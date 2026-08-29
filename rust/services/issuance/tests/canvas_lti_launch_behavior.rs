@@ -19,8 +19,9 @@ use marty_issuance_service::{
         CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
         CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
         CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchPorts,
-        CanvasLtiLaunchService, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
-        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+        CanvasLtiLaunchService, CanvasLtiLaunchServiceError, CanvasLtiLaunchStateRepository,
+        CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
+        CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::{
         CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiLoginService,
@@ -285,6 +286,7 @@ struct OrchestrationRepository {
     identity_count: Mutex<usize>,
     capability_requests: Mutex<Vec<CanvasLtiCapabilitySnapshotRequest>>,
     fail_binding_resolution: Mutex<bool>,
+    fail_capability_persistence: Mutex<bool>,
 }
 
 impl OrchestrationRepository {
@@ -413,6 +415,9 @@ impl CanvasLtiCapabilitySnapshotRepository for OrchestrationRepository {
         request: &CanvasLtiCapabilitySnapshotRequest,
     ) -> Result<Value, CanvasLtiLaunchPlanError> {
         self.record("merge-capabilities-and-persist-platform-validation");
+        if *self.fail_capability_persistence.lock().unwrap() {
+            return Err(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift);
+        }
         self.capability_requests
             .lock()
             .unwrap()
@@ -754,6 +759,67 @@ async fn binding_failure_preserves_consumed_state_and_verified_identity_only() {
             "persist-verified-identity",
             "resolve-binding-and-feature-gate"
         ]
+    );
+}
+
+#[tokio::test]
+async fn capability_failure_returns_no_response_after_prior_durable_writes() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    platform.lti_openid_configuration = Some(json!({
+        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
+    }));
+    platform.config_version = 3;
+    let (token, jwk) = orchestration_token("current-key", 61);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    *repository.fail_capability_persistence.lock().unwrap() = true;
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let service = orchestration_service(repository.clone(), platform);
+
+    let error = service
+        .launch(
+            "platform-1",
+            CanvasLtiLaunchSubmission {
+                id_token: Some(token),
+                state: Some("state-1".to_owned()),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CanvasLtiLaunchServiceError::Launch(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift)
+    ));
+    assert_eq!(
+        repository.states.lock().unwrap()["state-1"].status,
+        "consumed"
+    );
+    assert_eq!(*repository.identity_count.lock().unwrap(), 1);
+    assert!(repository.capability_requests.lock().unwrap().is_empty());
+    let bindings = repository.bindings.lock().unwrap();
+    assert_eq!(bindings[0].config_version, 5);
+    assert_eq!(
+        bindings[0].evidence_requirements[0]["scope"]["line_item_url"],
+        "https://school.canvas.example/api/lti/courses/course-1/line_items/7"
+    );
+    assert_eq!(
+        repository.calls().last(),
+        Some(&"merge-capabilities-and-persist-platform-validation")
     );
 }
 
