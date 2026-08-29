@@ -44,6 +44,7 @@ pub struct CanvasLtiProgramBinding {
     pub evidence_requirements: Vec<Value>,
     pub canvas_scope: Value,
     pub enabled: bool,
+    pub archived: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -551,7 +552,8 @@ pub fn select_binding<'a>(
     let binding = bindings
         .iter()
         .find(|binding| {
-            binding.enabled
+            !binding.archived
+                && binding.enabled
                 && binding.organization_id == platform.organization_id
                 && binding.platform_id == platform.id
                 && scope_matches(&binding.canvas_scope, &actual_scope)
@@ -561,6 +563,60 @@ pub fn select_binding<'a>(
         return Err(CanvasLtiLaunchPlanError::FeatureDisabled);
     }
     Ok(binding)
+}
+
+pub fn select_binding_with_staff_fallback<'a>(
+    platform: &CanvasLtiPlatform,
+    verified: &VerifiedLtiLaunch,
+    bindings: &'a [CanvasLtiProgramBinding],
+) -> Result<&'a CanvasLtiProgramBinding, CanvasLtiLaunchPlanError> {
+    match select_binding(platform, verified, bindings) {
+        Ok(binding) => return Ok(binding),
+        Err(CanvasLtiLaunchPlanError::BindingNotFound) => {}
+        Err(error) => return Err(error),
+    }
+    if !matches!(
+        verified.message_type.as_deref(),
+        Some("LtiDeepLinkingRequest" | "LtiResourceLinkRequest")
+    ) || !has_staff_role(&verified.roles)
+    {
+        return Err(CanvasLtiLaunchPlanError::BindingNotFound);
+    }
+    let requested_binding_id = claim_object(&verified.raw_claims, CUSTOM_CLAIM, "custom")
+        .and_then(|custom| custom.get("canvas_program_binding_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let actual_scope = launch_scope(verified, &platform.canvas_account_id);
+    let mut candidates = bindings.iter().filter(|binding| {
+        !binding.archived
+            && binding.organization_id == platform.organization_id
+            && binding.platform_id == platform.id
+            && requested_binding_id.is_none_or(|id| binding.id == id)
+            && scope_matches(&binding.canvas_scope, &actual_scope)
+    });
+    let binding = candidates
+        .next()
+        .filter(|_| candidates.next().is_none())
+        .ok_or(CanvasLtiLaunchPlanError::BindingNotFound)?;
+    if !feature_enabled(&binding.feature_flags, "enable_canvas_lti") {
+        return Err(CanvasLtiLaunchPlanError::FeatureDisabled);
+    }
+    Ok(binding)
+}
+
+fn has_staff_role(roles: &[String]) -> bool {
+    roles.iter().any(|role| {
+        matches!(
+            role.trim()
+                .to_ascii_lowercase()
+                .replace('#', "/")
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next(),
+            Some("instructor" | "administrator")
+        )
+    })
 }
 
 #[must_use]

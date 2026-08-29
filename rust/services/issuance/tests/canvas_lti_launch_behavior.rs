@@ -9,11 +9,12 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
         feature_enabled, launch_scope, plan_verified_identity, private_launch_response,
-        public_launch_response, scope_matches, select_binding, CanvasLtiIdentityRecord,
-        CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
-        CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
-        CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
-        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+        public_launch_response, scope_matches, select_binding, select_binding_with_staff_fallback,
+        CanvasLtiIdentityRecord, CanvasLtiIdentityRepository, CanvasLtiIdentityRequest,
+        CanvasLtiIdentityService, CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService,
+        CanvasLtiJwksRefresher, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+        CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
+        CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
 };
@@ -220,6 +221,7 @@ fn binding_from(value: &Value, platform: &CanvasLtiPlatform) -> CanvasLtiProgram
         evidence_requirements: Vec::new(),
         canvas_scope: json!({}),
         enabled: true,
+        archived: false,
     }
 }
 
@@ -364,6 +366,65 @@ async fn jwks_refresh_replays_bounded_fail_closed_contract() {
             *refresher.calls.lock().unwrap(),
             case["refresh_attempts"].as_u64().unwrap() as usize,
             "{name}"
+        );
+    }
+}
+
+#[test]
+fn staff_draft_binding_fallback_replays_the_python_oracle_contract() {
+    let contract = contract();
+    let policy = &contract["launch"]["draft_binding_fallback"];
+    let platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    for case in policy["cases"].as_array().unwrap() {
+        let mut verified: VerifiedLtiLaunch = serde_json::from_value(json!({
+            "issuer": "https://canvas.instructure.com",
+            "subject": "opaque-subject",
+            "audience": ["client-1"],
+            "deployment_id": "deployment-1",
+            "message_type": case["message_type"],
+            "roles": case["roles"],
+            "raw_claims": {
+                "custom": {"canvas_course_id": "course-1"}
+            },
+            "learner_identity": {}
+        }))
+        .unwrap();
+        if !case["requested_binding_id"].is_null() {
+            verified.raw_claims["custom"]["canvas_program_binding_id"] =
+                case["requested_binding_id"].clone();
+        }
+        let bindings = case["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|candidate| {
+                let mut binding = binding_from(
+                    &json!({
+                        "id": candidate["id"],
+                        "application_template_id": format!("application-{}", candidate["id"]),
+                        "credential_template_id": format!("credential-{}", candidate["id"])
+                    }),
+                    &platform,
+                );
+                binding.canvas_scope = json!({"course_id": candidate["course_id"]});
+                binding.enabled = false;
+                binding.archived = candidate["archived"].as_bool().unwrap();
+                binding
+            })
+            .collect::<Vec<_>>();
+
+        let actual = select_binding_with_staff_fallback(&platform, &verified, &bindings)
+            .ok()
+            .map(|binding| binding.id.as_str());
+        assert_eq!(
+            actual,
+            case["expected_binding_id"].as_str(),
+            "{}",
+            case["name"]
         );
     }
 }
@@ -572,6 +633,9 @@ fn binding_selection_is_tenant_bound_ordered_and_fail_closed_on_flags() {
     let mut disabled = base.clone();
     disabled.id = "disabled".to_owned();
     disabled.enabled = false;
+    let mut archived = base.clone();
+    archived.id = "archived".to_owned();
+    archived.archived = true;
     let mut selected = base.clone();
     selected.canvas_scope = json!({"course_id": "course-101"});
 
@@ -579,7 +643,7 @@ fn binding_selection_is_tenant_bound_ordered_and_fail_closed_on_flags() {
         select_binding(
             &platform,
             &verified,
-            &[wrong_tenant, disabled, selected.clone()]
+            &[wrong_tenant, disabled, archived, selected.clone()]
         )
         .unwrap()
         .id,

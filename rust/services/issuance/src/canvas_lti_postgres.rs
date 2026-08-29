@@ -53,7 +53,8 @@ const CONSUME_LAUNCH_STATE: &str = "UPDATE issuance_service.canvas_lti_launch_st
 
 const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
         application_template_id, credential_template_id, delivery_mode,
-        deployment_profile_id, feature_flags, evidence_requirements, canvas_scope, enabled
+        deployment_profile_id, feature_flags, evidence_requirements, canvas_scope, enabled,
+        archived_at IS NOT NULL AS archived
     FROM issuance_service.canvas_program_bindings
     WHERE organization_id = $1 AND platform_id = $2
     ORDER BY created_at";
@@ -523,6 +524,7 @@ fn program_binding(
             .try_get("canvas_scope")
             .map_err(launch_repository_error)?,
         enabled: row.try_get("enabled").map_err(launch_repository_error)?,
+        archived: row.try_get("archived").map_err(launch_repository_error)?,
     })
 }
 

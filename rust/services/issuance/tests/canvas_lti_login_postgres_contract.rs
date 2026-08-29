@@ -125,6 +125,7 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             evidence_requirements jsonb NOT NULL DEFAULT '[]'::jsonb,
             canvas_scope jsonb NOT NULL DEFAULT '{}'::jsonb,
             enabled boolean NOT NULL DEFAULT false,
+            archived_at timestamptz NULL,
             created_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )",
     )
