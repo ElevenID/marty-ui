@@ -13,6 +13,7 @@ use crate::canvas_lti_launch::{
     merge_verified_lti_binding_capabilities, plan_ags_line_item_pin, plan_verified_identity,
     CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsServiceUrlValidator,
     CanvasLtiCapabilitySnapshotRepository, CanvasLtiCapabilitySnapshotRequest,
+    CanvasLtiExperienceHandoffRepository, CanvasLtiExperienceHandoffRequest,
     CanvasLtiIdentityRecord, CanvasLtiIdentityRepository, CanvasLtiIdentityRequest,
     CanvasLtiIdentityStatus, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
     CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding,
@@ -42,7 +43,8 @@ const SAVE_LAUNCH_STATE: &str = "WITH database_clock AS (
         NULL
     FROM database_clock";
 
-const GET_LAUNCH_STATE: &str = "SELECT platform_id, state, nonce, status,
+const GET_LAUNCH_STATE: &str = "SELECT id, platform_id, organization_id, canvas_account_id,
+        state, nonce, redirect_uri, status, metadata,
         expires_at <= clock_timestamp() AS expired
     FROM issuance_service.canvas_lti_launch_states
     WHERE state = $1";
@@ -52,7 +54,20 @@ const CONSUME_LAUNCH_STATE: &str = "UPDATE issuance_service.canvas_lti_launch_st
     WHERE state = $1
       AND status = 'pending'
       AND expires_at > clock_timestamp()
-    RETURNING platform_id, state, nonce, status, false AS expired";
+    RETURNING id, platform_id, organization_id, canvas_account_id, state, nonce,
+        redirect_uri, status, metadata, false AS expired";
+
+const INSERT_EXPERIENCE_CODE: &str = "INSERT INTO issuance_service.canvas_lti_launch_states (
+        id, platform_id, organization_id, canvas_account_id, state, nonce, login_hint,
+        target_link_uri, lti_message_hint, redirect_uri, status, metadata,
+        created_at, expires_at, consumed_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, 'pending', $8,
+        clock_timestamp(), $9, NULL)";
+
+const ATTACH_EXPERIENCE_CODE: &str = "UPDATE issuance_service.canvas_lti_launch_states
+    SET metadata = $6
+    WHERE id = $1 AND state = $2 AND platform_id = $3 AND organization_id = $4
+      AND canvas_account_id = $5 AND status = 'consumed'";
 
 const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
         application_template_id, credential_template_id, delivery_mode,
@@ -365,6 +380,67 @@ impl CanvasLtiLaunchStateRepository for PostgresCanvasLtiLoginRepository {
             .await
             .map_err(launch_repository_error)?;
         row.map(stored_launch_state).transpose()
+    }
+}
+
+#[async_trait]
+impl CanvasLtiExperienceHandoffRepository for PostgresCanvasLtiLoginRepository {
+    async fn persist_experience_handoff(
+        &self,
+        request: &CanvasLtiExperienceHandoffRequest,
+    ) -> Result<(), CanvasLtiLaunchPlanError> {
+        if request.organization_id.trim().is_empty()
+            || request.platform_id.trim().is_empty()
+            || request.canvas_account_id.trim().is_empty()
+            || request.code.id.trim().is_empty()
+            || request.code.state.trim().is_empty()
+            || request.code.nonce.trim().is_empty()
+            || request.redirect_uri.trim().is_empty()
+            || request.consumed_state.id.trim().is_empty()
+            || request.consumed_state.status != "consumed"
+            || request.consumed_state.platform_id != request.platform_id
+            || request.consumed_state.organization_id != request.organization_id
+            || request.consumed_state.canvas_account_id != request.canvas_account_id
+            || request.consumed_state.redirect_uri != request.redirect_uri
+            || request.code_metadata.get("kind").and_then(Value::as_str)
+                != Some("canvas_lti_experience_code")
+            || request
+                .code_metadata
+                .get("launch_state")
+                .and_then(Value::as_str)
+                != Some(request.consumed_state.state.as_str())
+            || !request.consumed_state_metadata.is_object()
+        {
+            return Err(CanvasLtiLaunchPlanError::RepositoryUnavailable);
+        }
+        let mut transaction = self.pool.begin().await.map_err(launch_repository_error)?;
+        sqlx::query(INSERT_EXPERIENCE_CODE)
+            .bind(&request.code.id)
+            .bind(&request.platform_id)
+            .bind(&request.organization_id)
+            .bind(&request.canvas_account_id)
+            .bind(&request.code.state)
+            .bind(&request.code.nonce)
+            .bind(&request.redirect_uri)
+            .bind(&request.code_metadata)
+            .bind(request.expires_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?;
+        let updated = sqlx::query(ATTACH_EXPERIENCE_CODE)
+            .bind(&request.consumed_state.id)
+            .bind(&request.consumed_state.state)
+            .bind(&request.platform_id)
+            .bind(&request.organization_id)
+            .bind(&request.canvas_account_id)
+            .bind(&request.consumed_state_metadata)
+            .execute(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?;
+        if updated.rows_affected() != 1 {
+            return Err(CanvasLtiLaunchPlanError::RepositoryUnavailable);
+        }
+        transaction.commit().await.map_err(launch_repository_error)
     }
 }
 
@@ -723,12 +799,23 @@ fn stored_launch_state(
     row: sqlx::postgres::PgRow,
 ) -> Result<CanvasLtiStoredLaunchState, CanvasLtiLaunchPlanError> {
     Ok(CanvasLtiStoredLaunchState {
+        id: row.try_get("id").map_err(launch_repository_error)?,
         platform_id: row
             .try_get("platform_id")
             .map_err(launch_repository_error)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(launch_repository_error)?,
+        canvas_account_id: row
+            .try_get("canvas_account_id")
+            .map_err(launch_repository_error)?,
         state: row.try_get("state").map_err(launch_repository_error)?,
         nonce: row.try_get("nonce").map_err(launch_repository_error)?,
+        redirect_uri: row
+            .try_get("redirect_uri")
+            .map_err(launch_repository_error)?,
         status: row.try_get("status").map_err(launch_repository_error)?,
+        metadata: row.try_get("metadata").map_err(launch_repository_error)?,
         expired: row.try_get("expired").map_err(launch_repository_error)?,
     })
 }

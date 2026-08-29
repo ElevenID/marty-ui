@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -14,18 +14,21 @@ use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
-        feature_enabled, launch_scope, merge_verified_lti_binding_capabilities,
-        plan_ags_line_item_pin, plan_verified_identity, private_launch_response,
-        public_launch_response, scope_matches, select_binding, select_binding_with_staff_fallback,
-        CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsPinService,
-        CanvasLtiAgsServiceUrlValidator, CanvasLtiCapabilitySnapshotRepository,
-        CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock, CanvasLtiIdentityRecord,
-        CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
-        CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
-        CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchPorts,
-        CanvasLtiLaunchService, CanvasLtiLaunchServiceError, CanvasLtiLaunchStateRepository,
-        CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
-        CanvasLtiStoredLaunchState,
+        canvas_lti_experience_handoff, feature_enabled, launch_scope,
+        merge_verified_lti_binding_capabilities, plan_ags_line_item_pin, plan_verified_identity,
+        private_launch_response, public_launch_response, scope_matches, select_binding,
+        select_binding_with_staff_fallback, CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest,
+        CanvasLtiAgsPinService, CanvasLtiAgsServiceUrlValidator,
+        CanvasLtiCapabilitySnapshotRepository, CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock,
+        CanvasLtiExperienceCodeGenerator, CanvasLtiExperienceCodeSeed,
+        CanvasLtiExperienceHandoffRepository, CanvasLtiExperienceHandoffRequest,
+        CanvasLtiExperienceService, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
+        CanvasLtiIdentityRequest, CanvasLtiIdentityService, CanvasLtiIdentityStatus,
+        CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
+        CanvasLtiLaunchPlanError, CanvasLtiLaunchPorts, CanvasLtiLaunchService,
+        CanvasLtiLaunchServiceError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
+        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+        CanvasLtiVerifiedLaunchResponse,
     },
     canvas_lti_login::{
         CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiLoginService,
@@ -197,10 +200,17 @@ impl CanvasLtiIdentityRepository for IdentityRepository {
 
 fn pending_state(platform_id: &str, state: &str) -> CanvasLtiStoredLaunchState {
     CanvasLtiStoredLaunchState {
+        id: format!("id-{state}"),
         platform_id: platform_id.to_owned(),
+        organization_id: "org-1".to_owned(),
+        canvas_account_id: "account-1".to_owned(),
         state: state.to_owned(),
         nonce: "nonce-1".to_owned(),
+        redirect_uri: format!(
+            "https://issuer.example.test/v1/integrations/canvas/lti/platforms/{platform_id}/experience"
+        ),
         status: "pending".to_owned(),
+        metadata: json!({"login_marker": "preserve-me"}),
         expired: false,
     }
 }
@@ -294,8 +304,10 @@ struct OrchestrationRepository {
     calls: Mutex<Vec<&'static str>>,
     identity_count: Mutex<usize>,
     capability_requests: Mutex<Vec<CanvasLtiCapabilitySnapshotRequest>>,
+    handoff_requests: Mutex<Vec<CanvasLtiExperienceHandoffRequest>>,
     fail_binding_resolution: Mutex<bool>,
     fail_capability_persistence: Mutex<bool>,
+    fail_handoff: Mutex<bool>,
 }
 
 impl OrchestrationRepository {
@@ -435,6 +447,21 @@ impl CanvasLtiCapabilitySnapshotRepository for OrchestrationRepository {
     }
 }
 
+#[async_trait]
+impl CanvasLtiExperienceHandoffRepository for OrchestrationRepository {
+    async fn persist_experience_handoff(
+        &self,
+        request: &CanvasLtiExperienceHandoffRequest,
+    ) -> Result<(), CanvasLtiLaunchPlanError> {
+        self.record("persist-experience-handoff");
+        if *self.fail_handoff.lock().unwrap() {
+            return Err(CanvasLtiLaunchPlanError::RepositoryUnavailable);
+        }
+        self.handoff_requests.lock().unwrap().push(request.clone());
+        Ok(())
+    }
+}
+
 struct OrchestrationJwksRefresher {
     repository: Arc<OrchestrationRepository>,
     refreshed: CanvasLtiPlatform,
@@ -458,6 +485,101 @@ impl CanvasLtiClock for FixedClock {
     fn now(&self) -> DateTime<Utc> {
         self.0
     }
+}
+
+struct FixedExperienceCodeGenerator;
+
+impl CanvasLtiExperienceCodeGenerator for FixedExperienceCodeGenerator {
+    fn generate(&self) -> CanvasLtiExperienceCodeSeed {
+        CanvasLtiExperienceCodeSeed {
+            id: "experience-code-id-1".to_owned(),
+            state: "experience-code-1".to_owned(),
+            nonce: "experience-nonce-1".to_owned(),
+        }
+    }
+}
+
+#[test]
+fn experience_handoff_replays_the_complete_frozen_mip_vector() {
+    let vector = &contract()["experience"]["callback"]["handoff_vector"];
+    let platform = platform_from(&vector["platform"]);
+    let mut consumed_state = pending_state(
+        vector["platform"]["id"].as_str().unwrap(),
+        vector["launch_state"].as_str().unwrap(),
+    );
+    consumed_state.metadata = vector["existing_launch_metadata"].clone();
+    let frozen = &vector["verified_launch"];
+    let verified_launch = CanvasLtiVerifiedLaunchResponse {
+        organization_id: platform.organization_id.clone(),
+        canvas_account_id: platform.canvas_account_id.clone(),
+        canvas_platform_id: frozen["canvas_platform_id"].as_str().unwrap().to_owned(),
+        canvas_program_binding_id: frozen["canvas_program_binding_id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        application_template_id: frozen["application_template_id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        credential_template_id: frozen["credential_template_id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        delivery_mode: frozen["delivery_mode"].as_str().unwrap().to_owned(),
+        deployment_profile_id: None,
+        feature_flags: serde_json::from_value::<BTreeMap<String, bool>>(
+            frozen["feature_flags"].clone(),
+        )
+        .unwrap(),
+        evidence_requirements: frozen["evidence_requirements"].as_array().unwrap().clone(),
+        state: vector["launch_state"].as_str().unwrap().to_owned(),
+        verified: true,
+        issuer: frozen["issuer"].as_str().unwrap().to_owned(),
+        subject: frozen["subject"].as_str().unwrap().to_owned(),
+        audience: Vec::new(),
+        deployment_id: frozen["deployment_id"].as_str().unwrap().to_owned(),
+        nonce: None,
+        issued_at: None,
+        expires_at: None,
+        message_type: None,
+        lti_version: None,
+        target_link_uri: None,
+        context: Some(frozen["context"].clone()),
+        roles: frozen["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|role| role.as_str().unwrap().to_owned())
+            .collect(),
+        learner_identity: frozen["learner_identity"].clone(),
+        raw_claims: json!({}),
+        lti_capabilities: frozen["lti_capabilities"].clone(),
+        identity_mapping_status: None,
+    };
+    let handoff = canvas_lti_experience_handoff(
+        &platform,
+        &consumed_state,
+        &verified_launch,
+        vector["launch_url"].as_str().unwrap(),
+        vector["experience_code_id"].as_str().unwrap(),
+        DateTime::parse_from_rfc3339(vector["experience_code_expires_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc),
+    );
+
+    assert_eq!(handoff.mip_primitives, vector["expected_mip_primitives"]);
+    assert_eq!(
+        handoff.consumed_state_metadata,
+        vector["expected_consumed_state_metadata"]
+    );
+    assert_eq!(
+        handoff.code_metadata["mip_primitives"],
+        vector["expected_mip_primitives"]
+    );
+    assert_eq!(
+        handoff.code_metadata["verified_launch"],
+        serde_json::to_value(verified_launch).unwrap()
+    );
 }
 
 fn orchestration_token(kid: &str, key_byte: u8) -> (String, Value) {
@@ -704,6 +826,122 @@ async fn launch_orchestration_replays_order_and_atomic_persistence_contract() {
         requests[0].verified_at,
         Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap()
     );
+}
+
+#[tokio::test]
+async fn experience_handoff_persists_after_launch_and_before_redirect() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 35);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let experience = CanvasLtiExperienceService::new(
+        orchestration_service(repository.clone(), platform),
+        repository.clone(),
+        Arc::new(FixedExperienceCodeGenerator),
+        Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
+        )),
+        Duration::from_secs(60),
+        "https://ui.example.test/",
+    )
+    .unwrap();
+
+    let result = experience
+        .launch(
+            "platform-1",
+            CanvasLtiLaunchSubmission {
+                id_token: Some(token),
+                state: Some("state-1".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.location,
+        "https://ui.example.test/canvas/lti/experience?code=experience-code-1"
+    );
+    assert_eq!(
+        repository.calls().last(),
+        Some(&"persist-experience-handoff")
+    );
+    let requests = repository.handoff_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.code.id, "experience-code-id-1");
+    assert_eq!(request.expires_at.to_rfc3339(), "2026-08-29T12:01:00+00:00");
+    assert_eq!(request.code_metadata["kind"], "canvas_lti_experience_code");
+    assert_eq!(request.code_metadata["launch_state"], "state-1");
+    assert_eq!(
+        request.code_metadata["mip_primitives"]["protocol"],
+        "ELEVENID_EXPERIENCE"
+    );
+    assert_eq!(
+        request.code_metadata["mip_primitives"]["context"]["canvas_program_binding_id"],
+        "binding-1"
+    );
+    assert_eq!(
+        request.consumed_state_metadata,
+        json!({
+            "login_marker": "preserve-me",
+            "experience_code_id": "experience-code-id-1",
+            "experience_code_expires_at": "2026-08-29T12:01:00+00:00"
+        })
+    );
+}
+
+#[tokio::test]
+async fn experience_handoff_failure_never_returns_a_redirect() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 36);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    *repository.fail_handoff.lock().unwrap() = true;
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let experience = CanvasLtiExperienceService::new(
+        orchestration_service(repository.clone(), platform),
+        repository.clone(),
+        Arc::new(FixedExperienceCodeGenerator),
+        Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
+        )),
+        Duration::from_secs(60),
+        "https://ui.example.test",
+    )
+    .unwrap();
+
+    assert!(experience
+        .launch(
+            "platform-1",
+            CanvasLtiLaunchSubmission {
+                id_token: Some(token),
+                state: Some("state-1".to_owned()),
+            },
+        )
+        .await
+        .is_err());
+    assert!(repository.handoff_requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -5,9 +5,10 @@ use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_lti_launch::{
         CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiCapabilitySnapshotRequest,
-        CanvasLtiCapabilitySnapshotService, CanvasLtiIdentityService, CanvasLtiJwksRefresher,
-        CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
-        CanvasLtiLaunchStateService,
+        CanvasLtiCapabilitySnapshotService, CanvasLtiExperienceCodeSeed,
+        CanvasLtiExperienceHandoffRepository, CanvasLtiExperienceHandoffRequest,
+        CanvasLtiIdentityService, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
+        CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
     },
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
     canvas_lti_postgres::{
@@ -693,6 +694,71 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("consumed_at")
         .unwrap()
         .is_some());
+
+    let handoff_repository = PostgresCanvasLtiLoginRepository::new(pool.clone());
+    let consumed_state = handoff_repository
+        .get_launch_state(&state)
+        .await
+        .unwrap()
+        .unwrap();
+    let code_state = format!("experience-{}", Uuid::new_v4());
+    let request = CanvasLtiExperienceHandoffRequest {
+        organization_id: "org-123".to_owned(),
+        platform_id: "platform-123".to_owned(),
+        canvas_account_id: "account-123".to_owned(),
+        code: CanvasLtiExperienceCodeSeed {
+            id: Uuid::new_v4().to_string(),
+            state: code_state.clone(),
+            nonce: Uuid::new_v4().to_string(),
+        },
+        redirect_uri: consumed_state.redirect_uri.clone(),
+        expires_at: Utc::now() + chrono::Duration::seconds(60),
+        code_metadata: json!({
+            "kind": "canvas_lti_experience_code",
+            "launch_state": consumed_state.state
+        }),
+        consumed_state: consumed_state.clone(),
+        consumed_state_metadata: json!({"experience_code_id": "code-1"}),
+    };
+    handoff_repository
+        .persist_experience_handoff(&request)
+        .await
+        .unwrap();
+    let handoff_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_lti_launch_states
+         WHERE state = $1 AND status = 'pending'",
+    )
+    .bind(&code_state)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(handoff_rows, 1);
+    assert_eq!(
+        handoff_repository
+            .get_launch_state(&state)
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata,
+        request.consumed_state_metadata
+    );
+
+    let mut rejected = request.clone();
+    rejected.code.id = Uuid::new_v4().to_string();
+    rejected.code.state = format!("rejected-{}", Uuid::new_v4());
+    rejected.consumed_state.id = "wrong-consumed-id".to_owned();
+    assert!(handoff_repository
+        .persist_experience_handoff(&rejected)
+        .await
+        .is_err());
+    let rolled_back: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_lti_launch_states WHERE state = $1",
+    )
+    .bind(&rejected.code.state)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rolled_back, 0);
 
     sqlx::query("DROP TABLE issuance_service.canvas_lti_launch_states")
         .execute(&pool)
