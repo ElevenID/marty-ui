@@ -502,7 +502,12 @@ async function findCredentialRow(page, credentialId) {
   const search = page.getByPlaceholder('Search issued credentials...');
   const row = page.locator(`tbody tr[data-credential-record-id="${credentialId}"]`);
   await row.waitFor({ state: 'visible', timeout: 30_000 });
-  const friendlyReference = await row.locator('td').first().locator('.MuiTypography-caption').innerText();
+  const reference = row.locator('[data-credential-reference]');
+  await reference.waitFor({ state: 'visible', timeout: 30_000 });
+  const friendlyReference = await reference.getAttribute('data-credential-reference');
+  if (!friendlyReference?.trim()) {
+    throw new Error('Credential row is missing its stable privacy-safe reference');
+  }
   await search.fill(friendlyReference.trim());
   await row.waitFor({ state: 'visible', timeout: 30_000 });
   return row;
