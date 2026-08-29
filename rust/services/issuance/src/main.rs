@@ -1,7 +1,13 @@
 use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
+    canvas_issuance_guard::CanvasGuardConfig,
     client_auth::RegisteredClientAuthenticator,
+    credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
+    credential_builder::HttpCredentialBuilder,
+    credential_issuer::{HttpIssuerContextResolver, NativeCredentialProofVerifier},
+    credential_lifecycle::PostgresCredentialLifecycle,
+    credential_postgres::PostgresCredentialRepository,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{router_with_all_services, IssuanceServices},
@@ -58,12 +64,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.issuance_api_key.as_deref(),
         &config.issuer_base_url,
     );
+    let token_hmac_key = config
+        .token_hmac_key
+        .as_deref()
+        .expect("from_env requires TOKEN_HMAC_KEY");
     let token_repository = Arc::new(PostgresTokenExchangeRepository::new(
         pool.clone(),
-        config
-            .token_hmac_key
-            .as_deref()
-            .expect("from_env requires TOKEN_HMAC_KEY"),
+        token_hmac_key,
     ));
     let token_exchange = TokenExchangeService::new(
         token_repository.clone(),
@@ -72,9 +79,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(MartyTokenGenerator),
         &config.issuer_base_url,
     );
+    let nonce_repository = Arc::new(PostgresProofNonceRepository::new(pool.clone()));
     let proof_nonce = ProofNonceService::new(
-        Arc::new(PostgresProofNonceRepository::new(pool)),
+        nonce_repository.clone(),
         Arc::new(SecureProofNonceGenerator),
+    );
+    let credential = CredentialIssuanceService::new(
+        CredentialPorts {
+            repository: Arc::new(PostgresCredentialRepository::new(
+                pool.clone(),
+                token_hmac_key,
+            )),
+            nonce_repository,
+            dpop_verifier: Arc::new(MartyDpopProofVerifier),
+            proof_verifier: Arc::new(NativeCredentialProofVerifier),
+            issuer_resolver: Arc::new(HttpIssuerContextResolver::new(
+                config.signing_keys_internal_url.clone(),
+                config.signing_keys_internal_api_key.as_deref(),
+                config.dependency_timeout,
+            )?),
+            builder: Arc::new(HttpCredentialBuilder::new(
+                config.signing_keys_internal_url.clone(),
+                config.signing_keys_internal_api_key.as_deref(),
+                config.dependency_timeout,
+            )?),
+            lifecycle: Arc::new(PostgresCredentialLifecycle::new(
+                pool,
+                config.revocation_profile_service_url.clone(),
+                config.internal_service_token.as_deref(),
+                config.dependency_timeout,
+                CanvasGuardConfig {
+                    enabled: config.canvas_portable_enabled,
+                    pilot_organizations: config.canvas_pilot_organizations.clone(),
+                    evidence_max_age: config.canvas_evidence_max_age,
+                    readiness_max_age: config.canvas_readiness_max_age,
+                },
+            )?),
+            notification_ids: Arc::new(UuidNotificationIdGenerator),
+        },
+        &config.issuer_base_url,
     );
     let listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_listener_healthy()?;
@@ -88,6 +131,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             transaction_reads,
             token_exchange,
             proof_nonce,
+            credential,
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );

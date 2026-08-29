@@ -78,6 +78,7 @@ load_secret_env() {
     load_secret_var GOOGLE_SITE_VERIFICATION
     load_secret_var MARTY_API_CLIENT_SECRET
     load_secret_var ISSUANCE_API_KEY
+    load_secret_var TOKEN_HMAC_KEY
     load_secret_var SIGNING_KEYS_INTERNAL_API_KEY
     load_secret_var GRPC_SERVICE_TOKEN
     load_secret_var FLOW_WEBHOOK_SECRET

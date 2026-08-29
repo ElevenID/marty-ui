@@ -70,6 +70,8 @@ struct HttpOperation {
     token_exchange_behavior_case: Option<String>,
     #[serde(default)]
     proof_nonce_behavior_case: Option<String>,
+    #[serde(default)]
+    credential_behavior_contract: bool,
 }
 
 #[derive(Deserialize)]
@@ -580,6 +582,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_transaction_read_cases = BTreeSet::new();
     let mut native_token_exchange_cases = BTreeSet::new();
     let mut native_proof_nonce_cases = BTreeSet::new();
+    let mut native_credential_contract = false;
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -712,6 +715,27 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
             )?;
+        } else if operation.credential_behavior_contract {
+            require(
+                !native_credential_contract
+                    && operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && operation.operation == "issue_credential"
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/credential"
+                    && credential_admission["cases"]
+                        .as_array()
+                        .is_some_and(|cases| cases.len() >= 20)
+                    && credential_signing["formats"]
+                        .as_array()
+                        .is_some_and(|formats| formats.len() == 4),
+                "native credential endpoint diverges from its admission or signing contract",
+            )?;
+            native_credential_contract = true;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
         }
@@ -751,6 +775,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_proof_nonce_cases == BTreeSet::from(["nonce_endpoint"]),
         "native proof nonce behavior coverage is incomplete",
     )?;
+    require(
+        native_credential_contract,
+        "native credential endpoint behavior coverage is incomplete",
+    )?;
     for operation in &coverage.platform_additive_http {
         require(
             operation.owner == "mmf-runtime",
@@ -789,17 +817,23 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         coverage.native_environment_variables
             == [
                 "CORS_ALLOWED_ORIGINS",
+                "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+                "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+                "CANVAS_PILOT_ORGANIZATION_IDS",
+                "CANVAS_PORTABLE_INTEGRATION_ENABLED",
                 "DATABASE_URL",
+                "GRPC_SERVICE_TOKEN",
                 "ISSUANCE_SERVICE_PORT",
                 "ISSUANCE_API_KEY",
                 "ISSUER_BASE_URL",
                 "ISSUER_DISPLAY_NAME",
+                "REVOCATION_PROFILE_SERVICE_URL",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "SIGNING_KEYS_INTERNAL_URL",
                 "TOKEN_RATE_LIMIT",
                 "TOKEN_RATE_WINDOW",
             ]
-            && coverage.remaining.literal_environment_variables + 10 == environment_count
+            && coverage.remaining.literal_environment_variables + 16 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -887,8 +921,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 17);
-        assert_eq!(summary.remaining_http, 114);
+        assert_eq!(summary.native_http, 18);
+        assert_eq!(summary.remaining_http, 113);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

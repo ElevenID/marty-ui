@@ -44,6 +44,7 @@ pub struct IssuanceServices {
     transactions: TransactionReadService,
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
+    credential: CredentialIssuanceService,
     token_rate_limiter: TokenRateLimiter,
 }
 
@@ -54,6 +55,7 @@ impl IssuanceServices {
         transactions: TransactionReadService,
         token_exchange: TokenExchangeService,
         proof_nonce: ProofNonceService,
+        credential: CredentialIssuanceService,
         token_rate_limiter: TokenRateLimiter,
     ) -> Self {
         Self {
@@ -61,6 +63,7 @@ impl IssuanceServices {
             transactions,
             token_exchange,
             proof_nonce,
+            credential,
             token_rate_limiter,
         }
     }
@@ -139,7 +142,7 @@ pub fn router_with_all_services(
             transactions: Some(services.transactions),
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
-            credential: None,
+            credential: Some(services.credential),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )

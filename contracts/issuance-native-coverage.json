@@ -153,6 +153,12 @@
       "path": "/v1/issuance/nonce",
       "operation": "nonce_endpoint",
       "proof_nonce_behavior_case": "nonce_endpoint"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/credential",
+      "operation": "issue_credential",
+      "credential_behavior_contract": true
     }
   ],
   "platform_additive_http": [
@@ -160,21 +166,27 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 114,
+    "http": 113,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 79,
+    "literal_environment_variables": 73,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
   },
   "native_environment_variables": [
     "CORS_ALLOWED_ORIGINS",
+    "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+    "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+    "CANVAS_PILOT_ORGANIZATION_IDS",
+    "CANVAS_PORTABLE_INTEGRATION_ENABLED",
     "DATABASE_URL",
+    "GRPC_SERVICE_TOKEN",
     "ISSUANCE_SERVICE_PORT",
     "ISSUANCE_API_KEY",
     "ISSUER_BASE_URL",
     "ISSUER_DISPLAY_NAME",
+    "REVOCATION_PROFILE_SERVICE_URL",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "SIGNING_KEYS_INTERNAL_URL",
     "TOKEN_RATE_LIMIT",

@@ -1,17 +1,20 @@
+use axum::{routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use hmac::{Hmac, Mac};
 use marty_issuance_service::canvas_issuance_guard::{
     CanvasGuardConfig, PostgresCanvasIssuanceGuard,
 };
 use marty_issuance_service::credential::{
-    CredentialIssuanceError, CredentialRepository, CredentialTransactionStatus, IssuedCredential,
-    IssuerContext,
+    CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
+    CredentialTransactionStatus, IssuedCredential, IssuerContext,
 };
+use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
 use std::{collections::BTreeSet, time::Duration as StdDuration};
+use url::Url;
 use uuid::Uuid;
 
 fn token_digest(key: &[u8], token: &str) -> String {
@@ -47,13 +50,16 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     sqlx::query(
         "INSERT INTO issuance_service.issuance_transactions
              (id, organization_id, credential_template_id, revocation_profile_id,
-              application_id, status, pre_auth_code, access_token, c_nonce, claims,
+              renewal_of_credential_id, application_id, status, pre_auth_code,
+              access_token, c_nonce, claims,
               credential_type, issuer_profile_id, issuer_did_override,
-              issuer_algorithm, signing_service_id)
+              issuer_algorithm, signing_service_id, delivery_mode)
          VALUES ('tx-contract', 'org-a', 'template-a', 'status-profile-a',
-                 'application-a', 'authorized', 'pre-auth-contract', $1, $2,
+                 'credential-source', 'application-a', 'authorized',
+                 'pre-auth-contract', $1, $2,
                  '{}'::jsonb, 'OpenBadgeCredential', 'issuer-profile-a',
-                 'did:web:issuer.example', 'ES256', 'kms-service-a')",
+                 'did:web:issuer.example', 'ES256', 'kms-service-a',
+                 'wallet_plus_canvas_mirror')",
     )
     .bind(token_digest(key.as_bytes(), &access_token))
     .bind(&nonce)
@@ -81,6 +87,21 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .unwrap();
 
     seed_canvas_guard_contract(&pool).await;
+    sqlx::query(
+        "INSERT INTO issuance_service.issued_credentials
+             (id, transaction_id, organization_id, credential_template_id,
+              issuer_did, revocation_profile_id, status_list_entries,
+              credential_jwt, credential_hash, status, status_updated_at,
+              revoked, issued_at)
+         VALUES ('credential-source', 'source-transaction', 'org-a', 'template-a',
+                 'did:web:issuer.example', 'status-profile-a',
+                 '[{\"status_list_id\":\"status-profile-a\",\"index\":8,\"type\":\"BitstringStatusListEntry\",\"status_purpose\":\"revocation\"}]'::jsonb,
+                 'source-credential', 'source-hash', 'active', clock_timestamp(),
+                 false, clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let repository = PostgresCredentialRepository::new(pool.clone(), key.as_bytes());
     let transaction = repository
@@ -160,7 +181,7 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         subject_did: Some("did:key:holder".to_owned()),
         issuer_did: "did:web:issuer.example".to_owned(),
         revocation_profile_id: None,
-        renewed_from_credential_id: None,
+        renewed_from_credential_id: claimed.renewal_of_credential_id.clone(),
         status_list_entries: vec![json!({"index": 7})],
         credential: "signed-credential".to_owned(),
         credential_hash: "credential-hash".to_owned(),
@@ -168,6 +189,25 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         expires_at: now + Duration::days(365),
     };
     repository.finalize(&claimed, &issued).await.unwrap();
+    let (revocation_url, revocation_server) = revocation_server().await;
+    let lifecycle = PostgresCredentialLifecycle::new(
+        pool.clone(),
+        revocation_url,
+        Some("contract-service-token"),
+        StdDuration::from_secs(1),
+        CanvasGuardConfig {
+            enabled: true,
+            pilot_organizations: BTreeSet::from(["org-a".to_owned()]),
+            evidence_max_age: StdDuration::from_secs(900),
+            readiness_max_age: StdDuration::from_secs(900),
+        },
+    )
+    .unwrap();
+    lifecycle
+        .after_issued(&claimed, &issued, "dc+sd-jwt")
+        .await
+        .unwrap();
+    revocation_server.abort();
     assert!(repository.finalize(&claimed, &issued).await.is_err());
     let persisted = repository
         .credential_by_transaction(&claimed.id)
@@ -212,9 +252,110 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
             .as_deref(),
         Some(credential_id)
     );
+    let drift = sqlx::query(
+        "SELECT target_type, schedule_seconds, metadata
+         FROM issuance_service.canvas_evidence_sync_targets
+         WHERE organization_id = 'org-a' AND logical_key = 'application:application-a'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        drift.try_get::<String, _>("target_type").unwrap(),
+        "issued_drift"
+    );
+    assert_eq!(drift.try_get::<i32, _>("schedule_seconds").unwrap(), 21_600);
+    assert_eq!(
+        drift.try_get::<serde_json::Value, _>("metadata").unwrap()["claimed_credential_id"],
+        credential_id
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE transaction_id = 'tx-contract' AND event_type = 'credential_issued'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    let deliveries = sqlx::query(
+        "SELECT delivery_target, status FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1 ORDER BY delivery_target",
+    )
+    .bind(credential_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(deliveries.len(), 2);
+    assert_eq!(
+        deliveries[0]
+            .try_get::<String, _>("delivery_target")
+            .unwrap(),
+        "canvas_credentials"
+    );
+    assert_eq!(
+        deliveries[0].try_get::<String, _>("status").unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        deliveries[1]
+            .try_get::<String, _>("delivery_target")
+            .unwrap(),
+        "wallet"
+    );
+    assert_eq!(
+        deliveries[1].try_get::<String, _>("status").unwrap(),
+        "delivered"
+    );
+    let source = sqlx::query(
+        "SELECT status, revoked, revocation_reason, renewed_to_credential_id
+         FROM issuance_service.issued_credentials WHERE id = 'credential-source'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(source.try_get::<String, _>("status").unwrap(), "revoked");
+    assert!(source.try_get::<bool, _>("revoked").unwrap());
+    assert_eq!(
+        source
+            .try_get::<Option<String>, _>("revocation_reason")
+            .unwrap()
+            .as_deref(),
+        Some("Superseded by renewed credential")
+    );
+    assert_eq!(
+        source
+            .try_get::<Option<String>, _>("renewed_to_credential_id")
+            .unwrap()
+            .as_deref(),
+        Some(credential_id)
+    );
 
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
     drop_contract_schema(&pool).await;
+}
+
+async fn revocation_server() -> (Url, tokio::task::JoinHandle<()>) {
+    async fn process(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        Json(json!({
+            "success":true,
+            "organization_id":body["organization_id"],
+            "index":body["index"],
+            "status_list_url":"https://status.example/lists/active"
+        }))
+    }
+    let app = Router::new().route(
+        "/revocation/internal/revocation-profiles/{profile_id}/process-revocation",
+        post(process),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (
+        Url::parse(&format!("http://{address}/revocation")).unwrap(),
+        server,
+    )
 }
 
 async fn seed_canvas_guard_contract(pool: &sqlx::PgPool) {
@@ -349,9 +490,11 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             organization_id TEXT NOT NULL, credential_template_id TEXT NOT NULL,
             applicant_id TEXT, subject_did TEXT, issuer_did TEXT,
             revocation_profile_id TEXT, renewed_from_credential_id TEXT,
+            renewed_to_credential_id TEXT,
             status_list_entries JSONB NOT NULL, credential_jwt TEXT NOT NULL,
             credential_hash TEXT NOT NULL, status TEXT NOT NULL,
             status_updated_at TIMESTAMPTZ NOT NULL, revoked BOOLEAN NOT NULL,
+            revoked_at TIMESTAMPTZ, revocation_reason TEXT,
             issued_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ)",
         "CREATE TABLE issuance_service.applications (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
@@ -374,7 +517,8 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             config_version INTEGER, validated_config_version INTEGER,
             readiness_checks JSONB, readiness_validated_at TIMESTAMPTZ,
             activated_at TIMESTAMPTZ, archived_at TIMESTAMPTZ,
-            credential_template_snapshot JSONB, enabled BOOLEAN NOT NULL)",
+            credential_template_snapshot JSONB, canvas_credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
+            enabled BOOLEAN NOT NULL)",
         "CREATE TABLE issuance_service.evidence_facts (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, application_id TEXT NOT NULL,
             subject_id TEXT, provider TEXT, fact_type TEXT, scope JSONB, assertion JSONB,
@@ -384,6 +528,23 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE issuance_service.evidence_fact_heads (
             organization_id TEXT NOT NULL, application_id TEXT NOT NULL,
             logical_key TEXT NOT NULL, fact_id TEXT NOT NULL)",
+        "CREATE TABLE issuance_service.canvas_evidence_sync_targets (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, platform_id TEXT NOT NULL,
+            binding_id TEXT NOT NULL, target_type TEXT NOT NULL, logical_key TEXT NOT NULL,
+            application_id TEXT, enabled BOOLEAN NOT NULL, schedule_seconds INTEGER NOT NULL,
+            next_run_at TIMESTAMPTZ NOT NULL, config_version INTEGER NOT NULL,
+            metadata JSON NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL, UNIQUE (organization_id, logical_key))",
+        "CREATE TABLE issuance_service.issuance_events (
+            id TEXT PRIMARY KEY, transaction_id TEXT, application_id TEXT,
+            event_type TEXT NOT NULL, metadata JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL)",
+        "CREATE TABLE issuance_service.credential_delivery_records (
+            id TEXT PRIMARY KEY, credential_id TEXT NOT NULL, transaction_id TEXT NOT NULL,
+            organization_id TEXT NOT NULL, delivery_target TEXT NOT NULL,
+            delivery_mode TEXT NOT NULL, status TEXT NOT NULL, canvas_account_id TEXT,
+            external_credential_id TEXT, external_issuer_id TEXT, last_error TEXT,
+            metadata JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL)",
         "CREATE TABLE issuance_service.canvas_award_candidates (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, application_id TEXT,
             binding_id TEXT NOT NULL, platform_id TEXT NOT NULL, state TEXT NOT NULL,
@@ -403,6 +564,9 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
 
 async fn drop_contract_schema(pool: &sqlx::PgPool) {
     for statement in [
+        "DROP TABLE IF EXISTS issuance_service.credential_delivery_records",
+        "DROP TABLE IF EXISTS issuance_service.issuance_events",
+        "DROP TABLE IF EXISTS issuance_service.canvas_evidence_sync_targets",
         "DROP TABLE IF EXISTS issuance_service.evidence_fact_heads",
         "DROP TABLE IF EXISTS issuance_service.evidence_facts",
         "DROP TABLE IF EXISTS issuance_service.canvas_program_bindings",
