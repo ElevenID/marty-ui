@@ -136,8 +136,7 @@ export async function fetchIssuedCredentials({ organizationId, page, perPage, se
         || record.subject_name
         || record.holder_email
         || record.subject_email
-        || record.subject_id
-        || 'Unknown holder',
+        || '',
       holder_email: record.holder_email || record.subject_email || record.subject_id || 'Unknown holder',
       credential_reference: pickOfficialReference({
         rawId: record.credential_id || record.id,

@@ -60,6 +60,7 @@ import { formatOfficialReference, formatStructuredIdentifiers } from '../../../u
 function AuditPage() {
   const { t } = useTranslation('console');
   const [searchParams] = useSearchParams();
+  const urlSearchQuery = searchParams.get('search') || '';
   
   const getBreadcrumbs = () => [
     { label: t('audit.breadcrumbs.console'), path: '/console' },
@@ -104,7 +105,7 @@ function AuditPage() {
   const [exporting, setExporting] = useState(false);
   
   // Filters
-  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('search') || '');
+  const [searchQuery, setSearchQuery] = useState(() => urlSearchQuery);
   const [category, setCategory] = useState('all');
   const [severity, setSeverity] = useState('all');
   const [actor, setActor] = useState('');
@@ -114,6 +115,11 @@ function AuditPage() {
   const [endDate, setEndDate] = useState(null);
 
   const { showNotification } = useNotifications();
+
+  useEffect(() => {
+    setSearchQuery(urlSearchQuery);
+    setPage(0);
+  }, [urlSearchQuery]);
 
   useEffect(() => {
     loadEvents();

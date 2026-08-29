@@ -113,6 +113,8 @@ describe('IssuancePage', () => {
     expect(screen.getByRole('table', { name: 'Issued credentials' })).toBeInTheDocument();
     expect(screen.getAllByText(formatOfficialReference('cred-open-badge-1', 'credential')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Open Badge Login Template').length).toBeGreaterThan(0);
+    expect(screen.getByText(`Template ${formatOfficialReference('template-open-badge', 'template')}`)).toBeInTheDocument();
+    expect(screen.getByText(/Issued .*2026.*Expires .*2026/i)).toBeInTheDocument();
     expect(screen.getByText('Demo Employee 01')).toBeInTheDocument();
     expect(screen.getByText(formatOfficialReference('flow-execution-1', 'flow'))).toBeInTheDocument();
     expect(screen.getAllByText(`Renewed from ${formatOfficialReference('cred-open-badge-0', 'credential')}`).length).toBeGreaterThan(0);

@@ -88,6 +88,12 @@ const LIFECYCLE_ACTIONS = {
 
 const normalizeStatus = (status) => String(status || '').trim().toUpperCase();
 
+const formatDateTime = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+};
+
 function IssuancePage() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
@@ -125,7 +131,10 @@ function IssuancePage() {
     return Array.isArray(result) ? result : [];
   }, [organizationId]);
 
-  const issuedCredentials = issuedCredentialsData?.credentials || [];
+  const issuedCredentials = useMemo(
+    () => issuedCredentialsData?.credentials || [],
+    [issuedCredentialsData],
+  );
   const getCredentialReference = (credential) => pickOfficialReference({
     rawId: credential?.credential_id || credential?.id,
     kind: 'credential',
@@ -145,9 +154,13 @@ function IssuancePage() {
     fallback: 'Not linked',
   });
   const getHolderLabel = (credential) => {
-    const candidate = String(credential?.holder_label || credential?.holder_email || '').trim();
-    if (candidate && !candidate.startsWith('did:') && candidate.length <= 80) return candidate;
-    const subjectId = credential?.subject_id || candidate;
+    const displayLabel = String(credential?.holder_label || '').trim();
+    if (displayLabel && !displayLabel.startsWith('did:') && displayLabel.length <= 80) {
+      return displayLabel;
+    }
+    const holderEmail = String(credential?.holder_email || '').trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(holderEmail)) return holderEmail;
+    const subjectId = credential?.subject_id || credential?.holder_id || holderEmail;
     if (!subjectId) return 'Unknown holder';
     return `Lifecycle holder • ${pickOfficialReference({ rawId: subjectId, kind: 'account' })}`;
   };
@@ -158,19 +171,20 @@ function IssuancePage() {
     return isEmail && candidate !== primary ? candidate : null;
   };
   const getLifecycleRelationship = (credential) => {
+    const relationships = [];
     if (credential?.renewed_from_credential_id) {
-      return `Renewed from ${pickOfficialReference({
+      relationships.push(`Renewed from ${pickOfficialReference({
         rawId: credential.renewed_from_credential_id,
         kind: 'credential',
-      })}`;
+      })}`);
     }
     if (credential?.renewed_to_credential_id) {
-      return `Superseded by ${pickOfficialReference({
+      relationships.push(`Superseded by ${pickOfficialReference({
         rawId: credential.renewed_to_credential_id,
         kind: 'credential',
-      })}`;
+      })}`);
     }
-    return 'Original issuance';
+    return relationships.join(' • ') || 'Original issuance';
   };
   const templateNameById = useMemo(() => {
     const map = new Map();
@@ -212,8 +226,9 @@ function IssuancePage() {
   }, [credentialId, detailCredentialId]);
 
   const handleOpenDetails = (credential) => {
-    setFocusedCredentialId(credential.id || credential.credential_id);
-    navigate(`/console/org/operate/issuance/${encodeURIComponent(credential.id)}`);
+    const selectedId = credential.id || credential.credential_id;
+    setFocusedCredentialId(selectedId);
+    navigate(`/console/org/operate/issuance/${encodeURIComponent(selectedId)}`);
   };
 
   const handleCloseDetails = () => {
@@ -420,7 +435,7 @@ function IssuancePage() {
             <TableBody>
               {issuedCredentials.map((credential) => (
                 <TableRow
-                  key={credential.id}
+                  key={credential.id || credential.credential_id}
                   data-credential-record-id={credential.id || credential.credential_id}
                   hover
                   selected={(credential.id || credential.credential_id) === (credentialId || detailCredentialId || focusedCredentialId)}
@@ -437,6 +452,14 @@ function IssuancePage() {
                       </Typography>
                       <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
                         {getCredentialReference(credential)}
+                      </Typography>
+                      {credential.credential_template_id && (
+                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                          Template {getTemplateReference(credential.credential_template_id)}
+                        </Typography>
+                      )}
+                      <Typography variant="caption" color="text.secondary">
+                        Issued {formatDateTime(credential.issued_date)} • Expires {formatDateTime(credential.expiry_date)}
                       </Typography>
                     </Stack>
                   </TableCell>
