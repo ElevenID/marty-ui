@@ -14,6 +14,7 @@ RUST_SERVICES = {
     "event_stream": "marty-event-stream",
     "flow": "marty-flow",
     "gateway": "marty-gateway",
+    "issuance_native": "marty-issuance-service",
     "notification": "marty-notification",
     "organization": "marty-organization",
     "presentation_policy": "marty-presentation-policy",
