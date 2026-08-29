@@ -20,7 +20,7 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns ten frozen HTTP operations: the exact legacy
+The native candidate now owns fifteen frozen HTTP operations: the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
 the global plus three organization-scoped OAuth discovery variants, and all
 three tenant-backed credential-issuer metadata variants. The six deterministic
@@ -32,7 +32,15 @@ through a pure two-phase Rust planner, an organization-scoped Postgres
 projection, and a fail-closed signing-policy adapter. It preserves format
 filtering, claims and display metadata, DID-selected proof policy, and Google
 and Apple wallet variants without moving database or HTTP I/O into the core
-protocol crate.
+protocol crate. The five read-only offer/transaction operations replay
+[`issuance-offer-transaction-reads.json`](../../contracts/issuance-offer-transaction-reads.json)
+through one tenant-safe transaction model, one Postgres projection, MMF's
+constant-time secret comparison, and the existing `marty-oid4vci` offer
+builder. They preserve management authentication, hidden cross-tenant
+resources, expiration, repeated and missing query validation, Python timestamp
+shapes, and the distinct list-summary and detail projections. A disposable
+PostgreSQL contract exercises the production projection, tenant-bound list,
+nullable lifecycle fields, and fail-closed persisted status decoding.
 The same contract binds legacy request-ID propagation/generation and allowed
 and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
@@ -49,8 +57,8 @@ Python issuance image.
 2. Land this native host, contract mirror, provenance, configuration adapter,
    lifecycle, and executable smoke gate without deployment wiring.
 3. Port offer/transaction reads using canonical `marty-oid4vci` types and MMF
-   transport/configuration primitives. All issuer discovery is complete in
-   Rust.
+   transport/configuration primitives. All issuer discovery and the five
+   read-only offer/transaction operations are complete in Rust.
 4. Port token exchange and credential issuance, reusing `marty-core` for
    cryptography and credential formats and preserving idempotency/race gates.
 5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI

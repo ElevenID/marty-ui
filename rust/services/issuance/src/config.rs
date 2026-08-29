@@ -18,6 +18,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
+    pub issuance_api_key: Option<String>,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
     pub dependency_timeout: Duration,
@@ -34,6 +35,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
+            .field(
+                "issuance_api_key_configured",
+                &self.issuance_api_key.is_some(),
+            )
             .field("signing_keys_internal_url", &self.signing_keys_internal_url)
             .field(
                 "signing_keys_internal_api_key_configured",
@@ -126,8 +131,9 @@ impl IssuanceServiceConfig {
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
+        let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
-            .or(secret_value(&values, "ISSUANCE_API_KEY")?);
+            .or_else(|| issuance_api_key.clone());
         Ok(Self {
             http_addr,
             release_version: settings.build.release_version,
@@ -136,6 +142,7 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
+            issuance_api_key,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
             dependency_timeout: Duration::from_secs(10),
@@ -322,6 +329,7 @@ mod tests {
             "http://gateway:8000/internal/signing-keys/"
         );
         assert!(config.signing_keys_internal_api_key.is_none());
+        assert!(config.issuance_api_key.is_none());
     }
 
     #[test]
@@ -379,8 +387,10 @@ mod tests {
             config.signing_keys_internal_api_key.as_deref(),
             Some("preferred-key")
         );
+        assert_eq!(config.issuance_api_key.as_deref(), Some("fallback-key"));
         let diagnostic = format!("{config:?}");
         assert!(!diagnostic.contains("preferred-key"));
+        assert!(!diagnostic.contains("fallback-key"));
         assert!(!diagnostic.contains("user:pass"));
     }
 
@@ -434,5 +444,23 @@ mod tests {
                 .expect_err("invalid dependency URL");
             assert_eq!(error.code, ErrorCode::Configuration);
         }
+    }
+
+    #[test]
+    fn issuance_key_is_retained_for_management_and_signing_fallback_without_debug_leakage() {
+        let config = IssuanceServiceConfig::from_values(values(&[(
+            "ISSUANCE_API_KEY",
+            "shared-legacy-key",
+        )]))
+        .expect("configuration");
+        assert_eq!(
+            config.issuance_api_key.as_deref(),
+            Some("shared-legacy-key")
+        );
+        assert_eq!(
+            config.signing_keys_internal_api_key.as_deref(),
+            Some("shared-legacy-key")
+        );
+        assert!(!format!("{config:?}").contains("shared-legacy-key"));
     }
 }

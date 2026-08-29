@@ -20,6 +20,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     discovery = json.loads(discovery_bytes)
     tenant_bytes = (ROOT / "contracts/issuance-tenant-discovery.json").read_bytes()
     tenant = json.loads(tenant_bytes)
+    transaction_bytes = (
+        ROOT / "contracts/issuance-offer-transaction-reads.json"
+    ).read_bytes()
+    transaction_reads = json.loads(transaction_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -45,6 +49,16 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         == "d853a14efb5cce2894aea138e2e784735499a7fc"
     )
     assert tenant["schema"] == "marty.issuance-tenant-discovery/v1"
+    assert hashlib.sha256(
+        transaction_bytes.replace(b"\r\n", b"\n")
+    ).hexdigest() == coverage["transaction_read_behavior_contract"]["sha256"]
+    assert (
+        coverage["transaction_read_behavior_contract"]["commit"]
+        == "4d628a185cf82b84a400c6ea495865786c9f4588"
+    )
+    assert transaction_reads["schema"] == "marty.issuance-offer-transaction-reads/v1"
+    assert len(transaction_reads["edge_cases"]) == 8
+    assert len(transaction_reads["failures"]) == 7
     native = {operation["operation"]: operation for operation in coverage["native_http"]}
     assert native.pop("health_check") == {
         "method": "GET",
@@ -57,7 +71,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     }
     discovery_cases = {case["operation"]: case for case in discovery["cases"]}
     tenant_cases = {case["operation"]: case for case in tenant["variants"]}
-    assert set(native) == set(discovery_cases) | set(tenant_cases)
+    transaction_cases = {
+        case["operation"]: case for case in transaction_reads["cases"]
+    }
+    assert set(native) == set(discovery_cases) | set(tenant_cases) | set(transaction_cases)
     for operation, coverage_entry in native.items():
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
@@ -66,6 +83,22 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "{org_id}", "org-a"
             )
             continue
+        if operation in transaction_cases:
+            assert coverage_entry["transaction_read_behavior_case"] == operation
+            assert coverage_entry["method"] == transaction_cases[operation]["method"] == "GET"
+            expected_paths = {
+                "get_credential_offer": "/v1/issuance/offers/tx-pending",
+                "list_transactions": "/v1/issuance/transactions?organization_id=org-a",
+                "get_transaction": "/v1/issuance/transactions/tx-revoked",
+                "get_transaction_revocation_status": (
+                    "/v1/issuance/transactions/tx-revoked/revocation-status"
+                ),
+                "get_issuance_transaction_owner": (
+                    "/internal/v1/resource-owners/issuance-transactions/tx-pending"
+                ),
+            }
+            assert transaction_cases[operation]["path"] == expected_paths[operation]
+            continue
         assert coverage_entry["method"] == discovery_cases[operation]["method"] == "GET"
         assert coverage_entry["behavior_case"] == operation
         expected_case_path = coverage_entry["path"].replace(
@@ -73,7 +106,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ).replace("{org_id}", "org-a")
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 121,
+        "http": 116,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 81,

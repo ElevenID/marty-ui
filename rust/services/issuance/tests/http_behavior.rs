@@ -3,11 +3,16 @@ use axum::{
     body::Body,
     http::{Method, Request},
 };
+use chrono::DateTime;
 use marty_issuance_service::{
-    http::{router, router_with_tenant_discovery},
+    http::{router, router_with_services, router_with_tenant_discovery},
     tenant_discovery::{
         ProofPolicyResolver, TenantDiscoveryError, TenantDiscoveryRepository,
         TenantDiscoveryService,
+    },
+    transaction_reads::{
+        IssuanceTransactionRecord, TransactionReadError, TransactionReadRepository,
+        TransactionReadService, TransactionStatus,
     },
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
@@ -576,5 +581,215 @@ async fn native_tenant_discovery_fails_closed_when_proof_policy_is_unavailable()
             .expect("response");
         assert_eq!(response.status().as_u16(), failure["status_code"]);
         assert_eq!(json_body(response).await, failure["body"]);
+    }
+}
+
+#[derive(Clone)]
+struct ContractTransactionRepository {
+    transactions: BTreeMap<String, IssuanceTransactionRecord>,
+    calls: Arc<Mutex<Vec<Value>>>,
+}
+
+#[async_trait]
+impl TransactionReadRepository for ContractTransactionRepository {
+    async fn get(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<IssuanceTransactionRecord>, TransactionReadError> {
+        self.calls
+            .lock()
+            .expect("transaction calls")
+            .push(serde_json::json!({"method": "get_transaction", "value": transaction_id}));
+        Ok(self.transactions.get(transaction_id).cloned())
+    }
+
+    async fn list(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<IssuanceTransactionRecord>, TransactionReadError> {
+        self.calls
+            .lock()
+            .expect("transaction calls")
+            .push(serde_json::json!({"method": "list_transactions", "value": organization_id}));
+        Ok(["tx-pending", "tx-revoked"]
+            .into_iter()
+            .filter_map(|id| self.transactions.get(id).cloned())
+            .filter(|transaction| transaction.organization_id == organization_id)
+            .collect())
+    }
+}
+
+fn transaction_record(value: &Value) -> IssuanceTransactionRecord {
+    let optional_time = |name: &str| {
+        value[name]
+            .as_str()
+            .map(|time| DateTime::parse_from_rfc3339(time).expect("time").to_utc())
+    };
+    IssuanceTransactionRecord {
+        id: value["id"].as_str().expect("id").to_owned(),
+        organization_id: value["organization_id"]
+            .as_str()
+            .expect("organization")
+            .to_owned(),
+        credential_template_id: value["credential_template_id"]
+            .as_str()
+            .expect("template")
+            .to_owned(),
+        applicant_id: value["applicant_id"].as_str().map(str::to_owned),
+        application_id: value["application_id"].as_str().map(str::to_owned),
+        subject_did: value["subject_did"].as_str().map(str::to_owned),
+        status: TransactionStatus::try_from(value["status"].as_str().expect("status"))
+            .expect("released status"),
+        pre_auth_code: value["pre_auth_code"]
+            .as_str()
+            .expect("pre-authorized code")
+            .to_owned(),
+        credential_type: value["credential_type"].as_str().map(str::to_owned),
+        created_at: optional_time("created_at").expect("created at"),
+        expires_at: optional_time("expires_at").expect("expires at"),
+        issued_at: optional_time("issued_at"),
+        revoked_at: optional_time("revoked_at"),
+        revocation_reason: value["revocation_reason"].as_str().map(str::to_owned),
+    }
+}
+
+fn transaction_app(contract: &Value) -> (axum::Router, Arc<Mutex<Vec<Value>>>) {
+    let inputs = &contract["inputs"];
+    let documents = StaticDiscoveryDocuments::new(
+        inputs["issuer_base_url"].as_str().expect("base URL"),
+        "Example Issuer",
+    );
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let repository = ContractTransactionRepository {
+        transactions: inputs["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .map(transaction_record)
+            .map(|transaction| (transaction.id.clone(), transaction))
+            .collect(),
+        calls: calls.clone(),
+    };
+    let config =
+        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).expect("config");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let app = router_with_services(
+        runtime.state(),
+        documents.clone(),
+        TransportPolicy::new(config.cors_allowed_origins),
+        TenantDiscoveryService::new(
+            documents,
+            Arc::new(ContractTenantRepository {
+                templates: Vec::new(),
+                organizations: Arc::new(Mutex::new(Vec::new())),
+            }),
+            Arc::new(ContractProofPolicies {
+                requirements: BTreeMap::new(),
+                calls: Arc::new(Mutex::new(Vec::new())),
+                unavailable: false,
+            }),
+        ),
+        TransactionReadService::new(
+            Arc::new(repository),
+            inputs["management_api_key"].as_str(),
+            inputs["issuer_base_url"].as_str().expect("base URL"),
+        ),
+    );
+    (app, calls)
+}
+
+fn contract_request(value: &Value) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(value["method"].as_str().unwrap_or("GET"))
+        .uri(value["path"].as_str().expect("path"));
+    if let Some(headers) = value["headers"].as_object() {
+        for (name, value) in headers {
+            builder = builder.header(name, value.as_str().expect("header value"));
+        }
+    }
+    builder.body(Body::empty()).expect("request")
+}
+
+#[tokio::test]
+async fn native_offer_transaction_reads_match_the_python_oracle_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-offer-transaction-reads.json"
+    ))
+    .expect("offer transaction contract");
+    let (app, calls) = transaction_app(&contract);
+
+    for case in contract["cases"].as_array().expect("cases") {
+        calls.lock().expect("transaction calls").clear();
+        let response = app
+            .clone()
+            .oneshot(contract_request(case))
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status().as_u16(),
+            case["status_code"],
+            "{}",
+            case["operation"]
+        );
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/json",
+            "{}",
+            case["operation"]
+        );
+        assert_eq!(
+            json_body(response).await,
+            case["body"],
+            "{}",
+            case["operation"]
+        );
+        assert_eq!(
+            calls.lock().expect("transaction calls").as_slice(),
+            case["repository_calls"]
+                .as_array()
+                .expect("repository calls"),
+            "{}",
+            case["operation"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_offer_transaction_read_edges_and_failures_match_the_python_oracle_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-offer-transaction-reads.json"
+    ))
+    .expect("offer transaction contract");
+    let (app, calls) = transaction_app(&contract);
+
+    let edge_cases = contract["edge_cases"].as_array().expect("edge cases");
+    let failures = contract["failures"].as_array().expect("failures");
+    for failure in edge_cases.iter().chain(failures) {
+        calls.lock().expect("transaction calls").clear();
+        let response = app
+            .clone()
+            .oneshot(contract_request(failure))
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status().as_u16(),
+            failure["status_code"],
+            "{}",
+            failure["name"]
+        );
+        assert_eq!(
+            json_body(response).await,
+            failure["body"],
+            "{}",
+            failure["name"]
+        );
+        assert_eq!(
+            calls.lock().expect("transaction calls").as_slice(),
+            failure["repository_calls"]
+                .as_array()
+                .expect("repository calls"),
+            "{}",
+            failure["name"]
+        );
     }
 }
