@@ -14,13 +14,18 @@ use axum::{
 use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_lti_experience::{
-        canvas_lti_experience_exchange_metadata, sha256_hex, CanvasLtiExperienceExchangeError,
-        CanvasLtiExperienceExchangePersistence, CanvasLtiExperienceExchangeRecord,
-        CanvasLtiExperienceExchangeRepository, CanvasLtiExperienceExchangeResult,
-        CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionGenerator,
-        CanvasLtiExperienceSessionSeed, SecureCanvasLtiExperienceSessionGenerator,
+        canvas_lti_experience_exchange_metadata, canvas_lti_experience_session_projection,
+        sha256_hex, CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
+        CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeRepository,
+        CanvasLtiExperienceExchangeResult, CanvasLtiExperienceExchangeService,
+        CanvasLtiExperienceSessionError, CanvasLtiExperienceSessionGenerator,
+        CanvasLtiExperienceSessionSeed, CanvasLtiExperienceSessionService,
+        SecureCanvasLtiExperienceSessionGenerator,
     },
-    canvas_lti_launch::CanvasLtiClock,
+    canvas_lti_launch::{
+        CanvasLtiClock, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+        CanvasLtiStoredLaunchState,
+    },
     http::router_with_canvas_lti_experience_exchange,
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
@@ -41,6 +46,34 @@ struct ExchangeRepository {
     requests: Mutex<Vec<CanvasLtiExperienceExchangePersistence>>,
     fail: Mutex<bool>,
     invalid: Mutex<bool>,
+}
+
+#[derive(Default)]
+struct SessionRepository {
+    record: Mutex<Option<CanvasLtiStoredLaunchState>>,
+    lookups: Mutex<Vec<String>>,
+    fail: Mutex<bool>,
+}
+
+#[async_trait]
+impl CanvasLtiLaunchStateRepository for SessionRepository {
+    async fn get_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        self.lookups.lock().unwrap().push(state.to_owned());
+        if *self.fail.lock().unwrap() {
+            return Err(CanvasLtiLaunchPlanError::RepositoryUnavailable);
+        }
+        Ok(self.record.lock().unwrap().clone())
+    }
+
+    async fn consume_launch_state(
+        &self,
+        _state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        unreachable!("session lookup never consumes a launch state")
+    }
 }
 
 #[async_trait]
@@ -160,6 +193,23 @@ fn exchange_app(service: CanvasLtiExperienceExchangeService) -> axum::Router {
 
 async fn response_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap()
+}
+
+fn stored_session_vector() -> CanvasLtiStoredLaunchState {
+    let vector = &contract()["experience"]["session_current"]["vector"];
+    let stored = &vector["stored_session"];
+    CanvasLtiStoredLaunchState {
+        id: stored["id"].as_str().unwrap().to_owned(),
+        platform_id: stored["platform_id"].as_str().unwrap().to_owned(),
+        organization_id: stored["organization_id"].as_str().unwrap().to_owned(),
+        canvas_account_id: stored["canvas_account_id"].as_str().unwrap().to_owned(),
+        state: vector["expected_state_digest"].as_str().unwrap().to_owned(),
+        nonce: "private-session-nonce".to_owned(),
+        redirect_uri: "https://ui.example.test/canvas/lti/experience".to_owned(),
+        status: stored["status"].as_str().unwrap().to_owned(),
+        metadata: stored["metadata"].clone(),
+        expired: false,
+    }
 }
 
 #[test]
@@ -544,5 +594,89 @@ async fn exchange_http_sanitizes_failures_and_never_returns_a_token() {
     assert_eq!(
         to_bytes(failed.into_body(), 1024).await.unwrap(),
         "Internal Server Error"
+    );
+}
+
+#[test]
+fn current_session_projection_replays_the_complete_browser_safe_vector() {
+    let vector = &contract()["experience"]["session_current"]["vector"];
+    let projected = canvas_lti_experience_session_projection(&stored_session_vector()).unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&projected).unwrap(),
+        vector["expected_response"]
+    );
+    assert_eq!(projected.learner_key, vector["expected_learner_key"]);
+    let response = serde_json::to_value(projected).unwrap();
+    for field in contract()["experience"]["session_current"]["browser_safe"]
+        ["private_response_fields_forbidden"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(response.get(field.as_str().unwrap()).is_none());
+    }
+}
+
+#[tokio::test]
+async fn current_session_uses_only_the_digest_and_fails_closed_for_every_invalid_record() {
+    let vector = &contract()["experience"]["session_current"]["vector"];
+    let repository = Arc::new(SessionRepository {
+        record: Mutex::new(Some(stored_session_vector())),
+        ..SessionRepository::default()
+    });
+    let service = CanvasLtiExperienceSessionService::new(repository.clone());
+    service
+        .current(&format!(
+            "  {}  ",
+            vector["normalized_token"].as_str().unwrap()
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.lookups.lock().unwrap().as_slice(),
+        [vector["expected_state_digest"].as_str().unwrap()]
+    );
+    assert_ne!(
+        repository.lookups.lock().unwrap()[0],
+        vector["normalized_token"]
+    );
+
+    let conditions = contract()["experience"]["session_current"]["lookup"]["required"]
+        .as_array()
+        .unwrap()[1..]
+        .to_vec();
+    for condition in conditions {
+        let mut record = stored_session_vector();
+        match condition.as_str().unwrap() {
+            "status-session" => record.status = "pending".to_owned(),
+            "unexpired" => record.expired = true,
+            "kind-canvas-lti-experience-session" => {
+                record.metadata["kind"] = Value::String("canvas_lti_experience_code".to_owned());
+            }
+            "verified-launch-object" => record.metadata["verified_launch"] = json!([]),
+            "mip-primitives-object" => record.metadata["mip_primitives"] = Value::Null,
+            unknown => panic!("unhandled session condition: {unknown}"),
+        }
+        let repository = Arc::new(SessionRepository {
+            record: Mutex::new(Some(record)),
+            ..SessionRepository::default()
+        });
+        assert_eq!(
+            CanvasLtiExperienceSessionService::new(repository)
+                .current("invalid-session-token")
+                .await
+                .unwrap_err(),
+            CanvasLtiExperienceSessionError::NotFound
+        );
+    }
+
+    let repository = Arc::new(SessionRepository::default());
+    *repository.fail.lock().unwrap() = true;
+    assert_eq!(
+        CanvasLtiExperienceSessionService::new(repository)
+            .current("session-token")
+            .await
+            .unwrap_err(),
+        CanvasLtiExperienceSessionError::RepositoryUnavailable
     );
 }
