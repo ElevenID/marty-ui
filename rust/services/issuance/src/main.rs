@@ -2,8 +2,12 @@ use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
     canvas_issuance_guard::CanvasGuardConfig,
+    canvas_lti_launch::{CanvasLtiLaunchPorts, CanvasLtiLaunchService, SystemCanvasLtiClock},
     canvas_lti_login::CanvasLtiLoginService,
-    canvas_lti_postgres::PostgresCanvasLtiLoginRepository,
+    canvas_lti_postgres::{
+        CanvasLtiJwksRefreshConfig, MartyCanvasLtiAgsServiceUrlValidator,
+        PostgresCanvasLtiJwksRefresher, PostgresCanvasLtiLoginRepository,
+    },
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -12,7 +16,7 @@ use marty_issuance_service::{
     credential_postgres::PostgresCredentialRepository,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
-    http::{router_with_all_services, IssuanceServices},
+    http::{router_with_all_services, CanvasLtiServices, IssuanceServices},
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
@@ -86,14 +90,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
         nonce_repository.clone(),
         Arc::new(SecureProofNonceGenerator),
     );
+    let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
     let canvas_lti_login = CanvasLtiLoginService::new(
-        Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone())),
+        canvas_lti_repository.clone(),
         &config.issuer_base_url,
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
         config.canvas_lti_state_ttl,
         config.canvas_self_managed_origins.clone(),
     )?;
+    let canvas_lti_launch = CanvasLtiLaunchService::new(
+        canvas_lti_login.clone(),
+        CanvasLtiLaunchPorts {
+            state_repository: canvas_lti_repository.clone(),
+            context_repository: canvas_lti_repository.clone(),
+            jwks_refresher: Arc::new(PostgresCanvasLtiJwksRefresher::new(
+                pool.clone(),
+                CanvasLtiJwksRefreshConfig {
+                    timeout: config.dependency_timeout,
+                    ttl: config.canvas_lti_jwks_ttl,
+                    self_managed_origins: config.canvas_self_managed_origins.clone(),
+                    allow_private_networks: config.canvas_allow_private_base_urls,
+                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+                },
+            )),
+            identity_repository: canvas_lti_repository.clone(),
+            ags_repository: canvas_lti_repository.clone(),
+            ags_url_validator: Arc::new(MartyCanvasLtiAgsServiceUrlValidator::new(
+                config.canvas_private_origin_allowlist.clone(),
+            )),
+            capability_repository: canvas_lti_repository,
+            clock: Arc::new(SystemCanvasLtiClock),
+        },
+    );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -142,7 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             token_exchange,
             proof_nonce,
             credential,
-            canvas_lti_login,
+            CanvasLtiServices::new(canvas_lti_login, canvas_lti_launch),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );

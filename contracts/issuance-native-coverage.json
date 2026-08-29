@@ -177,6 +177,12 @@
       "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login",
       "operation": "initiate_canvas_lti_experience_login_route",
       "canvas_lti_behavior_case": "experience-login"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
+      "operation": "verify_canvas_lti_launch_route",
+      "canvas_lti_behavior_case": "launch"
     }
   ],
   "platform_additive_http": [
@@ -184,21 +190,25 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 111,
+    "http": 110,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 71,
+    "literal_environment_variables": 67,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
   },
   "native_environment_variables": [
     "CORS_ALLOWED_ORIGINS",
+    "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
+    "CANVAS_ALLOW_PRIVATE_BASE_URLS",
     "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+    "CANVAS_LTI_JWKS_TTL_MINUTES",
     "CANVAS_LTI_STATE_TTL_MINUTES",
     "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
     "CANVAS_PILOT_ORGANIZATION_IDS",
     "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+    "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
     "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
     "DATABASE_URL",
     "GRPC_SERVICE_TOKEN",

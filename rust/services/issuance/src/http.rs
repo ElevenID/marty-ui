@@ -15,9 +15,13 @@ use marty_oid4vci::discovery::{
 };
 use mmf_core::HealthReport;
 use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::{
+    canvas_lti_launch::{
+        public_launch_response, CanvasLtiLaunchPlanError, CanvasLtiLaunchService,
+        CanvasLtiLaunchServiceError, CanvasLtiLaunchSubmission,
+    },
     canvas_lti_login::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
@@ -42,6 +46,7 @@ struct IssuanceState {
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
+    canvas_lti_launch: Option<CanvasLtiLaunchService>,
 }
 
 pub struct IssuanceServices {
@@ -50,8 +55,21 @@ pub struct IssuanceServices {
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
     credential: CredentialIssuanceService,
-    canvas_lti_login: CanvasLtiLoginService,
+    canvas_lti: CanvasLtiServices,
     token_rate_limiter: TokenRateLimiter,
+}
+
+#[derive(Clone, Debug)]
+pub struct CanvasLtiServices {
+    login: CanvasLtiLoginService,
+    launch: CanvasLtiLaunchService,
+}
+
+impl CanvasLtiServices {
+    #[must_use]
+    pub fn new(login: CanvasLtiLoginService, launch: CanvasLtiLaunchService) -> Self {
+        Self { login, launch }
+    }
 }
 
 impl IssuanceServices {
@@ -62,7 +80,7 @@ impl IssuanceServices {
         token_exchange: TokenExchangeService,
         proof_nonce: ProofNonceService,
         credential: CredentialIssuanceService,
-        canvas_lti_login: CanvasLtiLoginService,
+        canvas_lti: CanvasLtiServices,
         token_rate_limiter: TokenRateLimiter,
     ) -> Self {
         Self {
@@ -71,7 +89,7 @@ impl IssuanceServices {
             token_exchange,
             proof_nonce,
             credential,
-            canvas_lti_login,
+            canvas_lti,
             token_rate_limiter,
         }
     }
@@ -85,6 +103,7 @@ struct OptionalServices {
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
+    canvas_lti_launch: Option<CanvasLtiLaunchService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -152,7 +171,8 @@ pub fn router_with_all_services(
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
             credential: Some(services.credential),
-            canvas_lti_login: Some(services.canvas_lti_login),
+            canvas_lti_login: Some(services.canvas_lti.login),
+            canvas_lti_launch: Some(services.canvas_lti.launch),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -248,6 +268,23 @@ pub fn router_with_canvas_lti_login(
     )
 }
 
+pub fn router_with_canvas_lti_launch(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_launch: CanvasLtiLaunchService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_launch: Some(canvas_lti_launch),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -333,6 +370,12 @@ fn router_with_optional_services(
                 post(initiate_canvas_lti_experience_login),
             );
     }
+    if services.canvas_lti_launch.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
+            post(verify_canvas_lti_launch),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -341,6 +384,7 @@ fn router_with_optional_services(
         proof_nonce: services.proof_nonce,
         credential: services.credential,
         canvas_lti_login: services.canvas_lti_login,
+        canvas_lti_launch: services.canvas_lti_launch,
     });
     system
         .merge(api)
@@ -353,6 +397,23 @@ async fn initiate_canvas_lti_login(
     request: Request,
 ) -> Result<Response, CanvasLtiLoginHttpError> {
     initiate_canvas_lti_login_mode(state, platform_id, request, CanvasLtiLoginMode::Launch).await
+}
+
+async fn verify_canvas_lti_launch(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasLtiLaunchHttpError> {
+    let service = state
+        .canvas_lti_launch
+        .as_ref()
+        .ok_or(CanvasLtiLaunchPlanError::RepositoryUnavailable)?;
+    // Preserve the Python boundary: platform lookup, pilot authorization, and
+    // trust validation occur before request-body parsing.
+    let platform = service.prepare_platform(&platform_id).await?;
+    let submission = parse_canvas_lti_launch_submission(request).await?;
+    let result = service.launch_prepared(platform, submission).await?;
+    Ok(Json(public_launch_response(&result.response)).into_response())
 }
 
 async fn initiate_canvas_lti_experience_login(
@@ -385,38 +446,43 @@ async fn initiate_canvas_lti_login_mode(
 async fn parse_canvas_lti_login_submission(
     request: Request,
 ) -> Result<CanvasLtiLoginSubmission, CanvasLtiLoginHttpError> {
-    const MAX_LOGIN_BODY_BYTES: usize = 64 * 1024;
+    let object = parse_canvas_lti_payload(request)
+        .await
+        .map_err(CanvasLtiLoginError::Invalid)?;
+    Ok(CanvasLtiLoginSubmission::from_json_object(&object))
+}
+
+async fn parse_canvas_lti_launch_submission(
+    request: Request,
+) -> Result<CanvasLtiLaunchSubmission, CanvasLtiLaunchHttpError> {
+    let object = parse_canvas_lti_payload(request)
+        .await
+        .map_err(CanvasLtiLaunchPlanError::Invalid)?;
+    Ok(CanvasLtiLaunchSubmission::from_json_object(&object))
+}
+
+async fn parse_canvas_lti_payload(request: Request) -> Result<Map<String, Value>, &'static str> {
+    const MAX_CANVAS_LTI_BODY_BYTES: usize = 64 * 1024;
     let is_json = request
         .headers()
         .get(http_header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"));
-    let bytes = to_bytes(request.into_body(), MAX_LOGIN_BODY_BYTES)
+    let bytes = to_bytes(request.into_body(), MAX_CANVAS_LTI_BODY_BYTES)
         .await
-        .map_err(|_| {
-            CanvasLtiLoginError::Invalid("Canvas LTI request body exceeds the size limit")
-        })?;
+        .map_err(|_| "Canvas LTI request body exceeds the size limit")?;
     if is_json {
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| CanvasLtiLoginError::Invalid("Invalid JSON body"))?;
-        let object = value.as_object().ok_or(CanvasLtiLoginError::Invalid(
-            "Canvas LTI JSON body must be an object",
-        ))?;
-        return Ok(CanvasLtiLoginSubmission::from_json_object(object));
+        let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid JSON body")?;
+        return value
+            .as_object()
+            .cloned()
+            .ok_or("Canvas LTI JSON body must be an object");
     }
-    let mut submission = CanvasLtiLoginSubmission::default();
+    let mut object = Map::new();
     for (name, value) in url::form_urlencoded::parse(&bytes) {
-        let destination = match name.as_ref() {
-            "iss" => &mut submission.iss,
-            "login_hint" => &mut submission.login_hint,
-            "target_link_uri" => &mut submission.target_link_uri,
-            "lti_message_hint" => &mut submission.lti_message_hint,
-            "client_id" => &mut submission.client_id,
-            _ => continue,
-        };
-        *destination = Some(value.into_owned());
+        object.insert(name.into_owned(), Value::String(value.into_owned()));
     }
-    Ok(submission)
+    Ok(object)
 }
 
 async fn root_issuer_metadata(
@@ -737,6 +803,8 @@ struct CredentialIssuanceHttpError(CredentialIssuanceError);
 
 struct CanvasLtiLoginHttpError(CanvasLtiLoginError);
 
+struct CanvasLtiLaunchHttpError(CanvasLtiLaunchServiceError);
+
 impl From<CanvasLtiLoginError> for CanvasLtiLoginHttpError {
     fn from(value: CanvasLtiLoginError) -> Self {
         Self(value)
@@ -745,20 +813,72 @@ impl From<CanvasLtiLoginError> for CanvasLtiLoginHttpError {
 
 impl IntoResponse for CanvasLtiLoginHttpError {
     fn into_response(self) -> Response {
+        let (status, detail) = canvas_lti_login_status_detail(self.0);
+        (status, Json(json!({"detail": detail}))).into_response()
+    }
+}
+
+impl From<CanvasLtiLaunchServiceError> for CanvasLtiLaunchHttpError {
+    fn from(value: CanvasLtiLaunchServiceError) -> Self {
+        Self(value)
+    }
+}
+
+impl From<CanvasLtiLaunchPlanError> for CanvasLtiLaunchHttpError {
+    fn from(value: CanvasLtiLaunchPlanError) -> Self {
+        Self(CanvasLtiLaunchServiceError::Launch(value))
+    }
+}
+
+impl IntoResponse for CanvasLtiLaunchHttpError {
+    fn into_response(self) -> Response {
         let (status, detail) = match self.0 {
-            error
-            @ (CanvasLtiLoginError::PlatformNotFound | CanvasLtiLoginError::PilotDisabled) => {
-                (StatusCode::NOT_FOUND, error.to_string())
-            }
-            CanvasLtiLoginError::Invalid(detail) => (StatusCode::BAD_REQUEST, detail.to_owned()),
-            CanvasLtiLoginError::Conflict(detail) => (StatusCode::CONFLICT, detail.to_owned()),
-            CanvasLtiLoginError::TrustConflict(detail) => (StatusCode::CONFLICT, detail),
-            CanvasLtiLoginError::RepositoryUnavailable => (
+            CanvasLtiLaunchServiceError::Platform(CanvasLtiLoginError::RepositoryUnavailable) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Canvas LTI login is temporarily unavailable".to_owned(),
+                "Canvas LTI launch is temporarily unavailable".to_owned(),
             ),
+            CanvasLtiLaunchServiceError::Platform(error) => canvas_lti_login_status_detail(error),
+            CanvasLtiLaunchServiceError::Launch(error) => {
+                use CanvasLtiLaunchPlanError as Error;
+                match error {
+                    error @ (Error::Invalid(_)
+                    | Error::Verification(_)
+                    | Error::VerificationAfterJwksRefresh(_)
+                    | Error::JwksRefresh(_)
+                    | Error::StateUnknown
+                    | Error::StateExpired) => (StatusCode::BAD_REQUEST, error.to_string()),
+                    error @ (Error::BindingNotFound
+                    | Error::FeatureDisabled
+                    | Error::AgsBindingMismatch
+                    | Error::AgsRequirementMismatch
+                    | Error::AgsLineItem(_)
+                    | Error::CapabilityScopeMismatch
+                    | Error::CapabilityConfigurationDrift) => {
+                        (StatusCode::CONFLICT, error.to_string())
+                    }
+                    Error::RepositoryUnavailable => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Canvas LTI launch is temporarily unavailable".to_owned(),
+                    ),
+                }
+            }
         };
         (status, Json(json!({"detail": detail}))).into_response()
+    }
+}
+
+fn canvas_lti_login_status_detail(error: CanvasLtiLoginError) -> (StatusCode, String) {
+    match error {
+        error @ (CanvasLtiLoginError::PlatformNotFound | CanvasLtiLoginError::PilotDisabled) => {
+            (StatusCode::NOT_FOUND, error.to_string())
+        }
+        CanvasLtiLoginError::Invalid(detail) => (StatusCode::BAD_REQUEST, detail.to_owned()),
+        CanvasLtiLoginError::Conflict(detail) => (StatusCode::CONFLICT, detail.to_owned()),
+        CanvasLtiLoginError::TrustConflict(detail) => (StatusCode::CONFLICT, detail),
+        CanvasLtiLoginError::RepositoryUnavailable => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Canvas LTI login is temporarily unavailable".to_owned(),
+        ),
     }
 }
 

@@ -5,6 +5,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::{
+    body::{to_bytes, Body},
+    http::{header, Request, StatusCode},
+};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -28,9 +32,14 @@ use marty_issuance_service::{
         CanvasLtiPlatform,
     },
     canvas_lti_postgres::MartyCanvasLtiAgsServiceUrlValidator,
+    http::router_with_canvas_lti_launch,
+    transport::TransportPolicy,
+    IssuanceRuntime, IssuanceServiceConfig,
 };
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_oid4vci::lti::VerifiedLtiLaunch;
 use serde_json::{json, Value};
+use tower::ServiceExt;
 
 #[derive(Default)]
 struct StateRepository {
@@ -514,6 +523,46 @@ fn orchestration_binding(platform: &CanvasLtiPlatform) -> CanvasLtiProgramBindin
     binding
 }
 
+fn orchestration_platform() -> CanvasLtiPlatform {
+    let mut platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    platform.lti_openid_configuration = Some(json!({
+        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
+    }));
+    platform
+}
+
+fn orchestration_app(service: CanvasLtiLaunchService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    router_with_canvas_lti_launch(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
+        TransportPolicy::new(vec!["https://canvas.example.test".to_owned()]),
+        service,
+    )
+}
+
+async fn post_launch_json(app: axum::Router, payload: Value) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/platforms/platform-1/launch")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    (status, body)
+}
+
 fn orchestration_service(
     repository: Arc<OrchestrationRepository>,
     refreshed: CanvasLtiPlatform,
@@ -568,14 +617,7 @@ async fn launch_orchestration_replays_order_and_atomic_persistence_contract() {
         ])
     );
     let repository = Arc::new(OrchestrationRepository::default());
-    let mut platform = platform_from(&json!({
-        "id": "platform-1",
-        "organization_id": "org-1",
-        "canvas_account_id": "account-1"
-    }));
-    platform.lti_openid_configuration = Some(json!({
-        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
-    }));
+    let mut platform = orchestration_platform();
     platform.config_version = 3;
     platform.lti_jwks_json = Some(json!({"keys": [{"kid": "old-key"}]}));
     let (token, jwk) = orchestration_token("new-key", 31);
@@ -667,14 +709,7 @@ async fn launch_orchestration_replays_order_and_atomic_persistence_contract() {
 #[tokio::test]
 async fn jwt_failure_keeps_state_consumed_without_identity_or_capability_writes() {
     let repository = Arc::new(OrchestrationRepository::default());
-    let mut platform = platform_from(&json!({
-        "id": "platform-1",
-        "organization_id": "org-1",
-        "canvas_account_id": "account-1"
-    }));
-    platform.lti_openid_configuration = Some(json!({
-        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
-    }));
+    let mut platform = orchestration_platform();
     let (token, signing_jwk) = orchestration_token("same-key", 41);
     let (_, wrong_jwk) = orchestration_token("same-key", 42);
     platform.lti_jwks_json = Some(json!({"keys": [wrong_jwk]}));
@@ -714,14 +749,7 @@ async fn jwt_failure_keeps_state_consumed_without_identity_or_capability_writes(
 #[tokio::test]
 async fn binding_failure_preserves_consumed_state_and_verified_identity_only() {
     let repository = Arc::new(OrchestrationRepository::default());
-    let mut platform = platform_from(&json!({
-        "id": "platform-1",
-        "organization_id": "org-1",
-        "canvas_account_id": "account-1"
-    }));
-    platform.lti_openid_configuration = Some(json!({
-        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
-    }));
+    let mut platform = orchestration_platform();
     let (token, jwk) = orchestration_token("current-key", 51);
     platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
     *repository.platform.lock().unwrap() = Some(platform.clone());
@@ -821,6 +849,218 @@ async fn capability_failure_returns_no_response_after_prior_durable_writes() {
         repository.calls().last(),
         Some(&"merge-capabilities-and-persist-platform-validation")
     );
+}
+
+#[tokio::test]
+async fn launch_http_form_uses_last_duplicate_and_returns_only_public_projection() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 61);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("id_token", "discarded-token")
+        .append_pair("state", "discarded-state")
+        .append_pair("id_token", &token)
+        .append_pair("state", "state-1")
+        .finish();
+    let response = orchestration_app(orchestration_service(repository.clone(), platform))
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/platforms/platform-1/launch")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert_eq!(body["verified"], true);
+    assert_eq!(body["canvas_platform_id"], "platform-1");
+    assert_eq!(body["canvas_program_binding_id"], "binding-1");
+    assert_eq!(body["application_template_id"], "application-1");
+    for private_field in [
+        "subject",
+        "nonce",
+        "state",
+        "learner_identity",
+        "raw_claims",
+        "lti_capabilities",
+        "target_link_uri",
+    ] {
+        assert!(body.get(private_field).is_none(), "{private_field}");
+    }
+    assert_eq!(
+        repository.states.lock().unwrap()["state-1"].status,
+        "consumed"
+    );
+}
+
+#[tokio::test]
+async fn launch_http_rejects_malformed_non_object_and_oversized_bodies() {
+    let cases = [
+        ("application/json", "{".to_owned(), "Invalid JSON body"),
+        (
+            "application/json",
+            "[]".to_owned(),
+            "Canvas LTI JSON body must be an object",
+        ),
+        (
+            "application/x-www-form-urlencoded",
+            "x".repeat(64 * 1024 + 1),
+            "Canvas LTI request body exceeds the size limit",
+        ),
+    ];
+    for (content_type, body, detail) in cases {
+        let repository = Arc::new(OrchestrationRepository::default());
+        let platform = orchestration_platform();
+        *repository.platform.lock().unwrap() = Some(platform.clone());
+        let response = orchestration_app(orchestration_service(repository, platform))
+            .oneshot(
+                Request::post("/v1/integrations/canvas/lti/platforms/platform-1/launch")
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(body, json!({"detail": detail}));
+    }
+}
+
+#[tokio::test]
+async fn launch_http_replays_every_frozen_submission_failure() {
+    let contract = contract();
+    let failures = contract["launch"]["submission"]["failures"]
+        .as_array()
+        .unwrap();
+    let expected = |name: &str| {
+        let failure = failures
+            .iter()
+            .find(|failure| failure["name"] == name)
+            .unwrap();
+        (
+            StatusCode::from_u16(failure["status_code"].as_u64().unwrap() as u16).unwrap(),
+            json!({"detail": failure["detail"]}),
+        )
+    };
+
+    for (name, payload) in [
+        ("id_token_missing", json!({"state": "state-1"})),
+        (
+            "state_missing",
+            json!({"id_token": "header.payload.signature"}),
+        ),
+        (
+            "state_unknown",
+            json!({"id_token": "header.payload.signature", "state": "state-1"}),
+        ),
+    ] {
+        let repository = Arc::new(OrchestrationRepository::default());
+        let platform = orchestration_platform();
+        *repository.platform.lock().unwrap() = Some(platform.clone());
+        assert_eq!(
+            post_launch_json(
+                orchestration_app(orchestration_service(repository, platform)),
+                payload,
+            )
+            .await,
+            expected(name)
+        );
+    }
+
+    let repository = Arc::new(OrchestrationRepository::default());
+    let platform = orchestration_platform();
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    let mut consumed = pending_state("platform-1", "state-1");
+    consumed.status = "consumed".to_owned();
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), consumed);
+    assert_eq!(
+        post_launch_json(
+            orchestration_app(orchestration_service(repository, platform)),
+            json!({"id_token": "header.payload.signature", "state": "state-1"}),
+        )
+        .await,
+        expected("state_consumed")
+    );
+
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 81);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    let mut binding = orchestration_binding(&platform);
+    binding.feature_flags = json!({"enable_canvas_lti": false});
+    repository.bindings.lock().unwrap().push(binding);
+    assert_eq!(
+        post_launch_json(
+            orchestration_app(orchestration_service(repository, platform)),
+            json!({"id_token": token, "state": "state-1"}),
+        )
+        .await,
+        expected("feature_disabled")
+    );
+}
+
+#[tokio::test]
+async fn launch_http_maps_binding_failure_to_frozen_conflict_response() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 71);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    *repository.fail_binding_resolution.lock().unwrap() = true;
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    let response = orchestration_app(orchestration_service(repository.clone(), platform))
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/platforms/platform-1/launch")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"id_token": token, "state": "state-1"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert_eq!(
+        body,
+        json!({"detail": "Canvas LTI launch did not match an enabled Canvas program binding"})
+    );
+    assert_eq!(*repository.identity_count.lock().unwrap(), 1);
+    assert!(repository.capability_requests.lock().unwrap().is_empty());
 }
 
 #[test]
