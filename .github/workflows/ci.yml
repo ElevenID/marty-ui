@@ -704,6 +704,9 @@ jobs:
           SIGNING_KEYS_INTERNAL_API_KEY: ci-only-signing-key-api-key-32-characters
           FLOW_WEBHOOK_SECRET: ci-only-flow-webhook-secret-32-characters
           FLOW_APPLICATION_EVENT_HMAC_KEY: ci-only-flow-application-event-key-32-chars
+          TOKEN_HMAC_KEY: ci-only-token-hmac-key-with-at-least-32-characters
+          MARTY_DB_PASSWORD: ci-only-database-password
+          CORS_ORIGINS: https://beta.example.test
           REDIS_PASSWORD: ci-only-redis-password
           MARTY_ISSUER_DID: did:web:beta.example.test
           MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
