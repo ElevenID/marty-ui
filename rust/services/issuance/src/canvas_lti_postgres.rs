@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use chrono::Duration as ChronoDuration;
 use marty_oid4vci::lti::{
     canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
     validate_canvas_lti_service_url, CanvasLtiPlatformProbe,
@@ -9,8 +10,14 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
 
+use crate::canvas_lti_bootstrap::{
+    plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplication,
+    CanvasLtiBootstrapApplicationSeed, CanvasLtiBootstrapPersistence, CanvasLtiBootstrapPlan,
+    CanvasLtiBootstrapRepository, CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest,
+    CanvasLtiBootstrapTemplate,
+};
 use crate::canvas_lti_experience::{
-    canvas_lti_experience_exchange_metadata, generate_valid_session,
+    canvas_lti_experience_exchange_metadata, generate_valid_session, lti_subject, python_truthy,
     CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
     CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeRepository,
     CanvasLtiExperienceSessionGenerator,
@@ -93,6 +100,58 @@ const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
     FROM issuance_service.canvas_program_bindings
     WHERE organization_id = $1 AND platform_id = $2
     ORDER BY created_at";
+
+const GET_BOOTSTRAP_FEATURE_FLAGS: &str = "SELECT feature_flags
+    FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2";
+
+const GET_BOOTSTRAP_TEMPLATE: &str = "SELECT id, organization_id
+    FROM issuance_service.application_templates
+    WHERE id = $1";
+
+const LIST_BOOTSTRAP_APPLICATIONS: &str = "SELECT id, organization_id,
+        application_template_id, applicant_identifier, form_data, integration_context,
+        status, created_at, updated_at
+    FROM issuance_service.applications
+    WHERE organization_id = $1 AND application_template_id = $2
+    ORDER BY created_at DESC";
+
+const GET_BOOTSTRAP_APPLICATION: &str = "SELECT id, organization_id,
+        application_template_id, applicant_identifier, form_data, integration_context,
+        status, created_at, updated_at
+    FROM issuance_service.applications
+    WHERE id = $1";
+
+const LOCK_BOOTSTRAP_SCOPE: &str = "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))";
+
+const LIST_LOCKED_BOOTSTRAP_APPLICATIONS: &str = "SELECT id, organization_id,
+        application_template_id, applicant_identifier, form_data, integration_context,
+        status, created_at, updated_at
+    FROM issuance_service.applications
+    WHERE organization_id = $1 AND application_template_id = $2
+    ORDER BY created_at DESC
+    FOR UPDATE";
+
+const INSERT_BOOTSTRAP_APPLICATION: &str = "INSERT INTO issuance_service.applications (
+        id, organization_id, application_template_id, applicant_identifier, form_data,
+        submitted_evidence, integration_context, status, review_notes, reviewer_id,
+        rejection_reason, derived_claims, issuance_transaction_id, credential_id,
+        created_at, updated_at, submitted_at, reviewed_at, expires_at
+    ) VALUES ($1, $2, $3, $4, $5, '[]'::json, $6, $7, NULL, NULL, NULL,
+        '{}'::json, NULL, NULL, $8, $8, $8, NULL, $9)";
+
+const UPDATE_BOOTSTRAP_APPLICATION: &str = "UPDATE issuance_service.applications
+    SET integration_context = $3, updated_at = $4
+    WHERE id = $1 AND organization_id = $2";
+
+const INSERT_BOOTSTRAP_EVENT: &str = "INSERT INTO issuance_service.issuance_events (
+        id, transaction_id, application_id, event_type, metadata, created_at
+    ) VALUES ($1, NULL, $2, 'canvas_lti_application_bootstrapped', $3, $4)";
+
+const ATTACH_BOOTSTRAP_SESSION: &str = "UPDATE issuance_service.canvas_lti_launch_states
+    SET metadata = $4
+    WHERE id = $1 AND state = $2 AND organization_id = $3
+      AND status = 'session' AND expires_at > clock_timestamp()";
 
 const LOCK_IDENTITY_SCOPE: &str = "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))";
 
@@ -687,6 +746,217 @@ impl CanvasLtiCapabilitySnapshotRepository for PostgresCanvasLtiLoginRepository 
 }
 
 #[async_trait]
+impl CanvasLtiBootstrapRepository for PostgresCanvasLtiLoginRepository {
+    async fn bound_feature_enabled(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+        flag: &str,
+    ) -> Result<Option<bool>, CanvasLtiBootstrapRepositoryError> {
+        let row = sqlx::query(GET_BOOTSTRAP_FEATURE_FLAGS)
+            .bind(binding_id)
+            .bind(organization_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(bootstrap_repository_error)?;
+        let Some(row) = row else { return Ok(None) };
+        let flags: Value = row
+            .try_get("feature_flags")
+            .map_err(bootstrap_repository_error)?;
+        let Some(flags) = flags.as_object() else {
+            return Ok(Some(true));
+        };
+        const CANVAS_FLAGS: [&str; 7] = [
+            "enable_canvas_lti",
+            "enable_canvas_mirror_publish",
+            "enable_canvas_mirror_ops",
+            "enable_canvas_deep_linking",
+            "enable_canvas_ags",
+            "enable_canvas_nrps",
+            "enable_background_awards",
+        ];
+        if !CANVAS_FLAGS.iter().any(|name| flags.contains_key(*name)) {
+            return Ok(Some(true));
+        }
+        Ok(Some(flags.get(flag).is_some_and(python_truthy)))
+    }
+
+    async fn get_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<CanvasLtiBootstrapTemplate>, CanvasLtiBootstrapRepositoryError> {
+        sqlx::query(GET_BOOTSTRAP_TEMPLATE)
+            .bind(template_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(bootstrap_repository_error)?
+            .map(bootstrap_template)
+            .transpose()
+    }
+
+    async fn list_applications(
+        &self,
+        organization_id: &str,
+        template_id: &str,
+    ) -> Result<Vec<CanvasLtiBootstrapApplication>, CanvasLtiBootstrapRepositoryError> {
+        sqlx::query(LIST_BOOTSTRAP_APPLICATIONS)
+            .bind(organization_id)
+            .bind(template_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(bootstrap_repository_error)?
+            .into_iter()
+            .map(bootstrap_application)
+            .collect()
+    }
+
+    async fn persist_plan(
+        &self,
+        context: &crate::canvas_lti_experience::CanvasLtiExperienceSessionContext,
+        plan: &CanvasLtiBootstrapPlan,
+    ) -> Result<CanvasLtiBootstrapPersistence, CanvasLtiBootstrapRepositoryError> {
+        let template_id = context
+            .application_template_id
+            .as_deref()
+            .ok_or(CanvasLtiBootstrapRepositoryError::Unavailable)?;
+        let join_identity = lti_subject(&context.verified_launch).map_or_else(
+            || format!("state:{}", context.state),
+            |subject| {
+                format!(
+                    "subject:{}:{subject}",
+                    context
+                        .canvas_program_binding_id
+                        .as_deref()
+                        .unwrap_or_default()
+                )
+            },
+        );
+        let lock_scope = format!(
+            "canvas-bootstrap:{}:{template_id}:{join_identity}",
+            context.launch_state.organization_id
+        );
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(bootstrap_repository_error)?;
+        sqlx::query(LOCK_BOOTSTRAP_SCOPE)
+            .bind(lock_scope)
+            .execute(&mut *transaction)
+            .await
+            .map_err(bootstrap_repository_error)?;
+        let locked_applications = sqlx::query(LIST_LOCKED_BOOTSTRAP_APPLICATIONS)
+            .bind(&context.launch_state.organization_id)
+            .bind(template_id)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(bootstrap_repository_error)?
+            .into_iter()
+            .map(bootstrap_application)
+            .collect::<Result<Vec<_>, _>>()?;
+        let template = CanvasLtiBootstrapTemplate {
+            id: template_id.to_owned(),
+            organization_id: context.launch_state.organization_id.clone(),
+        };
+        let replay = plan_canvas_lti_experience_bootstrap(
+            context,
+            &CanvasLtiBootstrapRequest::default(),
+            true,
+            Some(true),
+            Some(&template),
+            &locked_applications,
+            |_| CanvasLtiBootstrapApplicationSeed {
+                id: plan.application.id.clone(),
+                anonymous_identifier_suffix: String::new(),
+            },
+            plan.planned_at,
+        )
+        .map_err(|_| CanvasLtiBootstrapRepositoryError::Unavailable)?;
+        let actual = if replay.created {
+            if !plan.created {
+                return Err(CanvasLtiBootstrapRepositoryError::Unavailable);
+            }
+            plan.clone()
+        } else {
+            replay
+        };
+
+        if actual.created {
+            let expires_at = actual.planned_at + ChronoDuration::days(30);
+            sqlx::query(INSERT_BOOTSTRAP_APPLICATION)
+                .bind(&actual.application.id)
+                .bind(&actual.application.organization_id)
+                .bind(&actual.application.application_template_id)
+                .bind(&actual.application.applicant_identifier)
+                .bind(&actual.application.form_data)
+                .bind(&actual.application.integration_context)
+                .bind(&actual.application.status)
+                .bind(actual.planned_at)
+                .bind(expires_at)
+                .execute(&mut *transaction)
+                .await
+                .map_err(bootstrap_repository_error)?;
+            let event_metadata = actual
+                .bootstrap_event_metadata
+                .as_ref()
+                .ok_or(CanvasLtiBootstrapRepositoryError::Unavailable)?;
+            sqlx::query(INSERT_BOOTSTRAP_EVENT)
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(&actual.application.id)
+                .bind(event_metadata)
+                .bind(actual.planned_at)
+                .execute(&mut *transaction)
+                .await
+                .map_err(bootstrap_repository_error)?;
+        } else {
+            let updated = sqlx::query(UPDATE_BOOTSTRAP_APPLICATION)
+                .bind(&actual.application.id)
+                .bind(&actual.application.organization_id)
+                .bind(&actual.application.integration_context)
+                .bind(actual.application.updated_at)
+                .execute(&mut *transaction)
+                .await
+                .map_err(bootstrap_repository_error)?;
+            if updated.rows_affected() != 1 {
+                return Err(CanvasLtiBootstrapRepositoryError::Unavailable);
+            }
+        }
+        let attached = sqlx::query(ATTACH_BOOTSTRAP_SESSION)
+            .bind(&context.launch_state.id)
+            .bind(&context.launch_state.state)
+            .bind(&context.launch_state.organization_id)
+            .bind(&actual.session_metadata)
+            .execute(&mut *transaction)
+            .await
+            .map_err(bootstrap_repository_error)?;
+        if attached.rows_affected() != 1 {
+            return Err(CanvasLtiBootstrapRepositoryError::Unavailable);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(bootstrap_repository_error)?;
+        Ok(CanvasLtiBootstrapPersistence {
+            application: actual.application,
+            created: actual.created,
+        })
+    }
+
+    async fn get_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Option<CanvasLtiBootstrapApplication>, CanvasLtiBootstrapRepositoryError> {
+        sqlx::query(GET_BOOTSTRAP_APPLICATION)
+            .bind(application_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(bootstrap_repository_error)?
+            .map(bootstrap_application)
+            .transpose()
+    }
+}
+
+#[async_trait]
 impl CanvasLtiIdentityRepository for PostgresCanvasLtiLoginRepository {
     async fn reconcile_verified_identity(
         &self,
@@ -849,6 +1119,47 @@ impl CanvasLtiJwksRefresher for PostgresCanvasLtiJwksRefresher {
     }
 }
 
+fn bootstrap_template(
+    row: sqlx::postgres::PgRow,
+) -> Result<CanvasLtiBootstrapTemplate, CanvasLtiBootstrapRepositoryError> {
+    Ok(CanvasLtiBootstrapTemplate {
+        id: row.try_get("id").map_err(bootstrap_repository_error)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(bootstrap_repository_error)?,
+    })
+}
+
+fn bootstrap_application(
+    row: sqlx::postgres::PgRow,
+) -> Result<CanvasLtiBootstrapApplication, CanvasLtiBootstrapRepositoryError> {
+    Ok(CanvasLtiBootstrapApplication {
+        id: row.try_get("id").map_err(bootstrap_repository_error)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(bootstrap_repository_error)?,
+        application_template_id: row
+            .try_get("application_template_id")
+            .map_err(bootstrap_repository_error)?,
+        applicant_identifier: row
+            .try_get("applicant_identifier")
+            .map_err(bootstrap_repository_error)?,
+        form_data: row
+            .try_get("form_data")
+            .map_err(bootstrap_repository_error)?,
+        integration_context: row
+            .try_get("integration_context")
+            .map_err(bootstrap_repository_error)?,
+        status: row.try_get("status").map_err(bootstrap_repository_error)?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(bootstrap_repository_error)?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(bootstrap_repository_error)?,
+    })
+}
+
 fn program_binding(
     row: sqlx::postgres::PgRow,
 ) -> Result<CanvasLtiProgramBinding, CanvasLtiLaunchPlanError> {
@@ -973,4 +1284,9 @@ fn exchange_repository_error(cause: sqlx::Error) -> CanvasLtiExperienceExchangeE
 fn exchange_plan_error(cause: CanvasLtiLaunchPlanError) -> CanvasLtiExperienceExchangeError {
     error!(%cause, "Canvas LTI experience exchange record was invalid");
     CanvasLtiExperienceExchangeError::RepositoryUnavailable
+}
+
+fn bootstrap_repository_error(cause: sqlx::Error) -> CanvasLtiBootstrapRepositoryError {
+    error!(%cause, "Canvas LTI bootstrap repository query failed");
+    CanvasLtiBootstrapRepositoryError::Unavailable
 }

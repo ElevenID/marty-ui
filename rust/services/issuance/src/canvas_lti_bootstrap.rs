@@ -105,6 +105,13 @@ pub struct CanvasLtiBootstrapPlan {
     pub materialize_award_candidate: bool,
     pub enqueue_canvas_sync: bool,
     pub response: CanvasLtiBootstrapResponse,
+    pub planned_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasLtiBootstrapPersistence {
+    pub application: CanvasLtiBootstrapApplication,
+    pub created: bool,
 }
 
 impl fmt::Debug for CanvasLtiBootstrapPlan {
@@ -176,7 +183,7 @@ pub trait CanvasLtiBootstrapRepository: Send + Sync {
         &self,
         context: &CanvasLtiExperienceSessionContext,
         plan: &CanvasLtiBootstrapPlan,
-    ) -> Result<(), CanvasLtiBootstrapRepositoryError>;
+    ) -> Result<CanvasLtiBootstrapPersistence, CanvasLtiBootstrapRepositoryError>;
 
     async fn get_application(
         &self,
@@ -347,22 +354,23 @@ impl CanvasLtiBootstrapService {
             },
             self.clock.now(),
         )?;
-        self.repository
+        let persisted = self
+            .repository
             .persist_plan(&context, &plan)
             .await
             .map_err(repository_error)?;
         if plan.materialize_award_candidate {
             self.candidate_materializer
-                .materialize(&context, &plan.application)
+                .materialize(&context, &persisted.application)
                 .await
                 .map_err(repository_error)?;
         }
         let application = self
             .repository
-            .get_application(&plan.application.id)
+            .get_application(&persisted.application.id)
             .await
             .map_err(repository_error)?
-            .unwrap_or(plan.application);
+            .unwrap_or(persisted.application);
         if plan.enqueue_canvas_sync {
             if let Err(cause) = self
                 .sync_enqueuer
@@ -375,7 +383,7 @@ impl CanvasLtiBootstrapService {
         Ok(canvas_lti_bootstrap_response(
             &context,
             &application,
-            plan.created,
+            persisted.created,
         ))
     }
 }
@@ -454,6 +462,7 @@ where
         materialize_award_candidate: true,
         enqueue_canvas_sync: true,
         response,
+        planned_at: now,
     })
 }
 

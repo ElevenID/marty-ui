@@ -13,7 +13,8 @@ use marty_issuance_service::{
         plan_canvas_lti_experience_bootstrap, CanvasLtiAwardCandidateMaterializer,
         CanvasLtiBootstrapApplication, CanvasLtiBootstrapApplicationAction,
         CanvasLtiBootstrapApplicationGenerator, CanvasLtiBootstrapApplicationSeed,
-        CanvasLtiBootstrapPlan, CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRepository,
+        CanvasLtiBootstrapPersistence, CanvasLtiBootstrapPlan, CanvasLtiBootstrapPlanError,
+        CanvasLtiBootstrapRepository,
         CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
         CanvasLtiBootstrapServiceError, CanvasLtiBootstrapSyncEnqueuer,
         CanvasLtiBootstrapSyncError, CanvasLtiBootstrapTemplate,
@@ -161,10 +162,13 @@ impl CanvasLtiBootstrapRepository for BootstrapRepository {
         &self,
         _context: &marty_issuance_service::canvas_lti_experience::CanvasLtiExperienceSessionContext,
         plan: &CanvasLtiBootstrapPlan,
-    ) -> Result<(), CanvasLtiBootstrapRepositoryError> {
+    ) -> Result<CanvasLtiBootstrapPersistence, CanvasLtiBootstrapRepositoryError> {
         self.persisted_created.lock().unwrap().push(plan.created);
         *self.application.lock().unwrap() = Some(plan.application.clone());
-        Ok(())
+        Ok(CanvasLtiBootstrapPersistence {
+            application: plan.application.clone(),
+            created: plan.created,
+        })
     }
 
     async fn get_application(
