@@ -1,8 +1,10 @@
 use std::error::Error;
 
 use marty_issuance_service::{
-    http::router, validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
+    http::router, transport::TransportPolicy, validate_embedded_contract, IssuanceRuntime,
+    IssuanceServiceConfig,
 };
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -24,9 +26,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         error
     })?;
     let runtime = IssuanceRuntime::new(&config)?;
+    let discovery =
+        StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name);
     let listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_listener_healthy()?;
-    let app = router(runtime.state());
+    let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
+    let app = router(runtime.state(), discovery, transport);
     runtime.activate()?;
     info!(
         address = %config.http_addr,

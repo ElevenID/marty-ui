@@ -10,6 +10,7 @@ pub mod config;
 pub mod contract;
 pub mod http;
 pub mod runtime;
+pub mod transport;
 
 pub use config::*;
 pub use contract::*;

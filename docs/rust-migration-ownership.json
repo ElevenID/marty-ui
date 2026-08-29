@@ -621,7 +621,8 @@
         "paths": ["rust/services/issuance"],
         "binding_paths": [
           "contracts/issuance-runtime-surface.json",
-          "contracts/issuance-native-coverage.json"
+          "contracts/issuance-native-coverage.json",
+          "contracts/issuance-static-discovery.json"
         ]
       },
       "legacy": [

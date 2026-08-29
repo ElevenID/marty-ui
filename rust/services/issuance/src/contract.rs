@@ -7,6 +7,8 @@ use sha2::{Digest, Sha256};
 
 const SURFACE: &[u8] = include_bytes!("../../../../contracts/issuance-runtime-surface.json");
 const COVERAGE: &str = include_str!("../../../../contracts/issuance-native-coverage.json");
+const STATIC_DISCOVERY: &[u8] =
+    include_bytes!("../../../../contracts/issuance-static-discovery.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -19,6 +21,7 @@ pub struct CoverageSummary {
 struct Coverage {
     schema: String,
     upstream: Upstream,
+    behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -39,12 +42,34 @@ struct HttpOperation {
     method: String,
     path: String,
     operation: String,
-    response: ExpectedResponse,
+    #[serde(default)]
+    response: Option<ExpectedResponse>,
+    #[serde(default)]
+    behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ExpectedResponse {
     status_code: u16,
+    body: Value,
+}
+
+#[derive(Deserialize)]
+struct DiscoveryContract {
+    schema: String,
+    transport: Value,
+    cases: Vec<DiscoveryCase>,
+    rejected_paths: Vec<String>,
+    remaining_tenant_backed_operations: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DiscoveryCase {
+    operation: String,
+    method: String,
+    path: String,
+    status_code: u16,
+    content_type: String,
     body: Value,
 }
 
@@ -71,9 +96,46 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid issuance surface", error))?;
     let coverage: Coverage = serde_json::from_str(COVERAGE)
         .map_err(|error| contract_error("invalid native coverage", error))?;
+    let discovery: DiscoveryContract = serde_json::from_slice(STATIC_DISCOVERY)
+        .map_err(|error| contract_error("invalid static discovery contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
+    )?;
+    require(
+        discovery.schema == "marty.issuance-static-discovery/v1"
+            && discovery.cases.len() == 6
+            && discovery.transport["request_id"]["generated_pattern"] == "^[0-9a-f]{8}$"
+            && discovery.transport["cors"]["environment_variable"] == "CORS_ALLOWED_ORIGINS"
+            && discovery.transport["cors"]["default_allowed_origins"]
+                == serde_json::json!(["http://localhost:3000"])
+            && discovery.transport["cors"]["wildcard_simple_request"]["configured_origin"] == "*"
+            && discovery.transport["cors"]["preflight"]["status_code"] == 200
+            && discovery.transport["cors"]["denied_preflight"]["status_code"] == 400
+            && discovery.transport["cors"]["denied_method_preflight"]["status_code"] == 400
+            && discovery.rejected_paths
+                == [
+                    "/.well-known/openid-credential-issuer/org/org-a/spruce",
+                    "/.well-known/oauth-authorization-server/org/org-a/spruce",
+                ]
+            && discovery.remaining_tenant_backed_operations
+                == [
+                    "get_org_issuer_metadata",
+                    "get_org_issuer_metadata_credential_manager",
+                    "get_org_issuer_metadata_apple_wallet",
+                ],
+        "unexpected static discovery behavior contract",
+    )?;
+    require(
+        coverage.behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
+            && coverage.behavior_contract.commit.len() == 40
+            && coverage
+                .behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid static discovery provenance",
     )?;
     require(
         coverage.schema == "marty.issuance-native-coverage/v1",
@@ -95,6 +157,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         actual_hash == coverage.upstream.sha256,
         "issuance surface hash does not match provenance",
+    )?;
+    let canonical_discovery = canonical_lf(STATIC_DISCOVERY);
+    let actual_discovery_hash = format!("{:x}", Sha256::digest(&canonical_discovery));
+    require(
+        actual_discovery_hash == coverage.behavior_contract.sha256,
+        "static discovery hash does not match provenance",
     )?;
 
     let routes = surface["http"]["routes"]
@@ -119,6 +187,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     )?;
 
     let mut native = BTreeSet::new();
+    let mut native_behavior_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -132,16 +201,55 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             }),
             "native issuance operation is absent from the frozen surface",
         )?;
-        require(
-            operation.response.status_code == 200
-                && operation.response.body
-                    == serde_json::json!({
-                        "status": "healthy",
-                        "service": "issuance-service"
+        if operation.operation == "health_check" {
+            let response = operation
+                .response
+                .as_ref()
+                .ok_or_else(|| invalid("native issuance health response is missing"))?;
+            require(
+                operation.behavior_case.is_none()
+                    && response.status_code == 200
+                    && response.body
+                        == serde_json::json!({
+                            "status": "healthy",
+                            "service": "issuance-service"
+                        }),
+                "native issuance health response diverges from the legacy contract",
+            )?;
+        } else {
+            let behavior_case = operation
+                .behavior_case
+                .as_deref()
+                .ok_or_else(|| invalid("native issuance behavior case is missing"))?;
+            require(
+                operation.response.is_none()
+                    && behavior_case == operation.operation
+                    && native_behavior_cases.insert(behavior_case)
+                    && discovery.cases.iter().any(|case| {
+                        let expected_case_path = operation
+                            .path
+                            .replace("{credential_type:path}", "access_badge")
+                            .replace("{org_id}", "org-a");
+                        case.operation == behavior_case
+                            && case.method == operation.method
+                            && case.status_code == 200
+                            && case.content_type == "application/json"
+                            && case.path == expected_case_path
+                            && case.body.is_object()
                     }),
-            "native issuance health response diverges from the legacy contract",
-        )?;
+                "native issuance operation diverges from its behavior case",
+            )?;
+        }
     }
+    let frozen_behavior_cases = discovery
+        .cases
+        .iter()
+        .map(|case| case.operation.as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_behavior_cases == frozen_behavior_cases,
+        "native issuance behavior coverage is incomplete",
+    )?;
     for operation in &coverage.platform_additive_http {
         require(
             operation.owner == "mmf-runtime",
@@ -177,8 +285,14 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .ok_or_else(|| invalid("issuance migration heads are missing"))?
         .len() as u64;
     require(
-        coverage.native_environment_variables == ["ISSUANCE_SERVICE_PORT"]
-            && coverage.remaining.literal_environment_variables + 1 == environment_count
+        coverage.native_environment_variables
+            == [
+                "CORS_ALLOWED_ORIGINS",
+                "ISSUANCE_SERVICE_PORT",
+                "ISSUER_BASE_URL",
+                "ISSUER_DISPLAY_NAME",
+            ]
+            && coverage.remaining.literal_environment_variables + 4 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -254,8 +368,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 1);
-        assert_eq!(summary.remaining_http, 130);
+        assert_eq!(summary.native_http, 7);
+        assert_eq!(summary.remaining_http, 124);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }
