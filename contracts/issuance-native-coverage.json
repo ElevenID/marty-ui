@@ -198,9 +198,21 @@
     },
     {
       "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
+      "operation": "bootstrap_canvas_lti_experience_application_route",
+      "canvas_lti_behavior_case": "experience-bootstrap"
+    },
+    {
+      "method": "POST",
       "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
       "operation": "verify_canvas_lti_launch_route",
       "canvas_lti_behavior_case": "launch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/jwks",
+      "operation": "get_canvas_lti_tool_jwks",
+      "canvas_lti_behavior_case": "tool-jwks"
     }
   ],
   "platform_additive_http": [
@@ -208,10 +220,10 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 107,
+    "http": 105,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 63,
+    "literal_environment_variables": 61,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
@@ -226,6 +238,8 @@
     "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
     "CANVAS_LTI_JWKS_TTL_MINUTES",
     "CANVAS_LTI_STATE_TTL_MINUTES",
+    "CANVAS_LTI_TOOL_ISSUER_DID",
+    "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
     "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
     "CANVAS_PILOT_ORGANIZATION_IDS",
     "CANVAS_PORTABLE_INTEGRATION_ENABLED",

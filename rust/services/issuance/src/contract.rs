@@ -817,21 +817,25 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience" => "launch_canvas_lti_experience_route",
                 "experience-exchange" => "exchange_canvas_lti_experience_code_route",
                 "experience-session-current" => "get_canvas_lti_experience_session_route",
+                "experience-bootstrap" => "bootstrap_canvas_lti_experience_application_route",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
+                "tool-jwks" => "get_canvas_lti_tool_jwks",
                 "launch" => "verify_canvas_lti_launch_route",
                 _ => return Err(invalid("unknown native Canvas LTI behavior case")),
             };
             let expected_authentication = match behavior_case {
                 "launch" | "experience" => "public-lti-form-post",
                 "experience-exchange" => "public-one-time-code",
-                "experience-session-current" => "lti-session-bearer",
+                "experience-session-current" | "experience-bootstrap" => "lti-session-bearer",
+                "tool-jwks" => "public",
                 _ => "public-lti-login",
             };
-            let expected_method = if behavior_case == "experience-session-current" {
-                "GET"
-            } else {
-                "POST"
-            };
+            let expected_method =
+                if matches!(behavior_case, "experience-session-current" | "tool-jwks") {
+                    "GET"
+                } else {
+                    "POST"
+                };
             require(
                 operation.operation == expected_operation
                     && operation.method == expected_method
@@ -877,8 +881,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-exchange",
                 "experience-login",
                 "experience-session-current",
+                "experience-bootstrap",
                 "launch",
                 "login",
+                "tool-jwks",
             ]),
         "native Canvas LTI behavior coverage is incomplete",
     )?;
@@ -949,6 +955,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
                 "CANVAS_LTI_JWKS_TTL_MINUTES",
                 "CANVAS_LTI_STATE_TTL_MINUTES",
+                "CANVAS_LTI_TOOL_ISSUER_DID",
+                "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
                 "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
                 "CANVAS_PILOT_ORGANIZATION_IDS",
                 "CANVAS_PORTABLE_INTEGRATION_ENABLED",
@@ -1064,8 +1072,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 24);
-        assert_eq!(summary.remaining_http, 107);
+        assert_eq!(summary.native_http, 26);
+        assert_eq!(summary.remaining_http, 105);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

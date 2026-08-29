@@ -435,7 +435,7 @@ fn authoritative_fact(
             "candidate_payload_hash": observation.payload_hash,
         },
     });
-    let canonical = canonical_json(&normalized);
+    let canonical = python_canonical_json(&normalized);
     let payload_hash = sha256_hex(canonical.as_bytes());
     let event_material = format!("canvas:{}:{canonical}", text(&source));
     let provider_event_id =
@@ -496,7 +496,7 @@ fn sha256_hex(value: &[u8]) -> String {
     hex::encode(Sha256::digest(value))
 }
 
-fn canonical_json(value: &Value) -> String {
+pub(crate) fn python_canonical_json(value: &Value) -> String {
     match value {
         Value::Null => "null".to_owned(),
         Value::Bool(true) => "true".to_owned(),
@@ -507,7 +507,7 @@ fn canonical_json(value: &Value) -> String {
             "[{}]",
             values
                 .iter()
-                .map(canonical_json)
+                .map(python_canonical_json)
                 .collect::<Vec<_>>()
                 .join(",")
         ),
@@ -520,7 +520,7 @@ fn canonical_json(value: &Value) -> String {
                 .map(|(name, value)| format!(
                     "{}:{}",
                     python_json_string(name),
-                    canonical_json(value)
+                    python_canonical_json(value)
                 ))
                 .collect::<Vec<_>>()
                 .join(",")

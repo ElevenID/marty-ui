@@ -333,19 +333,19 @@ impl CredentialBuilder for HttpCredentialBuilder {
 }
 
 #[derive(Clone, Debug)]
-struct SignRequest {
-    organization_id: String,
-    issuer_did: String,
-    credential_format: String,
-    key_purpose: String,
-    payload: Vec<u8>,
-    algorithm: String,
-    verification_method_id: String,
+pub(crate) struct SignRequest {
+    pub(crate) organization_id: String,
+    pub(crate) issuer_did: String,
+    pub(crate) credential_format: String,
+    pub(crate) key_purpose: String,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) algorithm: String,
+    pub(crate) verification_method_id: String,
 }
 
 #[derive(Debug)]
-struct SignResponse {
-    signature_b64: String,
+pub(crate) struct SignResponse {
+    pub(crate) signature_b64: String,
 }
 
 #[async_trait]
@@ -354,14 +354,14 @@ trait DidSigner: Send + Sync {
 }
 
 #[derive(Clone)]
-struct HttpDidSigner {
+pub(crate) struct HttpDidSigner {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
 }
 
 impl HttpDidSigner {
-    fn new(
+    pub(crate) fn new(
         base_url: Url,
         api_key: Option<&str>,
         timeout: Duration,
@@ -387,6 +387,13 @@ impl HttpDidSigner {
         endpoint.set_query(None);
         endpoint.set_fragment(None);
         endpoint
+    }
+
+    pub(crate) async fn sign_did(
+        &self,
+        request: SignRequest,
+    ) -> Result<SignResponse, CredentialIssuanceError> {
+        self.sign(request).await
     }
 }
 
