@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use marty_issuance_service::{
     canvas_lti_bootstrap::CanvasLtiBootstrapSyncEnqueuer,
+    canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueueError,
     canvas_lti_sync_enqueue::{
         CanvasSyncEnqueueIdGenerator, CanvasSyncEnqueueIds, PostgresCanvasLtiBootstrapSyncEnqueuer,
     },
@@ -115,6 +116,28 @@ async fn sync_enqueue_is_tenant_bound_durable_and_idempotent() {
     .await
     .unwrap();
     assert!(enqueuer.enqueue("org-1", "application-1").await.is_err());
+    assert_eq!(
+        marty_issuance_service::canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueuer::enqueue(
+            &enqueuer,
+            "org-1",
+            "application-1",
+        )
+        .await
+        .unwrap_err(),
+        CanvasLtiEvidenceSyncEnqueueError::Conflict {
+            code: "canvas_binding_inactive"
+        }
+    );
+    assert_eq!(
+        marty_issuance_service::canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueuer::enqueue(
+            &enqueuer,
+            "org-1",
+            "missing-application",
+        )
+        .await
+        .unwrap_err(),
+        CanvasLtiEvidenceSyncEnqueueError::NotFound
+    );
 }
 
 async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {

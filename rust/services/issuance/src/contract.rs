@@ -820,6 +820,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-bootstrap" => "bootstrap_canvas_lti_experience_application_route",
                 "experience-deep-linking" => "create_canvas_lti_deep_linking_response_route",
                 "experience-evidence-status" => "get_canvas_lti_evidence_status",
+                "experience-evidence-sync" => "sync_canvas_lti_evidence",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
                 "tool-jwks" => "get_canvas_lti_tool_jwks",
                 "launch" => "verify_canvas_lti_launch_route",
@@ -831,7 +832,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-session-current"
                 | "experience-bootstrap"
                 | "experience-deep-linking"
-                | "experience-evidence-status" => "lti-session-bearer",
+                | "experience-evidence-status"
+                | "experience-evidence-sync" => "lti-session-bearer",
                 "tool-jwks" => "public",
                 _ => "public-lti-login",
             };
@@ -891,6 +893,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-bootstrap",
                 "experience-deep-linking",
                 "experience-evidence-status",
+                "experience-evidence-sync",
                 "launch",
                 "login",
                 "tool-jwks",
@@ -1082,8 +1085,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 28);
-        assert_eq!(summary.remaining_http, 103);
+        assert_eq!(summary.native_http, 29);
+        assert_eq!(summary.remaining_http, 102);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

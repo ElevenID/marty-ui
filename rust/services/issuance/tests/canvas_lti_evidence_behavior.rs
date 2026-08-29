@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -11,7 +14,8 @@ use marty_issuance_service::{
         project_canvas_lti_evidence_status, CanvasLtiEvidenceApplication, CanvasLtiEvidenceBinding,
         CanvasLtiEvidenceCandidate, CanvasLtiEvidenceError, CanvasLtiEvidenceFact,
         CanvasLtiEvidencePlatform, CanvasLtiEvidenceProjectionData, CanvasLtiEvidenceRepository,
-        CanvasLtiEvidenceScope, CanvasLtiEvidenceService, CanvasLtiEvidenceSyncJob,
+        CanvasLtiEvidenceScope, CanvasLtiEvidenceService, CanvasLtiEvidenceSyncEnqueueError,
+        CanvasLtiEvidenceSyncEnqueuer, CanvasLtiEvidenceSyncJob, CanvasLtiEvidenceSyncService,
         CanvasLtiEvidenceSyncTarget,
     },
     canvas_lti_experience::{
@@ -21,7 +25,7 @@ use marty_issuance_service::{
     canvas_lti_launch::{
         CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiStoredLaunchState,
     },
-    http::router_with_canvas_lti_evidence,
+    http::{router_with_canvas_lti_evidence, router_with_canvas_lti_evidence_sync},
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
 };
@@ -391,6 +395,18 @@ fn service_app(service: CanvasLtiEvidenceService) -> axum::Router {
     )
 }
 
+fn sync_service_app(service: CanvasLtiEvidenceSyncService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    router_with_canvas_lti_evidence_sync(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        service,
+    )
+}
+
 async fn response_json(response: axum::response::Response) -> Value {
     let body = axum::body::to_bytes(response.into_body(), 128 * 1024)
         .await
@@ -478,5 +494,113 @@ async fn evidence_status_http_requires_session_bearer_and_disables_browser_cachi
     assert_eq!(
         response_json(bootstrap_required).await,
         json!({"detail": "Bootstrap the Canvas application before synchronizing evidence"})
+    );
+}
+
+struct Enqueuer {
+    result: Result<(), CanvasLtiEvidenceSyncEnqueueError>,
+    calls: Mutex<Vec<(String, String)>>,
+}
+
+#[async_trait]
+impl CanvasLtiEvidenceSyncEnqueuer for Enqueuer {
+    async fn enqueue(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<(), CanvasLtiEvidenceSyncEnqueueError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((organization_id.to_owned(), application_id.to_owned()));
+        self.result.clone()
+    }
+}
+
+fn sync_service(
+    result: Result<(), CanvasLtiEvidenceSyncEnqueueError>,
+) -> (CanvasLtiEvidenceSyncService, Arc<Enqueuer>) {
+    let enqueuer = Arc::new(Enqueuer {
+        result,
+        calls: Mutex::new(Vec::new()),
+    });
+    (
+        CanvasLtiEvidenceSyncService::new(
+            service(stored_session(Some("application-1")), Some(scope()), true),
+            enqueuer.clone(),
+        ),
+        enqueuer,
+    )
+}
+
+#[tokio::test]
+async fn evidence_sync_http_enqueues_exact_session_scope_then_returns_fresh_no_store_status() {
+    let path = "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync";
+    let (service, enqueuer) = sync_service(Ok(()));
+    let unauthorized = sync_service_app(service)
+        .oneshot(Request::post(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(unauthorized.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert!(enqueuer.calls.lock().unwrap().is_empty());
+
+    let (service, enqueuer) = sync_service(Ok(()));
+    let response = sync_service_app(service)
+        .oneshot(
+            Request::post(path)
+                .header(header::AUTHORIZATION, "Bearer private-session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+    assert_eq!(
+        enqueuer.calls.lock().unwrap().as_slice(),
+        [("org-1".to_owned(), "application-1".to_owned())]
+    );
+    assert_eq!(
+        response_json(response).await["evidence"]["status"],
+        "not_observed"
+    );
+
+    let (service, _) = sync_service(Err(CanvasLtiEvidenceSyncEnqueueError::Conflict {
+        code: "canvas_binding_inactive",
+    }));
+    let conflict = sync_service_app(service)
+        .oneshot(
+            Request::post(path)
+                .header(header::AUTHORIZATION, "Bearer private-session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(conflict).await,
+        json!({"detail": {
+            "code": "canvas_binding_inactive",
+            "message": "Canvas synchronization is unavailable"
+        }})
+    );
+
+    let (service, _) = sync_service(Err(CanvasLtiEvidenceSyncEnqueueError::NotFound));
+    let not_found = sync_service_app(service)
+        .oneshot(
+            Request::post(path)
+                .header(header::AUTHORIZATION, "Bearer private-session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(not_found).await,
+        json!({"detail": "Canvas application context was not found"})
     );
 }
