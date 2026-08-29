@@ -4566,6 +4566,7 @@ dependencies = [
 name = "marty-issuance-service"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -4573,6 +4574,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hmac 0.12.1",
+ "httpdate",
  "jsonwebtoken",
  "marty-oid4vci",
  "marty-verification",

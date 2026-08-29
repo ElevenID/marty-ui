@@ -34,6 +34,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-canvas-lti-foundation.json"
     ).read_bytes()
     canvas_lti = json.loads(canvas_lti_bytes)
+    canvas_oauth_bytes = (
+        ROOT / "contracts/issuance-canvas-oauth-lifecycle.json"
+    ).read_bytes()
+    canvas_oauth = json.loads(canvas_oauth_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -142,6 +146,19 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
+    assert (
+        hashlib.sha256(canvas_oauth_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["canvas_oauth_behavior_contract"]["sha256"]
+    )
+    assert (
+        coverage["canvas_oauth_behavior_contract"]["commit"]
+        == "84af1b15dfb1dcd84d5ecb70b3bd061b92081b91"
+    )
+    assert canvas_oauth["schema"] == "marty.issuance-canvas-oauth-lifecycle/v1"
+    assert len(canvas_oauth["scope"]["routes"]) == 3
+    assert canvas_oauth["start"]["authorization"]["persisted_state"] == "sha256-only"
+    assert canvas_oauth["callback"]["publication"]["browser_token_disclosure"] is False
+    assert canvas_oauth["disconnect"]["retry"]["durable"] is True
     capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
     assert capability_policy["authority"] == "verified-signed-launch-claims"
     assert capability_policy["authorization_index"] == "verified_binding_launches"
@@ -226,6 +243,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "sync_canvas_lti_evidence",
             "get_canvas_lti_tool_jwks",
             "verify_canvas_lti_launch_route",
+            "start_canvas_oauth_connection",
+            "complete_canvas_oauth_connection",
+            "disconnect_canvas_oauth_connection",
         }
     )
     for operation, coverage_entry in native.items():
@@ -318,6 +338,24 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in canvas_lti["scope"]["routes"]
             )
             continue
+        if operation in {
+            "start_canvas_oauth_connection",
+            "complete_canvas_oauth_connection",
+            "disconnect_canvas_oauth_connection",
+        }:
+            expected_case = {
+                "start_canvas_oauth_connection": "start",
+                "complete_canvas_oauth_connection": "callback",
+                "disconnect_canvas_oauth_connection": "disconnect",
+            }[operation]
+            assert coverage_entry["canvas_oauth_behavior_case"] == expected_case
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                for route in canvas_oauth["scope"]["routes"]
+            )
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -354,10 +392,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 102,
+        "http": 99,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 60,
+        "literal_environment_variables": 58,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -375,6 +413,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_LTI_STATE_TTL_MINUTES",
         "CANVAS_LTI_TOOL_ISSUER_DID",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
         "CANVAS_PILOT_ORGANIZATION_IDS",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
@@ -382,6 +421,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
         "DATABASE_URL",
         "GRPC_SERVICE_TOKEN",
+        "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "ISSUANCE_SERVICE_PORT",
         "ISSUANCE_API_KEY",
         "ISSUER_BASE_URL",
@@ -420,6 +460,8 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "CANVAS_LTI_STATE_TTL_MINUTES:" in beta
     assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" in beta
+    assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL:" in beta
+    assert "INTEGRATION_SECRET_MASTER_KEY:" in beta
     assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
     assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
     assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta

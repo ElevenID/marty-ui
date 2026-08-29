@@ -54,6 +54,12 @@
     "commit": "82945b2ad4a12aef03389d754f2eb4ed32cb1b18",
     "sha256": "1f9bdc801552ac6ba51df91bc62663096cbf89b3f4544c7588eb8c4323ea91de"
   },
+  "canvas_oauth_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-canvas-oauth-lifecycle.json",
+    "commit": "84af1b15dfb1dcd84d5ecb70b3bd061b92081b91",
+    "sha256": "ee705cfeb7a281f6a1586fa3d17b0fdaf98e96a34f700e05b24950fab0769949"
+  },
   "native_http": [
     {
       "method": "GET",
@@ -231,6 +237,24 @@
       "path": "/v1/integrations/canvas/lti/jwks",
       "operation": "get_canvas_lti_tool_jwks",
       "canvas_lti_behavior_case": "tool-jwks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
+      "operation": "start_canvas_oauth_connection",
+      "canvas_oauth_behavior_case": "start"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/oauth/callback",
+      "operation": "complete_canvas_oauth_connection",
+      "canvas_oauth_behavior_case": "callback"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
+      "operation": "disconnect_canvas_oauth_connection",
+      "canvas_oauth_behavior_case": "disconnect"
     }
   ],
   "platform_additive_http": [
@@ -238,10 +262,10 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 102,
+    "http": 99,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 60,
+    "literal_environment_variables": 58,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
@@ -259,6 +283,7 @@
     "CANVAS_LTI_STATE_TTL_MINUTES",
     "CANVAS_LTI_TOOL_ISSUER_DID",
     "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+    "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
     "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
     "CANVAS_PILOT_ORGANIZATION_IDS",
     "CANVAS_PORTABLE_INTEGRATION_ENABLED",
@@ -266,6 +291,7 @@
     "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
     "DATABASE_URL",
     "GRPC_SERVICE_TOKEN",
+    "INTEGRATION_SECRET_MASTER_KEY_ENV",
     "ISSUANCE_SERVICE_PORT",
     "ISSUANCE_API_KEY",
     "ISSUER_BASE_URL",

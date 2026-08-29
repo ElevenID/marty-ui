@@ -40,6 +40,9 @@ use marty_issuance_service::{
         HttpCanvasLtiToolIdentityResolver, HttpCanvasLtiToolSignatureProvider,
         IssuerDidCanvasLtiToolJwtSigner,
     },
+    canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
+    canvas_oauth_http::HttpCanvasOAuthProvider,
+    canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -50,8 +53,9 @@ use marty_issuance_service::{
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
         router_with_all_services, CanvasLtiExperienceSessionServices, CanvasLtiServices,
-        IssuanceServices,
+        CanvasServices, IssuanceServices,
     },
+    integration_secret::IntegrationSecretCipher,
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
@@ -126,6 +130,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(SecureProofNonceGenerator),
     );
     let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
+    let integration_secret_cipher = IntegrationSecretCipher::from_base64(
+        config
+            .integration_secret_master_key
+            .as_deref()
+            .expect("from_env requires INTEGRATION_SECRET_MASTER_KEY"),
+    )?;
+    let canvas_oauth = CanvasOAuthService::new(
+        Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
+        Arc::new(PostgresIntegrationSecretVault::new(
+            pool.clone(),
+            integration_secret_cipher,
+        )),
+        Arc::new(HttpCanvasOAuthProvider::new(
+            std::time::Duration::from_secs(15),
+            config.canvas_private_origin_allowlist.clone(),
+            config.canvas_allow_private_base_urls,
+        )),
+        config.issuance_api_key.as_deref(),
+        CanvasOAuthServiceConfig {
+            issuer_base_url: config.issuer_base_url.clone(),
+            completion_base_url: config.canvas_oauth_completion_redirect_url.clone(),
+            portable_enabled: config.canvas_portable_enabled,
+            pilot_organizations: config.canvas_pilot_organizations.clone(),
+            allow_private_networks: config.canvas_allow_private_base_urls,
+            allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+        },
+    )?;
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,
@@ -294,19 +325,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
             token_exchange,
             proof_nonce,
             credential,
-            CanvasLtiServices::new(
-                canvas_lti_login,
-                canvas_lti_launch,
-                canvas_lti_experience,
-                canvas_lti_experience_exchange,
-                CanvasLtiExperienceSessionServices::new(
-                    canvas_lti_experience_session,
-                    canvas_lti_bootstrap,
-                    canvas_lti_deep_linking,
-                    canvas_lti_evidence,
-                    canvas_lti_evidence_sync,
+            CanvasServices::new(
+                canvas_oauth,
+                CanvasLtiServices::new(
+                    canvas_lti_login,
+                    canvas_lti_launch,
+                    canvas_lti_experience,
+                    canvas_lti_experience_exchange,
+                    CanvasLtiExperienceSessionServices::new(
+                        canvas_lti_experience_session,
+                        canvas_lti_bootstrap,
+                        canvas_lti_deep_linking,
+                        canvas_lti_evidence,
+                        canvas_lti_evidence_sync,
+                    ),
+                    canvas_lti_tool_signer,
                 ),
-                canvas_lti_tool_signer,
             ),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),

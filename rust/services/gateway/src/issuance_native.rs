@@ -86,6 +86,7 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/nonce"),
             (HttpMethod::Get, "/v1/issuance/offers/tx-1"),
             (HttpMethod::Get, "/v1/issuance/transactions/tx-1"),
+            (HttpMethod::Get, "/v1/issuance/transactions"),
             (
                 HttpMethod::Get,
                 "/.well-known/openid-credential-issuer/org/org-1/apple-wallet",
@@ -111,6 +112,15 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/integrations/canvas/lti/experience-sessions/exchange",
             ),
+            (
+                HttpMethod::Post,
+                "/v1/integrations/canvas/platforms/platform-1/oauth/authorizations",
+            ),
+            (HttpMethod::Get, "/v1/integrations/canvas/oauth/callback"),
+            (
+                HttpMethod::Delete,
+                "/v1/integrations/canvas/platforms/platform-1/oauth",
+            ),
         ] {
             assert!(is_native_http(method, path), "{method:?} {path}");
         }
@@ -120,10 +130,17 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Get, "/.well-known/jwks.json"),
             (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
-            (HttpMethod::Get, "/v1/issuance/transactions"),
+            (
+                HttpMethod::Get,
+                "/v1/integrations/canvas/platforms/platform-1/oauth/authorizations",
+            ),
+            (HttpMethod::Post, "/v1/integrations/canvas/oauth/callback"),
+            (
+                HttpMethod::Post,
+                "/v1/integrations/canvas/platforms/platform-1/oauth",
+            ),
         ] {
-            let expected = method == HttpMethod::Get && path == "/v1/issuance/transactions";
-            assert_eq!(is_native_http(method, path), expected, "{method:?} {path}");
+            assert!(!is_native_http(method, path), "{method:?} {path}");
         }
     }
 }
