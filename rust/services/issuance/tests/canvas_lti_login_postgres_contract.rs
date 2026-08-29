@@ -1,17 +1,34 @@
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_lti_launch::{
-        CanvasLtiIdentityService, CanvasLtiLaunchContextRepository, CanvasLtiLaunchStateRepository,
-        CanvasLtiLaunchStateService,
+        CanvasLtiIdentityService, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
+        CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
     },
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
-    canvas_lti_postgres::PostgresCanvasLtiLoginRepository,
+    canvas_lti_postgres::{
+        CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient, PostgresCanvasLtiJwksRefresher,
+        PostgresCanvasLtiLoginRepository,
+    },
 };
-use marty_oid4vci::lti::VerifiedLtiLaunch;
+use marty_oid4vci::lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, Row};
 use uuid::Uuid;
+
+struct FixedProbe(CanvasLtiPlatformProbe);
+
+#[async_trait]
+impl CanvasLtiProbeClient for FixedProbe {
+    async fn probe(
+        &self,
+        _canvas_base_url: &str,
+        _config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String> {
+        Ok(self.0.clone())
+    }
+}
 
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
@@ -85,8 +102,11 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             lti_issuer text NULL,
             lti_jwks_url text NULL,
             lti_jwks_json jsonb NULL,
+            lti_jwks_fetched_at timestamptz NULL,
+            lti_jwks_expires_at timestamptz NULL,
             lti_openid_configuration jsonb NULL,
-            enabled boolean NOT NULL DEFAULT false
+            enabled boolean NOT NULL DEFAULT false,
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )",
     )
     .execute(&pool)
@@ -166,7 +186,7 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             id, organization_id, canvas_account_id, canvas_base_url, lti_client_id,
             lti_deployment_id, lti_trust_profile, lti_issuer, lti_jwks_url,
             lti_jwks_json, lti_openid_configuration, enabled
-        ) VALUES ($1, 'org-123', 'account-123', 'https://school.canvas.example',
+        ) VALUES ($1, 'org-123', 'account-123', 'https://SCHOOL.CANVAS.EXAMPLE:443/',
             'client-123', 'deployment-123', 'hosted_global',
             'https://canvas.instructure.com',
             'https://sso.canvaslms.com/api/lti/security/jwks',
@@ -189,6 +209,57 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     assert_eq!(platform.lti_trust_profile, "hosted_global");
     assert!(platform.enabled);
     assert!(repository.get_platform("missing").await.unwrap().is_none());
+
+    let probe = CanvasLtiPlatformProbe {
+        canvas_base_url: "https://school.canvas.example".to_owned(),
+        issuer: "https://canvas.instructure.com".to_owned(),
+        authorization_endpoint: Some(
+            "https://sso.canvaslms.com/api/lti/authorize_redirect".to_owned(),
+        ),
+        token_endpoint: Some("https://school.canvas.example/login/oauth2/token".to_owned()),
+        jwks_uri: "https://sso.canvaslms.com/api/lti/security/jwks".to_owned(),
+        registration_endpoint: None,
+        raw_openid_configuration: json!({"issuer": "https://canvas.instructure.com"}),
+        jwks_json: json!({"keys": [{"kid": "rotated-canvas-key"}]}),
+    };
+    let jwks_refresher = PostgresCanvasLtiJwksRefresher::with_probe_client(
+        pool.clone(),
+        CanvasLtiJwksRefreshConfig {
+            timeout: Duration::from_secs(10),
+            ttl: Duration::from_secs(1_200),
+            self_managed_origins: Vec::new(),
+            allow_private_networks: false,
+            allow_http_localhost: false,
+        },
+        Arc::new(FixedProbe(probe)),
+    );
+    let refreshed = jwks_refresher
+        .refresh_platform_jwks(&platform)
+        .await
+        .unwrap();
+    assert_eq!(
+        refreshed.lti_jwks_json,
+        Some(json!({"keys": [{"kid": "rotated-canvas-key"}]}))
+    );
+    let persisted_refresh = sqlx::query(
+        "SELECT canvas_base_url, lti_jwks_json,
+                lti_jwks_fetched_at IS NOT NULL AS fetched,
+                lti_jwks_expires_at > lti_jwks_fetched_at + interval '1199 seconds' AS ttl_persisted
+         FROM issuance_service.canvas_platforms WHERE id = 'platform-123'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        persisted_refresh.get::<String, _>("canvas_base_url"),
+        "https://school.canvas.example"
+    );
+    assert_eq!(
+        persisted_refresh.get::<serde_json::Value, _>("lti_jwks_json"),
+        json!({"keys": [{"kid": "rotated-canvas-key"}]})
+    );
+    assert!(persisted_refresh.get::<bool, _>("fetched"));
+    assert!(persisted_refresh.get::<bool, _>("ttl_persisted"));
 
     let identity_service = CanvasLtiIdentityService::new(Arc::new(repository.clone()));
     assert_eq!(

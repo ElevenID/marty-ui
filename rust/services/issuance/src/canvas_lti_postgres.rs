@@ -1,13 +1,19 @@
+use std::{sync::Arc, time::Duration};
+
 use async_trait::async_trait;
+use marty_oid4vci::lti::{
+    canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
+    CanvasLtiPlatformProbe,
+};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
 
 use crate::canvas_lti_launch::{
     plan_verified_identity, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
-    CanvasLtiIdentityRequest, CanvasLtiIdentityStatus, CanvasLtiLaunchContextRepository,
-    CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding,
-    CanvasLtiStoredLaunchState,
+    CanvasLtiIdentityRequest, CanvasLtiIdentityStatus, CanvasLtiJwksRefresher,
+    CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+    CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
 };
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
@@ -85,6 +91,104 @@ const SAVE_IDENTITY: &str = "INSERT INTO issuance_service.canvas_learner_identit
 const QUARANTINE_IDENTITY: &str = "UPDATE issuance_service.canvas_learner_identities
     SET status = 'quarantined', conflict_reason = $3, updated_at = clock_timestamp()
     WHERE id = $1 AND organization_id = $2";
+
+const SAVE_REFRESHED_JWKS: &str = "UPDATE issuance_service.canvas_platforms
+    SET canvas_base_url = $4,
+        lti_issuer = $5,
+        lti_jwks_url = $6,
+        lti_jwks_json = $7,
+        lti_jwks_fetched_at = clock_timestamp(),
+        lti_jwks_expires_at = clock_timestamp() + ($8::double precision * interval '1 second'),
+        lti_openid_configuration = $9,
+        updated_at = clock_timestamp()
+    WHERE id = $1
+      AND organization_id = $2
+      AND lti_trust_profile = $3
+      AND canvas_base_url = $10";
+
+#[derive(Clone, Debug)]
+pub struct CanvasLtiJwksRefreshConfig {
+    pub timeout: Duration,
+    pub ttl: Duration,
+    pub self_managed_origins: Vec<String>,
+    pub allow_private_networks: bool,
+    pub allow_http_localhost: bool,
+}
+
+#[async_trait]
+pub trait CanvasLtiProbeClient: Send + Sync {
+    async fn probe(
+        &self,
+        canvas_base_url: &str,
+        config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String>;
+}
+
+#[derive(Debug)]
+struct MartyCanvasLtiProbeClient;
+
+#[async_trait]
+impl CanvasLtiProbeClient for MartyCanvasLtiProbeClient {
+    async fn probe(
+        &self,
+        canvas_base_url: &str,
+        config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String> {
+        probe_canvas_lti_platform(
+            canvas_base_url,
+            config.timeout.as_secs().max(1),
+            config.allow_private_networks,
+            config.allow_http_localhost,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Clone)]
+pub struct PostgresCanvasLtiJwksRefresher {
+    pool: PgPool,
+    config: CanvasLtiJwksRefreshConfig,
+    probe_client: Arc<dyn CanvasLtiProbeClient>,
+}
+
+impl std::fmt::Debug for PostgresCanvasLtiJwksRefresher {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PostgresCanvasLtiJwksRefresher")
+            .field("timeout", &self.config.timeout)
+            .field("ttl", &self.config.ttl)
+            .field(
+                "self_managed_origin_count",
+                &self.config.self_managed_origins.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl PostgresCanvasLtiJwksRefresher {
+    #[must_use]
+    pub fn new(pool: PgPool, config: CanvasLtiJwksRefreshConfig) -> Self {
+        Self {
+            pool,
+            config,
+            probe_client: Arc::new(MartyCanvasLtiProbeClient),
+        }
+    }
+
+    #[must_use]
+    pub fn with_probe_client(
+        pool: PgPool,
+        config: CanvasLtiJwksRefreshConfig,
+        probe_client: Arc<dyn CanvasLtiProbeClient>,
+    ) -> Self {
+        Self {
+            pool,
+            config,
+            probe_client,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct PostgresCanvasLtiLoginRepository {
@@ -299,6 +403,84 @@ impl CanvasLtiIdentityRepository for PostgresCanvasLtiLoginRepository {
             .await
             .map_err(launch_repository_error)?;
         Ok(stored)
+    }
+}
+
+#[async_trait]
+impl CanvasLtiJwksRefresher for PostgresCanvasLtiJwksRefresher {
+    async fn refresh_platform_jwks(
+        &self,
+        platform: &CanvasLtiPlatform,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLaunchPlanError> {
+        let canvas_base_url = platform
+            .canvas_base_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(CanvasLtiLaunchPlanError::Invalid(
+                "Canvas platform requires canvas_base_url before refreshing JWKS",
+            ))?;
+        let normalized_origin = normalize_canvas_base_url(
+            canvas_base_url,
+            self.config.allow_private_networks,
+            self.config.allow_http_localhost,
+        )
+        .map_err(|error| CanvasLtiLaunchPlanError::JwksRefresh(error.to_string()))?;
+        let expected = canvas_lti_trust_profile(
+            &normalized_origin,
+            &platform.lti_trust_profile,
+            &self.config.self_managed_origins,
+        )
+        .map_err(|error| CanvasLtiLaunchPlanError::JwksRefresh(error.to_string()))?;
+        let probe = self
+            .probe_client
+            .probe(&normalized_origin, &self.config)
+            .await
+            .map_err(CanvasLtiLaunchPlanError::JwksRefresh)?;
+        if probe.canvas_base_url != normalized_origin
+            || probe.issuer != expected.issuer
+            || probe.authorization_endpoint.as_deref()
+                != Some(expected.authorization_endpoint.as_str())
+            || probe.token_endpoint.as_deref() != Some(expected.token_endpoint.as_str())
+            || probe.jwks_uri != expected.jwks_uri
+        {
+            return Err(CanvasLtiLaunchPlanError::JwksRefresh(
+                "Canvas metadata probe returned endpoints outside the persisted trust profile"
+                    .to_owned(),
+            ));
+        }
+        let ttl_seconds = self.config.ttl.as_secs();
+        if ttl_seconds == 0 || ttl_seconds > i64::MAX as u64 {
+            return Err(CanvasLtiLaunchPlanError::JwksRefresh(
+                "Canvas JWKS cache TTL is invalid".to_owned(),
+            ));
+        }
+        let result = sqlx::query(SAVE_REFRESHED_JWKS)
+            .bind(&platform.id)
+            .bind(&platform.organization_id)
+            .bind(&platform.lti_trust_profile)
+            .bind(&normalized_origin)
+            .bind(&probe.issuer)
+            .bind(&probe.jwks_uri)
+            .bind(&probe.jwks_json)
+            .bind(ttl_seconds as i64)
+            .bind(&probe.raw_openid_configuration)
+            .bind(canvas_base_url)
+            .execute(&self.pool)
+            .await
+            .map_err(launch_repository_error)?;
+        if result.rows_affected() != 1 {
+            return Err(CanvasLtiLaunchPlanError::JwksRefresh(
+                "Canvas platform trust configuration changed during JWKS refresh".to_owned(),
+            ));
+        }
+
+        let mut refreshed = platform.clone();
+        refreshed.canvas_base_url = Some(normalized_origin);
+        refreshed.lti_issuer = Some(probe.issuer);
+        refreshed.lti_jwks_url = Some(probe.jwks_uri);
+        refreshed.lti_jwks_json = Some(probe.jwks_json);
+        refreshed.lti_openid_configuration = Some(probe.raw_openid_configuration);
+        Ok(refreshed)
     }
 }
 

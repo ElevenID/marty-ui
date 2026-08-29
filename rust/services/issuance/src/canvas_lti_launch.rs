@@ -133,6 +133,8 @@ pub enum CanvasLtiLaunchPlanError {
     Verification(String),
     #[error("Canvas LTI launch verification failed after JWKS refresh: {0}")]
     VerificationAfterJwksRefresh(String),
+    #[error("{0}")]
+    JwksRefresh(String),
     #[error("Canvas LTI launch did not match an enabled Canvas program binding")]
     BindingNotFound,
     #[error("Canvas LTI is disabled for this deployment profile")]
