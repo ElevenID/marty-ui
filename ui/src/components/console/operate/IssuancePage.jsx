@@ -102,6 +102,7 @@ function IssuancePage() {
   const [lifecycleReason, setLifecycleReason] = useState('');
   const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
   const [focusedCredentialId, setFocusedCredentialId] = useState(null);
+  const [detailCredentialId, setDetailCredentialId] = useState(null);
 
   const {
     data: issuedCredentialsData,
@@ -182,16 +183,16 @@ function IssuancePage() {
   }, [credentialTemplatesData]);
 
   const selectedCredential = useMemo(() => {
-    const selectedId = credentialId || focusedCredentialId;
+    const selectedId = credentialId || detailCredentialId;
     if (!selectedId) return null;
     return issuedCredentials.find((credential) => (
       credential.id === selectedId || credential.credential_id === selectedId
     )) || null;
-  }, [credentialId, focusedCredentialId, issuedCredentials]);
+  }, [credentialId, detailCredentialId, issuedCredentials]);
 
   useEffect(() => {
     setLatestOffer(null);
-  }, [credentialId]);
+  }, [credentialId, detailCredentialId]);
 
   const handleOpenDetails = (credential) => {
     setFocusedCredentialId(credential.id || credential.credential_id);
@@ -200,6 +201,7 @@ function IssuancePage() {
 
   const handleCloseDetails = () => {
     setFocusedCredentialId(null);
+    setDetailCredentialId(null);
     setLatestOffer(null);
     if (credentialId) navigate('/console/org/operate/issuance');
   };
@@ -212,6 +214,7 @@ function IssuancePage() {
 
   const handleRenew = async (credential) => {
     setFocusedCredentialId(credential.id || credential.credential_id);
+    setDetailCredentialId(credential.id || credential.credential_id);
     setRenewingCredentialId(credential.id);
     try {
       const offer = await renewCredential({ credentialId: credential.id });
@@ -356,8 +359,8 @@ function IssuancePage() {
                   key={credential.id}
                   data-credential-record-id={credential.id || credential.credential_id}
                   hover
-                  selected={(credential.id || credential.credential_id) === (credentialId || focusedCredentialId)}
-                  aria-selected={(credential.id || credential.credential_id) === (credentialId || focusedCredentialId)}
+                  selected={(credential.id || credential.credential_id) === (credentialId || detailCredentialId || focusedCredentialId)}
+                  aria-selected={(credential.id || credential.credential_id) === (credentialId || detailCredentialId || focusedCredentialId)}
                 >
                   <TableCell>
                     <Stack spacing={0.25}>

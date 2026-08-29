@@ -226,6 +226,7 @@ describe('IssuancePage', () => {
       'Lifecycle state: Suspended. Verification policies may now deny this credential.',
       expect.objectContaining({ replaceKey: 'credential-lifecycle' }),
     );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('reinstates a suspended credential and does not offer suspension', async () => {
