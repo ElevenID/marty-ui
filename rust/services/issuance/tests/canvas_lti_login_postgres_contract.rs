@@ -960,6 +960,21 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings (
+            id, organization_id, platform_id, application_template_id,
+            credential_template_id, delivery_mode, feature_flags, enabled
+        ) VALUES
+            ('binding-evidence-only', 'org-123', 'platform-123',
+             'application-template-bootstrap', 'credential-template-bootstrap',
+             'wallet_and_direct', '{\"enable_canvas_evidence\":true}'::jsonb, true),
+            ('binding-extension-only', 'org-123', 'platform-123',
+             'application-template-bootstrap', 'credential-template-bootstrap',
+             'wallet_and_direct', '{\"extension_flag\":true}'::jsonb, true)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let bootstrap_token = format!("bootstrap-token-{}", Uuid::new_v4());
     let bootstrap_digest = sha256_hex(&bootstrap_token);
     let bootstrap_session_id = Uuid::new_v4().to_string();
@@ -1004,6 +1019,20 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     assert_eq!(
         handoff_repository
             .bound_feature_enabled("org-123", "binding-bootstrap", "enable_canvas_lti")
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        handoff_repository
+            .bound_feature_enabled("org-123", "binding-evidence-only", "enable_canvas_lti")
+            .await
+            .unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        handoff_repository
+            .bound_feature_enabled("org-123", "binding-extension-only", "enable_canvas_lti")
             .await
             .unwrap(),
         Some(true)

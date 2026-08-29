@@ -17,20 +17,20 @@ use crate::canvas_lti_bootstrap::{
     CanvasLtiBootstrapTemplate,
 };
 use crate::canvas_lti_experience::{
-    canvas_lti_experience_exchange_metadata, generate_valid_session, lti_subject, python_truthy,
+    canvas_lti_experience_exchange_metadata, generate_valid_session, lti_subject,
     CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
     CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeRepository,
     CanvasLtiExperienceSessionGenerator,
 };
 use crate::canvas_lti_launch::{
-    merge_verified_lti_binding_capabilities, plan_ags_line_item_pin, plan_verified_identity,
-    CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsServiceUrlValidator,
-    CanvasLtiCapabilitySnapshotRepository, CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock,
-    CanvasLtiExperienceHandoffRepository, CanvasLtiExperienceHandoffRequest,
-    CanvasLtiIdentityRecord, CanvasLtiIdentityRepository, CanvasLtiIdentityRequest,
-    CanvasLtiIdentityStatus, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
-    CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding,
-    CanvasLtiStoredLaunchState,
+    feature_enabled, merge_verified_lti_binding_capabilities, plan_ags_line_item_pin,
+    plan_verified_identity, CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest,
+    CanvasLtiAgsServiceUrlValidator, CanvasLtiCapabilitySnapshotRepository,
+    CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock, CanvasLtiExperienceHandoffRepository,
+    CanvasLtiExperienceHandoffRequest, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
+    CanvasLtiIdentityRequest, CanvasLtiIdentityStatus, CanvasLtiJwksRefresher,
+    CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+    CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
 };
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
@@ -763,22 +763,7 @@ impl CanvasLtiBootstrapRepository for PostgresCanvasLtiLoginRepository {
         let flags: Value = row
             .try_get("feature_flags")
             .map_err(bootstrap_repository_error)?;
-        let Some(flags) = flags.as_object() else {
-            return Ok(Some(true));
-        };
-        const CANVAS_FLAGS: [&str; 7] = [
-            "enable_canvas_lti",
-            "enable_canvas_mirror_publish",
-            "enable_canvas_mirror_ops",
-            "enable_canvas_deep_linking",
-            "enable_canvas_ags",
-            "enable_canvas_nrps",
-            "enable_background_awards",
-        ];
-        if !CANVAS_FLAGS.iter().any(|name| flags.contains_key(*name)) {
-            return Ok(Some(true));
-        }
-        Ok(Some(flags.get(flag).is_some_and(python_truthy)))
+        Ok(Some(feature_enabled(&flags, flag)))
     }
 
     async fn get_template(
