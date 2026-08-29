@@ -22,12 +22,12 @@ hmac = "0.12"
 hex = "0.4"
 http = "1"
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
-marty-crypto = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "1a00b6be216fb9c6a6c543c84b53d433400b632c", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
-marty-didcomm = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "1a00b6be216fb9c6a6c543c84b53d433400b632c", default-features = false }
-marty-iso18013 = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "1a00b6be216fb9c6a6c543c84b53d433400b632c", default-features = false }
-marty-oid4vci = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "1a00b6be216fb9c6a6c543c84b53d433400b632c", default-features = false }
-marty-verification = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "1a00b6be216fb9c6a6c543c84b53d433400b632c", default-features = false }
-marty-status = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "1a00b6be216fb9c6a6c543c84b53d433400b632c" }
+marty-crypto = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
+marty-iso18013 = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
+marty-oid4vci = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
+marty-verification = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
+marty-status = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c" }
 mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "020beffb4da1e0ef52b4330b55c3b4633022d529" }
 mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "020beffb4da1e0ef52b4330b55c3b4633022d529" }
 mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "020beffb4da1e0ef52b4330b55c3b4633022d529" }

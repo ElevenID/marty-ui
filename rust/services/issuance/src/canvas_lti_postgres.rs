@@ -3,17 +3,18 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use marty_oid4vci::lti::{
     canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
-    CanvasLtiPlatformProbe,
+    validate_canvas_lti_service_url, CanvasLtiPlatformProbe,
 };
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
 
 use crate::canvas_lti_launch::{
-    plan_verified_identity, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
-    CanvasLtiIdentityRequest, CanvasLtiIdentityStatus, CanvasLtiJwksRefresher,
-    CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
-    CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+    plan_ags_line_item_pin, plan_verified_identity, CanvasLtiAgsPinRepository,
+    CanvasLtiAgsPinRequest, CanvasLtiAgsServiceUrlValidator, CanvasLtiIdentityRecord,
+    CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityStatus,
+    CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError,
+    CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
 };
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
@@ -106,6 +107,46 @@ const SAVE_REFRESHED_JWKS: &str = "UPDATE issuance_service.canvas_platforms
       AND organization_id = $2
       AND lti_trust_profile = $3
       AND canvas_base_url = $10";
+
+const LOCK_AGS_BINDING: &str = "SELECT evidence_requirements
+    FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2 AND platform_id = $3 AND archived_at IS NULL
+    FOR UPDATE";
+
+const SAVE_AGS_LINE_ITEM: &str = "UPDATE issuance_service.canvas_program_bindings
+    SET evidence_requirements = $4,
+        config_version = config_version + 1,
+        enabled = false,
+        validated_config_version = NULL,
+        readiness_checks = '[]'::json,
+        readiness_validated_at = NULL,
+        activated_at = NULL,
+        credential_template_snapshot = '{}'::json,
+        updated_at = clock_timestamp()
+    WHERE id = $1 AND organization_id = $2 AND platform_id = $3 AND archived_at IS NULL";
+
+#[derive(Clone, Debug)]
+pub struct MartyCanvasLtiAgsServiceUrlValidator {
+    private_origin_allowlist: Vec<String>,
+}
+
+impl MartyCanvasLtiAgsServiceUrlValidator {
+    #[must_use]
+    pub fn new(private_origin_allowlist: Vec<String>) -> Self {
+        Self {
+            private_origin_allowlist,
+        }
+    }
+}
+
+#[async_trait]
+impl CanvasLtiAgsServiceUrlValidator for MartyCanvasLtiAgsServiceUrlValidator {
+    async fn validate(&self, service_url: &str) -> Result<String, String> {
+        validate_canvas_lti_service_url(service_url, &self.private_origin_allowlist)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CanvasLtiJwksRefreshConfig {
@@ -319,6 +360,57 @@ impl CanvasLtiLaunchContextRepository for PostgresCanvasLtiLoginRepository {
             .into_iter()
             .map(program_binding)
             .collect()
+    }
+}
+
+#[async_trait]
+impl CanvasLtiAgsPinRepository for PostgresCanvasLtiLoginRepository {
+    async fn pin_verified_line_item(
+        &self,
+        binding: &CanvasLtiProgramBinding,
+        request: &CanvasLtiAgsPinRequest,
+    ) -> Result<bool, CanvasLtiLaunchPlanError> {
+        if request.binding_id != binding.id {
+            return Err(CanvasLtiLaunchPlanError::AgsBindingMismatch);
+        }
+        let mut transaction = self.pool.begin().await.map_err(launch_repository_error)?;
+        let row = sqlx::query(LOCK_AGS_BINDING)
+            .bind(&binding.id)
+            .bind(&binding.organization_id)
+            .bind(&binding.platform_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?
+            .ok_or(CanvasLtiLaunchPlanError::AgsBindingMismatch)?;
+        let evidence_requirements = row
+            .try_get::<Value, _>("evidence_requirements")
+            .map_err(launch_repository_error)?
+            .as_array()
+            .cloned()
+            .ok_or(CanvasLtiLaunchPlanError::RepositoryUnavailable)?;
+        let Some(updated) = plan_ags_line_item_pin(&evidence_requirements, request)? else {
+            transaction
+                .commit()
+                .await
+                .map_err(launch_repository_error)?;
+            return Ok(false);
+        };
+        let result = sqlx::query(SAVE_AGS_LINE_ITEM)
+            .bind(&binding.id)
+            .bind(&binding.organization_id)
+            .bind(&binding.platform_id)
+            .bind(Value::Array(updated))
+            .execute(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?;
+        if result.rows_affected() != 1 {
+            return Err(CanvasLtiLaunchPlanError::AgsBindingMismatch);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(launch_repository_error)?;
+        Ok(true)
     }
 }
 

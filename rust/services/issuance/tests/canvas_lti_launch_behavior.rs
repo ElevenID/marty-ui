@@ -18,6 +18,7 @@ use marty_issuance_service::{
         CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
+    canvas_lti_postgres::MartyCanvasLtiAgsServiceUrlValidator,
 };
 use marty_oid4vci::lti::VerifiedLtiLaunch;
 use serde_json::{json, Value};
@@ -74,8 +75,9 @@ struct JwksRefresher {
 
 struct AgsUrlValidator;
 
+#[async_trait]
 impl CanvasLtiAgsServiceUrlValidator for AgsUrlValidator {
-    fn validate(&self, service_url: &str) -> Result<String, String> {
+    async fn validate(&self, service_url: &str) -> Result<String, String> {
         if service_url.starts_with("https://") {
             Ok(service_url.to_owned())
         } else {
@@ -564,6 +566,47 @@ async fn ags_line_item_planner_replays_the_python_oracle_contract() {
     assert_eq!(
         policy["changed_binding_policy"]["config_version_increment"],
         1
+    );
+}
+
+#[tokio::test]
+async fn ags_service_url_validation_is_https_dns_and_exact_allowlist_bound() {
+    let hardened = MartyCanvasLtiAgsServiceUrlValidator::new(Vec::new());
+    assert!(hardened
+        .validate("http://127.0.0.1/internal")
+        .await
+        .unwrap_err()
+        .contains("must use HTTPS"));
+    assert!(hardened
+        .validate("https://127.0.0.1/internal")
+        .await
+        .unwrap_err()
+        .contains("exact CANVAS_PRIVATE_ORIGIN_ALLOWLIST"));
+    assert!(hardened
+        .validate("https://100.64.0.1/internal")
+        .await
+        .unwrap_err()
+        .contains("exact CANVAS_PRIVATE_ORIGIN_ALLOWLIST"));
+    assert!(hardened
+        .validate("https://192.0.2.1/internal")
+        .await
+        .unwrap_err()
+        .contains("exact CANVAS_PRIVATE_ORIGIN_ALLOWLIST"));
+    assert!(hardened
+        .validate("https://user:secret@127.0.0.1/internal")
+        .await
+        .is_err());
+
+    let allowlisted = MartyCanvasLtiAgsServiceUrlValidator::new(vec![
+        "https://127.0.0.1/".to_owned(),
+        "not-a-valid-origin".to_owned(),
+    ]);
+    assert_eq!(
+        allowlisted
+            .validate("https://127.0.0.1/internal")
+            .await
+            .unwrap(),
+        "https://127.0.0.1/internal"
     );
 }
 

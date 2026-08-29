@@ -3,8 +3,9 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_lti_launch::{
-        CanvasLtiIdentityService, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
-        CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
+        CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiIdentityService,
+        CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository, CanvasLtiLaunchStateRepository,
+        CanvasLtiLaunchStateService,
     },
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
     canvas_lti_postgres::{
@@ -13,7 +14,7 @@ use marty_issuance_service::{
     },
 };
 use marty_oid4vci::lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, Row};
 use uuid::Uuid;
 
@@ -125,8 +126,15 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             evidence_requirements jsonb NOT NULL DEFAULT '[]'::jsonb,
             canvas_scope jsonb NOT NULL DEFAULT '{}'::jsonb,
             enabled boolean NOT NULL DEFAULT false,
+            config_version integer NOT NULL DEFAULT 1,
+            validated_config_version integer NULL,
+            readiness_checks json NOT NULL DEFAULT '[]'::json,
+            readiness_validated_at timestamptz NULL,
+            activated_at timestamptz NULL,
+            credential_template_snapshot json NOT NULL DEFAULT '{}'::json,
             archived_at timestamptz NULL,
-            created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )",
     )
     .execute(&pool)
@@ -394,6 +402,77 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         Some("profile-1")
     );
     assert!(!bindings[1].enabled);
+
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings (
+            id, organization_id, platform_id, application_template_id,
+            credential_template_id, feature_flags, evidence_requirements, canvas_scope,
+            enabled, config_version, validated_config_version, readiness_checks,
+            readiness_validated_at, activated_at, credential_template_snapshot
+        ) VALUES (
+            'binding-ags', 'org-123', 'platform-123', 'app-ags', 'credential-ags',
+            '{\"enable_canvas_lti\":true}'::jsonb,
+            '[{\"requirement_id\":\"score-1\",\"source\":\"ags_result\",\"scope\":{\"resource_id\":\"resource-1\",\"line_item_url\":\"https://canvas.example.edu/old\"}}]'::jsonb,
+            '{\"course_id\":\"course-101\"}'::jsonb, true, 4, 4,
+            '[{\"code\":\"ready\",\"status\":\"ready\"}]'::json,
+            clock_timestamp(), clock_timestamp(), '{\"id\":\"credential-ags\"}'::json
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let binding = repository
+        .list_program_bindings("org-123", "platform-123")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|binding| binding.id == "binding-ags")
+        .unwrap();
+    let request = CanvasLtiAgsPinRequest {
+        binding_id: binding.id.clone(),
+        requirement_id: "score-1".to_owned(),
+        resource_id: "resource-1".to_owned(),
+        line_item_url: "https://canvas.example.edu/new".to_owned(),
+    };
+    let first_repository = repository.clone();
+    let second_repository = repository.clone();
+    let (first, second) = tokio::join!(
+        first_repository.pin_verified_line_item(&binding, &request),
+        second_repository.pin_verified_line_item(&binding, &request)
+    );
+    assert_eq!(
+        usize::from(first.unwrap()) + usize::from(second.unwrap()),
+        1
+    );
+    let pinned = sqlx::query(
+        "SELECT evidence_requirements, config_version, enabled,
+            validated_config_version, readiness_checks, readiness_validated_at,
+            activated_at, credential_template_snapshot
+         FROM issuance_service.canvas_program_bindings WHERE id = 'binding-ags'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        pinned.get::<Value, _>("evidence_requirements")[0]["scope"]["line_item_url"],
+        "https://canvas.example.edu/new"
+    );
+    assert_eq!(pinned.get::<i32, _>("config_version"), 5);
+    assert!(!pinned.get::<bool, _>("enabled"));
+    assert!(pinned
+        .get::<Option<i32>, _>("validated_config_version")
+        .is_none());
+    assert_eq!(pinned.get::<Value, _>("readiness_checks"), json!([]));
+    assert!(pinned
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("readiness_validated_at")
+        .is_none());
+    assert!(pinned
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("activated_at")
+        .is_none());
+    assert_eq!(
+        pinned.get::<Value, _>("credential_template_snapshot"),
+        json!({})
+    );
 
     let state = format!("state-{}", Uuid::new_v4());
     let nonce = format!("nonce-{}", Uuid::new_v4());
