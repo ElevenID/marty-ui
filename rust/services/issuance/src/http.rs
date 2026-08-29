@@ -587,12 +587,19 @@ async fn parse_canvas_lti_experience_exchange(
             media_type == "application/json"
                 || (media_type.starts_with("application/") && media_type.ends_with("+json"))
         });
-    if !is_json {
-        return Err(CanvasLtiExperienceExchangeHttpError::UnsupportedMediaType);
-    }
     let bytes = to_bytes(request.into_body(), MAX_EXCHANGE_BODY_BYTES)
         .await
         .map_err(|_| CanvasLtiExperienceExchangeHttpError::BodyTooLarge)?;
+    if !is_json {
+        return Err(CanvasLtiExperienceExchangeHttpError::Validation(vec![
+            json!({
+                "type": "model_attributes_type",
+                "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": String::from_utf8_lossy(&bytes),
+            }),
+        ]));
+    }
     let input: Value = serde_json::from_slice(&bytes)
         .map_err(|_| CanvasLtiExperienceExchangeHttpError::InvalidJson)?;
     let Some(object) = input.as_object() else {
@@ -1022,7 +1029,6 @@ enum CanvasLtiExperienceExchangeHttpError {
     Service(CanvasLtiExperienceExchangeError),
     Validation(Vec<Value>),
     InvalidJson,
-    UnsupportedMediaType,
     BodyTooLarge,
 }
 
@@ -1062,11 +1068,6 @@ impl IntoResponse for CanvasLtiExperienceExchangeHttpError {
                         "ctx": {"error": "Invalid JSON"},
                     }]
                 })),
-            )
-                .into_response(),
-            Self::UnsupportedMediaType => (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                Json(json!({"detail": "Content-Type must be application/json"})),
             )
                 .into_response(),
             Self::BodyTooLarge => (

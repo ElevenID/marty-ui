@@ -52,7 +52,7 @@
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-canvas-lti-foundation.json",
     "commit": "8c92e52bb56c1b817153ea1c57fc63625f614190",
-    "sha256": "75a27ca50f65249001ef74132529400820db937e1397b91ca20850da634d5c37"
+    "sha256": "c343b3eed7b3e39c786601dad31a9fcc49973c2a82fac3da78edc76883fc9edd"
   },
   "native_http": [
     {

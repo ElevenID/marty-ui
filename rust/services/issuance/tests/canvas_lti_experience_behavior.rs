@@ -405,24 +405,58 @@ async fn exchange_http_replays_every_frozen_schema_failure() {
 }
 
 #[tokio::test]
-async fn exchange_http_accepts_only_json_media_types() {
+async fn exchange_http_replays_non_json_media_as_model_validation() {
     let repository = Arc::new(ExchangeRepository::default());
-    let app = exchange_app(exchange_service(repository, Arc::new(FixedGenerator)));
-    let rejected = app
-        .clone()
-        .oneshot(
-            Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
-                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .body(Body::from("code=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(rejected.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let app = exchange_app(exchange_service(
+        repository.clone(),
+        Arc::new(FixedGenerator),
+    ));
+    let cases = [
+        (None, r#"{"code":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#),
+        (
+            Some("application/x-www-form-urlencoded"),
+            "code=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        ),
+        (
+            Some("text/plain"),
+            r#"{"code":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#,
+        ),
+    ];
+    let request_contract = &contract()["experience"]["exchange"]["request"];
+    let non_json_contract = &request_contract["non_json_body_behavior"];
+    assert_eq!(non_json_contract["status_code"], 422);
+    assert_eq!(non_json_contract["error_type"], "model_attributes_type");
+    assert_eq!(non_json_contract["input_projection"], "raw-decoded-body");
+    assert_eq!(non_json_contract["cache_headers"], "absent");
     assert_eq!(
-        response_json(rejected).await,
-        json!({"detail": "Content-Type must be application/json"})
+        non_json_contract["cases"].as_array().unwrap().len(),
+        cases.len()
     );
+    for (content_type, body) in cases {
+        let mut request = Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange");
+        if let Some(content_type) = content_type {
+            request = request.header(header::CONTENT_TYPE, content_type);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert_eq!(
+            response_json(response).await,
+            json!({
+                "detail": [{
+                    "type": "model_attributes_type",
+                    "loc": ["body"],
+                    "msg": "Input should be a valid dictionary or object to extract fields from",
+                    "input": body,
+                }]
+            })
+        );
+    }
+    assert!(repository.requests.lock().unwrap().is_empty());
 
     let accepted = app
         .oneshot(
@@ -434,6 +468,33 @@ async fn exchange_http_accepts_only_json_media_types() {
         .await
         .unwrap();
     assert_eq!(accepted.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn exchange_http_bounds_non_json_body_before_validation_projection() {
+    let repository = Arc::new(ExchangeRepository::default());
+    let max_body_bytes = contract()["experience"]["exchange"]["request"]["body_max_bytes"]
+        .as_u64()
+        .unwrap() as usize;
+    let response = exchange_app(exchange_service(
+        repository.clone(),
+        Arc::new(FixedGenerator),
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("x".repeat(max_body_bytes + 1)))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response_json(response).await,
+        json!({"detail": "Canvas LTI exchange body exceeds the size limit"})
+    );
+    assert!(repository.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -107,6 +107,10 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/integrations/canvas/lti/platforms/platform-1/experience",
             ),
+            (
+                HttpMethod::Post,
+                "/v1/integrations/canvas/lti/experience-sessions/exchange",
+            ),
         ] {
             assert!(is_native_http(method, path), "{method:?} {path}");
         }

@@ -161,6 +161,23 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     experience_exchange = canvas_lti["experience"]["exchange"]
     assert len(experience_exchange["ordered_stages"]) == 11
     assert experience_exchange["response_after_both_persistence_writes"] is True
+    exchange_request = experience_exchange["request"]
+    assert exchange_request["json_media_types"] == [
+        "application/json",
+        "application/*+json",
+    ]
+    assert exchange_request["body_max_bytes"] == 65536
+    assert exchange_request["non_json_body_behavior"] == {
+        "status_code": 422,
+        "error_type": "model_attributes_type",
+        "input_projection": "raw-decoded-body",
+        "cache_headers": "absent",
+        "cases": [
+            "missing-content-type",
+            "application/x-www-form-urlencoded",
+            "text/plain",
+        ],
+    }
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }
