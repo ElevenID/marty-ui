@@ -144,9 +144,13 @@ pub struct CredentialTransaction {
     pub claims: Map<String, Value>,
     pub credential_type: Option<String>,
     pub selective_disclosure_claims: Vec<String>,
+    pub zk_predicate_claims: Vec<String>,
     pub credential_payload_format: String,
     pub wallet_configs: Vec<Value>,
     pub validity_days: i64,
+    pub renewable: bool,
+    pub renewal_window_days: i64,
+    pub delivery_mode: String,
     pub issuer_profile_id: Option<String>,
     pub issuer_mode: String,
     pub issuer_did: Option<String>,
@@ -1107,6 +1111,8 @@ pub enum CredentialIssuanceError {
     LifecycleUnavailable(String),
     #[error("the credential template has no revocation profile")]
     RevocationProfileRequired,
+    #[error("credential eligibility requirements are not satisfied")]
+    CanvasEligibilityDenied,
     #[error("credential repository is unavailable")]
     RepositoryUnavailable,
 }
@@ -1140,9 +1146,13 @@ mod tests {
             .expect("claims"),
             credential_type: Some("OpenBadgeCredential".to_owned()),
             selective_disclosure_claims: vec![],
+            zk_predicate_claims: vec![],
             credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
             wallet_configs: vec![],
             validity_days: 365,
+            renewable: false,
+            renewal_window_days: 30,
+            delivery_mode: "wallet_only".to_owned(),
             issuer_profile_id: None,
             issuer_mode: "org_managed".to_owned(),
             issuer_did: None,

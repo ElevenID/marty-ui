@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod canvas_issuance_guard;
 pub mod client_auth;
 pub mod config;
 pub mod contract;

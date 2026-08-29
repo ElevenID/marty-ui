@@ -1,12 +1,17 @@
 use chrono::{Duration, Utc};
 use hmac::{Hmac, Mac};
+use marty_issuance_service::canvas_issuance_guard::{
+    CanvasGuardConfig, PostgresCanvasIssuanceGuard,
+};
 use marty_issuance_service::credential::{
-    CredentialRepository, CredentialTransactionStatus, IssuedCredential,
+    CredentialIssuanceError, CredentialRepository, CredentialTransactionStatus, IssuedCredential,
+    IssuerContext,
 };
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
+use std::{collections::BTreeSet, time::Duration as StdDuration};
 use uuid::Uuid;
 
 fn token_digest(key: &[u8], token: &str) -> String {
@@ -41,10 +46,14 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     let nonce = format!("credential-proof-nonce-{}", Uuid::new_v4());
     sqlx::query(
         "INSERT INTO issuance_service.issuance_transactions
-             (id, organization_id, credential_template_id, application_id, status,
-              pre_auth_code, access_token, c_nonce, claims, credential_type)
-         VALUES ('tx-contract', 'org-a', 'template-a', 'application-a', 'authorized',
-                 'pre-auth-contract', $1, $2, '{}'::jsonb, 'OpenBadgeCredential')",
+             (id, organization_id, credential_template_id, revocation_profile_id,
+              application_id, status, pre_auth_code, access_token, c_nonce, claims,
+              credential_type, issuer_profile_id, issuer_did_override,
+              issuer_algorithm, signing_service_id)
+         VALUES ('tx-contract', 'org-a', 'template-a', 'status-profile-a',
+                 'application-a', 'authorized', 'pre-auth-contract', $1, $2,
+                 '{}'::jsonb, 'OpenBadgeCredential', 'issuer-profile-a',
+                 'did:web:issuer.example', 'ES256', 'kms-service-a')",
     )
     .bind(token_digest(key.as_bytes(), &access_token))
     .bind(&nonce)
@@ -53,9 +62,11 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .unwrap();
     sqlx::query(
         "INSERT INTO issuance_service.applications
-             (id, organization_id, credential_id, integration_context)
-         VALUES ('application-a', 'org-a', NULL,
-                 '{\"canvas\":{\"source\":\"canvas-lti\",\"canvas_award_candidate_id\":\"candidate-a\",\"canvas_program_binding_id\":\"binding-a\",\"canvas_platform_id\":\"platform-a\"}}')",
+             (id, organization_id, application_template_id, status,
+              issuance_transaction_id, credential_id, integration_context)
+         VALUES ('application-a', 'org-a', 'application-template-a', 'approved',
+                 'tx-contract', NULL,
+                 '{\"canvas\":{\"source\":\"canvas-lti\",\"canvas_award_candidate_id\":\"candidate-a\",\"canvas_account_id\":\"account-a\",\"canvas_program_binding_id\":\"binding-a\",\"canvas_platform_id\":\"platform-a\",\"application_template_id\":\"application-template-a\",\"credential_template_id\":\"template-a\",\"lti_subject\":\"opaque-subject-a\"}}')",
     )
     .execute(&pool)
     .await
@@ -69,6 +80,8 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .await
     .unwrap();
 
+    seed_canvas_guard_contract(&pool).await;
+
     let repository = PostgresCredentialRepository::new(pool.clone(), key.as_bytes());
     let transaction = repository
         .transaction_by_access_token(&access_token)
@@ -76,6 +89,56 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .unwrap()
         .expect("Python-compatible HMAC token lookup");
     assert_eq!(transaction.nonce.as_deref(), Some(nonce.as_str()));
+    let guard = PostgresCanvasIssuanceGuard::new(
+        pool.clone(),
+        CanvasGuardConfig {
+            enabled: true,
+            pilot_organizations: BTreeSet::from(["org-a".to_owned()]),
+            evidence_max_age: StdDuration::from_secs(900),
+            readiness_max_age: StdDuration::from_secs(900),
+        },
+    );
+    let issuer_did = "did:web:issuer.example";
+    let issuer = IssuerContext {
+        issuer_profile_id: "issuer-profile-a".to_owned(),
+        issuer_did: issuer_did.to_owned(),
+        signing_service_id: "kms-service-a".to_owned(),
+        algorithm: "ES256".to_owned(),
+        verification_method_id: Some(format!("{issuer_did}#key-a")),
+        public_jwk: Some(json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
+        certificate_chain: Vec::new(),
+        raw_context: json!({
+            "organization_id":"org-a", "issuer_did":issuer_did,
+            "verification_method_id":format!("{issuer_did}#key-a"),
+            "key_purpose":"vc_jwt_issuer", "algorithm":"ES256",
+            "public_jwk":{"kty":"EC","crv":"P-256","x":"x","y":"y"},
+            "issuer_profile":{
+                "id":"issuer-profile-a", "status":"active", "organization_id":"org-a",
+                "issuer_did":issuer_did, "verification_method_id":format!("{issuer_did}#key-a"),
+                "key_purpose":"vc_jwt_issuer"
+            },
+            "service":{"id":"kms-service-a","algorithm":"ES256"}
+        }),
+    };
+    assert!(guard.ensure_ready(&transaction, &issuer).await.unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.evidence_facts
+         SET verification = '{\"status\":\"UNVERIFIED\"}'::jsonb WHERE id = 'fact-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        guard.ensure_ready(&transaction, &issuer).await,
+        Err(CredentialIssuanceError::CanvasEligibilityDenied)
+    ));
+    sqlx::query(
+        "UPDATE issuance_service.evidence_facts
+         SET verification = '{\"status\":\"VERIFIED\"}'::jsonb WHERE id = 'fact-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let credential_id = "urn:uuid:credential-postgres-contract";
     let (first, second) = tokio::join!(
         repository.claim_for_signing(&transaction, credential_id),
@@ -152,6 +215,45 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
 
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
     drop_contract_schema(&pool).await;
+}
+
+async fn seed_canvas_guard_contract(pool: &sqlx::PgPool) {
+    for statement in [
+        "INSERT INTO issuance_service.application_templates
+             (id, organization_id, credential_template_id, status)
+         VALUES ('application-template-a', 'org-a', 'template-a', 'active')",
+        "INSERT INTO issuance_service.canvas_platforms
+             (id, organization_id, canvas_account_id, registration_status, enabled)
+         VALUES ('platform-a', 'org-a', 'account-a', 'installed', true)",
+        "INSERT INTO issuance_service.canvas_program_bindings
+             (id, organization_id, platform_id, application_template_id,
+              credential_template_id, evidence_requirements, config_version,
+              validated_config_version, readiness_checks, readiness_validated_at,
+              activated_at, credential_template_snapshot, enabled)
+         VALUES ('binding-a', 'org-a', 'platform-a', 'application-template-a',
+                 'template-a',
+                 '[{\"requirement_id\":\"score-a\",\"source\":\"canvas_rest\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"course-a\",\"activity_id\":\"activity-a\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]'::jsonb,
+                 1, 1, '[{\"status\":\"ready\",\"blocking\":true}]'::jsonb,
+                 clock_timestamp(), clock_timestamp(),
+                 '{\"id\":\"template-a\",\"organization_id\":\"org-a\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"status-profile-a\",\"issuer_did\":\"did:web:issuer.example\",\"issuer_algorithm\":\"ES256\"}'::jsonb,
+                 true)",
+        "INSERT INTO issuance_service.evidence_facts
+             (id, organization_id, application_id, subject_id, provider, fact_type,
+              scope, assertion, verification, source, requirement_id, logical_key,
+              source_revision, payload_hash, effective_at, observed_at, created_at)
+         VALUES ('fact-a', 'org-a', 'application-a', 'opaque-subject-a', 'canvas',
+                 'canvas.assignment_score',
+                 '{\"course_id\":\"course-a\",\"activity_id\":\"activity-a\"}'::jsonb,
+                 '{\"score_percent\":92}'::jsonb, '{\"status\":\"VERIFIED\"}'::jsonb,
+                 '{\"source\":\"canvas_rest\"}'::jsonb, 'score-a', 'logical-a',
+                 'revision-a', 'payload-a', clock_timestamp(), clock_timestamp(),
+                 clock_timestamp())",
+        "INSERT INTO issuance_service.evidence_fact_heads
+             (organization_id, application_id, logical_key, fact_id)
+         VALUES ('org-a', 'application-a', 'logical-a', 'fact-a')",
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+    }
 }
 
 async fn assert_authorization_only_race(
@@ -231,8 +333,12 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             subject_did TEXT, status TEXT NOT NULL, pre_auth_code TEXT NOT NULL UNIQUE,
             access_token TEXT, c_nonce TEXT, claims JSONB NOT NULL DEFAULT '{}'::jsonb,
             credential_type TEXT, selective_disclosure_claims JSONB DEFAULT '[]'::jsonb,
+            zk_predicate_claims JSONB DEFAULT '[]'::jsonb,
             credential_payload_format TEXT NOT NULL DEFAULT 'w3c_vcdm_v2_sd_jwt',
             wallet_configs JSONB DEFAULT '[]'::jsonb, validity_days INTEGER NOT NULL DEFAULT 365,
+            renewable BOOLEAN NOT NULL DEFAULT false,
+            renewal_window_days INTEGER NOT NULL DEFAULT 30,
+            delivery_mode TEXT NOT NULL DEFAULT 'wallet_only',
             issuer_profile_id TEXT, issuer_mode TEXT NOT NULL DEFAULT 'org_managed',
             issuer_did_override TEXT, issuer_algorithm TEXT, signing_service_id TEXT,
             reserved_credential_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
@@ -248,9 +354,36 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             status_updated_at TIMESTAMPTZ NOT NULL, revoked BOOLEAN NOT NULL,
             issued_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ)",
         "CREATE TABLE issuance_service.applications (
-            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, credential_id TEXT,
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+            application_template_id TEXT, status TEXT, issuance_transaction_id TEXT,
+            credential_id TEXT,
             integration_context JSONB NOT NULL DEFAULT '{}'::jsonb,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())",
+        "CREATE TABLE issuance_service.application_templates (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+            credential_template_id TEXT NOT NULL, approval_policy_set_id TEXT,
+            status TEXT NOT NULL)",
+        "CREATE TABLE issuance_service.canvas_platforms (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, canvas_account_id TEXT,
+            registration_status TEXT, enabled BOOLEAN NOT NULL, archived_at TIMESTAMPTZ)",
+        "CREATE TABLE issuance_service.canvas_program_bindings (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, platform_id TEXT,
+            application_template_id TEXT, credential_template_id TEXT,
+            auto_approve_on_evidence BOOLEAN NOT NULL DEFAULT false,
+            evidence_requirements JSONB NOT NULL, approval_policy_set_id TEXT,
+            config_version INTEGER, validated_config_version INTEGER,
+            readiness_checks JSONB, readiness_validated_at TIMESTAMPTZ,
+            activated_at TIMESTAMPTZ, archived_at TIMESTAMPTZ,
+            credential_template_snapshot JSONB, enabled BOOLEAN NOT NULL)",
+        "CREATE TABLE issuance_service.evidence_facts (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, application_id TEXT NOT NULL,
+            subject_id TEXT, provider TEXT, fact_type TEXT, scope JSONB, assertion JSONB,
+            verification JSONB, source JSONB, requirement_id TEXT, logical_key TEXT,
+            source_revision TEXT, payload_hash TEXT, effective_at TIMESTAMPTZ,
+            observed_at TIMESTAMPTZ, created_at TIMESTAMPTZ)",
+        "CREATE TABLE issuance_service.evidence_fact_heads (
+            organization_id TEXT NOT NULL, application_id TEXT NOT NULL,
+            logical_key TEXT NOT NULL, fact_id TEXT NOT NULL)",
         "CREATE TABLE issuance_service.canvas_award_candidates (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, application_id TEXT,
             binding_id TEXT NOT NULL, platform_id TEXT NOT NULL, state TEXT NOT NULL,
@@ -270,6 +403,11 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
 
 async fn drop_contract_schema(pool: &sqlx::PgPool) {
     for statement in [
+        "DROP TABLE IF EXISTS issuance_service.evidence_fact_heads",
+        "DROP TABLE IF EXISTS issuance_service.evidence_facts",
+        "DROP TABLE IF EXISTS issuance_service.canvas_program_bindings",
+        "DROP TABLE IF EXISTS issuance_service.canvas_platforms",
+        "DROP TABLE IF EXISTS issuance_service.application_templates",
         "DROP TABLE IF EXISTS issuance_service.canvas_award_candidates",
         "DROP TABLE IF EXISTS issuance_service.issued_credentials",
         "DROP TABLE IF EXISTS issuance_service.applications",

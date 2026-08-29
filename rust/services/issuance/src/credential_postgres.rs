@@ -22,7 +22,8 @@ macro_rules! transaction_query {
             "SELECT id, organization_id, credential_template_id, revocation_profile_id,
      renewal_of_credential_id, applicant_id, application_id, subject_did, status,
      pre_auth_code, c_nonce, claims, credential_type, selective_disclosure_claims,
-     credential_payload_format, wallet_configs, validity_days, issuer_profile_id,
+     zk_predicate_claims, credential_payload_format, wallet_configs, validity_days,
+     renewable, renewal_window_days, delivery_mode, issuer_profile_id,
      issuer_mode, issuer_did_override, issuer_algorithm, signing_service_id,
      reserved_credential_id FROM issuance_service.issuance_transactions WHERE ",
             $condition
@@ -41,7 +42,8 @@ const CLAIM_FOR_SIGNING: &str = "UPDATE issuance_service.issuance_transactions
      RETURNING id, organization_id, credential_template_id, revocation_profile_id,
          renewal_of_credential_id, applicant_id, application_id, subject_did, status,
          pre_auth_code, c_nonce, claims, credential_type, selective_disclosure_claims,
-         credential_payload_format, wallet_configs, validity_days, issuer_profile_id,
+         zk_predicate_claims, credential_payload_format, wallet_configs, validity_days,
+         renewable, renewal_window_days, delivery_mode, issuer_profile_id,
          issuer_mode, issuer_did_override, issuer_algorithm, signing_service_id,
          reserved_credential_id";
 
@@ -366,9 +368,13 @@ fn transaction_row(row: PgRow) -> Result<CredentialTransaction, CredentialIssuan
         claims: json_map(&row, "claims")?,
         credential_type: get(&row, "credential_type")?,
         selective_disclosure_claims: json_vec(&row, "selective_disclosure_claims")?,
+        zk_predicate_claims: json_vec(&row, "zk_predicate_claims")?,
         credential_payload_format: get(&row, "credential_payload_format")?,
         wallet_configs: json_vec(&row, "wallet_configs")?,
         validity_days: i64::from(get::<i32>(&row, "validity_days")?),
+        renewable: get(&row, "renewable")?,
+        renewal_window_days: i64::from(get::<i32>(&row, "renewal_window_days")?),
+        delivery_mode: get(&row, "delivery_mode")?,
         issuer_profile_id: get(&row, "issuer_profile_id")?,
         issuer_mode: get(&row, "issuer_mode")?,
         issuer_did: get(&row, "issuer_did_override")?,
