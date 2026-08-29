@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
+    time::Duration,
 };
 
 use mmf_config::{ConfigLayer, LayeredConfig};
@@ -8,7 +9,7 @@ use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
     pub release_version: String,
@@ -16,6 +17,31 @@ pub struct IssuanceServiceConfig {
     pub issuer_base_url: String,
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
+    pub database_url: String,
+    pub signing_keys_internal_url: url::Url,
+    pub signing_keys_internal_api_key: Option<String>,
+    pub dependency_timeout: Duration,
+}
+
+impl std::fmt::Debug for IssuanceServiceConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssuanceServiceConfig")
+            .field("http_addr", &self.http_addr)
+            .field("release_version", &self.release_version)
+            .field("build_revision", &self.build_revision)
+            .field("issuer_base_url", &self.issuer_base_url)
+            .field("issuer_display_name", &self.issuer_display_name)
+            .field("cors_allowed_origins", &self.cors_allowed_origins)
+            .field("database_url_configured", &!self.database_url.is_empty())
+            .field("signing_keys_internal_url", &self.signing_keys_internal_url)
+            .field(
+                "signing_keys_internal_api_key_configured",
+                &self.signing_keys_internal_api_key.is_some(),
+            )
+            .field("dependency_timeout", &self.dependency_timeout)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -23,6 +49,7 @@ struct Settings {
     server: ServerSettings,
     build: BuildSettings,
     discovery: DiscoverySettings,
+    dependencies: DependencySettings,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +69,12 @@ struct BuildSettings {
 struct DiscoverySettings {
     issuer_base_url: String,
     issuer_display_name: String,
+}
+
+#[derive(Deserialize)]
+struct DependencySettings {
+    database_url: String,
+    signing_keys_internal_url: String,
 }
 
 impl IssuanceServiceConfig {
@@ -68,6 +101,10 @@ impl IssuanceServiceConfig {
                 "discovery": {
                     "issuer_base_url": "https://beta.elevenidllc.com",
                     "issuer_display_name": "ElevenID LLC"
+                },
+                "dependencies": {
+                    "database_url": "postgresql://marty:marty_dev@postgres:5432/marty_credentials",
+                    "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys"
                 }
             }),
         };
@@ -86,6 +123,11 @@ impl IssuanceServiceConfig {
         })?;
         let http_addr = SocketAddr::new(settings.server.host, settings.server.port);
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
+        let database_url = validate_database_url(&settings.dependencies.database_url)?;
+        let signing_keys_internal_url =
+            validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
+        let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
+            .or(secret_value(&values, "ISSUANCE_API_KEY")?);
         Ok(Self {
             http_addr,
             release_version: settings.build.release_version,
@@ -93,6 +135,10 @@ impl IssuanceServiceConfig {
             issuer_base_url,
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
+            database_url,
+            signing_keys_internal_url,
+            signing_keys_internal_api_key,
+            dependency_timeout: Duration::from_secs(10),
         })
     }
 }
@@ -133,7 +179,22 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
     if let Some(issuer_display_name) = values.get("ISSUER_DISPLAY_NAME") {
         discovery.insert("issuer_display_name".to_owned(), json!(issuer_display_name));
     }
-    Ok(json!({"server": server, "build": build, "discovery": discovery}))
+    let mut dependencies = Map::new();
+    if let Some(database_url) = values.get("DATABASE_URL") {
+        dependencies.insert("database_url".to_owned(), json!(database_url));
+    }
+    if let Some(signing_keys_internal_url) = values.get("SIGNING_KEYS_INTERNAL_URL") {
+        dependencies.insert(
+            "signing_keys_internal_url".to_owned(),
+            json!(signing_keys_internal_url),
+        );
+    }
+    Ok(json!({
+        "server": server,
+        "build": build,
+        "discovery": discovery,
+        "dependencies": dependencies
+    }))
 }
 
 fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
@@ -160,6 +221,75 @@ fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
     Ok(normalized.to_owned())
 }
 
+fn validate_database_url(value: &str) -> Result<String, MmfError> {
+    let normalized = value.replacen("postgresql+asyncpg://", "postgresql://", 1);
+    let parsed = url::Url::parse(&normalized).map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "DATABASE_URL must be a valid PostgreSQL URL",
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "DATABASE_URL must be a valid PostgreSQL URL",
+        ));
+    }
+    Ok(normalized)
+}
+
+fn validate_internal_url(value: &str) -> Result<url::Url, MmfError> {
+    let mut parsed = url::Url::parse(value).map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "SIGNING_KEYS_INTERNAL_URL must be a valid HTTP(S) URL",
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "SIGNING_KEYS_INTERNAL_URL must be a credential-free HTTP(S) URL without query or fragment",
+        ));
+    }
+    if !parsed.path().ends_with('/') {
+        parsed.set_path(&format!("{}/", parsed.path()));
+    }
+    Ok(parsed)
+}
+
+fn secret_value(values: &BTreeMap<String, String>, name: &str) -> Result<Option<String>, MmfError> {
+    if let Some(value) = values.get(name).filter(|value| !value.is_empty()) {
+        return Ok(Some(value.clone()));
+    }
+    let file_name = format!("{name}_FILE");
+    let Some(path) = values.get(&file_name).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let value = std::fs::read_to_string(path).map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("unable to read {file_name}"),
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            format!("{file_name} is empty"),
+        ));
+    }
+    Ok(Some(value.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use mmf_core::ErrorCode;
@@ -183,6 +313,15 @@ mod tests {
         assert_eq!(config.issuer_base_url, "https://beta.elevenidllc.com");
         assert_eq!(config.issuer_display_name, "ElevenID LLC");
         assert_eq!(config.cors_allowed_origins, ["http://localhost:3000"]);
+        assert_eq!(
+            config.database_url,
+            "postgresql://marty:marty_dev@postgres:5432/marty_credentials"
+        );
+        assert_eq!(
+            config.signing_keys_internal_url.as_str(),
+            "http://gateway:8000/internal/signing-keys/"
+        );
+        assert!(config.signing_keys_internal_api_key.is_none());
     }
 
     #[test]
@@ -207,6 +346,16 @@ mod tests {
                 "MARTY_ISSUANCE__DISCOVERY__ISSUER_DISPLAY_NAME",
                 "Example Issuer",
             ),
+            (
+                "DATABASE_URL",
+                "postgresql+asyncpg://user:pass@postgres.example/marty",
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_URL",
+                "https://gateway.example/internal/signing-keys",
+            ),
+            ("ISSUANCE_API_KEY", "fallback-key"),
+            ("SIGNING_KEYS_INTERNAL_API_KEY", "preferred-key"),
         ]))
         .expect("configuration");
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8010");
@@ -218,6 +367,21 @@ mod tests {
             config.cors_allowed_origins,
             ["https://wallet.example", "https://admin.example"]
         );
+        assert_eq!(
+            config.database_url,
+            "postgresql://user:pass@postgres.example/marty"
+        );
+        assert_eq!(
+            config.signing_keys_internal_url.as_str(),
+            "https://gateway.example/internal/signing-keys/"
+        );
+        assert_eq!(
+            config.signing_keys_internal_api_key.as_deref(),
+            Some("preferred-key")
+        );
+        let diagnostic = format!("{config:?}");
+        assert!(!diagnostic.contains("preferred-key"));
+        assert!(!diagnostic.contains("user:pass"));
     }
 
     #[test]
@@ -249,6 +413,25 @@ mod tests {
             let error =
                 IssuanceServiceConfig::from_values(values(&[("ISSUER_BASE_URL", issuer_base_url)]))
                     .expect_err("invalid issuer URL");
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn invalid_dependency_urls_fail_closed() {
+        for (name, value) in [
+            ("DATABASE_URL", "sqlite:///tmp/issuance.db"),
+            (
+                "SIGNING_KEYS_INTERNAL_URL",
+                "https://user:secret@gateway.example/internal/signing-keys",
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_URL",
+                "https://gateway.example/internal/signing-keys?tenant=a",
+            ),
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
+                .expect_err("invalid dependency URL");
             assert_eq!(error.code, ErrorCode::Configuration);
         }
     }
