@@ -804,12 +804,6 @@ async function main() {
       renewedFromCredentialId: credential.renewed_from_credential_id || null,
       sourceStatus: sourceAfterRenewal.lifecycleStatus,
     };
-    const pendingRenewalNotice = page.getByRole('alert').filter({
-      hasText: /replacement issuance is pending wallet claim/i,
-    });
-    if (await pendingRenewalNotice.isVisible().catch(() => false)) {
-      await pendingRenewalNotice.getByRole('button', { name: /^close$/i }).click();
-    }
     const detailDialog = page.getByRole('dialog', { name: /issued credential details/i });
     if (await detailDialog.isVisible().catch(() => false)) {
       await detailDialog.getByRole('button', { name: /^close$/i }).click();

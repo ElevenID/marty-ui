@@ -15,6 +15,7 @@ const {
   mockShowSuccess,
   mockShowInfo,
   mockShowError,
+  mockRemoveNotification,
 } = vi.hoisted(() => ({
   mockFetchIssuedCredentials: vi.fn(),
   mockSuspendCredential: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockShowSuccess: vi.fn(),
   mockShowInfo: vi.fn(),
   mockShowError: vi.fn(),
+  mockRemoveNotification: vi.fn(),
 }));
 
 vi.mock('../../../contexts/ConsoleContext', () => ({
@@ -44,6 +46,7 @@ vi.mock('../../../hooks/useNotifications', () => ({
     showSuccess: mockShowSuccess,
     showInfo: mockShowInfo,
     showError: mockShowError,
+    removeNotification: mockRemoveNotification,
   }),
 }));
 
@@ -54,6 +57,7 @@ vi.mock('../../../services/presentationPolicyApi', () => ({
 describe('IssuancePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockShowInfo.mockReturnValue('renewal-notification-1');
     mockFetchIssuedCredentials.mockResolvedValue({
       credentials: [
         {
@@ -198,6 +202,7 @@ describe('IssuancePage', () => {
     await user.click(screen.getByRole('button', { name: /^close$/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(search).toHaveValue(reference);
+    expect(mockRemoveNotification).toHaveBeenCalledWith('renewal-notification-1');
   });
 
   it('requires a reason and suspends an active credential', async () => {

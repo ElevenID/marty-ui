@@ -93,7 +93,7 @@ function IssuancePage() {
   const navigate = useNavigate();
   const { credentialId } = useParams();
   const { activeOrgId: organizationId } = useConsole();
-  const { showError, showInfo, showSuccess } = useNotifications();
+  const { showError, showInfo, showSuccess, removeNotification } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [renewingCredentialId, setRenewingCredentialId] = useState(null);
   const [latestOffer, setLatestOffer] = useState(null);
@@ -103,6 +103,7 @@ function IssuancePage() {
   const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
   const [focusedCredentialId, setFocusedCredentialId] = useState(null);
   const [detailCredentialId, setDetailCredentialId] = useState(null);
+  const [renewalNotificationId, setRenewalNotificationId] = useState(null);
 
   const {
     data: issuedCredentialsData,
@@ -203,6 +204,8 @@ function IssuancePage() {
     setFocusedCredentialId(null);
     setDetailCredentialId(null);
     setLatestOffer(null);
+    if (renewalNotificationId) removeNotification(renewalNotificationId);
+    setRenewalNotificationId(null);
     if (credentialId) navigate('/console/org/operate/issuance');
   };
 
@@ -219,9 +222,10 @@ function IssuancePage() {
     try {
       const offer = await renewCredential({ credentialId: credential.id });
       setLatestOffer({ ...offer, offer_url: offer.credential_offer_uri });
-      showInfo('Renewal offer generated. Replacement issuance is pending wallet claim.', {
+      const notificationId = showInfo('Renewal offer generated. Replacement issuance is pending wallet claim.', {
         replaceKey: 'credential-lifecycle',
       });
+      setRenewalNotificationId(notificationId);
     } catch (err) {
       showError(err?.message || 'Failed to generate a renewal offer');
     } finally {
