@@ -564,11 +564,22 @@ impl CanvasLtiLaunchService {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasLtiExperienceCodeSeed {
     pub id: String,
     pub state: String,
     pub nonce: String,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceCodeSeed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceCodeSeed")
+            .field("id", &self.id)
+            .field("state", &"[REDACTED]")
+            .field("nonce", &"[REDACTED]")
+            .finish()
+    }
 }
 
 pub trait CanvasLtiExperienceCodeGenerator: Send + Sync {
@@ -595,7 +606,7 @@ pub struct CanvasLtiExperienceHandoff {
     pub consumed_state_metadata: Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiExperienceHandoffRequest {
     pub organization_id: String,
     pub platform_id: String,
@@ -606,6 +617,19 @@ pub struct CanvasLtiExperienceHandoffRequest {
     pub code_metadata: Value,
     pub consumed_state: CanvasLtiStoredLaunchState,
     pub consumed_state_metadata: Value,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceHandoffRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceHandoffRequest")
+            .field("organization_id", &self.organization_id)
+            .field("platform_id", &self.platform_id)
+            .field("canvas_account_id", &self.canvas_account_id)
+            .field("code", &self.code)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
 }
 
 #[async_trait]

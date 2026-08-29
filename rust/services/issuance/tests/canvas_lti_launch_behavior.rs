@@ -500,6 +500,37 @@ impl CanvasLtiExperienceCodeGenerator for FixedExperienceCodeGenerator {
 }
 
 #[test]
+fn experience_handoff_debug_output_redacts_one_time_secrets() {
+    let code = FixedExperienceCodeGenerator.generate();
+    let mut consumed_state = pending_state("platform-1", "launch-state-secret");
+    consumed_state.nonce = "launch-nonce-secret".to_owned();
+    consumed_state.metadata = json!({"private": "launch-metadata-secret"});
+    let request = CanvasLtiExperienceHandoffRequest {
+        organization_id: "org-1".to_owned(),
+        platform_id: "platform-1".to_owned(),
+        canvas_account_id: "account-1".to_owned(),
+        code: code.clone(),
+        redirect_uri: "https://ui.example.test/callback?secret=redirect-secret".to_owned(),
+        expires_at: Utc.with_ymd_and_hms(2026, 8, 29, 12, 1, 0).unwrap(),
+        code_metadata: json!({"private": "code-metadata-secret"}),
+        consumed_state,
+        consumed_state_metadata: json!({"private": "consumed-metadata-secret"}),
+    };
+
+    for (rendered, secret) in [
+        (format!("{code:?}"), code.state.as_str()),
+        (format!("{code:?}"), code.nonce.as_str()),
+        (format!("{request:?}"), "launch-nonce-secret"),
+        (format!("{request:?}"), "launch-metadata-secret"),
+        (format!("{request:?}"), "redirect-secret"),
+        (format!("{request:?}"), "code-metadata-secret"),
+        (format!("{request:?}"), "consumed-metadata-secret"),
+    ] {
+        assert!(!rendered.contains(secret));
+    }
+}
+
+#[test]
 fn experience_handoff_replays_the_complete_frozen_mip_vector() {
     let vector = &contract()["experience"]["callback"]["handoff_vector"];
     let platform = platform_from(&vector["platform"]);
