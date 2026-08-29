@@ -10,6 +10,7 @@ const {
   candidateUiFileForRequest,
   dismissLifecycleUpdatedNotification,
   findCredentialRow,
+  requireDismissedLifecycleNotification,
   resolveUiCandidateDist,
   resolveVerificationIssuerDid,
   selectRenewedCredential,
@@ -46,6 +47,20 @@ test('recording flow dismisses lifecycle feedback before presenting verifier evi
 
   assert.equal(await dismissLifecycleUpdatedNotification(page), true);
   assert.deepEqual(calls, ['click', 'wait:hidden']);
+});
+
+test('recording flow fails closed when lifecycle feedback is missing', async () => {
+  const page = {
+    getByText: () => ({
+      last: () => ({ isVisible: async () => false }),
+    }),
+  };
+
+  assert.equal(await dismissLifecycleUpdatedNotification(page), false);
+  await assert.rejects(
+    requireDismissedLifecycleNotification(page),
+    /requires the lifecycle notification to be visible and dismissible/,
+  );
 });
 
 test('credential row selection uses the exact record id and its stable display reference', async () => {
