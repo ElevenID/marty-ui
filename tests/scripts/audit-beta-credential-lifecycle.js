@@ -805,7 +805,7 @@ async function main() {
       sourceStatus: sourceAfterRenewal.lifecycleStatus,
     };
     const pendingRenewalNotice = page.getByRole('alert').filter({
-      hasText: /renewal offer generated.*replacement issuance is pending wallet claim/i,
+      hasText: /replacement issuance is pending wallet claim/i,
     });
     if (await pendingRenewalNotice.isVisible().catch(() => false)) {
       await pendingRenewalNotice.getByRole('button', { name: /^close$/i }).click();
