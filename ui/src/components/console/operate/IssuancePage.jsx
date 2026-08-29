@@ -450,7 +450,12 @@ function IssuancePage() {
                             || credential.credential_type
                           : credential.type || credential.credential_type}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        data-credential-reference={getCredentialReference(credential)}
+                        sx={{ fontFamily: 'monospace' }}
+                      >
                         {getCredentialReference(credential)}
                       </Typography>
                       {credential.credential_template_id && (

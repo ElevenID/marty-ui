@@ -123,9 +123,14 @@ describe('IssuancePage', () => {
     expect(summary).toHaveTextContent('Selected credential');
     expect(summary).toHaveTextContent('Renewed from');
     expect(summary).toHaveTextContent('Eligible for policies that require an active credential');
-    expect(screen.getByRole('row', { name: /open badge login template/i })).toHaveAttribute(
+    const credentialRow = screen.getByRole('row', { name: /open badge login template/i });
+    expect(credentialRow).toHaveAttribute(
       'data-credential-record-id',
       'issued-rec-1',
+    );
+    expect(credentialRow.querySelector('[data-credential-reference]')).toHaveAttribute(
+      'data-credential-reference',
+      formatOfficialReference('cred-open-badge-1', 'credential'),
     );
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
     expect(screen.queryByText('Active Offers')).not.toBeInTheDocument();
