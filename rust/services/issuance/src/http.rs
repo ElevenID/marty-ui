@@ -17,6 +17,7 @@ use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde_json::{json, Value};
 
 use crate::{
+    credential::{CredentialIssuanceError, CredentialIssuanceService, CredentialRequest},
     proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
@@ -35,6 +36,7 @@ struct IssuanceState {
     transactions: Option<TransactionReadService>,
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
+    credential: Option<CredentialIssuanceService>,
 }
 
 pub struct IssuanceServices {
@@ -70,6 +72,7 @@ struct OptionalServices {
     transactions: Option<TransactionReadService>,
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
+    credential: Option<CredentialIssuanceService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -136,6 +139,7 @@ pub fn router_with_all_services(
             transactions: Some(services.transactions),
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
+            credential: None,
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -197,6 +201,23 @@ pub fn router_with_proof_nonce_and_rate_limit(
     )
 }
 
+pub fn router_with_credential_issuance(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    credential: CredentialIssuanceService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            credential: Some(credential),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -214,7 +235,7 @@ fn router_with_optional_services(
             services.token_rate_limiter.clone(),
             token_rate_limit_middleware,
         ));
-    let discovery = Router::new()
+    let mut api = Router::new()
         .route(
             "/.well-known/openid-credential-issuer",
             get(root_issuer_metadata),
@@ -267,17 +288,20 @@ fn router_with_optional_services(
         .route(
             "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
             get(transaction_owner),
-        )
-        .merge(oauth)
-        .with_state(IssuanceState {
-            documents: discovery,
-            tenant: services.tenant,
-            transactions: services.transactions,
-            token_exchange: services.token_exchange,
-            proof_nonce: services.proof_nonce,
-        });
+        );
+    if services.credential.is_some() {
+        api = api.route("/v1/issuance/credential", post(issue_credential));
+    }
+    let api = api.merge(oauth).with_state(IssuanceState {
+        documents: discovery,
+        tenant: services.tenant,
+        transactions: services.transactions,
+        token_exchange: services.token_exchange,
+        proof_nonce: services.proof_nonce,
+        credential: services.credential,
+    });
     system
-        .merge(discovery)
+        .merge(api)
         .layer(middleware::from_fn_with_state(transport, legacy_transport))
 }
 
@@ -412,6 +436,27 @@ async fn issue_proof_nonce(
         HeaderValue::from_static("no-store"),
     );
     Ok(response)
+}
+
+async fn issue_credential(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    Json(request): Json<CredentialRequest>,
+) -> Result<Json<crate::credential::CredentialResponse>, CredentialIssuanceHttpError> {
+    let endpoint_url = external_endpoint_url(&headers, "/v1/issuance/credential");
+    state
+        .credential
+        .as_ref()
+        .ok_or(CredentialIssuanceError::RepositoryUnavailable)?
+        .issue(
+            &request,
+            header(&headers, "Authorization"),
+            header(&headers, "DPoP"),
+            &endpoint_url,
+        )
+        .await
+        .map(Json)
+        .map_err(Into::into)
 }
 
 async fn token_rate_limit_middleware(
@@ -573,6 +618,150 @@ impl From<TenantDiscoveryError> for TenantDiscoveryHttpError {
 struct TokenExchangeHttpError(TokenExchangeError);
 
 struct ProofNonceHttpError(ProofNonceError);
+
+struct CredentialIssuanceHttpError(CredentialIssuanceError);
+
+impl From<CredentialIssuanceError> for CredentialIssuanceHttpError {
+    fn from(value: CredentialIssuanceError) -> Self {
+        Self(value)
+    }
+}
+
+impl IntoResponse for CredentialIssuanceHttpError {
+    fn into_response(self) -> Response {
+        use CredentialIssuanceError as Error;
+
+        let (status, body) = match self.0 {
+            Error::MissingAuthorization => (
+                StatusCode::UNAUTHORIZED,
+                json!({"detail": "Missing or invalid authorization"}),
+            ),
+            Error::InvalidAccessToken => (
+                StatusCode::UNAUTHORIZED,
+                json!({"detail": "Invalid access token"}),
+            ),
+            Error::DpopRequired => (
+                StatusCode::UNAUTHORIZED,
+                json!({"detail": "DPoP proof is required for this access token"}),
+            ),
+            Error::InvalidDpopProof => (
+                StatusCode::UNAUTHORIZED,
+                json!({"detail": "Invalid DPoP proof"}),
+            ),
+            Error::DpopMismatch => (
+                StatusCode::UNAUTHORIZED,
+                json!({"detail": "DPoP proof does not match access token"}),
+            ),
+            Error::SelectorRequired => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_credential_request",
+                    "error_description": "Provide exactly one of credential_configuration_id or credential_identifier"
+                }),
+            ),
+            Error::CredentialAlreadyIssued => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_credential_request",
+                    "error_description": "Credential already issued — access token is single-use"
+                }),
+            ),
+            Error::InvalidTransactionState => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_credential_request",
+                    "error_description": "Invalid transaction state"
+                }),
+            ),
+            Error::UnknownConfiguration(value) => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "unknown_credential_configuration",
+                    "error_description": format!("Unknown credential_configuration_id: '{value}'")
+                }),
+            ),
+            Error::UnknownIdentifier(value) => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "unknown_credential_identifier",
+                    "error_description": format!("Unknown credential_identifier: '{value}'")
+                }),
+            ),
+            Error::ProofRequired => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_proof",
+                    "error_description": "Proof of possession is required per OID4VCI §7.2"
+                }),
+            ),
+            Error::MalformedProof => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_proof",
+                    "error_description": "Could not decode proof JWT audience"
+                }),
+            ),
+            Error::AudienceMismatch { allowed, actual } => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_proof",
+                    "error_description": format!(
+                        "OID4VCI §8.2: proof JWT aud MUST be the credential_issuer URL (path in ('{}', '{}', '{}', '{}')), got '{}'",
+                        allowed[0], allowed[1], allowed[2], allowed[3], actual
+                    )
+                }),
+            ),
+            Error::InvalidNonce => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_nonce",
+                    "error_description": "Proof nonce is missing, expired, or already used"
+                }),
+            ),
+            Error::InvalidProof(description) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_proof", "error_description": description}),
+            ),
+            Error::NonceRepositoryUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({
+                    "error": "temporarily_unavailable",
+                    "error_description": "Proof nonce storage is unavailable"
+                }),
+            ),
+            Error::MdocHolderKeyRequired => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "invalid_proof",
+                    "error_description": "mso_mdoc issuance requires a cryptographically verified holder public JWK for device-key binding"
+                }),
+            ),
+            Error::IssuanceInProgress => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "issuance_in_progress",
+                    "error_description": "Credential signing is already in progress for this transaction"
+                }),
+            ),
+            Error::UnsupportedFormat(value) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail": format!("Unsupported credential signing format: {value}")}),
+            ),
+            Error::IssuerUnavailable(detail)
+            | Error::SigningUnavailable(detail)
+            | Error::LifecycleUnavailable(detail) => {
+                (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": detail}))
+            }
+            Error::BuilderChangedCredentialId
+            | Error::InvalidStoredDataIntegrityCredential
+            | Error::RepositoryUnavailable => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"detail": "Credential issuance is temporarily unavailable"}),
+            ),
+        };
+        (status, Json(body)).into_response()
+    }
+}
 
 impl From<ProofNonceError> for ProofNonceHttpError {
     fn from(value: ProofNonceError) -> Self {
