@@ -8,12 +8,24 @@ use thiserror::Error;
 
 use crate::{canvas_lti_launch::CanvasLtiClock, canvas_lti_login::random_token};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasLtiExperienceSessionSeed {
     pub id: String,
     pub token: String,
     pub state_digest: String,
     pub nonce: String,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceSessionSeed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceSessionSeed")
+            .field("id", &self.id)
+            .field("token", &"[REDACTED]")
+            .field("state_digest", &self.state_digest)
+            .field("nonce", &"[REDACTED]")
+            .finish()
+    }
 }
 
 pub trait CanvasLtiExperienceSessionGenerator: Send + Sync {
@@ -35,13 +47,23 @@ impl CanvasLtiExperienceSessionGenerator for SecureCanvasLtiExperienceSessionGen
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiExperienceExchangePersistence {
     pub code: String,
     pub session_ttl: Duration,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl std::fmt::Debug for CanvasLtiExperienceExchangePersistence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceExchangePersistence")
+            .field("code", &"[REDACTED]")
+            .field("session_ttl", &self.session_ttl)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiExperienceExchangeRecord {
     pub experience_code_id: String,
     pub session: CanvasLtiExperienceSessionSeed,
@@ -49,6 +71,18 @@ pub struct CanvasLtiExperienceExchangeRecord {
     pub expires_at: DateTime<Utc>,
     pub session_metadata: Value,
     pub spent_code_metadata: Value,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceExchangeRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceExchangeRecord")
+            .field("experience_code_id", &self.experience_code_id)
+            .field("session", &self.session)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
 }
 
 #[async_trait]
@@ -61,10 +95,20 @@ pub trait CanvasLtiExperienceExchangeRepository: Send + Sync {
     ) -> Result<CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeError>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasLtiExperienceExchangeResult {
     pub session_token: String,
     pub expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceExchangeResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceExchangeResult")
+            .field("session_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -117,7 +161,7 @@ impl CanvasLtiExperienceExchangeService {
         code: &str,
     ) -> Result<CanvasLtiExperienceExchangeResult, CanvasLtiExperienceExchangeError> {
         let code = code.trim();
-        if code.is_empty() {
+        if !(32..=256).contains(&code.chars().count()) {
             return Err(CanvasLtiExperienceExchangeError::InvalidCode);
         }
         let record = self

@@ -12,9 +12,9 @@ use marty_issuance_service::{
     canvas_lti_experience::{
         canvas_lti_experience_exchange_metadata, sha256_hex, CanvasLtiExperienceExchangeError,
         CanvasLtiExperienceExchangePersistence, CanvasLtiExperienceExchangeRecord,
-        CanvasLtiExperienceExchangeRepository, CanvasLtiExperienceExchangeService,
-        CanvasLtiExperienceSessionGenerator, CanvasLtiExperienceSessionSeed,
-        SecureCanvasLtiExperienceSessionGenerator,
+        CanvasLtiExperienceExchangeRepository, CanvasLtiExperienceExchangeResult,
+        CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionGenerator,
+        CanvasLtiExperienceSessionSeed, SecureCanvasLtiExperienceSessionGenerator,
     },
     canvas_lti_launch::CanvasLtiClock,
 };
@@ -97,6 +97,20 @@ struct CountingClock {
     calls: AtomicUsize,
 }
 
+fn exchange_service(
+    repository: Arc<ExchangeRepository>,
+    session_ttl: Duration,
+) -> Result<CanvasLtiExperienceExchangeService, CanvasLtiExperienceExchangeError> {
+    CanvasLtiExperienceExchangeService::new(
+        repository,
+        Arc::new(FixedGenerator),
+        Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 8, 29, 12, 2, 0).unwrap(),
+        )),
+        session_ttl,
+    )
+}
+
 impl CanvasLtiClock for CountingClock {
     fn now(&self) -> DateTime<Utc> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -129,17 +143,12 @@ fn exchange_metadata_replays_the_complete_frozen_vector() {
 #[tokio::test]
 async fn exchange_normalizes_the_code_and_responds_after_persistence() {
     let repository = Arc::new(ExchangeRepository::default());
-    let service = CanvasLtiExperienceExchangeService::new(
-        repository.clone(),
-        Arc::new(FixedGenerator),
-        Arc::new(FixedClock(
-            Utc.with_ymd_and_hms(2026, 8, 29, 12, 2, 0).unwrap(),
-        )),
-        Duration::from_secs(30 * 60),
-    )
-    .unwrap();
+    let service = exchange_service(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
 
-    let result = service.exchange("  experience-code-1  ").await.unwrap();
+    let result = service
+        .exchange("  experience-code-contract-0123456789  ")
+        .await
+        .unwrap();
 
     assert_eq!(
         result.session_token,
@@ -148,7 +157,7 @@ async fn exchange_normalizes_the_code_and_responds_after_persistence() {
     assert_eq!(result.expires_at.to_rfc3339(), "2026-08-29T12:32:00+00:00");
     let requests = repository.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].code, "experience-code-1");
+    assert_eq!(requests[0].code, "experience-code-contract-0123456789");
     assert_eq!(requests[0].session_ttl, Duration::from_secs(30 * 60));
 }
 
@@ -170,11 +179,76 @@ async fn exchange_failure_returns_no_session_token() {
     .unwrap();
 
     assert_eq!(
-        service.exchange("experience-code-1").await.unwrap_err(),
+        service
+            .exchange("experience-code-contract-0123456789")
+            .await
+            .unwrap_err(),
         CanvasLtiExperienceExchangeError::RepositoryUnavailable
     );
     assert_eq!(generator.0.load(Ordering::SeqCst), 0);
     assert_eq!(clock.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn exchange_rejects_invalid_session_ttls_at_construction() {
+    assert_eq!(
+        exchange_service(Arc::new(ExchangeRepository::default()), Duration::ZERO,).unwrap_err(),
+        CanvasLtiExperienceExchangeError::InvalidConfiguration
+    );
+    assert_eq!(
+        exchange_service(
+            Arc::new(ExchangeRepository::default()),
+            Duration::from_secs(u64::MAX),
+        )
+        .unwrap_err(),
+        CanvasLtiExperienceExchangeError::InvalidConfiguration
+    );
+}
+
+#[tokio::test]
+async fn exchange_rejects_out_of_contract_codes_before_persistence() {
+    let repository = Arc::new(ExchangeRepository::default());
+    let service = exchange_service(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
+
+    for code in ["x".repeat(31), "x".repeat(257)] {
+        assert_eq!(
+            service.exchange(&code).await.unwrap_err(),
+            CanvasLtiExperienceExchangeError::InvalidCode
+        );
+    }
+    assert!(repository.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn exchange_debug_output_redacts_plaintext_secrets() {
+    let session = FixedGenerator.generate();
+    let record = CanvasLtiExperienceExchangeRecord {
+        experience_code_id: "experience-code-id-1".to_owned(),
+        session: session.clone(),
+        created_at: Utc.with_ymd_and_hms(2026, 8, 29, 12, 2, 0).unwrap(),
+        expires_at: Utc.with_ymd_and_hms(2026, 8, 29, 12, 32, 0).unwrap(),
+        session_metadata: json!({"private": "session-metadata-secret"}),
+        spent_code_metadata: json!({"private": "spent-code-metadata-secret"}),
+    };
+    let persistence = CanvasLtiExperienceExchangePersistence {
+        code: "experience-code-contract-0123456789".to_owned(),
+        session_ttl: Duration::from_secs(30 * 60),
+    };
+    let result = CanvasLtiExperienceExchangeResult {
+        session_token: session.token.clone(),
+        expires_at: record.expires_at,
+    };
+
+    for (rendered, secret) in [
+        (format!("{session:?}"), session.token.as_str()),
+        (format!("{session:?}"), session.nonce.as_str()),
+        (format!("{record:?}"), "session-metadata-secret"),
+        (format!("{record:?}"), "spent-code-metadata-secret"),
+        (format!("{persistence:?}"), persistence.code.as_str()),
+        (format!("{result:?}"), result.session_token.as_str()),
+    ] {
+        assert!(!rendered.contains(secret));
+    }
 }
 
 #[test]
