@@ -3,9 +3,14 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
+    canvas_lti_experience::{
+        sha256_hex, CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
+        CanvasLtiExperienceExchangeRepository, CanvasLtiExperienceSessionGenerator,
+        CanvasLtiExperienceSessionSeed,
+    },
     canvas_lti_launch::{
         CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiCapabilitySnapshotRequest,
-        CanvasLtiCapabilitySnapshotService, CanvasLtiExperienceCodeSeed,
+        CanvasLtiCapabilitySnapshotService, CanvasLtiClock, CanvasLtiExperienceCodeSeed,
         CanvasLtiExperienceHandoffRepository, CanvasLtiExperienceHandoffRequest,
         CanvasLtiIdentityService, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
         CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
@@ -22,6 +27,22 @@ use sqlx::{postgres::PgPoolOptions, Row};
 use uuid::Uuid;
 
 struct FixedProbe(CanvasLtiPlatformProbe);
+
+struct FixedExperienceSessionGenerator(CanvasLtiExperienceSessionSeed);
+
+impl CanvasLtiExperienceSessionGenerator for FixedExperienceSessionGenerator {
+    fn generate(&self) -> CanvasLtiExperienceSessionSeed {
+        self.0.clone()
+    }
+}
+
+struct FixedClock(DateTime<Utc>);
+
+impl CanvasLtiClock for FixedClock {
+    fn now(&self) -> DateTime<Utc> {
+        self.0
+    }
+}
 
 #[async_trait]
 impl CanvasLtiProbeClient for FixedProbe {
@@ -741,6 +762,130 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             .unwrap()
             .metadata,
         request.consumed_state_metadata
+    );
+
+    let session_id = Uuid::new_v4().to_string();
+    let session_token = "session-token-contract-0123456789abcdef".to_owned();
+    let session_state = sha256_hex(&session_token);
+    let created_at = DateTime::parse_from_rfc3339("2026-08-29T12:02:00+00:00")
+        .unwrap()
+        .with_timezone(&Utc);
+    let exchange = CanvasLtiExperienceExchangePersistence {
+        code: code_state.clone(),
+        session_ttl: Duration::from_secs(30 * 60),
+    };
+    let exchange_clock = FixedClock(created_at);
+    let exchange_generator = FixedExperienceSessionGenerator(CanvasLtiExperienceSessionSeed {
+        id: session_id.clone(),
+        token: session_token.clone(),
+        state_digest: session_state.clone(),
+        nonce: Uuid::new_v4().to_string(),
+    });
+    let exchanged = handoff_repository
+        .exchange_experience_code(&exchange, &exchange_generator, &exchange_clock)
+        .await
+        .unwrap();
+    let session_row = sqlx::query(
+        "SELECT platform_id, organization_id, canvas_account_id, state, redirect_uri,
+                status, metadata, consumed_at
+         FROM issuance_service.canvas_lti_launch_states WHERE id = $1",
+    )
+    .bind(&session_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        session_row.try_get::<String, _>("state").unwrap(),
+        session_state
+    );
+    assert_eq!(
+        session_row.try_get::<String, _>("status").unwrap(),
+        "session"
+    );
+    assert_eq!(
+        session_row.try_get::<String, _>("platform_id").unwrap(),
+        "platform-123"
+    );
+    assert_eq!(
+        session_row.try_get::<String, _>("organization_id").unwrap(),
+        "org-123"
+    );
+    assert_eq!(
+        session_row
+            .try_get::<String, _>("canvas_account_id")
+            .unwrap(),
+        "account-123"
+    );
+    assert_eq!(
+        session_row.try_get::<String, _>("redirect_uri").unwrap(),
+        consumed_state.redirect_uri
+    );
+    assert_eq!(
+        session_row.try_get::<Value, _>("metadata").unwrap(),
+        exchanged.session_metadata
+    );
+    assert_eq!(
+        session_row
+            .try_get::<DateTime<Utc>, _>("consumed_at")
+            .unwrap(),
+        created_at
+    );
+    let plaintext_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_lti_launch_states WHERE state = $1",
+    )
+    .bind(&session_token)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(plaintext_rows, 0);
+    let spent = handoff_repository
+        .get_launch_state(&code_state)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(spent.status, "consumed");
+    assert_eq!(spent.metadata, exchanged.spent_code_metadata);
+    assert_eq!(
+        handoff_repository
+            .exchange_experience_code(&exchange, &exchange_generator, &exchange_clock)
+            .await
+            .unwrap_err(),
+        CanvasLtiExperienceExchangeError::InvalidCode
+    );
+
+    let mut collision_code = request.clone();
+    collision_code.code.id = Uuid::new_v4().to_string();
+    collision_code.code.state = format!("collision-{}", Uuid::new_v4());
+    handoff_repository
+        .persist_experience_handoff(&collision_code)
+        .await
+        .unwrap();
+    let collision_token = "different-session-token-contract-123456".to_owned();
+    let collision = CanvasLtiExperienceExchangePersistence {
+        code: collision_code.code.state.clone(),
+        session_ttl: Duration::from_secs(30 * 60),
+    };
+    let collision_generator = FixedExperienceSessionGenerator(CanvasLtiExperienceSessionSeed {
+        id: session_id,
+        state_digest: sha256_hex(&collision_token),
+        token: collision_token,
+        nonce: Uuid::new_v4().to_string(),
+    });
+    assert_eq!(
+        handoff_repository
+            .exchange_experience_code(&collision, &collision_generator, &exchange_clock)
+            .await
+            .unwrap_err(),
+        CanvasLtiExperienceExchangeError::RepositoryUnavailable
+    );
+    assert_eq!(
+        handoff_repository
+            .get_launch_state(&collision.code)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "pending"
     );
 
     let mut rejected = request.clone();

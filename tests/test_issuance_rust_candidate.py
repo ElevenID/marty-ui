@@ -138,7 +138,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["canvas_lti_behavior_contract"]["commit"]
-        == "7c9f623b582ac9cd77d90110b2e4a6d4ab8366dd"
+        == "8c92e52bb56c1b817153ea1c57fc63625f614190"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
@@ -158,6 +158,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     experience_callback = canvas_lti["experience"]["callback"]
     assert experience_callback["redirect_only_after_both_persistence_writes"] is True
     assert len(experience_callback["ordered_stages"]) == 7
+    experience_exchange = canvas_lti["experience"]["exchange"]
+    assert len(experience_exchange["ordered_stages"]) == 11
+    assert experience_exchange["response_after_both_persistence_writes"] is True
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }
