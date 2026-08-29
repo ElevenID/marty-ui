@@ -463,15 +463,26 @@ async fn parse_canvas_lti_launch_submission(
 
 async fn parse_canvas_lti_payload(request: Request) -> Result<Map<String, Value>, &'static str> {
     const MAX_CANVAS_LTI_BODY_BYTES: usize = 64 * 1024;
-    let is_json = request
+    let content_type = request
         .headers()
         .get(http_header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"));
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    let Some(content_type) = content_type else {
+        return Ok(Map::new());
+    };
+    if content_type != "application/json" && content_type != "application/x-www-form-urlencoded" {
+        // Match Starlette's request.form() boundary: unsupported media types
+        // produce an empty form rather than interpreting arbitrary text as an
+        // LTI submission.
+        return Ok(Map::new());
+    }
     let bytes = to_bytes(request.into_body(), MAX_CANVAS_LTI_BODY_BYTES)
         .await
         .map_err(|_| "Canvas LTI request body exceeds the size limit")?;
-    if is_json {
+    if content_type == "application/json" {
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid JSON body")?;
         return value
             .as_object()

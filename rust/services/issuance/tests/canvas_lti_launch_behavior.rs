@@ -918,6 +918,11 @@ async fn launch_http_rejects_malformed_non_object_and_oversized_bodies() {
             "Canvas LTI JSON body must be an object",
         ),
         (
+            "text/plain",
+            "id_token=header.payload.signature&state=state-1".to_owned(),
+            "Canvas LTI launch requires id_token",
+        ),
+        (
             "application/x-www-form-urlencoded",
             "x".repeat(64 * 1024 + 1),
             "Canvas LTI request body exceeds the size limit",
