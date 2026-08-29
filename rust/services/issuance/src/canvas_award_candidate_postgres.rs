@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-const LOAD_BINDING: &str = "SELECT jsonb_build_object(
+pub(crate) const LOAD_BINDING: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id, 'platform_id', platform_id,
         'application_template_id', application_template_id,
         'credential_template_id', credential_template_id,
@@ -37,11 +37,11 @@ const LOAD_BINDING: &str = "SELECT jsonb_build_object(
     ) FROM issuance_service.canvas_program_bindings
     WHERE id = $1 AND organization_id = $2 AND platform_id = $3";
 
-const LOAD_PLATFORM_DEPLOYMENT: &str = "SELECT lti_deployment_id
+pub(crate) const LOAD_PLATFORM_DEPLOYMENT: &str = "SELECT lti_deployment_id
     FROM issuance_service.canvas_platforms
     WHERE id = $1 AND organization_id = $2";
 
-const LOAD_APPLICATION_TEMPLATE: &str = "SELECT jsonb_build_object(
+pub(crate) const LOAD_APPLICATION_TEMPLATE: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id,
         'credential_template_id', credential_template_id,
         'approval_policy_set_id', approval_policy_set_id, 'status', status
