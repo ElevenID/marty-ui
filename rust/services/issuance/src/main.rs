@@ -3,7 +3,8 @@ use std::{error::Error, sync::Arc};
 use marty_issuance_service::{
     canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_experience::{
-        CanvasLtiExperienceExchangeService, SecureCanvasLtiExperienceSessionGenerator,
+        CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionService,
+        SecureCanvasLtiExperienceSessionGenerator,
     },
     canvas_lti_launch::{
         CanvasLtiExperienceService, CanvasLtiLaunchPorts, CanvasLtiLaunchService,
@@ -139,11 +140,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.canvas_lti_experience_base_url,
     )?;
     let canvas_lti_experience_exchange = CanvasLtiExperienceExchangeService::new(
-        canvas_lti_repository,
+        canvas_lti_repository.clone(),
         Arc::new(SecureCanvasLtiExperienceSessionGenerator),
         canvas_lti_clock,
         config.canvas_lti_experience_session_ttl,
     )?;
+    let canvas_lti_experience_session =
+        CanvasLtiExperienceSessionService::new(canvas_lti_repository);
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -197,6 +200,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 canvas_lti_launch,
                 canvas_lti_experience,
                 canvas_lti_experience_exchange,
+                canvas_lti_experience_session,
             ),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),

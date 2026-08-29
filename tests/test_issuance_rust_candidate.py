@@ -208,6 +208,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "initiate_canvas_lti_experience_login_route",
             "launch_canvas_lti_experience_route",
             "exchange_canvas_lti_experience_code_route",
+            "get_canvas_lti_experience_session_route",
             "verify_canvas_lti_launch_route",
         }
     )
@@ -241,6 +242,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "initiate_canvas_lti_experience_login_route",
             "launch_canvas_lti_experience_route",
             "exchange_canvas_lti_experience_code_route",
+            "get_canvas_lti_experience_session_route",
             "verify_canvas_lti_launch_route",
         }:
             expected_case = {
@@ -248,10 +250,13 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "initiate_canvas_lti_experience_login_route": "experience-login",
                 "launch_canvas_lti_experience_route": "experience",
                 "exchange_canvas_lti_experience_code_route": "experience-exchange",
+                "get_canvas_lti_experience_session_route": "experience-session-current",
                 "verify_canvas_lti_launch_route": "launch",
             }[operation]
             if operation == "exchange_canvas_lti_experience_code_route":
                 expected_authentication = "public-one-time-code"
+            elif operation == "get_canvas_lti_experience_session_route":
+                expected_authentication = "lti-session-bearer"
             elif operation in {
                 "launch_canvas_lti_experience_route",
                 "verify_canvas_lti_launch_route",
@@ -259,7 +264,12 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 expected_authentication = "public-lti-form-post"
             else:
                 expected_authentication = "public-lti-login"
-            assert coverage_entry["method"] == "POST"
+            expected_method = (
+                "GET"
+                if operation == "get_canvas_lti_experience_session_route"
+                else "POST"
+            )
+            assert coverage_entry["method"] == expected_method
             assert coverage_entry["canvas_lti_behavior_case"] == expected_case
             assert any(
                 route["method"] == coverage_entry["method"]
@@ -305,7 +315,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 108,
+        "http": 107,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 63,

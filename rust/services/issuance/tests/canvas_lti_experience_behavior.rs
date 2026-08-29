@@ -26,7 +26,7 @@ use marty_issuance_service::{
         CanvasLtiClock, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
         CanvasLtiStoredLaunchState,
     },
-    http::router_with_canvas_lti_experience_exchange,
+    http::{router_with_canvas_lti_experience_exchange, router_with_canvas_lti_experience_session},
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
 };
@@ -184,6 +184,18 @@ fn exchange_app(service: CanvasLtiExperienceExchangeService) -> axum::Router {
         .expect("configuration");
     let runtime = IssuanceRuntime::new(&config).expect("runtime");
     router_with_canvas_lti_experience_exchange(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        service,
+    )
+}
+
+fn session_app(service: CanvasLtiExperienceSessionService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    router_with_canvas_lti_experience_session(
         runtime.state(),
         StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
         TransportPolicy::new(Vec::new()),
@@ -678,5 +690,118 @@ async fn current_session_uses_only_the_digest_and_fails_closed_for_every_invalid
             .await
             .unwrap_err(),
         CanvasLtiExperienceSessionError::RepositoryUnavailable
+    );
+}
+
+#[tokio::test]
+async fn current_session_http_replays_bearer_normalization_and_browser_safe_response() {
+    let session = &contract()["experience"]["session_current"];
+    let vector = &session["vector"];
+    let repository = Arc::new(SessionRepository {
+        record: Mutex::new(Some(stored_session_vector())),
+        ..SessionRepository::default()
+    });
+    let response = session_app(CanvasLtiExperienceSessionService::new(repository.clone()))
+        .oneshot(
+            Request::get("/v1/integrations/canvas/lti/experience-sessions/current")
+                .header(
+                    header::AUTHORIZATION,
+                    vector["authorization"].as_str().unwrap(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body, vector["expected_response"]);
+    for field in session["browser_safe"]["private_response_fields_forbidden"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(body.get(field.as_str().unwrap()).is_none());
+    }
+    assert_eq!(
+        repository.lookups.lock().unwrap().as_slice(),
+        [vector["expected_state_digest"].as_str().unwrap()]
+    );
+}
+
+#[tokio::test]
+async fn current_session_http_replays_every_frozen_bearer_failure() {
+    let session = &contract()["experience"]["session_current"];
+    let failure = &session["authentication"]["failure"];
+    let cases = [None, Some("Bearer"), Some("Basic token"), Some("Bearer   ")];
+    assert_eq!(
+        cases.len(),
+        session["authentication"]["failure_cases"]
+            .as_array()
+            .unwrap()
+            .len()
+    );
+
+    for authorization in cases {
+        let mut request = Request::get("/v1/integrations/canvas/lti/experience-sessions/current");
+        if let Some(authorization) = authorization {
+            request = request.header(header::AUTHORIZATION, authorization);
+        }
+        let response = session_app(CanvasLtiExperienceSessionService::new(Arc::new(
+            SessionRepository::default(),
+        )))
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            failure["status_code"].as_u64().unwrap() as u16
+        );
+        assert_eq!(
+            response.headers()[header::WWW_AUTHENTICATE],
+            failure["headers"]["WWW-Authenticate"].as_str().unwrap()
+        );
+        assert_eq!(
+            response_json(response).await,
+            json!({"detail": failure["detail"]})
+        );
+    }
+}
+
+#[tokio::test]
+async fn current_session_http_hides_lookup_and_repository_failures() {
+    let path = "/v1/integrations/canvas/lti/experience-sessions/current";
+    let not_found = session_app(CanvasLtiExperienceSessionService::new(Arc::new(
+        SessionRepository::default(),
+    )))
+    .oneshot(
+        Request::get(path)
+            .header(header::AUTHORIZATION, "Bearer unknown-session")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(not_found).await,
+        json!({"detail": contract()["experience"]["session_current"]["lookup"]["failure"]["detail"]})
+    );
+
+    let repository = Arc::new(SessionRepository::default());
+    *repository.fail.lock().unwrap() = true;
+    let unavailable = session_app(CanvasLtiExperienceSessionService::new(repository))
+        .oneshot(
+            Request::get(path)
+                .header(header::AUTHORIZATION, "Bearer session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        to_bytes(unavailable.into_body(), 1024).await.unwrap(),
+        "Internal Server Error"
     );
 }

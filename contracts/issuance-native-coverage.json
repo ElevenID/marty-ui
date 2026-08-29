@@ -191,6 +191,12 @@
       "canvas_lti_behavior_case": "experience-exchange"
     },
     {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current",
+      "operation": "get_canvas_lti_experience_session_route",
+      "canvas_lti_behavior_case": "experience-session-current"
+    },
+    {
       "method": "POST",
       "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
       "operation": "verify_canvas_lti_launch_route",
@@ -202,7 +208,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 108,
+    "http": 107,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 63,
