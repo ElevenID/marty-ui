@@ -137,7 +137,7 @@ async function dismissLifecycleUpdatedNotification(page) {
   const title = page.getByText('Lifecycle updated', { exact: true }).last();
   if (await title.isVisible().catch(() => false)) {
     const alert = title.locator('xpath=ancestor::*[@role="alert"][1]');
-    const closeButton = alert.getByRole('button', { name: /^close$/i });
+    const closeButton = alert.locator('button[aria-label="Close"]');
     if (!await closeButton.isVisible().catch(() => false)) {
       throw new Error('Visible lifecycle notification has no dismiss control');
     }

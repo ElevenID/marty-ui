@@ -22,9 +22,8 @@ test('recording flow dismisses lifecycle feedback before presenting verifier evi
     click: async () => calls.push('click'),
   };
   const alert = {
-    getByRole: (role, options) => {
-      assert.equal(role, 'button');
-      assert.match('Close', options.name);
+    locator: (selector) => {
+      assert.equal(selector, 'button[aria-label="Close"]');
       return closeButton;
     },
     waitFor: async (options) => calls.push(`wait:${options.state}`),
