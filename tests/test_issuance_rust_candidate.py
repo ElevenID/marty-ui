@@ -181,6 +181,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     experience_session = canvas_lti["experience"]["session_current"]
     assert len(experience_session["ordered_stages"]) == 9
     assert len(experience_session["lookup"]["required"]) == 6
+    assert experience_session["cache_headers"] == {
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+    }
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }

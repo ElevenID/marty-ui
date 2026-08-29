@@ -715,6 +715,8 @@ async fn current_session_http_replays_bearer_normalization_and_browser_safe_resp
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
     let body = response_json(response).await;
     assert_eq!(body, vector["expected_response"]);
     for field in session["browser_safe"]["private_response_fields_forbidden"]
@@ -761,6 +763,8 @@ async fn current_session_http_replays_every_frozen_bearer_failure() {
             response.headers()[header::WWW_AUTHENTICATE],
             failure["headers"]["WWW-Authenticate"].as_str().unwrap()
         );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[header::PRAGMA], "no-cache");
         assert_eq!(
             response_json(response).await,
             json!({"detail": failure["detail"]})
@@ -783,6 +787,8 @@ async fn current_session_http_hides_lookup_and_repository_failures() {
     .await
     .unwrap();
     assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+    assert_eq!(not_found.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(not_found.headers()[header::PRAGMA], "no-cache");
     assert_eq!(
         response_json(not_found).await,
         json!({"detail": contract()["experience"]["session_current"]["lookup"]["failure"]["detail"]})
@@ -800,6 +806,8 @@ async fn current_session_http_hides_lookup_and_repository_failures() {
         .await
         .unwrap();
     assert_eq!(unavailable.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(unavailable.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(unavailable.headers()[header::PRAGMA], "no-cache");
     assert_eq!(
         to_bytes(unavailable.into_body(), 1024).await.unwrap(),
         "Internal Server Error"

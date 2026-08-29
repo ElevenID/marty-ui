@@ -546,11 +546,15 @@ async fn exchange_canvas_lti_experience_code(
         .ok_or(CanvasLtiExperienceExchangeError::RepositoryUnavailable)?
         .exchange(&code)
         .await?;
-    let mut response = Json(json!({
+    let response = Json(json!({
         "session_token": result.session_token,
         "expires_at": result.expires_at.to_rfc3339(),
     }))
     .into_response();
+    Ok(private_no_store(response))
+}
+
+fn private_no_store(mut response: Response) -> Response {
     response.headers_mut().insert(
         http_header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),
@@ -558,7 +562,7 @@ async fn exchange_canvas_lti_experience_code(
     response
         .headers_mut()
         .insert(http_header::PRAGMA, HeaderValue::from_static("no-cache"));
-    Ok(response)
+    response
 }
 
 async fn get_canvas_lti_experience_session(
@@ -572,7 +576,7 @@ async fn get_canvas_lti_experience_session(
         .ok_or(CanvasLtiExperienceSessionError::RepositoryUnavailable)?
         .current(token)
         .await?;
-    Ok(Json(session).into_response())
+    Ok(private_no_store(Json(session).into_response()))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1110,7 +1114,7 @@ impl From<CanvasLtiExperienceSessionError> for CanvasLtiExperienceSessionHttpErr
 
 impl IntoResponse for CanvasLtiExperienceSessionHttpError {
     fn into_response(self) -> Response {
-        match self {
+        let response = match self {
             Self::Unauthorized => {
                 let mut response = (
                     StatusCode::UNAUTHORIZED,
@@ -1133,7 +1137,8 @@ impl IntoResponse for CanvasLtiExperienceSessionHttpError {
             Self::Service(CanvasLtiExperienceSessionError::RepositoryUnavailable) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
             }
-        }
+        };
+        private_no_store(response)
     }
 }
 

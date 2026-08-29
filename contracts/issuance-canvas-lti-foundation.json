@@ -688,6 +688,7 @@
     "exchange_cache_headers": {"Cache-Control": "no-store", "Pragma": "no-cache"},
     "session_current": {
       "ordered_stages": ["parse-bearer", "hash-session-token", "load-session-by-digest", "validate-session", "derive-session-context", "project-browser-safe-capabilities", "project-browser-safe-canvas-context", "derive-learner-key", "respond"],
+      "cache_headers": {"Cache-Control": "no-store", "Pragma": "no-cache"},
       "authentication": {
         "header": "Authorization",
         "scheme_case_insensitive": "Bearer",
