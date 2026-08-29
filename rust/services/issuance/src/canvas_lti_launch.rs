@@ -89,8 +89,42 @@ pub struct CanvasLtiPublicLaunchResponse {
     pub identity_mapping_status: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CanvasLtiLaunchSubmission {
+    pub id_token: Option<String>,
+    pub state: Option<String>,
+}
+
+impl CanvasLtiLaunchSubmission {
+    #[must_use]
+    pub fn from_json_object(object: &Map<String, Value>) -> Self {
+        Self {
+            id_token: object
+                .get("id_token")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            state: object
+                .get("state")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
+
+    pub fn required(self) -> Result<(String, String), CanvasLtiLaunchPlanError> {
+        let id_token = non_empty(self.id_token).ok_or(CanvasLtiLaunchPlanError::Invalid(
+            "Canvas LTI launch requires id_token",
+        ))?;
+        let state = non_empty(self.state).ok_or(CanvasLtiLaunchPlanError::Invalid(
+            "Canvas LTI launch requires server-generated state",
+        ))?;
+        Ok((id_token, state))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum CanvasLtiLaunchPlanError {
+    #[error("{0}")]
+    Invalid(&'static str),
     #[error("Canvas LTI launch verification failed: {0}")]
     Verification(String),
     #[error("Canvas LTI launch did not match an enabled Canvas program binding")]
@@ -563,4 +597,11 @@ fn truthy(value: &Value) -> bool {
         Value::Array(value) => !value.is_empty(),
         Value::Object(value) => !value.is_empty(),
     }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
 }

@@ -8,7 +8,8 @@ use marty_issuance_service::{
     canvas_lti_launch::{
         feature_enabled, launch_scope, private_launch_response, public_launch_response,
         scope_matches, select_binding, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
-        CanvasLtiLaunchStateService, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+        CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
+        CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
 };
@@ -139,6 +140,53 @@ fn public_projection_replays_the_python_oracle_contract() {
     {
         assert!(public.get(private_field.as_str().unwrap()).is_none());
     }
+}
+
+#[test]
+fn launch_submission_replays_required_and_non_string_json_semantics() {
+    let contract = contract();
+    let failures = contract["launch"]["submission"]["failures"]
+        .as_array()
+        .unwrap();
+    let failure = |name: &str| {
+        failures
+            .iter()
+            .find(|failure| failure["name"] == name)
+            .unwrap()["detail"]
+            .as_str()
+            .unwrap()
+    };
+    let cases = [
+        (json!({"state": "state-1"}), "id_token_missing"),
+        (
+            json!({"id_token": "header.payload.signature"}),
+            "state_missing",
+        ),
+        (
+            json!({"id_token": 7, "state": "state-1"}),
+            "id_token_missing",
+        ),
+        (
+            json!({"id_token": "header.payload.signature", "state": false}),
+            "state_missing",
+        ),
+    ];
+    for (value, expected_failure) in cases {
+        let submission = CanvasLtiLaunchSubmission::from_json_object(value.as_object().unwrap());
+        assert_eq!(
+            submission.required().unwrap_err().to_string(),
+            failure(expected_failure)
+        );
+    }
+    assert_eq!(
+        CanvasLtiLaunchSubmission {
+            id_token: Some(" token ".to_owned()),
+            state: Some(" state-1 ".to_owned()),
+        }
+        .required()
+        .unwrap(),
+        ("token".to_owned(), "state-1".to_owned())
+    );
 }
 
 #[test]
