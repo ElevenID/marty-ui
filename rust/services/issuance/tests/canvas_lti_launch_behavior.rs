@@ -1,10 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
@@ -12,13 +14,18 @@ use marty_issuance_service::{
         plan_ags_line_item_pin, plan_verified_identity, private_launch_response,
         public_launch_response, scope_matches, select_binding, select_binding_with_staff_fallback,
         CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsPinService,
-        CanvasLtiAgsServiceUrlValidator, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
-        CanvasLtiIdentityRequest, CanvasLtiIdentityService, CanvasLtiIdentityStatus,
-        CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher, CanvasLtiLaunchPlanError,
-        CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission,
-        CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+        CanvasLtiAgsServiceUrlValidator, CanvasLtiCapabilitySnapshotRepository,
+        CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock, CanvasLtiIdentityRecord,
+        CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
+        CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
+        CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchPorts,
+        CanvasLtiLaunchService, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
+        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
     },
-    canvas_lti_login::CanvasLtiPlatform,
+    canvas_lti_login::{
+        CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiLoginService,
+        CanvasLtiPlatform,
+    },
     canvas_lti_postgres::MartyCanvasLtiAgsServiceUrlValidator,
 };
 use marty_oid4vci::lti::VerifiedLtiLaunch;
@@ -267,6 +274,487 @@ fn binding_from(value: &Value, platform: &CanvasLtiPlatform) -> CanvasLtiProgram
         archived: false,
         config_version: 1,
     }
+}
+
+#[derive(Default)]
+struct OrchestrationRepository {
+    platform: Mutex<Option<CanvasLtiPlatform>>,
+    states: Mutex<HashMap<String, CanvasLtiStoredLaunchState>>,
+    bindings: Mutex<Vec<CanvasLtiProgramBinding>>,
+    calls: Mutex<Vec<&'static str>>,
+    identity_count: Mutex<usize>,
+    capability_requests: Mutex<Vec<CanvasLtiCapabilitySnapshotRequest>>,
+    fail_binding_resolution: Mutex<bool>,
+}
+
+impl OrchestrationRepository {
+    fn record(&self, stage: &'static str) {
+        self.calls.lock().unwrap().push(stage);
+    }
+
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl CanvasLtiLoginRepository for OrchestrationRepository {
+    async fn get_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<Option<CanvasLtiPlatform>, CanvasLtiLoginError> {
+        self.record("load-platform");
+        Ok(self
+            .platform
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|platform| platform.id == platform_id))
+    }
+
+    async fn save_launch_state(
+        &self,
+        _launch_state: &CanvasLtiLaunchState,
+    ) -> Result<(), CanvasLtiLoginError> {
+        unreachable!("launch orchestration never creates login state")
+    }
+}
+
+#[async_trait]
+impl CanvasLtiLaunchStateRepository for OrchestrationRepository {
+    async fn get_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        self.record("load-state");
+        Ok(self.states.lock().unwrap().get(state).cloned())
+    }
+
+    async fn consume_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        self.record("consume-state-atomically");
+        let mut states = self.states.lock().unwrap();
+        let Some(stored) = states.get_mut(state) else {
+            return Ok(None);
+        };
+        if stored.status != "pending" || stored.expired {
+            return Ok(None);
+        }
+        stored.status = "consumed".to_owned();
+        Ok(Some(stored.clone()))
+    }
+}
+
+#[async_trait]
+impl CanvasLtiLaunchContextRepository for OrchestrationRepository {
+    async fn list_program_bindings(
+        &self,
+        _organization_id: &str,
+        _platform_id: &str,
+    ) -> Result<Vec<CanvasLtiProgramBinding>, CanvasLtiLaunchPlanError> {
+        self.record("resolve-binding-and-feature-gate");
+        if *self.fail_binding_resolution.lock().unwrap() {
+            Ok(Vec::new())
+        } else {
+            Ok(self.bindings.lock().unwrap().clone())
+        }
+    }
+}
+
+#[async_trait]
+impl CanvasLtiIdentityRepository for OrchestrationRepository {
+    async fn reconcile_verified_identity(
+        &self,
+        request: &CanvasLtiIdentityRequest,
+    ) -> Result<CanvasLtiIdentityRecord, CanvasLtiLaunchPlanError> {
+        self.record("persist-verified-identity");
+        *self.identity_count.lock().unwrap() += 1;
+        Ok(CanvasLtiIdentityRecord {
+            id: "identity-1".to_owned(),
+            organization_id: request.organization_id.clone(),
+            platform_id: request.platform_id.clone(),
+            deployment_id: request.deployment_id.clone(),
+            lti_subject: request.lti_subject.clone(),
+            canvas_user_id: request.canvas_user_id.clone(),
+            status: CanvasLtiIdentityStatus::Linked,
+            conflict_reason: None,
+        })
+    }
+}
+
+#[async_trait]
+impl CanvasLtiAgsPinRepository for OrchestrationRepository {
+    async fn pin_verified_line_item(
+        &self,
+        binding: &CanvasLtiProgramBinding,
+        request: &CanvasLtiAgsPinRequest,
+    ) -> Result<bool, CanvasLtiLaunchPlanError> {
+        self.record("persist-verified-ags-line-item");
+        let mut bindings = self.bindings.lock().unwrap();
+        let stored = bindings
+            .iter_mut()
+            .find(|candidate| candidate.id == binding.id)
+            .ok_or(CanvasLtiLaunchPlanError::AgsBindingMismatch)?;
+        let Some(updated) = plan_ags_line_item_pin(&stored.evidence_requirements, request)? else {
+            return Ok(false);
+        };
+        stored.evidence_requirements = updated;
+        stored.config_version += 1;
+        Ok(true)
+    }
+}
+
+#[async_trait]
+impl CanvasLtiCapabilitySnapshotRepository for OrchestrationRepository {
+    async fn persist_verified_capabilities(
+        &self,
+        request: &CanvasLtiCapabilitySnapshotRequest,
+    ) -> Result<Value, CanvasLtiLaunchPlanError> {
+        self.record("merge-capabilities-and-persist-platform-validation");
+        self.capability_requests
+            .lock()
+            .unwrap()
+            .push(request.clone());
+        Ok(request.launch_capabilities.clone())
+    }
+}
+
+struct OrchestrationJwksRefresher {
+    repository: Arc<OrchestrationRepository>,
+    refreshed: CanvasLtiPlatform,
+}
+
+#[async_trait]
+impl CanvasLtiJwksRefresher for OrchestrationJwksRefresher {
+    async fn refresh_platform_jwks(
+        &self,
+        _platform: &CanvasLtiPlatform,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLaunchPlanError> {
+        self.repository
+            .record("verify-jwt-with-bounded-jwks-refresh");
+        Ok(self.refreshed.clone())
+    }
+}
+
+struct FixedClock(DateTime<Utc>);
+
+impl CanvasLtiClock for FixedClock {
+    fn now(&self) -> DateTime<Utc> {
+        self.0
+    }
+}
+
+fn orchestration_token(kid: &str, key_byte: u8) -> (String, Value) {
+    let signing_key = SigningKey::from_bytes(&[key_byte; 32]);
+    let claims = json!({
+        "iss": "https://canvas.instructure.com",
+        "sub": "opaque-subject",
+        "aud": ["client-1"],
+        "exp": 4102444800u64,
+        "iat": 1700000000u64,
+        "nonce": "nonce-1",
+        "https://purl.imsglobal.org/spec/lti/claim/deployment_id": "deployment-1",
+        "https://purl.imsglobal.org/spec/lti/claim/message_type": "LtiResourceLinkRequest",
+        "https://purl.imsglobal.org/spec/lti/claim/version": "1.3.0",
+        "https://purl.imsglobal.org/spec/lti/claim/roles": ["Learner"],
+        "https://purl.imsglobal.org/spec/lti/claim/context": {"id": "course-1"},
+        "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "resource-1"},
+        "https://purl.imsglobal.org/spec/lti/claim/custom": {
+            "canvas_course_id": "course-1",
+            "canvas_program_binding_id": "binding-1",
+            "canvas_requirement_id": "score-1",
+            "canvas_resource_id": "resource-1",
+            "canvas_user_id": "42"
+        },
+        "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint": {
+            "lineitem": "https://school.canvas.example/api/lti/courses/course-1/line_items/7",
+            "scope": ["https://purl.imsglobal.org/spec/lti-ags/scope/score"]
+        }
+    });
+    let header = json!({"alg": "EdDSA", "typ": "JWT", "kid": kid});
+    let header = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
+    let claims = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
+    let signing_input = format!("{header}.{claims}");
+    let signature = signing_key.sign(signing_input.as_bytes());
+    (
+        format!(
+            "{signing_input}.{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        ),
+        lti_jwk(kid, &signing_key.verifying_key()),
+    )
+}
+
+fn orchestration_binding(platform: &CanvasLtiPlatform) -> CanvasLtiProgramBinding {
+    let mut binding = binding_from(
+        &json!({
+            "id": "binding-1",
+            "application_template_id": "application-1",
+            "credential_template_id": "credential-1"
+        }),
+        platform,
+    );
+    binding.config_version = 4;
+    binding.canvas_scope = json!({"course_id": "course-1"});
+    binding.evidence_requirements = vec![json!({
+        "requirement_id": "score-1",
+        "source": "ags_result",
+        "fact_type": "canvas.assignment_score",
+        "scope": {"course_id": "course-1", "resource_id": "resource-1"},
+        "pass_rule": {"min_score_percent": 80},
+        "required": true
+    })];
+    binding
+}
+
+fn orchestration_service(
+    repository: Arc<OrchestrationRepository>,
+    refreshed: CanvasLtiPlatform,
+) -> CanvasLtiLaunchService {
+    let login = CanvasLtiLoginService::new(
+        repository.clone(),
+        "https://issuer.example.test",
+        true,
+        BTreeSet::from(["org-1".to_owned()]),
+        Duration::from_secs(600),
+        Vec::new(),
+    )
+    .unwrap();
+    CanvasLtiLaunchService::new(
+        login,
+        CanvasLtiLaunchPorts {
+            state_repository: repository.clone(),
+            context_repository: repository.clone(),
+            jwks_refresher: Arc::new(OrchestrationJwksRefresher {
+                repository: repository.clone(),
+                refreshed,
+            }),
+            identity_repository: repository.clone(),
+            ags_repository: repository.clone(),
+            ags_url_validator: Arc::new(AgsUrlValidator),
+            capability_repository: repository,
+            clock: Arc::new(FixedClock(
+                Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
+            )),
+        },
+    )
+}
+
+#[tokio::test]
+async fn launch_orchestration_replays_order_and_atomic_persistence_contract() {
+    let policy = &contract()["launch"]["orchestration"];
+    assert_eq!(
+        policy["ordered_stages"],
+        json!([
+            "load-platform",
+            "authorize-and-validate-platform",
+            "parse-submission",
+            "load-state",
+            "consume-state-atomically",
+            "verify-jwt-with-bounded-jwks-refresh",
+            "persist-verified-identity",
+            "resolve-binding-and-feature-gate",
+            "persist-verified-ags-line-item",
+            "project-private-response",
+            "merge-binding-capability-snapshot",
+            "persist-platform-validation-state"
+        ])
+    );
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    platform.lti_openid_configuration = Some(json!({
+        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
+    }));
+    platform.config_version = 3;
+    platform.lti_jwks_json = Some(json!({"keys": [{"kid": "old-key"}]}));
+    let (token, jwk) = orchestration_token("new-key", 31);
+    let mut refreshed = platform.clone();
+    refreshed.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let service = orchestration_service(repository.clone(), refreshed);
+
+    let result = service
+        .launch(
+            "platform-1",
+            CanvasLtiLaunchSubmission {
+                id_token: Some(token),
+                state: Some("state-1".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.consumed_state.status, "consumed");
+    assert_eq!(
+        result.response.identity_mapping_status.as_deref(),
+        Some("linked")
+    );
+    assert_eq!(
+        result.response.evidence_requirements[0]["scope"]["line_item_url"],
+        "https://school.canvas.example/api/lti/courses/course-1/line_items/7"
+    );
+    let calls = repository.calls();
+    for ordered_pair in [
+        ("load-state", "consume-state-atomically"),
+        (
+            "consume-state-atomically",
+            "verify-jwt-with-bounded-jwks-refresh",
+        ),
+        (
+            "verify-jwt-with-bounded-jwks-refresh",
+            "persist-verified-identity",
+        ),
+        (
+            "persist-verified-identity",
+            "resolve-binding-and-feature-gate",
+        ),
+        (
+            "resolve-binding-and-feature-gate",
+            "persist-verified-ags-line-item",
+        ),
+        (
+            "persist-verified-ags-line-item",
+            "merge-capabilities-and-persist-platform-validation",
+        ),
+    ] {
+        let left = calls
+            .iter()
+            .position(|stage| *stage == ordered_pair.0)
+            .unwrap();
+        let right = calls
+            .iter()
+            .position(|stage| *stage == ordered_pair.1)
+            .unwrap();
+        assert!(left < right, "{calls:?}");
+    }
+    assert_eq!(
+        calls.last(),
+        Some(&"merge-capabilities-and-persist-platform-validation")
+    );
+    let requests = repository.capability_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].selected_platform_config_version, 3);
+    assert_eq!(requests[0].selected_binding_config_version, 4);
+    assert_eq!(requests[0].signed_course_id, "course-1");
+    assert!(requests[0].line_item_configuration_changed);
+    assert_eq!(
+        requests[0].verified_at,
+        Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn jwt_failure_keeps_state_consumed_without_identity_or_capability_writes() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    platform.lti_openid_configuration = Some(json!({
+        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
+    }));
+    let (token, signing_jwk) = orchestration_token("same-key", 41);
+    let (_, wrong_jwk) = orchestration_token("same-key", 42);
+    platform.lti_jwks_json = Some(json!({"keys": [wrong_jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    let mut refreshed = platform;
+    refreshed.lti_jwks_json = Some(json!({"keys": [signing_jwk]}));
+    let service = orchestration_service(repository.clone(), refreshed);
+
+    assert!(service
+        .launch(
+            "platform-1",
+            CanvasLtiLaunchSubmission {
+                id_token: Some(token),
+                state: Some("state-1".to_owned()),
+            },
+        )
+        .await
+        .is_err());
+
+    assert_eq!(
+        repository.states.lock().unwrap()["state-1"].status,
+        "consumed"
+    );
+    assert_eq!(*repository.identity_count.lock().unwrap(), 0);
+    assert!(repository.capability_requests.lock().unwrap().is_empty());
+    assert_eq!(
+        repository.calls(),
+        vec!["load-platform", "load-state", "consume-state-atomically"]
+    );
+}
+
+#[tokio::test]
+async fn binding_failure_preserves_consumed_state_and_verified_identity_only() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    platform.lti_openid_configuration = Some(json!({
+        "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect"
+    }));
+    let (token, jwk) = orchestration_token("current-key", 51);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    *repository.fail_binding_resolution.lock().unwrap() = true;
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    let service = orchestration_service(repository.clone(), platform);
+
+    assert!(service
+        .launch(
+            "platform-1",
+            CanvasLtiLaunchSubmission {
+                id_token: Some(token),
+                state: Some("state-1".to_owned()),
+            },
+        )
+        .await
+        .is_err());
+
+    assert_eq!(
+        repository.states.lock().unwrap()["state-1"].status,
+        "consumed"
+    );
+    assert_eq!(*repository.identity_count.lock().unwrap(), 1);
+    assert!(repository.capability_requests.lock().unwrap().is_empty());
+    assert_eq!(
+        repository.calls(),
+        vec![
+            "load-platform",
+            "load-state",
+            "consume-state-atomically",
+            "persist-verified-identity",
+            "resolve-binding-and-feature-gate"
+        ]
+    );
 }
 
 #[test]

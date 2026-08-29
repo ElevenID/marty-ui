@@ -138,7 +138,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["canvas_lti_behavior_contract"]["commit"]
-        == "77bb0a18ea26fa0a88345550d402864b65ecb1ab"
+        == "a0b6871e0d4a2a8164594dcc9f02c865c6c47df9"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
@@ -151,6 +151,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "same-config",
     ]
     assert len(capability_policy["cases"]) == 6
+    orchestration = canvas_lti["launch"]["orchestration"]
+    assert len(orchestration["ordered_stages"]) == 12
+    assert orchestration["invariants"]["state_consumed_before_jwt_verification"] is True
+    assert orchestration["invariants"]["state_restored_after_downstream_failure"] is False
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }

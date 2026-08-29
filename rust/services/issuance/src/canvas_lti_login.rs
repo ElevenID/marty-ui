@@ -176,6 +176,16 @@ impl CanvasLtiLoginService {
         self.initiate_prepared(prepared, submission).await
     }
 
+    pub(crate) async fn ready_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLoginError> {
+        Ok(self
+            .prepare(platform_id, CanvasLtiLoginMode::Launch)
+            .await?
+            .platform)
+    }
+
     pub(crate) async fn prepare(
         &self,
         platform_id: &str,

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::canvas_lti_login::CanvasLtiPlatform;
+use crate::canvas_lti_login::{CanvasLtiLoginError, CanvasLtiLoginService, CanvasLtiPlatform};
 
 const CUSTOM_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/custom";
 const RESOURCE_LINK_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/resource_link";
@@ -380,6 +380,179 @@ impl CanvasLtiCapabilitySnapshotService {
             ));
         }
         self.repository.persist_verified_capabilities(request).await
+    }
+}
+
+pub trait CanvasLtiClock: Send + Sync {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemCanvasLtiClock;
+
+impl CanvasLtiClock for SystemCanvasLtiClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
+pub struct CanvasLtiLaunchPorts {
+    pub state_repository: Arc<dyn CanvasLtiLaunchStateRepository>,
+    pub context_repository: Arc<dyn CanvasLtiLaunchContextRepository>,
+    pub jwks_refresher: Arc<dyn CanvasLtiJwksRefresher>,
+    pub identity_repository: Arc<dyn CanvasLtiIdentityRepository>,
+    pub ags_repository: Arc<dyn CanvasLtiAgsPinRepository>,
+    pub ags_url_validator: Arc<dyn CanvasLtiAgsServiceUrlValidator>,
+    pub capability_repository: Arc<dyn CanvasLtiCapabilitySnapshotRepository>,
+    pub clock: Arc<dyn CanvasLtiClock>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasLtiLaunchResult {
+    pub platform: CanvasLtiPlatform,
+    pub consumed_state: CanvasLtiStoredLaunchState,
+    pub response: CanvasLtiVerifiedLaunchResponse,
+}
+
+#[derive(Debug, Error)]
+pub enum CanvasLtiLaunchServiceError {
+    #[error(transparent)]
+    Platform(#[from] CanvasLtiLoginError),
+    #[error(transparent)]
+    Launch(#[from] CanvasLtiLaunchPlanError),
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiLaunchService {
+    platform_service: CanvasLtiLoginService,
+    state_service: CanvasLtiLaunchStateService,
+    context_repository: Arc<dyn CanvasLtiLaunchContextRepository>,
+    jwks_service: CanvasLtiJwksRefreshService,
+    identity_service: CanvasLtiIdentityService,
+    ags_service: CanvasLtiAgsPinService,
+    capability_service: CanvasLtiCapabilitySnapshotService,
+    clock: Arc<dyn CanvasLtiClock>,
+}
+
+impl std::fmt::Debug for CanvasLtiLaunchService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiLaunchService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiLaunchService {
+    #[must_use]
+    pub fn new(platform_service: CanvasLtiLoginService, ports: CanvasLtiLaunchPorts) -> Self {
+        Self {
+            platform_service,
+            state_service: CanvasLtiLaunchStateService::new(ports.state_repository),
+            context_repository: ports.context_repository,
+            jwks_service: CanvasLtiJwksRefreshService::new(ports.jwks_refresher),
+            identity_service: CanvasLtiIdentityService::new(ports.identity_repository),
+            ags_service: CanvasLtiAgsPinService::new(ports.ags_repository, ports.ags_url_validator),
+            capability_service: CanvasLtiCapabilitySnapshotService::new(
+                ports.capability_repository,
+            ),
+            clock: ports.clock,
+        }
+    }
+
+    pub(crate) async fn prepare_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLaunchServiceError> {
+        self.platform_service
+            .ready_platform(platform_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn launch(
+        &self,
+        platform_id: &str,
+        submission: CanvasLtiLaunchSubmission,
+    ) -> Result<CanvasLtiLaunchResult, CanvasLtiLaunchServiceError> {
+        let platform = self.prepare_platform(platform_id).await?;
+        self.launch_prepared(platform, submission).await
+    }
+
+    pub(crate) async fn launch_prepared(
+        &self,
+        platform: CanvasLtiPlatform,
+        submission: CanvasLtiLaunchSubmission,
+    ) -> Result<CanvasLtiLaunchResult, CanvasLtiLaunchServiceError> {
+        let (id_token, state) = submission.required()?;
+        let consumed_state = self.state_service.claim(&platform.id, &state).await?;
+        let (platform, verified) = self
+            .jwks_service
+            .verify_with_refresh(&platform, &id_token, &consumed_state.nonce)
+            .await?;
+        let identity_mapping_status = self
+            .identity_service
+            .record_verified_launch(&platform, &verified)
+            .await?;
+        let bindings = self
+            .context_repository
+            .list_program_bindings(&platform.organization_id, &platform.id)
+            .await?;
+        let selected_binding =
+            select_binding_with_staff_fallback(&platform, &verified, &bindings)?.clone();
+        let selected_binding_config_version = selected_binding.config_version;
+        let line_item_configuration_changed = self
+            .ags_service
+            .persist_verified_line_item(&selected_binding, &verified)
+            .await?;
+        let response_binding = if line_item_configuration_changed {
+            self.reload_binding(&selected_binding).await?
+        } else {
+            selected_binding.clone()
+        };
+        let signed_course_id =
+            signed_custom_identifier(&verified, "canvas_course_id").unwrap_or_default();
+        let response = private_launch_response(
+            &platform,
+            &response_binding,
+            &state,
+            verified,
+            Some(identity_mapping_status),
+        );
+        self.capability_service
+            .persist_verified_capabilities(&CanvasLtiCapabilitySnapshotRequest {
+                organization_id: platform.organization_id.clone(),
+                platform_id: platform.id.clone(),
+                selected_platform_config_version: platform.config_version,
+                binding_id: response_binding.id.clone(),
+                selected_binding_config_version,
+                signed_course_id,
+                launch_capabilities: response.lti_capabilities.clone(),
+                line_item_configuration_changed,
+                verified_at: self.clock.now(),
+            })
+            .await?;
+        Ok(CanvasLtiLaunchResult {
+            platform,
+            consumed_state,
+            response,
+        })
+    }
+
+    async fn reload_binding(
+        &self,
+        selected: &CanvasLtiProgramBinding,
+    ) -> Result<CanvasLtiProgramBinding, CanvasLtiLaunchPlanError> {
+        self.context_repository
+            .list_program_bindings(&selected.organization_id, &selected.platform_id)
+            .await?
+            .into_iter()
+            .find(|binding| {
+                binding.id == selected.id
+                    && binding.organization_id == selected.organization_id
+                    && binding.platform_id == selected.platform_id
+                    && !binding.archived
+            })
+            .ok_or(CanvasLtiLaunchPlanError::RepositoryUnavailable)
     }
 }
 
@@ -1256,6 +1429,13 @@ fn claim_object<'a>(
     raw.get(canonical)
         .and_then(Value::as_object)
         .or_else(|| raw.get(legacy).and_then(Value::as_object))
+}
+
+fn signed_custom_identifier(verified: &VerifiedLtiLaunch, name: &str) -> Option<String> {
+    claim_object(&verified.raw_claims, CUSTOM_CLAIM, "custom")
+        .and_then(|custom| custom.get(name))
+        .map(scalar_string)
+        .and_then(|value| non_empty(Some(value)))
 }
 
 fn aliases(key: &str) -> &'static [&'static str] {
