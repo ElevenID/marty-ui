@@ -21,7 +21,7 @@ test('recording flow dismisses lifecycle feedback before presenting verifier evi
     isVisible: async () => true,
     click: async () => calls.push('click'),
   };
-  const alert = {
+  const snackbar = {
     getByRole: (role, options) => {
       assert.equal(role, 'button');
       assert.match('Close', options.name);
@@ -30,12 +30,12 @@ test('recording flow dismisses lifecycle feedback before presenting verifier evi
     waitFor: async (options) => calls.push(`wait:${options.state}`),
   };
   const page = {
-    getByRole: (role) => {
-      assert.equal(role, 'alert');
+    locator: (selector) => {
+      assert.equal(selector, '.MuiSnackbar-root');
       return {
         filter: ({ hasText }) => {
           assert.equal(hasText, 'Lifecycle updated');
-          return { last: () => alert };
+          return { last: () => snackbar };
         },
       };
     },
