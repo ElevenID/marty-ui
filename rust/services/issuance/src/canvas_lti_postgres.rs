@@ -12,9 +12,9 @@ use tracing::error;
 
 use crate::canvas_lti_bootstrap::{
     plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplication,
-    CanvasLtiBootstrapApplicationSeed, CanvasLtiBootstrapPersistence, CanvasLtiBootstrapPlan,
-    CanvasLtiBootstrapRepository, CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest,
-    CanvasLtiBootstrapTemplate,
+    CanvasLtiBootstrapApplicationAction, CanvasLtiBootstrapApplicationSeed,
+    CanvasLtiBootstrapPersistence, CanvasLtiBootstrapPlan, CanvasLtiBootstrapRepository,
+    CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapTemplate,
 };
 use crate::canvas_lti_experience::{
     canvas_lti_experience_exchange_metadata, generate_valid_session, lti_subject,
@@ -866,45 +866,50 @@ impl CanvasLtiBootstrapRepository for PostgresCanvasLtiLoginRepository {
             replay
         };
 
-        if actual.created {
-            let expires_at = actual.planned_at + ChronoDuration::days(30);
-            sqlx::query(INSERT_BOOTSTRAP_APPLICATION)
-                .bind(&actual.application.id)
-                .bind(&actual.application.organization_id)
-                .bind(&actual.application.application_template_id)
-                .bind(&actual.application.applicant_identifier)
-                .bind(&actual.application.form_data)
-                .bind(&actual.application.integration_context)
-                .bind(&actual.application.status)
-                .bind(actual.planned_at)
-                .bind(expires_at)
-                .execute(&mut *transaction)
-                .await
-                .map_err(bootstrap_repository_error)?;
-            let event_metadata = actual
-                .bootstrap_event_metadata
-                .as_ref()
-                .ok_or(CanvasLtiBootstrapRepositoryError::Unavailable)?;
-            sqlx::query(INSERT_BOOTSTRAP_EVENT)
-                .bind(uuid::Uuid::new_v4().to_string())
-                .bind(&actual.application.id)
-                .bind(event_metadata)
-                .bind(actual.planned_at)
-                .execute(&mut *transaction)
-                .await
-                .map_err(bootstrap_repository_error)?;
-        } else {
-            let updated = sqlx::query(UPDATE_BOOTSTRAP_APPLICATION)
-                .bind(&actual.application.id)
-                .bind(&actual.application.organization_id)
-                .bind(&actual.application.integration_context)
-                .bind(actual.application.updated_at)
-                .execute(&mut *transaction)
-                .await
-                .map_err(bootstrap_repository_error)?;
-            if updated.rows_affected() != 1 {
-                return Err(CanvasLtiBootstrapRepositoryError::Unavailable);
+        match (actual.application_action, actual.created) {
+            (CanvasLtiBootstrapApplicationAction::Create, true) => {
+                let expires_at = actual.planned_at + ChronoDuration::days(30);
+                sqlx::query(INSERT_BOOTSTRAP_APPLICATION)
+                    .bind(&actual.application.id)
+                    .bind(&actual.application.organization_id)
+                    .bind(&actual.application.application_template_id)
+                    .bind(&actual.application.applicant_identifier)
+                    .bind(&actual.application.form_data)
+                    .bind(&actual.application.integration_context)
+                    .bind(&actual.application.status)
+                    .bind(actual.planned_at)
+                    .bind(expires_at)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(bootstrap_repository_error)?;
+                let event_metadata = actual
+                    .bootstrap_event_metadata
+                    .as_ref()
+                    .ok_or(CanvasLtiBootstrapRepositoryError::Unavailable)?;
+                sqlx::query(INSERT_BOOTSTRAP_EVENT)
+                    .bind(uuid::Uuid::new_v4().to_string())
+                    .bind(&actual.application.id)
+                    .bind(event_metadata)
+                    .bind(actual.planned_at)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(bootstrap_repository_error)?;
             }
+            (CanvasLtiBootstrapApplicationAction::Resume, false) => {
+                let updated = sqlx::query(UPDATE_BOOTSTRAP_APPLICATION)
+                    .bind(&actual.application.id)
+                    .bind(&actual.application.organization_id)
+                    .bind(&actual.application.integration_context)
+                    .bind(actual.application.updated_at)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(bootstrap_repository_error)?;
+                if updated.rows_affected() != 1 {
+                    return Err(CanvasLtiBootstrapRepositoryError::Unavailable);
+                }
+            }
+            (CanvasLtiBootstrapApplicationAction::Replay, false) => {}
+            _ => return Err(CanvasLtiBootstrapRepositoryError::Unavailable),
         }
         let attached = sqlx::query(ATTACH_BOOTSTRAP_SESSION)
             .bind(&context.launch_state.id)

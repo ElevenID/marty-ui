@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_lti_bootstrap::{
-        plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplicationSeed,
-        CanvasLtiBootstrapRepository, CanvasLtiBootstrapRequest,
+        plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplicationAction,
+        CanvasLtiBootstrapApplicationSeed, CanvasLtiBootstrapRepository, CanvasLtiBootstrapRequest,
     },
     canvas_lti_experience::{
         canvas_lti_experience_session_context, sha256_hex, CanvasLtiExperienceExchangeError,
@@ -1170,6 +1170,43 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     .await
     .unwrap();
     assert!((29.999..=30.001).contains(&expiry_days));
+
+    let application_xmin_before: i64 = sqlx::query_scalar(
+        "SELECT xmin::text::bigint FROM issuance_service.applications WHERE id = $1",
+    )
+    .bind(&stored_application.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let exact_replay_plan = plan_canvas_lti_experience_bootstrap(
+        &context,
+        &CanvasLtiBootstrapRequest::default(),
+        true,
+        Some(true),
+        Some(&template),
+        std::slice::from_ref(&stored_application),
+        |_| panic!("exact replay must not generate an application"),
+        planned_at,
+    )
+    .unwrap();
+    assert_eq!(
+        exact_replay_plan.application_action,
+        CanvasLtiBootstrapApplicationAction::Replay
+    );
+    let exact_replay = handoff_repository
+        .persist_plan(&context, &exact_replay_plan)
+        .await
+        .unwrap();
+    assert!(!exact_replay.created);
+    assert_eq!(exact_replay.application.id, stored_application.id);
+    let application_xmin_after: i64 = sqlx::query_scalar(
+        "SELECT xmin::text::bigint FROM issuance_service.applications WHERE id = $1",
+    )
+    .bind(&stored_application.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(application_xmin_after, application_xmin_before);
 
     let expired_session_id = Uuid::new_v4().to_string();
     let expired_token = format!("expired-bootstrap-token-{}", Uuid::new_v4());
