@@ -4,6 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use marty_oid4vci::{
     lti::{verify_lti_launch_jwt, VerifiedLtiLaunch},
     Oid4vciError,
@@ -48,6 +49,7 @@ pub struct CanvasLtiProgramBinding {
     pub canvas_scope: Value,
     pub enabled: bool,
     pub archived: bool,
+    pub config_version: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -155,6 +157,10 @@ pub enum CanvasLtiLaunchPlanError {
     AgsRequirementMismatch,
     #[error("Canvas AGS line item could not be pinned: {0}")]
     AgsLineItem(String),
+    #[error("Canvas capability snapshot does not match the selected platform and binding")]
+    CapabilityScopeMismatch,
+    #[error("Canvas platform or program binding changed before capability snapshot persistence")]
+    CapabilityConfigurationDrift,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -313,6 +319,67 @@ impl CanvasLtiAgsPinService {
         self.repository
             .pin_verified_line_item(binding, &request)
             .await
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasLtiCapabilitySnapshotRequest {
+    pub organization_id: String,
+    pub platform_id: String,
+    pub selected_platform_config_version: i64,
+    pub binding_id: String,
+    pub selected_binding_config_version: i64,
+    pub signed_course_id: String,
+    pub launch_capabilities: Value,
+    pub line_item_configuration_changed: bool,
+    pub verified_at: DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait CanvasLtiCapabilitySnapshotRepository: Send + Sync {
+    /// Lock the selected trust scope, reject configuration drift, and persist
+    /// one binding-indexed snapshot atomically.
+    async fn persist_verified_capabilities(
+        &self,
+        request: &CanvasLtiCapabilitySnapshotRequest,
+    ) -> Result<Value, CanvasLtiLaunchPlanError>;
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiCapabilitySnapshotService {
+    repository: Arc<dyn CanvasLtiCapabilitySnapshotRepository>,
+}
+
+impl std::fmt::Debug for CanvasLtiCapabilitySnapshotService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiCapabilitySnapshotService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiCapabilitySnapshotService {
+    #[must_use]
+    pub fn new(repository: Arc<dyn CanvasLtiCapabilitySnapshotRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn persist_verified_capabilities(
+        &self,
+        request: &CanvasLtiCapabilitySnapshotRequest,
+    ) -> Result<Value, CanvasLtiLaunchPlanError> {
+        if request.organization_id.trim().is_empty()
+            || request.platform_id.trim().is_empty()
+            || request.binding_id.trim().is_empty()
+            || request.selected_platform_config_version < 1
+            || request.selected_binding_config_version < 1
+            || !request.launch_capabilities.is_object()
+        {
+            return Err(CanvasLtiLaunchPlanError::Invalid(
+                "Canvas LTI capability snapshot is incomplete",
+            ));
+        }
+        self.repository.persist_verified_capabilities(request).await
     }
 }
 

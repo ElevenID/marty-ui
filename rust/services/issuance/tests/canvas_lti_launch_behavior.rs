@@ -243,6 +243,7 @@ fn platform_from(value: &Value) -> CanvasLtiPlatform {
         lti_jwks_url: Some("https://sso.canvaslms.com/api/lti/security/jwks".to_owned()),
         lti_jwks_json: Some(json!({"keys": []})),
         lti_openid_configuration: None,
+        config_version: 1,
         enabled: true,
     }
 }
@@ -264,6 +265,7 @@ fn binding_from(value: &Value, platform: &CanvasLtiPlatform) -> CanvasLtiProgram
         canvas_scope: json!({}),
         enabled: true,
         archived: false,
+        config_version: 1,
     }
 }
 

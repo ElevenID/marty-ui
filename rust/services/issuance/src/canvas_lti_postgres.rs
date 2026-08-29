@@ -10,11 +10,13 @@ use sqlx::{PgPool, Row};
 use tracing::error;
 
 use crate::canvas_lti_launch::{
-    plan_ags_line_item_pin, plan_verified_identity, CanvasLtiAgsPinRepository,
-    CanvasLtiAgsPinRequest, CanvasLtiAgsServiceUrlValidator, CanvasLtiIdentityRecord,
-    CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityStatus,
-    CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError,
-    CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+    merge_verified_lti_binding_capabilities, plan_ags_line_item_pin, plan_verified_identity,
+    CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsServiceUrlValidator,
+    CanvasLtiCapabilitySnapshotRepository, CanvasLtiCapabilitySnapshotRequest,
+    CanvasLtiIdentityRecord, CanvasLtiIdentityRepository, CanvasLtiIdentityRequest,
+    CanvasLtiIdentityStatus, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
+    CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding,
+    CanvasLtiStoredLaunchState,
 };
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
@@ -22,7 +24,7 @@ use crate::canvas_lti_login::{
 
 const GET_PLATFORM: &str = "SELECT id, organization_id, canvas_account_id, canvas_base_url,
         lti_client_id, lti_deployment_id, lti_trust_profile, lti_issuer, lti_jwks_url,
-        lti_jwks_json, lti_openid_configuration, enabled
+        lti_jwks_json, lti_openid_configuration, config_version, enabled
      FROM issuance_service.canvas_platforms
      WHERE id = $1";
 
@@ -55,7 +57,7 @@ const CONSUME_LAUNCH_STATE: &str = "UPDATE issuance_service.canvas_lti_launch_st
 const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
         application_template_id, credential_template_id, delivery_mode,
         deployment_profile_id, feature_flags, evidence_requirements, canvas_scope, enabled,
-        archived_at IS NOT NULL AS archived
+        archived_at IS NOT NULL AS archived, config_version
     FROM issuance_service.canvas_program_bindings
     WHERE organization_id = $1 AND platform_id = $2
     ORDER BY created_at";
@@ -124,6 +126,24 @@ const SAVE_AGS_LINE_ITEM: &str = "UPDATE issuance_service.canvas_program_binding
         credential_template_snapshot = '{}'::json,
         updated_at = clock_timestamp()
     WHERE id = $1 AND organization_id = $2 AND platform_id = $3 AND archived_at IS NULL";
+
+const LOCK_CAPABILITY_BINDING: &str = "SELECT config_version
+    FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2 AND platform_id = $3 AND archived_at IS NULL
+    FOR UPDATE";
+
+const LOCK_CAPABILITY_PLATFORM: &str = "SELECT capability_snapshot, config_version
+    FROM issuance_service.canvas_platforms
+    WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL
+    FOR UPDATE";
+
+const SAVE_CAPABILITY_SNAPSHOT: &str = "UPDATE issuance_service.canvas_platforms
+    SET capability_snapshot = $3,
+        registration_status = 'verified',
+        last_validated_at = $4,
+        last_connection_error = NULL,
+        updated_at = clock_timestamp()
+    WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL";
 
 #[derive(Clone, Debug)]
 pub struct MartyCanvasLtiAgsServiceUrlValidator {
@@ -283,6 +303,10 @@ impl CanvasLtiLoginRepository for PostgresCanvasLtiLoginRepository {
                 lti_openid_configuration: row
                     .try_get::<Option<Value>, _>("lti_openid_configuration")
                     .map_err(repository_error)?,
+                config_version: row
+                    .try_get::<i32, _>("config_version")
+                    .map(i64::from)
+                    .map_err(repository_error)?,
                 enabled: row.try_get("enabled").map_err(repository_error)?,
             })
         })
@@ -411,6 +435,77 @@ impl CanvasLtiAgsPinRepository for PostgresCanvasLtiLoginRepository {
             .await
             .map_err(launch_repository_error)?;
         Ok(true)
+    }
+}
+
+#[async_trait]
+impl CanvasLtiCapabilitySnapshotRepository for PostgresCanvasLtiLoginRepository {
+    async fn persist_verified_capabilities(
+        &self,
+        request: &CanvasLtiCapabilitySnapshotRequest,
+    ) -> Result<Value, CanvasLtiLaunchPlanError> {
+        let mut transaction = self.pool.begin().await.map_err(launch_repository_error)?;
+        let binding = sqlx::query(LOCK_CAPABILITY_BINDING)
+            .bind(&request.binding_id)
+            .bind(&request.organization_id)
+            .bind(&request.platform_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?
+            .ok_or(CanvasLtiLaunchPlanError::CapabilityScopeMismatch)?;
+        let current_config_version = binding
+            .try_get::<i32, _>("config_version")
+            .map(i64::from)
+            .map_err(launch_repository_error)?;
+        let expected_config_version = request
+            .selected_binding_config_version
+            .checked_add(i64::from(request.line_item_configuration_changed))
+            .ok_or(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift)?;
+        if current_config_version != expected_config_version {
+            return Err(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift);
+        }
+        let platform = sqlx::query(LOCK_CAPABILITY_PLATFORM)
+            .bind(&request.platform_id)
+            .bind(&request.organization_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?
+            .ok_or(CanvasLtiLaunchPlanError::CapabilityScopeMismatch)?;
+        let capability_snapshot = platform
+            .try_get::<Value, _>("capability_snapshot")
+            .map_err(launch_repository_error)?;
+        let current_platform_config_version = platform
+            .try_get::<i32, _>("config_version")
+            .map(i64::from)
+            .map_err(launch_repository_error)?;
+        if current_platform_config_version != request.selected_platform_config_version {
+            return Err(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift);
+        }
+        let updated = merge_verified_lti_binding_capabilities(
+            &capability_snapshot,
+            &request.launch_capabilities,
+            &request.binding_id,
+            current_config_version,
+            &request.signed_course_id,
+            request.line_item_configuration_changed,
+            &request.verified_at.to_rfc3339(),
+        );
+        let result = sqlx::query(SAVE_CAPABILITY_SNAPSHOT)
+            .bind(&request.platform_id)
+            .bind(&request.organization_id)
+            .bind(&updated)
+            .bind(request.verified_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?;
+        if result.rows_affected() != 1 {
+            return Err(CanvasLtiLaunchPlanError::CapabilityScopeMismatch);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(launch_repository_error)?;
+        Ok(updated)
     }
 }
 
@@ -617,6 +712,10 @@ fn program_binding(
             .map_err(launch_repository_error)?,
         enabled: row.try_get("enabled").map_err(launch_repository_error)?,
         archived: row.try_get("archived").map_err(launch_repository_error)?,
+        config_version: row
+            .try_get::<i32, _>("config_version")
+            .map(i64::from)
+            .map_err(launch_repository_error)?,
     })
 }
 

@@ -22,6 +22,7 @@ pub struct CanvasLtiPlatform {
     pub lti_jwks_url: Option<String>,
     pub lti_jwks_json: Option<Value>,
     pub lti_openid_configuration: Option<Value>,
+    pub config_version: i64,
     pub enabled: bool,
 }
 
