@@ -1010,7 +1010,7 @@ mod tests {
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CANVAS_LTI))),
-            "dd8527269b1868e844d6e49ac2ddf229c58e13b950f9ce9a74f3432f44bbd374"
+            "734b8da18a564cb1a8a889ca68dc6ca18aeac4246b51b57344e1359581b7a4a1"
         );
     }
 

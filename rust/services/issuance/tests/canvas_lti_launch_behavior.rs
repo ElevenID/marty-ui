@@ -6,8 +6,10 @@ use std::{
 use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_lti_launch::{
-        feature_enabled, launch_scope, private_launch_response, public_launch_response,
-        scope_matches, select_binding, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+        feature_enabled, launch_scope, plan_verified_identity, private_launch_response,
+        public_launch_response, scope_matches, select_binding, CanvasLtiIdentityRecord,
+        CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
+        CanvasLtiIdentityStatus, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
         CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
         CanvasLtiStoredLaunchState,
     },
@@ -52,6 +54,61 @@ impl CanvasLtiLaunchStateRepository for StateRepository {
         }
         stored.status = "consumed".to_owned();
         Ok(Some(stored.clone()))
+    }
+}
+
+#[derive(Default)]
+struct IdentityRepository {
+    identities: Mutex<Vec<CanvasLtiIdentityRecord>>,
+}
+
+#[async_trait]
+impl CanvasLtiIdentityRepository for IdentityRepository {
+    async fn reconcile_verified_identity(
+        &self,
+        request: &CanvasLtiIdentityRequest,
+    ) -> Result<CanvasLtiIdentityRecord, CanvasLtiLaunchPlanError> {
+        let mut identities = self.identities.lock().unwrap();
+        let same_scope = |record: &&CanvasLtiIdentityRecord| {
+            record.organization_id == request.organization_id
+                && record.platform_id == request.platform_id
+                && record.deployment_id == request.deployment_id
+        };
+        let existing_subject = identities
+            .iter()
+            .filter(same_scope)
+            .find(|record| record.lti_subject == request.lti_subject)
+            .cloned();
+        let existing_numeric = request.canvas_user_id.as_ref().and_then(|canvas_user_id| {
+            identities
+                .iter()
+                .filter(same_scope)
+                .find(|record| record.canvas_user_id.as_ref() == Some(canvas_user_id))
+                .cloned()
+        });
+        let new_id = format!("identity-{}", identities.len() + 1);
+        let plan = plan_verified_identity(
+            request,
+            existing_subject.as_ref(),
+            existing_numeric.as_ref(),
+            &new_id,
+        );
+        if let Some(existing) = plan.quarantine_existing {
+            let stored = identities
+                .iter_mut()
+                .find(|record| record.id == existing.id)
+                .expect("existing numeric identity");
+            *stored = existing;
+        }
+        if let Some(stored) = identities
+            .iter_mut()
+            .find(|record| record.id == plan.identity.id)
+        {
+            *stored = plan.identity.clone();
+        } else {
+            identities.push(plan.identity.clone());
+        }
+        Ok(plan.identity)
     }
 }
 
@@ -235,6 +292,125 @@ fn scope_matching_preserves_canvas_identity_namespaces_and_aliases() {
     ));
     assert!(!scope_matches(&json!({"lti_subject": "42"}), &actual));
     assert!(!scope_matches(&json!(["course-101"]), &actual));
+}
+
+#[tokio::test]
+async fn identity_mapping_replays_the_python_oracle_contract() {
+    let contract = contract();
+    let identity_contract = &contract["launch"]["identity_mapping"];
+    let cases = identity_contract["cases"].as_array().unwrap();
+    let case = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
+    let platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    let repository = Arc::new(IdentityRepository::default());
+    let service = CanvasLtiIdentityService::new(repository.clone());
+    let verified = |subject: &str, canvas_user_id: Option<&str>| VerifiedLtiLaunch {
+        issuer: "https://canvas.instructure.com".to_owned(),
+        subject: subject.to_owned(),
+        audience: vec!["client-1".to_owned()],
+        deployment_id: "deployment-1".to_owned(),
+        nonce: Some("nonce-1".to_owned()),
+        issued_at: None,
+        expires_at: None,
+        message_type: None,
+        lti_version: None,
+        target_link_uri: None,
+        context: None,
+        roles: Vec::new(),
+        learner_identity: json!({"email": "profile-only@example.test"}),
+        raw_claims: json!({
+            "email": "profile-only@example.test",
+            "https://purl.imsglobal.org/spec/lti/claim/custom": canvas_user_id
+                .map(|value| json!({"canvas_user_id": value}))
+                .unwrap_or_else(|| json!({}))
+        }),
+    };
+
+    let subject_case = case("subject_is_recorded_before_numeric_id_is_available");
+    let status = service
+        .record_verified_launch(
+            &platform,
+            &verified(subject_case["subject"].as_str().unwrap(), None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        identity_contract["subject_only"]["launch_response_status"]
+    );
+    let subject_id = repository.identities.lock().unwrap()[0].id.clone();
+
+    for name in [
+        "subject_only_record_is_enriched_in_place",
+        "same_verified_pair_is_idempotent",
+    ] {
+        let current = case(name);
+        let status = service
+            .record_verified_launch(
+                &platform,
+                &verified(
+                    current["subject"].as_str().unwrap(),
+                    current["canvas_user_id"].as_str(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, current["expected_status"]);
+        assert_eq!(repository.identities.lock().unwrap()[0].id, subject_id);
+    }
+
+    let conflict = case("numeric_id_cannot_move_to_another_subject");
+    let status = service
+        .record_verified_launch(
+            &platform,
+            &verified(
+                conflict["subject"].as_str().unwrap(),
+                conflict["canvas_user_id"].as_str(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status, conflict["expected_status"]);
+    {
+        let identities = repository.identities.lock().unwrap();
+        assert_eq!(identities.len(), 2);
+        assert!(identities
+            .iter()
+            .all(|identity| identity.status == CanvasLtiIdentityStatus::Quarantined));
+        assert!(identities.iter().all(|identity| {
+            identity.conflict_reason.as_deref() == conflict["reason"].as_str()
+        }));
+        assert!(identities.iter().all(|identity| {
+            !identity.lti_subject.contains('@')
+                && identity.canvas_user_id.as_deref() != Some("profile-only@example.test")
+        }));
+    }
+
+    for name in [
+        "quarantined_pair_cannot_reactivate",
+        "quarantined_numeric_id_cannot_move_to_a_third_subject",
+    ] {
+        let current = case(name);
+        let status = service
+            .record_verified_launch(
+                &platform,
+                &verified(
+                    current["subject"].as_str().unwrap(),
+                    current["canvas_user_id"].as_str(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, current["expected_status"]);
+    }
+    let identities = repository.identities.lock().unwrap();
+    assert_eq!(identities.len(), 3);
+    assert!(identities
+        .iter()
+        .all(|identity| identity.status == CanvasLtiIdentityStatus::Quarantined));
 }
 
 #[test]

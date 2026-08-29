@@ -4,8 +4,10 @@ use sqlx::{PgPool, Row};
 use tracing::error;
 
 use crate::canvas_lti_launch::{
-    CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
-    CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+    plan_verified_identity, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
+    CanvasLtiIdentityRequest, CanvasLtiIdentityStatus, CanvasLtiLaunchContextRepository,
+    CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiProgramBinding,
+    CanvasLtiStoredLaunchState,
 };
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
@@ -49,6 +51,40 @@ const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
     FROM issuance_service.canvas_program_bindings
     WHERE organization_id = $1 AND platform_id = $2
     ORDER BY created_at";
+
+const LOCK_IDENTITY_SCOPE: &str = "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))";
+
+const GET_IDENTITY_BY_SUBJECT: &str = "SELECT id, organization_id, platform_id,
+        deployment_id, lti_subject, canvas_user_id, status, conflict_reason
+    FROM issuance_service.canvas_learner_identities
+    WHERE organization_id = $1 AND platform_id = $2 AND deployment_id = $3
+      AND lti_subject = $4
+    FOR UPDATE";
+
+const GET_IDENTITY_BY_CANVAS_USER: &str = "SELECT id, organization_id, platform_id,
+        deployment_id, lti_subject, canvas_user_id, status, conflict_reason
+    FROM issuance_service.canvas_learner_identities
+    WHERE organization_id = $1 AND platform_id = $2 AND deployment_id = $3
+      AND canvas_user_id = $4
+    FOR UPDATE";
+
+const SAVE_IDENTITY: &str = "INSERT INTO issuance_service.canvas_learner_identities (
+        id, organization_id, platform_id, deployment_id, lti_subject, canvas_user_id,
+        sis_user_id, status, conflict_reason, verified_at, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8,
+        clock_timestamp(), clock_timestamp(), clock_timestamp())
+    ON CONFLICT (platform_id, deployment_id, lti_subject) DO UPDATE SET
+        canvas_user_id = EXCLUDED.canvas_user_id,
+        status = EXCLUDED.status,
+        conflict_reason = EXCLUDED.conflict_reason,
+        verified_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    RETURNING id, organization_id, platform_id, deployment_id, lti_subject,
+        canvas_user_id, status, conflict_reason";
+
+const QUARANTINE_IDENTITY: &str = "UPDATE issuance_service.canvas_learner_identities
+    SET status = 'quarantined', conflict_reason = $3, updated_at = clock_timestamp()
+    WHERE id = $1 AND organization_id = $2";
 
 #[derive(Clone)]
 pub struct PostgresCanvasLtiLoginRepository {
@@ -181,6 +217,91 @@ impl CanvasLtiLaunchContextRepository for PostgresCanvasLtiLoginRepository {
     }
 }
 
+#[async_trait]
+impl CanvasLtiIdentityRepository for PostgresCanvasLtiLoginRepository {
+    async fn reconcile_verified_identity(
+        &self,
+        request: &CanvasLtiIdentityRequest,
+    ) -> Result<CanvasLtiIdentityRecord, CanvasLtiLaunchPlanError> {
+        if request.organization_id.is_empty()
+            || request.platform_id.is_empty()
+            || request.deployment_id.is_empty()
+            || request.lti_subject.is_empty()
+        {
+            return Err(CanvasLtiLaunchPlanError::Invalid(
+                "Canvas LTI verified identity is incomplete",
+            ));
+        }
+        let mut transaction = self.pool.begin().await.map_err(launch_repository_error)?;
+        let lock_key = format!(
+            "{}\u{1f}{}\u{1f}{}",
+            request.organization_id, request.platform_id, request.deployment_id
+        );
+        sqlx::query(LOCK_IDENTITY_SCOPE)
+            .bind(lock_key)
+            .execute(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?;
+        let existing_subject = sqlx::query(GET_IDENTITY_BY_SUBJECT)
+            .bind(&request.organization_id)
+            .bind(&request.platform_id)
+            .bind(&request.deployment_id)
+            .bind(&request.lti_subject)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)?
+            .map(identity_record)
+            .transpose()?;
+        let existing_numeric = if let Some(canvas_user_id) = request.canvas_user_id.as_ref() {
+            sqlx::query(GET_IDENTITY_BY_CANVAS_USER)
+                .bind(&request.organization_id)
+                .bind(&request.platform_id)
+                .bind(&request.deployment_id)
+                .bind(canvas_user_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(launch_repository_error)?
+                .map(identity_record)
+                .transpose()?
+        } else {
+            None
+        };
+        let plan = plan_verified_identity(
+            request,
+            existing_subject.as_ref(),
+            existing_numeric.as_ref(),
+            &uuid::Uuid::new_v4().to_string(),
+        );
+        if let Some(existing) = plan.quarantine_existing.as_ref() {
+            sqlx::query(QUARANTINE_IDENTITY)
+                .bind(&existing.id)
+                .bind(&existing.organization_id)
+                .bind(&existing.conflict_reason)
+                .execute(&mut *transaction)
+                .await
+                .map_err(launch_repository_error)?;
+        }
+        let stored = sqlx::query(SAVE_IDENTITY)
+            .bind(&plan.identity.id)
+            .bind(&plan.identity.organization_id)
+            .bind(&plan.identity.platform_id)
+            .bind(&plan.identity.deployment_id)
+            .bind(&plan.identity.lti_subject)
+            .bind(&plan.identity.canvas_user_id)
+            .bind(plan.identity.status.as_str())
+            .bind(&plan.identity.conflict_reason)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(launch_repository_error)
+            .and_then(identity_record)?;
+        transaction
+            .commit()
+            .await
+            .map_err(launch_repository_error)?;
+        Ok(stored)
+    }
+}
+
 fn program_binding(
     row: sqlx::postgres::PgRow,
 ) -> Result<CanvasLtiProgramBinding, CanvasLtiLaunchPlanError> {
@@ -234,6 +355,40 @@ fn stored_launch_state(
         nonce: row.try_get("nonce").map_err(launch_repository_error)?,
         status: row.try_get("status").map_err(launch_repository_error)?,
         expired: row.try_get("expired").map_err(launch_repository_error)?,
+    })
+}
+
+fn identity_record(
+    row: sqlx::postgres::PgRow,
+) -> Result<CanvasLtiIdentityRecord, CanvasLtiLaunchPlanError> {
+    let status: String = row.try_get("status").map_err(launch_repository_error)?;
+    let status = match status.as_str() {
+        "subject_verified" => CanvasLtiIdentityStatus::SubjectVerified,
+        "linked" => CanvasLtiIdentityStatus::Linked,
+        "quarantined" => CanvasLtiIdentityStatus::Quarantined,
+        _ => return Err(CanvasLtiLaunchPlanError::RepositoryUnavailable),
+    };
+    Ok(CanvasLtiIdentityRecord {
+        id: row.try_get("id").map_err(launch_repository_error)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(launch_repository_error)?,
+        platform_id: row
+            .try_get("platform_id")
+            .map_err(launch_repository_error)?,
+        deployment_id: row
+            .try_get("deployment_id")
+            .map_err(launch_repository_error)?,
+        lti_subject: row
+            .try_get("lti_subject")
+            .map_err(launch_repository_error)?,
+        canvas_user_id: row
+            .try_get("canvas_user_id")
+            .map_err(launch_repository_error)?,
+        status,
+        conflict_reason: row
+            .try_get("conflict_reason")
+            .map_err(launch_repository_error)?,
     })
 }
 
