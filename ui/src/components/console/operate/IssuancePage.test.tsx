@@ -115,6 +115,10 @@ describe('IssuancePage', () => {
     expect(screen.getByText(formatOfficialReference('flow-execution-1', 'flow'))).toBeInTheDocument();
     expect(screen.getByText(`Renewed from ${formatOfficialReference('cred-open-badge-0', 'credential')}`)).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /open badge login template/i })).toHaveAttribute(
+      'data-credential-record-id',
+      'issued-rec-1',
+    );
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
     expect(screen.queryByText('Active Offers')).not.toBeInTheDocument();
   });

@@ -354,6 +354,7 @@ function IssuancePage() {
               {issuedCredentials.map((credential) => (
                 <TableRow
                   key={credential.id}
+                  data-credential-record-id={credential.id || credential.credential_id}
                   hover
                   selected={(credential.id || credential.credential_id) === (credentialId || focusedCredentialId)}
                   aria-selected={(credential.id || credential.credential_id) === (credentialId || focusedCredentialId)}

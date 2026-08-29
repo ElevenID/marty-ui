@@ -493,9 +493,12 @@ async function findRenewedCredential(page, templateId, sourceCredentialId) {
 }
 
 async function findCredentialRow(page, credentialId) {
+  if (!/^[A-Za-z0-9:._-]+$/.test(credentialId)) {
+    throw new Error('Credential row lookup requires a presentation-safe exact record ID');
+  }
   const search = page.getByPlaceholder('Search issued credentials...');
   await search.fill(credentialId);
-  const row = page.locator('tbody tr').first();
+  const row = page.locator(`tbody tr[data-credential-record-id="${credentialId}"]`);
   await row.waitFor({ state: 'visible', timeout: 30_000 });
   const friendlyReference = await row.locator('td').first().locator('.MuiTypography-caption').innerText();
   await search.fill(friendlyReference.trim());
