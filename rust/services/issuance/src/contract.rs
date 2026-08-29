@@ -19,6 +19,8 @@ const CREDENTIAL_ADMISSION: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-admission.json");
 const CREDENTIAL_SIGNING: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-signing.json");
+const CANVAS_LTI: &[u8] =
+    include_bytes!("../../../../contracts/issuance-canvas-lti-foundation.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -38,6 +40,7 @@ struct Coverage {
     proof_nonce_behavior_contract: Upstream,
     credential_admission_behavior_contract: Upstream,
     credential_signing_behavior_contract: Upstream,
+    canvas_lti_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -72,6 +75,8 @@ struct HttpOperation {
     proof_nonce_behavior_case: Option<String>,
     #[serde(default)]
     credential_behavior_contract: bool,
+    #[serde(default)]
+    canvas_lti_behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -226,6 +231,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid credential admission contract", error))?;
     let credential_signing: Value = serde_json::from_slice(CREDENTIAL_SIGNING)
         .map_err(|error| contract_error("invalid credential signing contract", error))?;
+    let canvas_lti: Value = serde_json::from_slice(CANVAS_LTI)
+        .map_err(|error| contract_error("invalid Canvas LTI contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -410,6 +417,20 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected credential signing behavior contract",
     )?;
     require(
+        canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
+            && canvas_lti["scope"]["route_count"] == 12
+            && canvas_lti["scope"]["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 12)
+            && canvas_lti["login"]["success"]["status_code"] == 303
+            && canvas_lti["login"]["success"]["state_source_bytes"] == 32
+            && canvas_lti["login"]["success"]["state_ttl_minutes"] == 10
+            && canvas_lti["login"]["failures"]
+                .as_array()
+                .is_some_and(|failures| failures.len() == 5),
+        "unexpected Canvas LTI behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -491,6 +512,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid credential signing provenance",
     )?;
     require(
+        coverage.canvas_lti_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.canvas_lti_behavior_contract.path
+                == "contracts/issuance-canvas-lti-foundation.json"
+            && coverage.canvas_lti_behavior_contract.commit.len() == 40
+            && coverage
+                .canvas_lti_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid Canvas LTI provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -554,6 +587,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_credential_signing == coverage.credential_signing_behavior_contract.sha256,
         "credential signing hash does not match provenance",
     )?;
+    let canonical_canvas_lti = canonical_lf(CANVAS_LTI);
+    let actual_canvas_lti = format!("{:x}", Sha256::digest(&canonical_canvas_lti));
+    require(
+        actual_canvas_lti == coverage.canvas_lti_behavior_contract.sha256,
+        "Canvas LTI hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -583,6 +622,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_token_exchange_cases = BTreeSet::new();
     let mut native_proof_nonce_cases = BTreeSet::new();
     let mut native_credential_contract = false;
+    let mut native_canvas_lti_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -595,6 +635,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && route["operation"] == operation.operation
             }),
             "native issuance operation is absent from the frozen surface",
+        )?;
+        let behavior_selector_count = usize::from(operation.response.is_some())
+            + usize::from(operation.behavior_case.is_some())
+            + usize::from(operation.tenant_behavior_case.is_some())
+            + usize::from(operation.transaction_read_behavior_case.is_some())
+            + usize::from(operation.token_exchange_behavior_case.is_some())
+            + usize::from(operation.proof_nonce_behavior_case.is_some())
+            + usize::from(operation.credential_behavior_contract)
+            + usize::from(operation.canvas_lti_behavior_case.is_some());
+        require(
+            behavior_selector_count == 1,
+            "native issuance operation must select exactly one behavior contract",
         )?;
         if operation.operation == "health_check" {
             let response = operation
@@ -736,6 +788,28 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "native credential endpoint diverges from its admission or signing contract",
             )?;
             native_credential_contract = true;
+        } else if let Some(behavior_case) = operation.canvas_lti_behavior_case.as_deref() {
+            let expected_operation = match behavior_case {
+                "login" => "initiate_canvas_lti_login_route",
+                "experience-login" => "initiate_canvas_lti_experience_login_route",
+                _ => return Err(invalid("unknown native Canvas LTI behavior case")),
+            };
+            require(
+                operation.operation == expected_operation
+                    && operation.method == "POST"
+                    && native_canvas_lti_cases.insert(behavior_case)
+                    && canvas_lti["scope"]["routes"]
+                        .as_array()
+                        .is_some_and(|routes| {
+                            routes.iter().any(|route| {
+                                route["method"] == operation.method
+                                    && route["path"] == operation.path
+                                    && route["operation"] == operation.operation
+                                    && route["authentication"] == "public-lti-login"
+                            })
+                        }),
+                "native Canvas LTI login operation diverges from its behavior contract",
+            )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
         }
@@ -757,6 +831,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_tenant_behavior_cases == frozen_tenant_behavior_cases,
         "native tenant issuance behavior coverage is incomplete",
+    )?;
+    require(
+        native_canvas_lti_cases == BTreeSet::from(["experience-login", "login"]),
+        "native Canvas LTI login behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -818,9 +896,11 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             == [
                 "CORS_ALLOWED_ORIGINS",
                 "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+                "CANVAS_LTI_STATE_TTL_MINUTES",
                 "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
                 "CANVAS_PILOT_ORGANIZATION_IDS",
                 "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+                "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
                 "DATABASE_URL",
                 "GRPC_SERVICE_TOKEN",
                 "ISSUANCE_SERVICE_PORT",
@@ -833,7 +913,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "TOKEN_RATE_LIMIT",
                 "TOKEN_RATE_WINDOW",
             ]
-            && coverage.remaining.literal_environment_variables + 16 == environment_count
+            && coverage.remaining.literal_environment_variables + 18 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -902,7 +982,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_embedded_contract, CREDENTIAL_ADMISSION, CREDENTIAL_SIGNING,
+        canonical_lf, validate_embedded_contract, CANVAS_LTI, CREDENTIAL_ADMISSION,
+        CREDENTIAL_SIGNING,
     };
 
     #[test]
@@ -916,13 +997,17 @@ mod tests {
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_SIGNING))),
             "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
         );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CANVAS_LTI))),
+            "66e0bda60f841a16be701e04edf5a133baf08f58a9c4ada639a11945841e1893"
+        );
     }
 
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 18);
-        assert_eq!(summary.remaining_http, 113);
+        assert_eq!(summary.native_http, 20);
+        assert_eq!(summary.remaining_http, 111);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

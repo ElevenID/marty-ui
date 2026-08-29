@@ -67,8 +67,11 @@ only JSON bodies.
 
 MMF-owned readiness, lifecycle, and version diagnostics remain additive. The
 shared service image and entrypoint package the native binary. Beta uses a
-separate `issuance-native` sidecar and the gateway sends only the eighteen
-contract-owned paths to it; the other 113 HTTP operations and all 12 gRPC
+separate `issuance-native` sidecar and the gateway sends only the initial eighteen
+contract-owned paths to it. The first two Canvas/LTI login operations add
+server-owned state/nonce generation, exact trust-profile validation, and the
+existing PostgreSQL launch-state schema, bringing the split to twenty native
+paths; the other 111 HTTP operations and all 12 gRPC
 methods remain on the Python issuance service. Production Compose remains
 unchanged and selects only the Python issuance service.
 
@@ -86,7 +89,8 @@ unchanged and selects only the Python issuance service.
    Token exchange, nonce issuance, and credential issuance are complete in the
    beta path split.
 5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI
-   orchestration, all 12 gRPC methods, and the Canvas worker.
+   orchestration, all 12 gRPC methods, and the Canvas worker. Canvas/LTI login
+   and experience-login initiation are complete in the beta path split.
 6. Replay the frozen positive, negative, concurrency, database, protocol, and
    migration contracts against both implementations; resolve every divergence.
 7. Atomically move image/SBOM/provenance ownership, delete the Python issuance

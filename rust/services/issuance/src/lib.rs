@@ -1,12 +1,16 @@
 //! Native issuance service boundary.
 //!
-//! This crate is intentionally not packaged or deployed while migration status
-//! is `cutover-in-progress`. The Python service remains the parity oracle until
-//! every frozen HTTP, gRPC, worker, configuration, and migration gate passes.
+//! While migration status is `cutover-in-progress`, this crate is packaged only
+//! as the beta `issuance-native` sidecar and receives the exact paths enumerated
+//! by the coverage contract. The Python service remains the production runtime
+//! and parity oracle until every frozen HTTP, gRPC, worker, configuration, and
+//! migration gate passes.
 
 #![forbid(unsafe_code)]
 
 pub mod canvas_issuance_guard;
+pub mod canvas_lti_login;
+pub mod canvas_lti_postgres;
 pub mod client_auth;
 pub mod config;
 pub mod contract;

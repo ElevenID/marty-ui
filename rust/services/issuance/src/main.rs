@@ -2,6 +2,8 @@ use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
     canvas_issuance_guard::CanvasGuardConfig,
+    canvas_lti_login::CanvasLtiLoginService,
+    canvas_lti_postgres::PostgresCanvasLtiLoginRepository,
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -84,6 +86,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         nonce_repository.clone(),
         Arc::new(SecureProofNonceGenerator),
     );
+    let canvas_lti_login = CanvasLtiLoginService::new(
+        Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone())),
+        &config.issuer_base_url,
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+        config.canvas_lti_state_ttl,
+        config.canvas_self_managed_origins.clone(),
+    )?;
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -132,6 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             token_exchange,
             proof_nonce,
             credential,
+            canvas_lti_login,
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );
