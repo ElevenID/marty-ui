@@ -632,7 +632,7 @@ pub struct CanvasLtiExperienceService {
     repository: Arc<dyn CanvasLtiExperienceHandoffRepository>,
     generator: Arc<dyn CanvasLtiExperienceCodeGenerator>,
     clock: Arc<dyn CanvasLtiClock>,
-    code_ttl: Duration,
+    code_ttl: chrono::Duration,
     experience_base_url: String,
 }
 
@@ -671,6 +671,9 @@ impl CanvasLtiExperienceService {
                 "Canvas LTI experience configuration is invalid",
             ));
         }
+        let code_ttl = chrono::Duration::from_std(code_ttl).map_err(|_| {
+            CanvasLtiLaunchPlanError::Invalid("Canvas LTI experience code TTL is invalid")
+        })?;
         Ok(Self {
             launch_service,
             repository,
@@ -701,14 +704,11 @@ impl CanvasLtiExperienceService {
             .await?;
         let code = self.generator.generate();
         let now = self.clock.now();
-        let ttl = chrono::Duration::from_std(self.code_ttl).map_err(|_| {
-            CanvasLtiLaunchPlanError::Invalid("Canvas LTI experience code TTL is invalid")
-        })?;
-        let expires_at = now
-            .checked_add_signed(ttl)
-            .ok_or(CanvasLtiLaunchPlanError::Invalid(
-                "Canvas LTI experience code TTL is invalid",
-            ))?;
+        let expires_at =
+            now.checked_add_signed(self.code_ttl)
+                .ok_or(CanvasLtiLaunchPlanError::Invalid(
+                    "Canvas LTI experience code TTL is invalid",
+                ))?;
         let encoded_code: String =
             url::form_urlencoded::byte_serialize(code.state.as_bytes()).collect();
         let location = format!(

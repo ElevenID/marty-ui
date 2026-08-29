@@ -901,6 +901,29 @@ async fn experience_handoff_persists_after_launch_and_before_redirect() {
     );
 }
 
+#[test]
+fn experience_handoff_rejects_unrepresentable_ttl_before_launch() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let platform = orchestration_platform();
+    let error = CanvasLtiExperienceService::new(
+        orchestration_service(repository.clone(), platform),
+        repository.clone(),
+        Arc::new(FixedExperienceCodeGenerator),
+        Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
+        )),
+        Duration::from_secs(u64::MAX),
+        "https://ui.example.test",
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CanvasLtiLaunchPlanError::Invalid("Canvas LTI experience code TTL is invalid")
+    ));
+    assert!(repository.calls().is_empty());
+}
+
 #[tokio::test]
 async fn experience_handoff_failure_never_returns_a_redirect() {
     let repository = Arc::new(OrchestrationRepository::default());
