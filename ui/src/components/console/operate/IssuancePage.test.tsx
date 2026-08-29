@@ -13,6 +13,7 @@ const {
   mockRenewCredential,
   mockListCredentialTemplates,
   mockShowSuccess,
+  mockShowInfo,
   mockShowError,
 } = vi.hoisted(() => ({
   mockFetchIssuedCredentials: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockRenewCredential: vi.fn(),
   mockListCredentialTemplates: vi.fn(),
   mockShowSuccess: vi.fn(),
+  mockShowInfo: vi.fn(),
   mockShowError: vi.fn(),
 }));
 
@@ -40,6 +42,7 @@ vi.mock('../../../application/vendor', () => ({
 vi.mock('../../../hooks/useNotifications', () => ({
   useNotifications: () => ({
     showSuccess: mockShowSuccess,
+    showInfo: mockShowInfo,
     showError: mockShowError,
   }),
 }));
@@ -59,10 +62,13 @@ describe('IssuancePage', () => {
           credential_type: 'open_badge',
           type: 'open_badge',
           subject_id: 'holder@example.com',
+          holder_label: 'Demo Employee 01',
           holder_email: 'holder@example.com',
           issued_date: '2026-05-07T12:00:00Z',
           expiry_date: '2026-06-07T12:00:00Z',
-          status: 'active',
+          status: 'ACTIVE',
+          flow_execution_id: 'flow-execution-1',
+          renewed_from_credential_id: 'cred-open-badge-0',
           application_id: 'application-1',
           credential_template_id: 'template-open-badge',
           issuer_did: 'did:web:issuer.example.com',
@@ -105,7 +111,11 @@ describe('IssuancePage', () => {
     expect(screen.getByRole('heading', { name: 'Issued Credentials' })).toBeInTheDocument();
     expect(screen.getByText(formatOfficialReference('cred-open-badge-1', 'credential'))).toBeInTheDocument();
     expect(screen.getByText('Open Badge Login Template')).toBeInTheDocument();
-    expect(screen.getByText(formatOfficialReference('template-open-badge', 'template'))).toBeInTheDocument();
+    expect(screen.getByText('Demo Employee 01')).toBeInTheDocument();
+    expect(screen.getByText(formatOfficialReference('flow-execution-1', 'flow'))).toBeInTheDocument();
+    expect(screen.getByText(`Renewed from ${formatOfficialReference('cred-open-badge-0', 'credential')}`)).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
     expect(screen.queryByText('Active Offers')).not.toBeInTheDocument();
   });
 
@@ -128,6 +138,7 @@ describe('IssuancePage', () => {
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
+    expect(screen.getByRole('button', { name: /view lifecycle audit/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^renew$/i }));
 
@@ -135,7 +146,7 @@ describe('IssuancePage', () => {
       expect(mockRenewCredential).toHaveBeenCalledWith({ credentialId: 'issued-rec-1' });
     });
 
-    expect(screen.getByText('Fresh wallet offer ready')).toBeInTheDocument();
+    expect(screen.getByText(/renewal offer ready.*replacement not issued yet/i)).toBeInTheDocument();
     expect(screen.getByText('openid-credential-offer://offer/test')).toBeInTheDocument();
   });
 
@@ -162,7 +173,10 @@ describe('IssuancePage', () => {
         reason: 'Membership under review',
       });
     });
-    expect(mockShowSuccess).toHaveBeenCalledWith('Credential suspended');
+    expect(mockShowInfo).toHaveBeenCalledWith(
+      'Lifecycle state: Suspended. Verification policies may now deny this credential.',
+      expect.objectContaining({ replaceKey: 'credential-lifecycle' }),
+    );
   });
 
   it('reinstates a suspended credential and does not offer suspension', async () => {
@@ -172,6 +186,7 @@ describe('IssuancePage', () => {
           id: 'issued-rec-1',
           credential_id: 'cred-open-badge-1',
           credential_type: 'open_badge',
+          subject_id: 'did:key:zDemoLifecycleHolder',
           status: 'SUSPENDED',
         },
       ],
@@ -187,6 +202,7 @@ describe('IssuancePage', () => {
     );
 
     expect(await screen.findByRole('button', { name: /reinstate credential/i })).toBeInTheDocument();
+    expect(screen.getByText(`Lifecycle holder • ${formatOfficialReference('did:key:zDemoLifecycleHolder', 'account')}`)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /suspend credential/i })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /reinstate credential/i }));
     await user.type(screen.getByRole('textbox', { name: /reason/i }), 'Review complete');

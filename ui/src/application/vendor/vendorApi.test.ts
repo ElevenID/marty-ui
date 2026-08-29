@@ -157,6 +157,31 @@ describe('vendorApi', () => {
     expect(get).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials?organization_id=org-1'));
   });
 
+  it('preserves friendly holder labels and lifecycle relationship fields', async () => {
+    get.mockResolvedValue([{
+      id: 'credential-2',
+      credential_type: 'membership',
+      subject_display_name: 'Demo Employee 01',
+      subject_email: 'demo.employee.01@example.test',
+      status: 'ACTIVE',
+      flow_execution_id: 'flow-1',
+      renewed_from_credential_id: 'credential-1',
+    }]);
+
+    const result = await fetchIssuedCredentials({
+      organizationId: 'org-1',
+      page: 1,
+      perPage: 10,
+      searchQuery: 'demo employee',
+    });
+
+    expect(result.credentials[0]).toMatchObject({
+      holder_label: 'Demo Employee 01',
+      flow_execution_id: 'flow-1',
+      renewed_from_credential_id: 'credential-1',
+    });
+  });
+
   it('revokeCredential calls POST', async () => {
     post.mockResolvedValue({});
     await revokeCredential({ credentialId: 'c1', reason: 'lost', comments: 'test' });

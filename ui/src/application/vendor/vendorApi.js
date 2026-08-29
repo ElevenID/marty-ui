@@ -129,6 +129,14 @@ export async function fetchIssuedCredentials({ organizationId, page, perPage, se
     .map((record) => ({
       ...record,
       type: record.credential_display_name || record.credential_type || 'Credential',
+      holder_label: record.holder_display_name
+        || record.subject_display_name
+        || record.holder_name
+        || record.subject_name
+        || record.holder_email
+        || record.subject_email
+        || record.subject_id
+        || 'Unknown holder',
       holder_email: record.holder_email || record.subject_email || record.subject_id || 'Unknown holder',
       issued_date: record.issued_date || record.issued_at,
       expiry_date: record.expiry_date || record.valid_until,
@@ -144,6 +152,7 @@ export async function fetchIssuedCredentials({ organizationId, page, perPage, se
       record.credential_type,
       record.type,
       record.holder_email,
+      record.holder_label,
       record.subject_id,
       record.application_id,
       record.issuer_did,
