@@ -110,7 +110,7 @@ struct CountingClock {
     calls: AtomicUsize,
 }
 
-fn exchange_service(
+fn exchange_service_with_ttl(
     repository: Arc<ExchangeRepository>,
     session_ttl: Duration,
 ) -> Result<CanvasLtiExperienceExchangeService, CanvasLtiExperienceExchangeError> {
@@ -187,7 +187,8 @@ fn exchange_metadata_replays_the_complete_frozen_vector() {
 #[tokio::test]
 async fn exchange_normalizes_the_code_and_responds_after_persistence() {
     let repository = Arc::new(ExchangeRepository::default());
-    let service = exchange_service(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
+    let service =
+        exchange_service_with_ttl(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
 
     let result = service
         .exchange("  experience-code-contract-0123456789  ")
@@ -236,11 +237,12 @@ async fn exchange_failure_returns_no_session_token() {
 #[test]
 fn exchange_rejects_invalid_session_ttls_at_construction() {
     assert_eq!(
-        exchange_service(Arc::new(ExchangeRepository::default()), Duration::ZERO,).unwrap_err(),
+        exchange_service_with_ttl(Arc::new(ExchangeRepository::default()), Duration::ZERO,)
+            .unwrap_err(),
         CanvasLtiExperienceExchangeError::InvalidConfiguration
     );
     assert_eq!(
-        exchange_service(
+        exchange_service_with_ttl(
             Arc::new(ExchangeRepository::default()),
             Duration::from_secs(u64::MAX),
         )
@@ -252,7 +254,8 @@ fn exchange_rejects_invalid_session_ttls_at_construction() {
 #[tokio::test]
 async fn exchange_rejects_out_of_contract_codes_before_persistence() {
     let repository = Arc::new(ExchangeRepository::default());
-    let service = exchange_service(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
+    let service =
+        exchange_service_with_ttl(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
 
     for code in ["x".repeat(31), "x".repeat(257)] {
         assert_eq!(
