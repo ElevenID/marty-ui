@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod canvas_award_candidate;
+pub mod canvas_award_candidate_approval;
 pub mod canvas_award_candidate_postgres;
 pub mod canvas_award_candidate_service;
 pub mod canvas_issuance_guard;
