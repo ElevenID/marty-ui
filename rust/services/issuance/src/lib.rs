@@ -17,6 +17,8 @@ pub mod canvas_issuance_guard;
 pub mod canvas_lti_bootstrap;
 pub mod canvas_lti_deep_linking;
 pub mod canvas_lti_deep_linking_postgres;
+pub mod canvas_lti_evidence;
+pub mod canvas_lti_evidence_postgres;
 pub mod canvas_lti_experience;
 pub mod canvas_lti_launch;
 pub mod canvas_lti_login;
