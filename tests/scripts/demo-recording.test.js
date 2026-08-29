@@ -42,13 +42,20 @@ test('verification display preserves the machine decision and a stable presentat
   assert.deepEqual(
     buildVerificationDisplay(
       { decision: 'deny', decisionReason: 'Credential is suspended' },
-      { actor: 'Marty status-aware verifier', testId: 'lifecycle-pres-01' },
+      {
+        actor: 'Marty status-aware verifier',
+        testId: 'lifecycle-pres-01',
+        evaluatedState: 'suspended',
+        comparison: 'Active -> suspended',
+      },
     ),
     {
       actor: 'Marty status-aware verifier',
       testId: 'LIFECYCLE-PRES-01',
       decision: 'DENIED',
       reason: 'Credential is suspended',
+      evaluatedState: 'SUSPENDED',
+      comparison: 'Active -> suspended',
     },
   );
 });
@@ -61,5 +68,12 @@ test('verification display fails closed without a governed identity', () => {
   assert.throws(
     () => buildVerificationDisplay({ decision: 'allow' }, { actor: 'Verifier', testId: 'unsafe id' }),
     /stable presentation-safe identifier/,
+  );
+  assert.throws(
+    () => buildVerificationDisplay(
+      { decision: 'allow' },
+      { actor: 'Verifier', testId: 'test-01', evaluatedState: 'not safe!' },
+    ),
+    /evaluatedState/,
   );
 });

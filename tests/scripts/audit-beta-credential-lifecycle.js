@@ -840,6 +840,8 @@ async function main() {
       enabled: RECORD_VIDEO,
       actor: 'Marty status-aware verifier',
       testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'SUSPENDED',
+      comparison: 'Active -> suspended',
     });
     await page.screenshot({ path: path.join(artifactDir, '02-suspended-credential.png'), fullPage: true });
 
@@ -853,6 +855,8 @@ async function main() {
       enabled: RECORD_VIDEO,
       actor: 'Marty status-aware verifier',
       testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'ACTIVE',
+      comparison: 'Denied while suspended -> allowed after reinstatement',
     });
     await page.screenshot({ path: path.join(artifactDir, '03-reinstated-credential.png'), fullPage: true });
 
@@ -861,11 +865,13 @@ async function main() {
     report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
-    await showLifecycleStep(page, 'Revocation is final', 'The verifier denies the revoked credential and the issuer inventory retains its final lifecycle state.');
+    await showLifecycleStep(page, 'Revoked credential is denied', 'In this test scenario, the verifier denies the revoked credential and the issuer inventory retains the revoked state.');
     await showVerificationResult(page, report.revoke.verification.result, {
       enabled: RECORD_VIDEO,
       actor: 'Marty status-aware verifier',
       testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'REVOKED',
+      comparison: 'Active -> revoked in this test scenario',
     });
     await page.screenshot({ path: path.join(artifactDir, '04-revoked-credential.png'), fullPage: true });
 

@@ -15,7 +15,6 @@ const {
   mockShowSuccess,
   mockShowInfo,
   mockShowError,
-  mockRemoveNotification,
 } = vi.hoisted(() => ({
   mockFetchIssuedCredentials: vi.fn(),
   mockSuspendCredential: vi.fn(),
@@ -26,7 +25,6 @@ const {
   mockShowSuccess: vi.fn(),
   mockShowInfo: vi.fn(),
   mockShowError: vi.fn(),
-  mockRemoveNotification: vi.fn(),
 }));
 
 vi.mock('../../../contexts/ConsoleContext', () => ({
@@ -46,7 +44,6 @@ vi.mock('../../../hooks/useNotifications', () => ({
     showSuccess: mockShowSuccess,
     showInfo: mockShowInfo,
     showError: mockShowError,
-    removeNotification: mockRemoveNotification,
   }),
 }));
 
@@ -57,7 +54,6 @@ vi.mock('../../../services/presentationPolicyApi', () => ({
 describe('IssuancePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockShowInfo.mockReturnValue('renewal-notification-1');
     mockFetchIssuedCredentials.mockResolvedValue({
       credentials: [
         {
@@ -115,12 +111,16 @@ describe('IssuancePage', () => {
     expect(screen.getByRole('heading', { name: 'Issued Credentials' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search issued credentials' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Issued credentials' })).toBeInTheDocument();
-    expect(screen.getByText(formatOfficialReference('cred-open-badge-1', 'credential'))).toBeInTheDocument();
-    expect(screen.getByText('Open Badge Login Template')).toBeInTheDocument();
+    expect(screen.getAllByText(formatOfficialReference('cred-open-badge-1', 'credential')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Open Badge Login Template').length).toBeGreaterThan(0);
     expect(screen.getByText('Demo Employee 01')).toBeInTheDocument();
     expect(screen.getByText(formatOfficialReference('flow-execution-1', 'flow'))).toBeInTheDocument();
-    expect(screen.getByText(`Renewed from ${formatOfficialReference('cred-open-badge-0', 'credential')}`)).toBeInTheDocument();
-    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getAllByText(`Renewed from ${formatOfficialReference('cred-open-badge-0', 'credential')}`).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0);
+    const summary = screen.getByRole('region', { name: /selected credential summary/i });
+    expect(summary).toHaveTextContent('Selected credential');
+    expect(summary).toHaveTextContent('Renewed from');
+    expect(summary).toHaveTextContent('Eligible for policies that require an active credential');
     expect(screen.getByRole('row', { name: /open badge login template/i })).toHaveAttribute(
       'data-credential-record-id',
       'issued-rec-1',
@@ -141,7 +141,7 @@ describe('IssuancePage', () => {
     );
 
     const reference = formatOfficialReference('cred-open-badge-1', 'credential');
-    expect(await screen.findByText(reference)).toBeInTheDocument();
+    expect((await screen.findAllByText(reference)).length).toBeGreaterThan(0);
     mockFetchIssuedCredentials.mockReturnValueOnce(pendingRefresh);
     await user.click(screen.getByRole('button', { name: /^refresh$/i }));
 
@@ -162,7 +162,7 @@ describe('IssuancePage', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(formatOfficialReference('cred-open-badge-1', 'credential'))).toBeInTheDocument();
+      expect(screen.getAllByText(formatOfficialReference('cred-open-badge-1', 'credential')).length).toBeGreaterThan(0);
     });
 
     await user.click(screen.getByRole('button', { name: /view credential details/i }));
@@ -204,7 +204,10 @@ describe('IssuancePage', () => {
     await user.click(screen.getByRole('button', { name: /^close$/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(search).toHaveValue(reference);
-    expect(mockRemoveNotification).toHaveBeenCalledWith('renewal-notification-1');
+    expect(mockShowInfo).not.toHaveBeenCalledWith(
+      expect.stringMatching(/renewal offer generated/i),
+      expect.anything(),
+    );
   });
 
   it('requires a reason and suspends an active credential', async () => {

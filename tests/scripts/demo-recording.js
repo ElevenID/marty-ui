@@ -55,6 +55,8 @@ async function showStep(page, title, detail, options = {}) {
 function buildVerificationDisplay(result, options = {}) {
   const actor = String(options.actor || '').trim();
   const testId = String(options.testId || '').trim().toUpperCase();
+  const evaluatedState = String(options.evaluatedState || '').trim().toUpperCase();
+  const comparison = String(options.comparison || '').trim();
   if (!actor) throw new TypeError('Verification display actor is required');
   if (!/^[A-Z0-9-]{6,48}$/.test(testId)) {
     throw new TypeError('Verification display testId must be a stable presentation-safe identifier');
@@ -71,7 +73,11 @@ function buildVerificationDisplay(result, options = {}) {
       ? 'Policy evaluation completed without a denial reason.'
       : 'No machine decision reason was returned.');
 
-  return Object.freeze({ actor, testId, decision, reason });
+  if (evaluatedState && !/^[A-Z][A-Z0-9_-]{1,31}$/.test(evaluatedState)) {
+    throw new TypeError('Verification display evaluatedState must be presentation-safe');
+  }
+
+  return Object.freeze({ actor, testId, decision, reason, evaluatedState, comparison });
 }
 
 async function showVerificationResult(page, result, options = {}) {
@@ -87,7 +93,7 @@ async function showVerificationResult(page, result, options = {}) {
       zIndex: '2147483647',
       right: '48px',
       top: '170px',
-      width: 'min(720px, calc(100vw - 96px))',
+      width: 'min(780px, calc(100vw - 96px))',
       padding: '28px 32px',
       borderRadius: '10px',
       border: '1px solid rgba(148, 163, 184, 0.55)',
@@ -117,7 +123,21 @@ async function showVerificationResult(page, result, options = {}) {
     });
     const reason = document.createElement('div');
     reason.textContent = model.reason;
-    Object.assign(reason.style, { marginTop: '16px', fontSize: '20px', lineHeight: '1.4', color: '#f1f5f9' });
+    Object.assign(reason.style, { marginTop: '16px', fontSize: '24px', lineHeight: '1.35', color: '#f1f5f9' });
+    const context = document.createElement('div');
+    context.textContent = [
+      model.evaluatedState ? `Evaluated lifecycle state: ${model.evaluatedState}` : '',
+      model.comparison,
+    ].filter(Boolean).join(' | ');
+    Object.assign(context.style, {
+      marginTop: '14px',
+      padding: '12px 14px',
+      borderRadius: '6px',
+      background: 'rgba(30, 41, 59, 0.95)',
+      fontSize: '19px',
+      fontWeight: '700',
+      color: '#e0f2fe',
+    });
     const metadata = document.createElement('div');
     Object.assign(metadata.style, {
       display: 'grid',
@@ -126,7 +146,7 @@ async function showVerificationResult(page, result, options = {}) {
       marginTop: '24px',
       paddingTop: '18px',
       borderTop: '1px solid rgba(148, 163, 184, 0.35)',
-      fontSize: '16px',
+      fontSize: '18px',
     });
     for (const [label, value] of [['Actor', model.actor], ['Test ID', model.testId]]) {
       const key = document.createElement('strong');
@@ -137,7 +157,9 @@ async function showVerificationResult(page, result, options = {}) {
       content.style.fontFamily = label === 'Test ID' ? 'monospace' : 'Arial, sans-serif';
       metadata.append(key, content);
     }
-    overlay.append(eyebrow, decision, reason, metadata);
+    overlay.append(eyebrow, decision, reason);
+    if (context.textContent) overlay.append(context);
+    overlay.append(metadata);
     document.body.appendChild(overlay);
   }, display);
   await page.waitForTimeout(options.durationMs || 3000);

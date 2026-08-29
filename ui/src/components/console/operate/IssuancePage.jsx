@@ -93,7 +93,7 @@ function IssuancePage() {
   const navigate = useNavigate();
   const { credentialId } = useParams();
   const { activeOrgId: organizationId } = useConsole();
-  const { showError, showInfo, showSuccess, removeNotification } = useNotifications();
+  const { showError, showInfo, showSuccess } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [renewingCredentialId, setRenewingCredentialId] = useState(null);
   const [latestOffer, setLatestOffer] = useState(null);
@@ -103,7 +103,6 @@ function IssuancePage() {
   const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
   const [focusedCredentialId, setFocusedCredentialId] = useState(null);
   const [detailCredentialId, setDetailCredentialId] = useState(null);
-  const [renewalNotificationId, setRenewalNotificationId] = useState(null);
 
   const {
     data: issuedCredentialsData,
@@ -191,6 +190,23 @@ function IssuancePage() {
     )) || null;
   }, [credentialId, detailCredentialId, issuedCredentials]);
 
+  const spotlightCredential = useMemo(() => {
+    if (selectedCredential) return selectedCredential;
+    const focused = issuedCredentials.find((credential) => (
+      (credential.id || credential.credential_id) === focusedCredentialId
+    ));
+    if (focused) return focused;
+    return issuedCredentials.length === 1 ? issuedCredentials[0] : null;
+  }, [focusedCredentialId, issuedCredentials, selectedCredential]);
+
+  const getVerificationExpectation = (credential) => {
+    const status = normalizeStatus(credential?.status);
+    if (status === 'ACTIVE') return 'Eligible for policies that require an active credential';
+    if (status === 'SUSPENDED') return 'Expected denial by policies that require an active credential';
+    if (status === 'REVOKED') return 'Expected denial by policies that reject revoked credentials';
+    return 'Verify the current lifecycle state before relying on this credential';
+  };
+
   useEffect(() => {
     setLatestOffer(null);
   }, [credentialId, detailCredentialId]);
@@ -204,8 +220,6 @@ function IssuancePage() {
     setFocusedCredentialId(null);
     setDetailCredentialId(null);
     setLatestOffer(null);
-    if (renewalNotificationId) removeNotification(renewalNotificationId);
-    setRenewalNotificationId(null);
     if (credentialId) navigate('/console/org/operate/issuance');
   };
 
@@ -222,10 +236,6 @@ function IssuancePage() {
     try {
       const offer = await renewCredential({ credentialId: credential.id });
       setLatestOffer({ ...offer, offer_url: offer.credential_offer_uri });
-      const notificationId = showInfo('Renewal offer generated. Replacement issuance is pending wallet claim.', {
-        replaceKey: 'credential-lifecycle',
-      });
-      setRenewalNotificationId(notificationId);
     } catch (err) {
       showError(err?.message || 'Failed to generate a renewal offer');
     } finally {
@@ -280,7 +290,7 @@ function IssuancePage() {
   const title = t('operate.issuance.title', 'Issued Credentials');
   const description = t(
     'operate.issuance.description',
-    'Inspect issued credentials and generate a fresh wallet offer when a holder needs to claim or re-claim one.',
+    'Inspect issued credentials, follow renewal relationships, and control suspension, reinstatement, and revocation.',
   );
 
   return (
@@ -329,6 +339,53 @@ function IssuancePage() {
       </Box>
       {loading && (
         <LinearProgress aria-label="Refreshing issued credentials" sx={{ mb: issuedCredentials.length > 0 ? 1 : 0 }} />
+      )}
+      {spotlightCredential && (
+        <Paper
+          variant="outlined"
+          role="region"
+          aria-label="Selected credential summary"
+          data-testid="selected-credential-summary"
+          sx={{ p: 2.5, mb: 2.5, borderColor: 'primary.main', borderWidth: 2 }}
+        >
+          <Stack spacing={2}>
+            <Box>
+              <Typography variant="overline" color="primary.main" fontWeight={700}>
+                Selected credential
+              </Typography>
+              <Typography variant="h5" fontWeight={700}>
+                {spotlightCredential.credential_template_id
+                  ? templateNameById.get(spotlightCredential.credential_template_id)
+                    || spotlightCredential.type
+                    || spotlightCredential.credential_type
+                  : spotlightCredential.type || spotlightCredential.credential_type}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace', mt: 0.5 }}>
+                {getCredentialReference(spotlightCredential)}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: '0.8fr 1.2fr 2fr' },
+                gap: 2,
+              }}
+            >
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Lifecycle state</Typography>
+                <StatusChip status={spotlightCredential.status} showIcon />
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Relationship</Typography>
+                <Typography fontWeight={600}>{getLifecycleRelationship(spotlightCredential)}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Verification policy cue</Typography>
+                <Typography fontWeight={600}>{getVerificationExpectation(spotlightCredential)}</Typography>
+              </Box>
+            </Box>
+          </Stack>
+        </Paper>
       )}
       {!loading && issuedCredentials.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
