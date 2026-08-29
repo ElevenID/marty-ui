@@ -25,7 +25,12 @@ async fn executable_serves_health_readiness_and_version() {
         name.starts_with("MARTY_ISSUANCE__")
             || matches!(
                 name.as_str(),
-                "ISSUANCE_SERVICE_PORT" | "MARTY_RELEASE_VERSION" | "MARTY_UI_SHA"
+                "ISSUANCE_SERVICE_PORT"
+                    | "MARTY_RELEASE_VERSION"
+                    | "MARTY_UI_SHA"
+                    | "ISSUER_BASE_URL"
+                    | "ISSUER_DISPLAY_NAME"
+                    | "CORS_ALLOWED_ORIGINS"
             )
     }) {
         command.env_remove(name);
@@ -36,6 +41,9 @@ async fn executable_serves_health_readiness_and_version() {
             .env("MARTY_ISSUANCE__SERVER__PORT", port.to_string())
             .env("MARTY_RELEASE_VERSION", "9.8.7")
             .env("MARTY_UI_SHA", "smoke-revision")
+            .env("ISSUER_BASE_URL", "https://issuer.example")
+            .env("ISSUER_DISPLAY_NAME", "Example Issuer")
+            .env("CORS_ALLOWED_ORIGINS", "https://wallet.example")
             .spawn()
             .expect("start issuance candidate"),
     );
@@ -66,6 +74,14 @@ async fn executable_serves_health_readiness_and_version() {
         .json::<Value>()
         .await
         .expect("version json");
+    let issuer_metadata = client
+        .get(format!("{base}/.well-known/openid-credential-issuer"))
+        .send()
+        .await
+        .expect("issuer metadata")
+        .json::<Value>()
+        .await
+        .expect("issuer metadata json");
     assert_eq!(
         health,
         Some(json!({"status":"healthy", "service":"issuance-service"}))
@@ -74,4 +90,9 @@ async fn executable_serves_health_readiness_and_version() {
     assert_eq!(version["service"], "issuance-service");
     assert_eq!(version["version"], "9.8.7");
     assert_eq!(version["build_revision"], "smoke-revision");
+    assert_eq!(
+        issuer_metadata["credential_issuer"],
+        "https://issuer.example"
+    );
+    assert_eq!(issuer_metadata["display"][0]["name"], "Example Issuer");
 }

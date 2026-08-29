@@ -6,6 +6,12 @@
     "commit": "578e86ef43166be79add2d812e92ef650535edaa",
     "sha256": "2ebc803454da1df3fd38c585ebeeaf540d13bbe41be7b70093f0394df6de66e3"
   },
+  "behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-static-discovery.json",
+    "commit": "5b210bde2bee4360a9504e4c360250b54f48f5ba",
+    "sha256": "f5a06d71d85dfa1fd75bf7ff1cedd1d9478134697f290267e0b774c812749aa2"
+  },
   "native_http": [
     {
       "method": "GET",
@@ -15,6 +21,42 @@
         "status_code": 200,
         "body": {"status": "healthy", "service": "issuance-service"}
       }
+    },
+    {
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer",
+      "operation": "get_issuer_metadata_root",
+      "behavior_case": "get_issuer_metadata_root"
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/{credential_type:path}",
+      "operation": "get_sd_jwt_vc_type_metadata",
+      "behavior_case": "get_sd_jwt_vc_type_metadata"
+    },
+    {
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server",
+      "operation": "get_as_metadata",
+      "behavior_case": "get_as_metadata"
+    },
+    {
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}",
+      "operation": "get_org_as_metadata",
+      "behavior_case": "get_org_as_metadata"
+    },
+    {
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}/credential-manager",
+      "operation": "get_org_credential_manager_as_metadata",
+      "behavior_case": "get_org_credential_manager_as_metadata"
+    },
+    {
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet",
+      "operation": "get_org_apple_wallet_as_metadata",
+      "behavior_case": "get_org_apple_wallet_as_metadata"
     }
   ],
   "platform_additive_http": [
@@ -22,14 +64,19 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 130,
+    "http": 124,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 88,
+    "literal_environment_variables": 85,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
   },
-  "native_environment_variables": ["ISSUANCE_SERVICE_PORT"],
+  "native_environment_variables": [
+    "CORS_ALLOWED_ORIGINS",
+    "ISSUANCE_SERVICE_PORT",
+    "ISSUER_BASE_URL",
+    "ISSUER_DISPLAY_NAME"
+  ],
   "deployment": "candidate-only"
 }

@@ -16,7 +16,11 @@ impl IssuanceRuntime {
             service: "issuance-service".to_owned(),
             version: config.release_version.clone(),
             build_revision: config.build_revision.clone(),
-            enabled_features: vec!["http_candidate".to_owned(), "contract_guard".to_owned()],
+            enabled_features: vec![
+                "http_candidate".to_owned(),
+                "contract_guard".to_owned(),
+                "static_discovery".to_owned(),
+            ],
         });
         state.register_required_component(HTTP_LISTENER)?;
         state.transition(LifecycleState::Initialized)?;
