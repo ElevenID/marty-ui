@@ -281,6 +281,24 @@ pub struct CanvasLtiExperienceSessionResponse {
     pub identity_mapping_status: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasLtiExperienceSessionContext {
+    pub launch_state: CanvasLtiStoredLaunchState,
+    pub verified_launch: Map<String, Value>,
+    pub mip_primitives: Map<String, Value>,
+    pub state: String,
+    pub canvas_platform_id: String,
+    pub canvas_program_binding_id: Option<String>,
+    pub application_template_id: Option<String>,
+    pub credential_template_id: Option<String>,
+    pub delivery_mode: String,
+    pub deployment_profile_id: Option<String>,
+    pub feature_flags: Value,
+    pub launch_url: Option<String>,
+    pub application_id: Option<String>,
+    pub lti_capabilities: Value,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CanvasLtiExperienceSessionError {
     #[error("Canvas LTI experience session not found")]
@@ -312,6 +330,14 @@ impl CanvasLtiExperienceSessionService {
         &self,
         session_token: &str,
     ) -> Result<CanvasLtiExperienceSessionResponse, CanvasLtiExperienceSessionError> {
+        let context = self.load(session_token).await?;
+        Ok(canvas_lti_experience_session_response(&context))
+    }
+
+    pub async fn load(
+        &self,
+        session_token: &str,
+    ) -> Result<CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError> {
         let session_token = session_token.trim();
         if session_token.is_empty() {
             return Err(CanvasLtiExperienceSessionError::NotFound);
@@ -322,13 +348,20 @@ impl CanvasLtiExperienceSessionService {
             .await
             .map_err(session_repository_error)?
             .ok_or(CanvasLtiExperienceSessionError::NotFound)?;
-        canvas_lti_experience_session_projection(&session)
+        canvas_lti_experience_session_context(session)
     }
 }
 
 pub fn canvas_lti_experience_session_projection(
     session: &CanvasLtiStoredLaunchState,
 ) -> Result<CanvasLtiExperienceSessionResponse, CanvasLtiExperienceSessionError> {
+    let context = canvas_lti_experience_session_context(session.clone())?;
+    Ok(canvas_lti_experience_session_response(&context))
+}
+
+pub fn canvas_lti_experience_session_context(
+    session: CanvasLtiStoredLaunchState,
+) -> Result<CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError> {
     let metadata = session
         .metadata
         .as_object()
@@ -358,6 +391,68 @@ pub fn canvas_lti_experience_session_projection(
         Some(&Value::String(session.platform_id.clone())),
     ])
     .unwrap_or_default();
+    let state = first_text([metadata.get("launch_state")]).unwrap_or_else(|| session.id.clone());
+    let canvas_program_binding_id = first_text([
+        mip_context.get("canvas_program_binding_id"),
+        verified.get("canvas_program_binding_id"),
+    ]);
+    let application_template_id = first_text([
+        mip_context.get("application_template_id"),
+        verified.get("application_template_id"),
+    ]);
+    let credential_template_id = first_text([
+        mip_context.get("credential_template_id"),
+        verified.get("credential_template_id"),
+    ]);
+    let delivery_mode = first_text([
+        mip_context.get("delivery_mode"),
+        verified.get("delivery_mode"),
+    ])
+    .unwrap_or_else(|| "wallet_only".to_owned());
+    let deployment_profile_id = first_text([
+        mip_context.get("deployment_profile_id"),
+        verified.get("deployment_profile_id"),
+    ]);
+    let feature_flags = first_truthy([
+        mip_context.get("feature_flags"),
+        verified.get("feature_flags"),
+    ])
+    .cloned()
+    .unwrap_or_else(|| Value::Object(Map::new()));
+    let launch_url = first_text([metadata.get("launch_url")]);
+    let application_id = first_text([
+        mip_context.get("application_id"),
+        verified.get("application_id"),
+    ]);
+    let lti_capabilities = first_truthy([
+        mip_context.get("lti_capabilities"),
+        verified.get("lti_capabilities"),
+    ])
+    .cloned()
+    .unwrap_or_else(|| Value::Object(Map::new()));
+    Ok(CanvasLtiExperienceSessionContext {
+        verified_launch: verified.clone(),
+        mip_primitives: mip.clone(),
+        launch_state: session,
+        state,
+        canvas_platform_id,
+        canvas_program_binding_id,
+        application_template_id,
+        credential_template_id,
+        delivery_mode,
+        deployment_profile_id,
+        feature_flags,
+        launch_url,
+        application_id,
+        lti_capabilities,
+    })
+}
+
+fn canvas_lti_experience_session_response(
+    context: &CanvasLtiExperienceSessionContext,
+) -> CanvasLtiExperienceSessionResponse {
+    let verified = &context.verified_launch;
+    let empty = Map::new();
     let learner = verified
         .get("learner_identity")
         .and_then(Value::as_object)
@@ -374,13 +469,10 @@ pub fn canvas_lti_experience_session_projection(
     .unwrap_or_default();
     let deployment_id = first_python_text([verified.get("deployment_id")]).unwrap_or_default();
     let learner_key = sha256_hex(&format!(
-        "{canvas_platform_id}:{deployment_id}:{learner_subject}"
+        "{}:{deployment_id}:{learner_subject}",
+        context.canvas_platform_id
     ));
-    let capabilities = first_truthy([
-        mip_context.get("lti_capabilities"),
-        verified.get("lti_capabilities"),
-    ]);
-    let capabilities = capabilities.and_then(Value::as_object).unwrap_or(&empty);
+    let capabilities = context.lti_capabilities.as_object().unwrap_or(&empty);
     let lti_capabilities = Value::Object(Map::from_iter(
         [
             "resource_link",
@@ -396,7 +488,7 @@ pub fn canvas_lti_experience_session_projection(
             )
         }),
     ));
-    let canvas_context = browser_safe_canvas_context(verified, raw_claims);
+    let canvas_context = browser_safe_canvas_context(verified);
     let roles = verified
         .get("roles")
         .and_then(Value::as_array)
@@ -416,56 +508,34 @@ pub fn canvas_lti_experience_session_projection(
         .and_then(python_string)
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
-    Ok(CanvasLtiExperienceSessionResponse {
-        organization_id: session.organization_id.clone(),
-        canvas_account_id: session.canvas_account_id.clone(),
-        canvas_platform_id,
-        canvas_program_binding_id: first_text([
-            mip_context.get("canvas_program_binding_id"),
-            verified.get("canvas_program_binding_id"),
-        ]),
-        application_template_id: first_text([
-            mip_context.get("application_template_id"),
-            verified.get("application_template_id"),
-        ]),
-        credential_template_id: first_text([
-            mip_context.get("credential_template_id"),
-            verified.get("credential_template_id"),
-        ]),
-        status: session.status.clone(),
-        application_id: first_text([
-            mip_context.get("application_id"),
-            verified.get("application_id"),
-        ]),
+    CanvasLtiExperienceSessionResponse {
+        organization_id: context.launch_state.organization_id.clone(),
+        canvas_account_id: context.launch_state.canvas_account_id.clone(),
+        canvas_platform_id: context.canvas_platform_id.clone(),
+        canvas_program_binding_id: context.canvas_program_binding_id.clone(),
+        application_template_id: context.application_template_id.clone(),
+        credential_template_id: context.credential_template_id.clone(),
+        status: context.launch_state.status.clone(),
+        application_id: context.application_id.clone(),
         lti_capabilities,
         canvas_context,
         roles,
         learner_display_name,
         learner_key,
         identity_mapping_status: first_text([verified.get("identity_mapping_status")]),
-    })
+    }
 }
 
-fn browser_safe_canvas_context(
-    verified: &Map<String, Value>,
-    raw_claims: &Map<String, Value>,
-) -> Value {
+pub(crate) fn browser_safe_canvas_context(verified: &Map<String, Value>) -> Value {
     let empty = Map::new();
     let context = verified
         .get("context")
         .and_then(Value::as_object)
         .unwrap_or(&empty);
-    let custom = raw_claims
-        .get("https://purl.imsglobal.org/spec/lti/claim/custom")
-        .and_then(Value::as_object)
-        .or_else(|| raw_claims.get("custom").and_then(Value::as_object))
-        .unwrap_or(&empty);
     let mut result = Map::new();
-    if let Some(course_id) = first_text([
-        custom.get("canvas_course_id"),
-        context.get("id"),
-        context.get("context_id"),
-    ]) {
+    if let Some(course_id) = signed_canvas_identifier(verified, "canvas_course_id")
+        .or_else(|| first_text([context.get("id"), context.get("context_id")]))
+    {
         result.insert("course_id".to_owned(), Value::String(course_id));
     }
     for name in ["title", "label"] {
@@ -478,7 +548,7 @@ fn browser_safe_canvas_context(
     Value::Object(result)
 }
 
-fn first_text<const N: usize>(values: [Option<&Value>; N]) -> Option<String> {
+pub(crate) fn first_text<const N: usize>(values: [Option<&Value>; N]) -> Option<String> {
     values
         .into_iter()
         .flatten()
@@ -487,7 +557,7 @@ fn first_text<const N: usize>(values: [Option<&Value>; N]) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn first_python_text<const N: usize>(values: [Option<&Value>; N]) -> Option<String> {
+pub(crate) fn first_python_text<const N: usize>(values: [Option<&Value>; N]) -> Option<String> {
     values
         .into_iter()
         .flatten()
@@ -496,14 +566,14 @@ fn first_python_text<const N: usize>(values: [Option<&Value>; N]) -> Option<Stri
         .filter(|value| !value.trim().is_empty())
 }
 
-fn first_truthy<const N: usize>(values: [Option<&Value>; N]) -> Option<&Value> {
+pub(crate) fn first_truthy<const N: usize>(values: [Option<&Value>; N]) -> Option<&Value> {
     values
         .into_iter()
         .flatten()
         .find(|value| python_truthy(value))
 }
 
-fn python_truthy(value: &Value) -> bool {
+pub(crate) fn python_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(value) => *value,
@@ -514,7 +584,7 @@ fn python_truthy(value: &Value) -> bool {
     }
 }
 
-fn python_string(value: &Value) -> Option<String> {
+pub(crate) fn python_string(value: &Value) -> Option<String> {
     match value {
         Value::Null => Some("None".to_owned()),
         Value::Bool(true) => Some("True".to_owned()),
@@ -523,6 +593,39 @@ fn python_string(value: &Value) -> Option<String> {
         Value::String(value) => Some(value.clone()),
         Value::Array(_) | Value::Object(_) => Some(value.to_string()),
     }
+}
+
+pub(crate) fn lti_subject(verified: &Map<String, Value>) -> Option<String> {
+    let empty = Map::new();
+    let learner = verified
+        .get("learner_identity")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let raw_claims = verified
+        .get("raw_claims")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    first_python_text([
+        verified.get("subject"),
+        learner.get("subject"),
+        raw_claims.get("sub"),
+    ])
+}
+
+pub(crate) fn signed_canvas_identifier(
+    verified: &Map<String, Value>,
+    name: &str,
+) -> Option<String> {
+    let raw_claims = verified.get("raw_claims")?.as_object()?;
+    let custom = raw_claims
+        .get("https://purl.imsglobal.org/spec/lti/claim/custom")
+        .and_then(Value::as_object)
+        .or_else(|| raw_claims.get("custom").and_then(Value::as_object))?;
+    custom
+        .get(name)
+        .and_then(python_string)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn session_repository_error(_cause: CanvasLtiLaunchPlanError) -> CanvasLtiExperienceSessionError {
