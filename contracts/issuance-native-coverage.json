@@ -24,6 +24,12 @@
     "commit": "4d628a185cf82b84a400c6ea495865786c9f4588",
     "sha256": "8d5bf9acac4925c3443f51c79e976889ca9051ab90a6bb8ad9e5aaf9b49bce26"
   },
+  "token_exchange_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-token-exchange.json",
+    "commit": "5c470988b597b8e26b93395e169f78b0edd6787f",
+    "sha256": "5ce88bb290e5e3381a3c0eedc4c098edac2012f7e34e2113d7f1cd8f5c6d6493"
+  },
   "native_http": [
     {
       "method": "GET",
@@ -117,6 +123,12 @@
       "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
       "operation": "get_issuance_transaction_owner",
       "transaction_read_behavior_case": "get_issuance_transaction_owner"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/token",
+      "operation": "exchange_token",
+      "token_exchange_behavior_case": "exchange_token"
     }
   ],
   "platform_additive_http": [
@@ -124,10 +136,10 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 116,
+    "http": 115,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 81,
+    "literal_environment_variables": 79,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
@@ -140,7 +152,9 @@
     "ISSUER_BASE_URL",
     "ISSUER_DISPLAY_NAME",
     "SIGNING_KEYS_INTERNAL_API_KEY",
-    "SIGNING_KEYS_INTERNAL_URL"
+    "SIGNING_KEYS_INTERNAL_URL",
+    "TOKEN_RATE_LIMIT",
+    "TOKEN_RATE_WINDOW"
   ],
   "deployment": "candidate-only"
 }

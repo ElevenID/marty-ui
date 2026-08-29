@@ -6,14 +6,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod client_auth;
 pub mod config;
 pub mod contract;
+pub mod dpop;
 pub mod http;
 pub mod management_security;
 pub mod runtime;
 pub mod signing_policy;
 pub mod tenant_discovery;
 pub mod tenant_postgres;
+pub mod token_exchange;
+pub mod token_postgres;
+pub mod token_rate_limit;
 pub mod transaction_postgres;
 pub mod transaction_reads;
 pub mod transport;

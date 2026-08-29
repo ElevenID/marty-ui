@@ -24,34 +24,40 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-offer-transaction-reads.json"
     ).read_bytes()
     transaction_reads = json.loads(transaction_bytes)
+    token_exchange_bytes = (
+        ROOT / "contracts/issuance-token-exchange.json"
+    ).read_bytes()
+    token_exchange = json.loads(token_exchange_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
     canonical_surface = surface_bytes.replace(b"\r\n", b"\n")
     assert (
-        hashlib.sha256(canonical_surface).hexdigest()
-        == coverage["upstream"]["sha256"]
+        hashlib.sha256(canonical_surface).hexdigest() == coverage["upstream"]["sha256"]
     )
     assert coverage["upstream"]["commit"] == "578e86ef43166be79add2d812e92ef650535edaa"
-    assert hashlib.sha256(discovery_bytes.replace(b"\r\n", b"\n")).hexdigest() == (
-        coverage["behavior_contract"]["sha256"]
+    assert (
+        hashlib.sha256(discovery_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == (coverage["behavior_contract"]["sha256"])
     )
     assert (
         coverage["behavior_contract"]["commit"]
         == "5b210bde2bee4360a9504e4c360250b54f48f5ba"
     )
     assert discovery["schema"] == "marty.issuance-static-discovery/v1"
-    assert hashlib.sha256(tenant_bytes.replace(b"\r\n", b"\n")).hexdigest() == (
-        coverage["tenant_behavior_contract"]["sha256"]
+    assert (
+        hashlib.sha256(tenant_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == (coverage["tenant_behavior_contract"]["sha256"])
     )
     assert (
         coverage["tenant_behavior_contract"]["commit"]
         == "d853a14efb5cce2894aea138e2e784735499a7fc"
     )
     assert tenant["schema"] == "marty.issuance-tenant-discovery/v1"
-    assert hashlib.sha256(
-        transaction_bytes.replace(b"\r\n", b"\n")
-    ).hexdigest() == coverage["transaction_read_behavior_contract"]["sha256"]
+    assert (
+        hashlib.sha256(transaction_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["transaction_read_behavior_contract"]["sha256"]
+    )
     assert (
         coverage["transaction_read_behavior_contract"]["commit"]
         == "4d628a185cf82b84a400c6ea495865786c9f4588"
@@ -59,7 +65,50 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert transaction_reads["schema"] == "marty.issuance-offer-transaction-reads/v1"
     assert len(transaction_reads["edge_cases"]) == 8
     assert len(transaction_reads["failures"]) == 7
-    native = {operation["operation"]: operation for operation in coverage["native_http"]}
+    assert (
+        hashlib.sha256(token_exchange_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["token_exchange_behavior_contract"]["sha256"]
+    )
+    assert (
+        coverage["token_exchange_behavior_contract"]["commit"]
+        == "5c470988b597b8e26b93395e169f78b0edd6787f"
+    )
+    assert token_exchange["schema"] == "marty.issuance-token-exchange/v1"
+    assert len(token_exchange["cases"]) == 4
+    assert len(token_exchange["failures"]) == 17
+    assert token_exchange["rate_limit"] == {
+        "requests": 2,
+        "window_seconds": 17,
+        "request": {
+            "form": {
+                "grant_type": "unsupported",
+                "pre-authorized_code": "pre-auth-token",
+            }
+        },
+        "allowed_status_code": 400,
+        "status_code": 429,
+        "headers": {"Retry-After": "17"},
+        "body": {"detail": "Rate limit exceeded"},
+    }
+    assert token_exchange["dependency_failures"] == [
+        {
+            "name": "token_repository_unavailable",
+            "setup": "repository_unavailable",
+            "form": {
+                "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                "pre-authorized_code": "pre-auth-token",
+            },
+            "status_code": 500,
+            "content_type": "text/plain",
+            "body": "Internal Server Error",
+            "repository_calls": [
+                {"method": "get_by_pre_auth_code", "value": "pre-auth-token"}
+            ],
+        }
+    ]
+    native = {
+        operation["operation"]: operation for operation in coverage["native_http"]
+    }
     assert native.pop("health_check") == {
         "method": "GET",
         "path": "/health",
@@ -71,11 +120,22 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     }
     discovery_cases = {case["operation"]: case for case in discovery["cases"]}
     tenant_cases = {case["operation"]: case for case in tenant["variants"]}
-    transaction_cases = {
-        case["operation"]: case for case in transaction_reads["cases"]
-    }
-    assert set(native) == set(discovery_cases) | set(tenant_cases) | set(transaction_cases)
+    transaction_cases = {case["operation"]: case for case in transaction_reads["cases"]}
+    assert set(native) == (
+        set(discovery_cases)
+        | set(tenant_cases)
+        | set(transaction_cases)
+        | {"exchange_token"}
+    )
     for operation, coverage_entry in native.items():
+        if operation == "exchange_token":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": token_exchange["inputs"]["path"],
+                "operation": "exchange_token",
+                "token_exchange_behavior_case": "exchange_token",
+            }
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -85,7 +145,11 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             continue
         if operation in transaction_cases:
             assert coverage_entry["transaction_read_behavior_case"] == operation
-            assert coverage_entry["method"] == transaction_cases[operation]["method"] == "GET"
+            assert (
+                coverage_entry["method"]
+                == transaction_cases[operation]["method"]
+                == "GET"
+            )
             expected_paths = {
                 "get_credential_offer": "/v1/issuance/offers/tx-pending",
                 "list_transactions": "/v1/issuance/transactions?organization_id=org-a",
@@ -101,15 +165,17 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             continue
         assert coverage_entry["method"] == discovery_cases[operation]["method"] == "GET"
         assert coverage_entry["behavior_case"] == operation
-        expected_case_path = coverage_entry["path"].replace(
-            "{credential_type:path}", "access_badge"
-        ).replace("{org_id}", "org-a")
+        expected_case_path = (
+            coverage_entry["path"]
+            .replace("{credential_type:path}", "access_badge")
+            .replace("{org_id}", "org-a")
+        )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 116,
+        "http": 115,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 81,
+        "literal_environment_variables": 79,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -123,6 +189,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "ISSUER_DISPLAY_NAME",
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "SIGNING_KEYS_INTERNAL_URL",
+        "TOKEN_RATE_LIMIT",
+        "TOKEN_RATE_WINDOW",
     ]
 
 
