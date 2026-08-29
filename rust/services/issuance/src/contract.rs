@@ -857,8 +857,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "issuance runtime mode coverage is incomplete",
     )?;
     require(
-        coverage.deployment == "candidate-only",
-        "incomplete issuance host must remain candidate-only",
+        coverage.deployment == "beta-path-split",
+        "incomplete issuance host must remain beta-path-split",
     )?;
 
     Ok(CoverageSummary {

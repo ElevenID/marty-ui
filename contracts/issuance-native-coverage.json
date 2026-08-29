@@ -192,5 +192,5 @@
     "TOKEN_RATE_LIMIT",
     "TOKEN_RATE_WINDOW"
   ],
-  "deployment": "candidate-only"
+  "deployment": "beta-path-split"
 }

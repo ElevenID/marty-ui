@@ -20,7 +20,7 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns seventeen frozen HTTP operations: the exact legacy
+The native candidate now owns eighteen frozen HTTP operations: the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
 the global plus three organization-scoped OAuth discovery variants, and all
 three tenant-backed credential-issuer metadata variants. The six deterministic
@@ -55,14 +55,22 @@ The OID4VCI proof-nonce endpoint replays
 limiting, five-minute database-clock expiry, SHA-256 digest-only persistence,
 and atomic single use. Its reusable capability repository is also the nonce
 consumer required by credential issuance.
+The credential endpoint replays the frozen admission and signing contracts,
+performs proof and capability validation, builds every supported credential
+format through the shared Rust crates, and preserves persisted status,
+delivery, renewal-revocation, and Canvas eligibility transitions. Its
+production repository is exercised against disposable PostgreSQL, including
+tenant isolation and renewal revocation behavior.
 The same contract binds legacy request-ID propagation/generation and allowed
 and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
 
 MMF-owned readiness, lifecycle, and version diagnostics remain additive. The
-service is still a compile/test candidate only: the shared service image,
-entrypoint, Compose topology, beta, and production continue to select the
-Python issuance image.
+shared service image and entrypoint package the native binary. Beta uses a
+separate `issuance-native` sidecar and the gateway sends only the eighteen
+contract-owned paths to it; the other 113 HTTP operations and all 12 gRPC
+methods remain on the Python issuance service. Production Compose remains
+unchanged and selects only the Python issuance service.
 
 ## Dependency and removal order
 
@@ -75,7 +83,8 @@ Python issuance image.
    read-only offer/transaction operations are complete in Rust.
 4. Port token exchange and credential issuance, reusing `marty-core` for
    cryptography and credential formats and preserving idempotency/race gates.
-   Token exchange and nonce issuance are complete; credential issuance remains.
+   Token exchange, nonce issuance, and credential issuance are complete in the
+   beta path split.
 5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI
    orchestration, all 12 gRPC methods, and the Canvas worker.
 6. Replay the frozen positive, negative, concurrency, database, protocol, and
