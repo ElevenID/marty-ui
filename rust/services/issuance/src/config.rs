@@ -18,6 +18,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
+    pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
@@ -37,6 +38,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
+            .field("token_hmac_key_configured", &self.token_hmac_key.is_some())
             .field(
                 "issuance_api_key_configured",
                 &self.issuance_api_key.is_some(),
@@ -95,7 +97,14 @@ struct RateLimitSettings {
 
 impl IssuanceServiceConfig {
     pub fn from_env() -> Result<Self, MmfError> {
-        Self::from_values(std::env::vars())
+        let config = Self::from_values(std::env::vars())?;
+        if config.token_hmac_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "TOKEN_HMAC_KEY or TOKEN_HMAC_KEY_FILE is required",
+            ));
+        }
+        Ok(config)
     }
 
     pub fn from_values(
@@ -147,6 +156,7 @@ impl IssuanceServiceConfig {
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
+        let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
         Ok(Self {
@@ -157,6 +167,7 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
+            token_hmac_key,
             issuance_api_key,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
@@ -378,6 +389,7 @@ mod tests {
         );
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
+        assert!(config.token_hmac_key.is_none());
         assert_eq!(config.token_rate_limit, 30);
         assert_eq!(config.token_rate_window, std::time::Duration::from_secs(60));
     }
@@ -413,6 +425,7 @@ mod tests {
                 "https://gateway.example/internal/signing-keys",
             ),
             ("ISSUANCE_API_KEY", "fallback-key"),
+            ("TOKEN_HMAC_KEY", "token-hmac-contract-key"),
             ("SIGNING_KEYS_INTERNAL_API_KEY", "preferred-key"),
             ("TOKEN_RATE_LIMIT", "12"),
             ("TOKEN_RATE_WINDOW", "45"),
@@ -440,11 +453,16 @@ mod tests {
             Some("preferred-key")
         );
         assert_eq!(config.issuance_api_key.as_deref(), Some("fallback-key"));
+        assert_eq!(
+            config.token_hmac_key.as_deref(),
+            Some("token-hmac-contract-key")
+        );
         assert_eq!(config.token_rate_limit, 12);
         assert_eq!(config.token_rate_window, std::time::Duration::from_secs(45));
         let diagnostic = format!("{config:?}");
         assert!(!diagnostic.contains("preferred-key"));
         assert!(!diagnostic.contains("fallback-key"));
+        assert!(!diagnostic.contains("token-hmac-contract-key"));
         assert!(!diagnostic.contains("user:pass"));
     }
 

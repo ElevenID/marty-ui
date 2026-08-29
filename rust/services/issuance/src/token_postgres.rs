@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use marty_oid4vci::CodeChallengeMethod;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use tracing::error;
 
@@ -57,6 +58,7 @@ const CLAIM_CLIENT_ASSERTION: &str = "WITH cleanup AS (
 #[derive(Clone)]
 pub struct PostgresTokenExchangeRepository {
     pool: PgPool,
+    token_hmac_key: std::sync::Arc<[u8]>,
 }
 
 impl std::fmt::Debug for PostgresTokenExchangeRepository {
@@ -69,8 +71,11 @@ impl std::fmt::Debug for PostgresTokenExchangeRepository {
 
 impl PostgresTokenExchangeRepository {
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, token_hmac_key: impl AsRef<[u8]>) -> Self {
+        Self {
+            pool,
+            token_hmac_key: std::sync::Arc::from(token_hmac_key.as_ref()),
+        }
     }
 }
 
@@ -98,7 +103,7 @@ impl TokenExchangeRepository for PostgresTokenExchangeRepository {
         Ok(sqlx::query(CLAIM_TRANSACTION)
             .bind(&transaction.id)
             .bind(&transaction.pre_authorized_code)
-            .bind(hash_token(access_token))
+            .bind(hash_access_token(&self.token_hmac_key, access_token))
             .bind(dpop_jkt)
             .fetch_optional(&self.pool)
             .await
@@ -128,7 +133,7 @@ impl TokenExchangeRepository for PostgresTokenExchangeRepository {
         Ok(sqlx::query(CLAIM_AUTHORIZATION)
             .bind(&session.id)
             .bind(&session.code)
-            .bind(hash_token(access_token))
+            .bind(hash_access_token(&self.token_hmac_key, access_token))
             .bind(dpop_jkt)
             .fetch_optional(&self.pool)
             .await
@@ -226,8 +231,10 @@ fn authorization_row(row: PgRow) -> Result<TokenAuthorizationSession, TokenExcha
     })
 }
 
-fn hash_token(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
+pub(crate) fn hash_access_token(key: &[u8], token: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts keys of any size");
+    mac.update(token.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }
 
 fn get<'row, T>(row: &'row PgRow, name: &str) -> Result<T, TokenExchangeError>
@@ -249,13 +256,13 @@ fn row_error(cause: sqlx::Error) -> TokenExchangeError {
 
 #[cfg(test)]
 mod tests {
-    use super::hash_token;
+    use super::hash_access_token;
 
     #[test]
     fn access_tokens_are_one_way_hashed_before_persistence() {
         assert_eq!(
-            hash_token("clear-access-token"),
-            "70c67f2e37f217d657fb255f86d46be48f593178b1d818aa0a7d08522d2e9aff"
+            hash_access_token(b"test-only-not-a-secret", "clear-access-token"),
+            "c8bbab78c3100a251baa92d44fe608aeec993e5dce470b5d61e75db549528ca2"
         );
     }
 }

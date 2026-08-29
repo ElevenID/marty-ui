@@ -14,6 +14,7 @@ const TENANT_DISCOVERY: &[u8] =
 const TRANSACTION_READS: &[u8] =
     include_bytes!("../../../../contracts/issuance-offer-transaction-reads.json");
 const TOKEN_EXCHANGE: &[u8] = include_bytes!("../../../../contracts/issuance-token-exchange.json");
+const PROOF_NONCE: &[u8] = include_bytes!("../../../../contracts/issuance-proof-nonce.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -30,6 +31,7 @@ struct Coverage {
     tenant_behavior_contract: Upstream,
     transaction_read_behavior_contract: Upstream,
     token_exchange_behavior_contract: Upstream,
+    proof_nonce_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -60,6 +62,8 @@ struct HttpOperation {
     transaction_read_behavior_case: Option<String>,
     #[serde(default)]
     token_exchange_behavior_case: Option<String>,
+    #[serde(default)]
+    proof_nonce_behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -167,6 +171,17 @@ struct TokenExchangeOutcome {
 }
 
 #[derive(Deserialize)]
+struct ProofNonceContract {
+    schema: String,
+    inputs: Value,
+    nonce_shape: Value,
+    persistence: Value,
+    success: Value,
+    failures: Vec<Value>,
+    rate_limit: Value,
+}
+
+#[derive(Deserialize)]
 struct PlatformOperation {
     method: String,
     path: String,
@@ -197,6 +212,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid transaction read contract", error))?;
     let token_exchange: TokenExchangeContract = serde_json::from_slice(TOKEN_EXCHANGE)
         .map_err(|error| contract_error("invalid token exchange contract", error))?;
+    let proof_nonce: ProofNonceContract = serde_json::from_slice(PROOF_NONCE)
+        .map_err(|error| contract_error("invalid proof nonce contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -299,6 +316,68 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected token exchange behavior contract",
     )?;
     require(
+        proof_nonce.schema == "marty.issuance-proof-nonce/v1"
+            && proof_nonce.inputs
+                == serde_json::json!({
+                    "path": "/v1/issuance/nonce",
+                    "generated_nonce": "contract-proof-nonce",
+                    "ttl_seconds": 300
+                })
+            && proof_nonce.nonce_shape
+                == serde_json::json!({
+                    "source_bytes": 32,
+                    "encoded_length": 43,
+                    "pattern": "^[A-Za-z0-9_-]{43}$"
+                })
+            && proof_nonce.persistence
+                == serde_json::json!({
+                    "digest_algorithm": "sha-256",
+                    "digest_length": 64,
+                    "plaintext_retained": false,
+                    "single_use": true
+                })
+            && proof_nonce.success
+                == serde_json::json!({
+                    "status_code": 200,
+                    "content_type": "application/json",
+                    "headers": {"Cache-Control": "no-store"},
+                    "body": {"c_nonce": "contract-proof-nonce"},
+                    "repository_calls": [{
+                        "method": "save_proof_nonce",
+                        "value": "contract-proof-nonce",
+                        "ttl_seconds": 300
+                    }]
+                })
+            && proof_nonce.failures
+                == [
+                    serde_json::json!({
+                        "name": "nonce_store_rejects_write",
+                        "setup": "store_returns_false",
+                        "status_code": 503,
+                        "content_type": "application/json",
+                        "body": {"detail": "Proof nonce storage is unavailable"}
+                    }),
+                    serde_json::json!({
+                        "name": "nonce_store_is_unavailable",
+                        "setup": "store_raises",
+                        "status_code": 503,
+                        "content_type": "application/json",
+                        "body": {"detail": "Proof nonce storage is unavailable"}
+                    }),
+                ]
+            && proof_nonce.rate_limit
+                == serde_json::json!({
+                    "requests": 2,
+                    "window_seconds": 17,
+                    "allowed_status_code": 200,
+                    "status_code": 429,
+                    "headers": {"Retry-After": "17"},
+                    "body": {"detail": "Rate limit exceeded"},
+                    "repository_call_count": 2
+                }),
+        "unexpected proof nonce behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -345,6 +424,17 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid token exchange provenance",
     )?;
     require(
+        coverage.proof_nonce_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.proof_nonce_behavior_contract.path == "contracts/issuance-proof-nonce.json"
+            && coverage.proof_nonce_behavior_contract.commit.len() == 40
+            && coverage
+                .proof_nonce_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid proof nonce provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -389,6 +479,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_token_exchange == coverage.token_exchange_behavior_contract.sha256,
         "token exchange hash does not match provenance",
     )?;
+    let canonical_proof_nonce = canonical_lf(PROOF_NONCE);
+    let actual_proof_nonce = format!("{:x}", Sha256::digest(&canonical_proof_nonce));
+    require(
+        actual_proof_nonce == coverage.proof_nonce_behavior_contract.sha256,
+        "proof nonce hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -416,6 +512,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_tenant_behavior_cases = BTreeSet::new();
     let mut native_transaction_read_cases = BTreeSet::new();
     let mut native_token_exchange_cases = BTreeSet::new();
+    let mut native_proof_nonce_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -436,6 +533,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .ok_or_else(|| invalid("native issuance health response is missing"))?;
             require(
                 operation.behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
                     && response.status_code == 200
                     && response.body
                         == serde_json::json!({
@@ -450,6 +548,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && operation.tenant_behavior_case.is_none()
                     && operation.transaction_read_behavior_case.is_none()
                     && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_behavior_cases.insert(behavior_case)
                     && discovery.cases.iter().any(|case| {
@@ -471,6 +570,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 operation.response.is_none()
                     && operation.transaction_read_behavior_case.is_none()
                     && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_tenant_behavior_cases.insert(behavior_case)
                     && tenant_discovery.variants.iter().any(|variant| {
@@ -487,6 +587,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && operation.behavior_case.is_none()
                     && operation.tenant_behavior_case.is_none()
                     && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
                     && native_transaction_read_cases.insert(behavior_case)
                     && transaction_reads.cases.iter().any(|case| {
                         let expected_path = match behavior_case {
@@ -518,6 +619,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && operation.behavior_case.is_none()
                     && operation.tenant_behavior_case.is_none()
                     && operation.transaction_read_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
                     && behavior_case == "exchange_token"
                     && operation.operation == behavior_case
                     && operation.method == "POST"
@@ -526,6 +628,22 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && token_exchange.cases.len() == 4
                     && token_exchange.failures.len() == 17,
                 "native issuance operation diverges from its token exchange contract",
+            )?;
+        } else if let Some(behavior_case) = operation.proof_nonce_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && behavior_case == "nonce_endpoint"
+                    && operation.operation == behavior_case
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/nonce"
+                    && native_proof_nonce_cases.insert(behavior_case)
+                    && proof_nonce.success["status_code"] == 200
+                    && proof_nonce.failures.len() == 2,
+                "native issuance operation diverges from its proof nonce contract",
             )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
@@ -561,6 +679,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_token_exchange_cases == BTreeSet::from(["exchange_token"]),
         "native token exchange behavior coverage is incomplete",
+    )?;
+    require(
+        native_proof_nonce_cases == BTreeSet::from(["nonce_endpoint"]),
+        "native proof nonce behavior coverage is incomplete",
     )?;
     for operation in &coverage.platform_additive_http {
         require(
@@ -686,8 +808,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 16);
-        assert_eq!(summary.remaining_http, 115);
+        assert_eq!(summary.native_http, 17);
+        assert_eq!(summary.remaining_http, 114);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

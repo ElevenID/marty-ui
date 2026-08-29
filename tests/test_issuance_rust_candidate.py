@@ -28,6 +28,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-token-exchange.json"
     ).read_bytes()
     token_exchange = json.loads(token_exchange_bytes)
+    proof_nonce_bytes = (ROOT / "contracts/issuance-proof-nonce.json").read_bytes()
+    proof_nonce = json.loads(proof_nonce_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -106,6 +108,26 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             ],
         }
     ]
+    assert (
+        hashlib.sha256(proof_nonce_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["proof_nonce_behavior_contract"]["sha256"]
+    )
+    assert (
+        coverage["proof_nonce_behavior_contract"]["commit"]
+        == "b1f8845dabc4e64d93dc0336acba032a5b1255ff"
+    )
+    assert proof_nonce["schema"] == "marty.issuance-proof-nonce/v1"
+    assert proof_nonce["inputs"] == {
+        "path": "/v1/issuance/nonce",
+        "generated_nonce": "contract-proof-nonce",
+        "ttl_seconds": 300,
+    }
+    assert proof_nonce["persistence"] == {
+        "digest_algorithm": "sha-256",
+        "digest_length": 64,
+        "plaintext_retained": False,
+        "single_use": True,
+    }
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }
@@ -125,7 +147,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
-        | {"exchange_token"}
+        | {"exchange_token", "nonce_endpoint"}
     )
     for operation, coverage_entry in native.items():
         if operation == "exchange_token":
@@ -134,6 +156,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "path": token_exchange["inputs"]["path"],
                 "operation": "exchange_token",
                 "token_exchange_behavior_case": "exchange_token",
+            }
+            continue
+        if operation == "nonce_endpoint":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": proof_nonce["inputs"]["path"],
+                "operation": "nonce_endpoint",
+                "proof_nonce_behavior_case": "nonce_endpoint",
             }
             continue
         if operation in tenant_cases:
@@ -172,7 +202,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 115,
+        "http": 114,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 79,
