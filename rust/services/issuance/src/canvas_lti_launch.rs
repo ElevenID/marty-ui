@@ -146,6 +146,12 @@ pub enum CanvasLtiLaunchPlanError {
     StateExpired,
     #[error("Canvas LTI launch repository is unavailable")]
     RepositoryUnavailable,
+    #[error("Canvas launch resource does not match the selected binding")]
+    AgsBindingMismatch,
+    #[error("Canvas launch resource does not match an AGS requirement")]
+    AgsRequirementMismatch,
+    #[error("Canvas AGS line item could not be pinned: {0}")]
+    AgsLineItem(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +243,137 @@ impl CanvasLtiJwksRefreshService {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasLtiAgsPinRequest {
+    pub binding_id: String,
+    pub requirement_id: String,
+    pub resource_id: String,
+    pub line_item_url: String,
+}
+
+pub trait CanvasLtiAgsServiceUrlValidator: Send + Sync {
+    fn validate(&self, service_url: &str) -> Result<String, String>;
+}
+
+#[async_trait]
+pub trait CanvasLtiAgsPinRepository: Send + Sync {
+    /// Persist the pin and invalidate every readiness artifact atomically.
+    async fn pin_verified_line_item(
+        &self,
+        binding: &CanvasLtiProgramBinding,
+        request: &CanvasLtiAgsPinRequest,
+    ) -> Result<bool, CanvasLtiLaunchPlanError>;
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiAgsPinService {
+    repository: Arc<dyn CanvasLtiAgsPinRepository>,
+    url_validator: Arc<dyn CanvasLtiAgsServiceUrlValidator>,
+}
+
+impl std::fmt::Debug for CanvasLtiAgsPinService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiAgsPinService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiAgsPinService {
+    #[must_use]
+    pub fn new(
+        repository: Arc<dyn CanvasLtiAgsPinRepository>,
+        url_validator: Arc<dyn CanvasLtiAgsServiceUrlValidator>,
+    ) -> Self {
+        Self {
+            repository,
+            url_validator,
+        }
+    }
+
+    pub async fn persist_verified_line_item(
+        &self,
+        binding: &CanvasLtiProgramBinding,
+        verified: &VerifiedLtiLaunch,
+    ) -> Result<bool, CanvasLtiLaunchPlanError> {
+        let Some(mut request) = verified_ags_pin_request(binding, verified)? else {
+            return Ok(false);
+        };
+        request.line_item_url = self
+            .url_validator
+            .validate(&request.line_item_url)
+            .map_err(CanvasLtiLaunchPlanError::AgsLineItem)?;
+        self.repository
+            .pin_verified_line_item(binding, &request)
+            .await
+    }
+}
+
+pub fn verified_ags_pin_request(
+    binding: &CanvasLtiProgramBinding,
+    verified: &VerifiedLtiLaunch,
+) -> Result<Option<CanvasLtiAgsPinRequest>, CanvasLtiLaunchPlanError> {
+    let custom = claim_object(&verified.raw_claims, CUSTOM_CLAIM, "custom");
+    let ags = claim_object(&verified.raw_claims, AGS_ENDPOINT_CLAIM, "ags_endpoint");
+    let values = [
+        object_non_empty_string(custom, "canvas_program_binding_id"),
+        object_non_empty_string(custom, "canvas_requirement_id"),
+        object_non_empty_string(custom, "canvas_resource_id"),
+        object_non_empty_string(ags, "lineitem"),
+    ];
+    let [Some(binding_id), Some(requirement_id), Some(resource_id), Some(line_item_url)] = values
+    else {
+        return Ok(None);
+    };
+    if binding_id != binding.id {
+        return Err(CanvasLtiLaunchPlanError::AgsBindingMismatch);
+    }
+    Ok(Some(CanvasLtiAgsPinRequest {
+        binding_id,
+        requirement_id,
+        resource_id,
+        line_item_url,
+    }))
+}
+
+pub fn plan_ags_line_item_pin(
+    evidence_requirements: &[Value],
+    request: &CanvasLtiAgsPinRequest,
+) -> Result<Option<Vec<Value>>, CanvasLtiLaunchPlanError> {
+    let mut matched = false;
+    let mut updated = evidence_requirements.to_vec();
+    for requirement in &mut updated {
+        let Some(requirement_object) = requirement.as_object_mut() else {
+            continue;
+        };
+        let scope_matches = requirement_object
+            .get("scope")
+            .and_then(Value::as_object)
+            .and_then(|scope| scope.get("resource_id"))
+            .is_some_and(|value| scalar_string(value) == request.resource_id);
+        if object_non_empty_string(Some(requirement_object), "requirement_id").as_deref()
+            == Some(request.requirement_id.as_str())
+            && object_non_empty_string(Some(requirement_object), "source").as_deref()
+                == Some("ags_result")
+            && scope_matches
+        {
+            let scope = requirement_object
+                .get_mut("scope")
+                .and_then(Value::as_object_mut)
+                .expect("matching requirement has an object scope");
+            scope.insert(
+                "line_item_url".to_owned(),
+                Value::String(request.line_item_url.clone()),
+            );
+            matched = true;
+        }
+    }
+    if !matched {
+        return Err(CanvasLtiLaunchPlanError::AgsRequirementMismatch);
+    }
+    Ok((updated != evidence_requirements).then_some(updated))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -827,6 +964,13 @@ fn lti_capabilities(
 
 fn object_value<'a>(object: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a Value> {
     object.and_then(|object| object.get(key))
+}
+
+fn object_non_empty_string(object: Option<&Map<String, Value>>, key: &str) -> Option<String> {
+    object
+        .and_then(|object| object.get(key))
+        .map(scalar_string)
+        .and_then(|value| non_empty(Some(value)))
 }
 
 fn string_list(value: Option<&Value>) -> Vec<String> {

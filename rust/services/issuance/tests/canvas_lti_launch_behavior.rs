@@ -8,13 +8,14 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
-        feature_enabled, launch_scope, plan_verified_identity, private_launch_response,
-        public_launch_response, scope_matches, select_binding, select_binding_with_staff_fallback,
-        CanvasLtiIdentityRecord, CanvasLtiIdentityRepository, CanvasLtiIdentityRequest,
-        CanvasLtiIdentityService, CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService,
-        CanvasLtiJwksRefresher, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
-        CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
-        CanvasLtiStoredLaunchState,
+        feature_enabled, launch_scope, plan_ags_line_item_pin, plan_verified_identity,
+        private_launch_response, public_launch_response, scope_matches, select_binding,
+        select_binding_with_staff_fallback, CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest,
+        CanvasLtiAgsPinService, CanvasLtiAgsServiceUrlValidator, CanvasLtiIdentityRecord,
+        CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
+        CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
+        CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
+        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
 };
@@ -69,6 +70,44 @@ struct JwksRefresher {
     calls: Mutex<usize>,
     refreshed: CanvasLtiPlatform,
     fails: bool,
+}
+
+struct AgsUrlValidator;
+
+impl CanvasLtiAgsServiceUrlValidator for AgsUrlValidator {
+    fn validate(&self, service_url: &str) -> Result<String, String> {
+        if service_url.starts_with("https://") {
+            Ok(service_url.to_owned())
+        } else {
+            Err("Canvas LTI service URLs must use HTTPS".to_owned())
+        }
+    }
+}
+
+struct AgsRepository {
+    binding: Mutex<CanvasLtiProgramBinding>,
+    readiness_invalidations: Mutex<usize>,
+}
+
+#[async_trait]
+impl CanvasLtiAgsPinRepository for AgsRepository {
+    async fn pin_verified_line_item(
+        &self,
+        binding: &CanvasLtiProgramBinding,
+        request: &CanvasLtiAgsPinRequest,
+    ) -> Result<bool, CanvasLtiLaunchPlanError> {
+        let mut stored = self.binding.lock().unwrap();
+        if stored.id != binding.id || request.binding_id != binding.id {
+            return Err(CanvasLtiLaunchPlanError::AgsBindingMismatch);
+        }
+        let Some(updated) = plan_ags_line_item_pin(&stored.evidence_requirements, request)? else {
+            return Ok(false);
+        };
+        stored.evidence_requirements = updated;
+        stored.enabled = false;
+        *self.readiness_invalidations.lock().unwrap() += 1;
+        Ok(true)
+    }
 }
 
 #[async_trait]
@@ -427,6 +466,105 @@ fn staff_draft_binding_fallback_replays_the_python_oracle_contract() {
             case["name"]
         );
     }
+}
+
+#[tokio::test]
+async fn ags_line_item_planner_replays_the_python_oracle_contract() {
+    let contract = contract();
+    let policy = &contract["launch"]["ags_line_item_pinning"];
+    let platform = platform_from(&json!({
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+    }));
+    for case in policy["cases"].as_array().unwrap() {
+        let mut binding = binding_from(
+            &json!({
+                "id": "binding-1",
+                "application_template_id": "application-1",
+                "credential_template_id": "credential-1"
+            }),
+            &platform,
+        );
+        let mut scope = json!({"course_id": "course-1", "resource_id": "resource-1"});
+        if !case["existing_line_item_url"].is_null() {
+            scope["line_item_url"] = case["existing_line_item_url"].clone();
+        }
+        binding.evidence_requirements = vec![json!({
+            "requirement_id": "score-1",
+            "source": case["requirement_source"],
+            "fact_type": "canvas.assignment_score",
+            "scope": scope,
+            "pass_rule": {"min_score_percent": 80},
+            "required": true
+        })];
+        let mut ags = json!({});
+        if !case["line_item_url"].is_null() {
+            ags["lineitem"] = case["line_item_url"].clone();
+        }
+        let verified: VerifiedLtiLaunch = serde_json::from_value(json!({
+            "issuer": "https://canvas.instructure.com",
+            "subject": "opaque-subject",
+            "audience": ["client-1"],
+            "deployment_id": "deployment-1",
+            "raw_claims": {
+                "https://purl.imsglobal.org/spec/lti/claim/custom": {
+                    "canvas_program_binding_id": case["signed_binding_id"],
+                    "canvas_requirement_id": case["signed_requirement_id"],
+                    "canvas_resource_id": case["signed_resource_id"]
+                },
+                "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint": ags
+            },
+            "roles": [],
+            "learner_identity": {}
+        }))
+        .unwrap();
+        let repository = Arc::new(AgsRepository {
+            binding: Mutex::new(binding.clone()),
+            readiness_invalidations: Mutex::new(0),
+        });
+        let service = CanvasLtiAgsPinService::new(repository.clone(), Arc::new(AgsUrlValidator));
+        let result = service
+            .persist_verified_line_item(&binding, &verified)
+            .await;
+        let name = case["name"].as_str().unwrap();
+
+        if case["status_code"] == 200 {
+            let changed = result.unwrap();
+            assert_eq!(changed, case["changed"].as_bool().unwrap(), "{name}");
+            assert_eq!(
+                *repository.readiness_invalidations.lock().unwrap(),
+                usize::from(changed),
+                "{name}"
+            );
+            let stored = repository.binding.lock().unwrap();
+            if changed {
+                assert_eq!(
+                    stored.evidence_requirements[0]["scope"]["line_item_url"],
+                    case["line_item_url"],
+                    "{name}"
+                );
+                assert!(!stored.enabled, "{name}");
+            }
+        } else {
+            let error = result.unwrap_err().to_string();
+            if let Some(detail) = case.get("detail").and_then(Value::as_str) {
+                assert_eq!(error, detail, "{name}");
+            } else {
+                assert!(
+                    error.starts_with(case["detail_prefix"].as_str().unwrap()),
+                    "{name}: {error}"
+                );
+            }
+            assert_eq!(*repository.readiness_invalidations.lock().unwrap(), 0);
+        }
+    }
+    assert_eq!(policy["incomplete_claim_policy"], "no-op");
+    assert_eq!(policy["matching_requirement_source"], "ags_result");
+    assert_eq!(
+        policy["changed_binding_policy"]["config_version_increment"],
+        1
+    );
 }
 
 #[test]
