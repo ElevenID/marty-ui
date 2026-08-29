@@ -12,6 +12,7 @@ pub mod discovery;
 pub mod flow_contract;
 pub mod issuance_create;
 pub mod issuance_lifecycle_contract;
+pub mod issuance_native;
 pub mod middleware;
 pub mod organization_composition;
 pub mod organization_contract;

@@ -167,7 +167,7 @@ $applicationServices = @(
     "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",
     "revocation-profile", "device-registration", "event-stream", "signing-keys", "issuance",
-    "canvas-sync-worker", "gateway"
+    "issuance-native", "canvas-sync-worker", "gateway"
 )
 Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
 
@@ -238,6 +238,10 @@ Wait-ForServiceHealth (@("keycloak") + $restoreServices)
 if ("canvas-sync-worker" -notin @($preDeploy.service)) {
     $worker = Find-ServiceContainer "canvas-sync-worker"
     if ($worker) { Invoke-Checked docker @("rm", "--force", $worker) }
+}
+if ("issuance-native" -notin @($preDeploy.service)) {
+    $nativeIssuance = Find-ServiceContainer "issuance-native"
+    if ($nativeIssuance) { Invoke-Checked docker @("rm", "--force", $nativeIssuance) }
 }
 
 $uiRecord = @($preDeploy | Where-Object { $_.service -eq "ui-prod" -and $_.running } | Select-Object -First 1)

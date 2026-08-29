@@ -79,6 +79,11 @@ if [ "$MODULE_NAME" = "verification" ]; then
 	exec /usr/local/bin/marty-verification-service
 fi
 
+if [ "$MODULE_NAME" = "issuance_native" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-issuance-service
+fi
+
 if [ "$MODULE_NAME" = "deployment_profile" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-deployment-profile

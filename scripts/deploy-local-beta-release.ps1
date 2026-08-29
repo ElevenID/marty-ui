@@ -71,6 +71,7 @@ $script:ApplicationServices = @(
     "device-registration",
     "event-stream",
     "issuance",
+    "issuance-native",
     "canvas-sync-worker",
     "gateway"
 )
@@ -951,6 +952,28 @@ catch {
 }
 
 Write-Step "Verify local and tunneled runtime markers"
+$nativeIssuanceContainer = Get-ComposeContainerId -Service "issuance-native"
+if (-not $nativeIssuanceContainer) { throw "Native issuance beta container is absent" }
+$nativeIssuanceVersionRaw = & docker exec $nativeIssuanceContainer curl --fail --silent --show-error http://127.0.0.1:8005/version
+if ($LASTEXITCODE -ne 0) { throw "Native issuance version probe failed" }
+$nativeIssuanceMarker = $nativeIssuanceVersionRaw | ConvertFrom-Json
+if ($nativeIssuanceMarker.service -ne "issuance-service" -or $nativeIssuanceMarker.version -ne $releaseVersion -or $nativeIssuanceMarker.build_revision -ne $sourceId) {
+    throw "Native issuance runtime marker does not match local release provenance"
+}
+$localIssuerMetadata = Invoke-RestMethod -Uri "http://127.0.0.1:8000/.well-known/openid-credential-issuer" -TimeoutSec 30
+$betaIssuerMetadata = Invoke-RestMethod -Uri "$BetaOrigin/.well-known/openid-credential-issuer" -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 30
+foreach ($metadata in @($localIssuerMetadata, $betaIssuerMetadata)) {
+    if (-not $metadata.credential_issuer -or -not $metadata.credential_endpoint -or -not $metadata.nonce_endpoint) {
+        throw "Native issuance discovery probe returned incomplete metadata"
+    }
+}
+$localNonce = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/issuance/nonce" -ContentType "application/json" -Body "{}" -TimeoutSec 30
+$betaNonce = Invoke-RestMethod -Method Post -Uri "$BetaOrigin/v1/issuance/nonce" -Headers @{ "Cache-Control" = "no-cache" } -ContentType "application/json" -Body "{}" -TimeoutSec 30
+foreach ($nonce in @($localNonce, $betaNonce)) {
+    if ($nonce.c_nonce -notmatch '^[A-Za-z0-9_-]{43}$') {
+        throw "Native issuance nonce probe violated the frozen response contract"
+    }
+}
 $servicesMarker = Invoke-RestMethod -Uri "http://127.0.0.1:8000/.well-known/marty-release" -TimeoutSec 30
 $uiMarker = Invoke-RestMethod -Uri "http://127.0.0.1:3002/marty-ui-release.json" -TimeoutSec 30
 $betaServicesMarker = Invoke-RestMethod -Uri "$BetaOrigin/.well-known/marty-release" -Headers @{ "Cache-Control" = "no-cache" } -TimeoutSec 30
@@ -1012,6 +1035,7 @@ $deploymentManifest = [ordered]@{
     deployed_demo_manifest = "deployed-demo-manifest.json"
     deployed_demo_manifest_sha256 = Get-FileSha256 $deployedDemoManifestPath
     services_marker = $servicesMarker
+    issuance_native_marker = $nativeIssuanceMarker
     ui_marker = $uiMarker
     images = $postDeployContainers
     canvas_portable_configuration = [ordered]@{
