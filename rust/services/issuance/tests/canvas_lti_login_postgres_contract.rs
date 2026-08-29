@@ -1,10 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_lti_launch::{
-        CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiIdentityService,
-        CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository, CanvasLtiLaunchStateRepository,
+        CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiCapabilitySnapshotRequest,
+        CanvasLtiCapabilitySnapshotService, CanvasLtiIdentityService, CanvasLtiJwksRefresher,
+        CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
         CanvasLtiLaunchStateService,
     },
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
@@ -106,6 +108,12 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             lti_jwks_fetched_at timestamptz NULL,
             lti_jwks_expires_at timestamptz NULL,
             lti_openid_configuration jsonb NULL,
+            registration_status varchar(40) NOT NULL DEFAULT 'draft',
+            capability_snapshot json NOT NULL DEFAULT '{}'::json,
+            last_validated_at timestamptz NULL,
+            last_connection_error text NULL,
+            config_version integer NOT NULL DEFAULT 1,
+            archived_at timestamptz NULL,
             enabled boolean NOT NULL DEFAULT false,
             updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )",
@@ -473,6 +481,140 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         pinned.get::<Value, _>("credential_template_snapshot"),
         json!({})
     );
+
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings (
+            id, organization_id, platform_id, application_template_id,
+            credential_template_id, feature_flags, evidence_requirements, canvas_scope,
+            enabled, config_version
+        ) VALUES (
+            'binding-capability', 'org-123', 'platform-123', 'app-capability',
+            'credential-capability', '{\"enable_canvas_lti\":true}'::jsonb,
+            '[]'::jsonb, '{\"course_id\":\"course-101\"}'::jsonb, true, 4
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let verified_at = "2026-08-29T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let capability_service = CanvasLtiCapabilitySnapshotService::new(Arc::new(repository.clone()));
+    let first_request = CanvasLtiCapabilitySnapshotRequest {
+        organization_id: "org-123".to_owned(),
+        platform_id: "platform-123".to_owned(),
+        selected_platform_config_version: 1,
+        binding_id: "binding-capability".to_owned(),
+        selected_binding_config_version: 4,
+        signed_course_id: "course-101".to_owned(),
+        launch_capabilities: json!({
+            "assignment_grade_services": false,
+            "names_roles": true
+        }),
+        line_item_configuration_changed: false,
+        verified_at,
+    };
+    let second_request = CanvasLtiCapabilitySnapshotRequest {
+        launch_capabilities: json!({
+            "assignment_grade_services": true,
+            "names_roles": false
+        }),
+        ..first_request.clone()
+    };
+    let first_service = capability_service.clone();
+    let second_service = capability_service.clone();
+    let (first_snapshot, second_snapshot) = tokio::join!(
+        first_service.persist_verified_capabilities(&first_request),
+        second_service.persist_verified_capabilities(&second_request)
+    );
+    first_snapshot.unwrap();
+    second_snapshot.unwrap();
+    let persisted_capabilities = sqlx::query(
+        "SELECT capability_snapshot, registration_status, last_validated_at,
+            last_connection_error
+         FROM issuance_service.canvas_platforms WHERE id = 'platform-123'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let capability_snapshot = persisted_capabilities.get::<Value, _>("capability_snapshot");
+    let binding_snapshot = &capability_snapshot["verified_binding_launches"]["binding-capability"];
+    assert_eq!(binding_snapshot["assignment_grade_services"], true);
+    assert_eq!(binding_snapshot["names_roles"], true);
+    assert_eq!(binding_snapshot["verified_binding_config_version"], 4);
+    assert_eq!(binding_snapshot["verified_course_id"], "course-101");
+    assert_eq!(
+        persisted_capabilities.get::<String, _>("registration_status"),
+        "verified"
+    );
+    assert_eq!(
+        persisted_capabilities.get::<DateTime<Utc>, _>("last_validated_at"),
+        verified_at
+    );
+    assert!(persisted_capabilities
+        .get::<Option<String>, _>("last_connection_error")
+        .is_none());
+
+    let ags_transition_request = CanvasLtiCapabilitySnapshotRequest {
+        binding_id: "binding-ags".to_owned(),
+        selected_binding_config_version: 4,
+        launch_capabilities: json!({
+            "assignment_grade_services": true,
+            "ags_lineitem_url": "https://canvas.example.edu/new"
+        }),
+        line_item_configuration_changed: true,
+        ..first_request.clone()
+    };
+    let after_ags_transition = capability_service
+        .persist_verified_capabilities(&ags_transition_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_ags_transition["verified_binding_launches"]["binding-ags"]
+            ["verified_binding_config_version"],
+        5
+    );
+    assert!(after_ags_transition["verified_binding_launches"]["binding-capability"].is_object());
+
+    let stale_request = CanvasLtiCapabilitySnapshotRequest {
+        selected_binding_config_version: 3,
+        ..first_request.clone()
+    };
+    assert!(matches!(
+        capability_service
+            .persist_verified_capabilities(&stale_request)
+            .await,
+        Err(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift)
+    ));
+    let wrong_tenant_request = CanvasLtiCapabilitySnapshotRequest {
+        organization_id: "org-other".to_owned(),
+        ..first_request.clone()
+    };
+    assert!(matches!(
+        capability_service
+            .persist_verified_capabilities(&wrong_tenant_request)
+            .await,
+        Err(CanvasLtiLaunchPlanError::CapabilityScopeMismatch)
+    ));
+    sqlx::query(
+        "UPDATE issuance_service.canvas_platforms
+         SET config_version = 2 WHERE id = 'platform-123'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        capability_service
+            .persist_verified_capabilities(&first_request)
+            .await,
+        Err(CanvasLtiLaunchPlanError::CapabilityConfigurationDrift)
+    ));
+    let after_rejections = sqlx::query_scalar::<_, Value>(
+        "SELECT capability_snapshot
+         FROM issuance_service.canvas_platforms WHERE id = 'platform-123'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(after_rejections, after_ags_transition);
 
     let state = format!("state-{}", Uuid::new_v4());
     let nonce = format!("nonce-{}", Uuid::new_v4());

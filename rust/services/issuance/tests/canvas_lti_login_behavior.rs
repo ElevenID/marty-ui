@@ -74,6 +74,7 @@ fn ready_platform() -> CanvasLtiPlatform {
             "token_endpoint": "https://school.canvas.example/login/oauth2/token",
             "jwks_uri": "https://sso.canvaslms.com/api/lti/security/jwks"
         })),
+        config_version: 1,
         enabled: true,
     }
 }
