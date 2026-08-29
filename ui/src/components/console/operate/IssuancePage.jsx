@@ -320,7 +320,10 @@ function IssuancePage() {
                   <SearchIcon color="action" />
                 </InputAdornment>
               ),
-            }
+            },
+            htmlInput: {
+              'aria-label': 'Search issued credentials',
+            },
           }}
         />
       </Box>
@@ -338,7 +341,7 @@ function IssuancePage() {
         </Paper>
       ) : issuedCredentials.length > 0 ? (
         <TableContainer component={Paper}>
-          <Table sx={{ tableLayout: 'fixed' }}>
+          <Table aria-label="Issued credentials" sx={{ tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '18%' }} />
               <col style={{ width: '18%' }} />

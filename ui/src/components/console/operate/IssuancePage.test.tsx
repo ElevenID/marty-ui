@@ -113,6 +113,8 @@ describe('IssuancePage', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Issued Credentials' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Search issued credentials' })).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Issued credentials' })).toBeInTheDocument();
     expect(screen.getByText(formatOfficialReference('cred-open-badge-1', 'credential'))).toBeInTheDocument();
     expect(screen.getByText('Open Badge Login Template')).toBeInTheDocument();
     expect(screen.getByText('Demo Employee 01')).toBeInTheDocument();
@@ -217,9 +219,12 @@ describe('IssuancePage', () => {
     const suspendButton = await screen.findByRole('button', { name: /suspend credential/i });
     await user.click(suspendButton);
 
+    expect(screen.getByRole('dialog', { name: /suspend credential/i })).toBeInTheDocument();
+    const reason = screen.getByRole('textbox', { name: /reason/i });
+    await waitFor(() => expect(reason).toHaveFocus());
     const confirm = screen.getByRole('button', { name: /^suspend$/i });
     expect(confirm).toBeDisabled();
-    await user.type(screen.getByRole('textbox', { name: /reason/i }), 'Membership under review');
+    await user.type(reason, 'Membership under review');
     await user.click(confirm);
 
     await waitFor(() => {
