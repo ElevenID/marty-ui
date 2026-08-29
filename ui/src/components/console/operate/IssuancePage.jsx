@@ -182,11 +182,12 @@ function IssuancePage() {
   }, [credentialTemplatesData]);
 
   const selectedCredential = useMemo(() => {
-    if (!credentialId) return null;
+    const selectedId = credentialId || focusedCredentialId;
+    if (!selectedId) return null;
     return issuedCredentials.find((credential) => (
-      credential.id === credentialId || credential.credential_id === credentialId
+      credential.id === selectedId || credential.credential_id === selectedId
     )) || null;
-  }, [credentialId, issuedCredentials]);
+  }, [credentialId, focusedCredentialId, issuedCredentials]);
 
   useEffect(() => {
     setLatestOffer(null);
@@ -198,7 +199,9 @@ function IssuancePage() {
   };
 
   const handleCloseDetails = () => {
-    navigate('/console/org/operate/issuance');
+    setFocusedCredentialId(null);
+    setLatestOffer(null);
+    if (credentialId) navigate('/console/org/operate/issuance');
   };
 
   const handleCopyOffer = async () => {
@@ -213,7 +216,6 @@ function IssuancePage() {
     try {
       const offer = await renewCredential({ credentialId: credential.id });
       setLatestOffer({ ...offer, offer_url: offer.credential_offer_uri });
-      navigate(`/console/org/operate/issuance/${encodeURIComponent(credential.id)}`);
       showInfo('Renewal offer generated. Replacement issuance is pending wallet claim.', {
         replaceKey: 'credential-lifecycle',
       });
@@ -452,7 +454,7 @@ function IssuancePage() {
         </TableContainer>
       ) : null}
       <Dialog
-        open={Boolean(credentialId && selectedCredential && !lifecycleAction)}
+        open={Boolean(selectedCredential && !lifecycleAction)}
         onClose={handleCloseDetails}
         maxWidth="sm"
         fullWidth

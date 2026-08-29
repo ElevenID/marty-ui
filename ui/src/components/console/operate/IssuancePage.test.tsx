@@ -136,7 +136,7 @@ describe('IssuancePage', () => {
     await user.click(screen.getByRole('button', { name: /^refresh$/i }));
 
     expect(screen.getByRole('progressbar', { name: /refreshing issued credentials/i })).toBeInTheDocument();
-    expect(screen.getByText(reference)).toBeInTheDocument();
+    expect(screen.getAllByText(reference).length).toBeGreaterThan(0);
     resolveRefresh?.({ credentials: [], total: 0 });
     await waitFor(() => expect(screen.queryByText(reference)).not.toBeInTheDocument());
   });
@@ -170,6 +170,29 @@ describe('IssuancePage', () => {
 
     expect(screen.getByText(/renewal offer ready.*replacement not issued yet/i)).toBeInTheDocument();
     expect(screen.getByText('openid-credential-offer://offer/test')).toBeInTheDocument();
+  });
+
+  it('generates a row renewal without remounting or losing the filtered inventory', async () => {
+    const { user } = renderWithoutRouter(
+      <MemoryRouter initialEntries={['/console/org/operate/issuance']}>
+        <Routes>
+          <Route path="/console/org/operate/issuance" element={<IssuancePage />} />
+          <Route path="/console/org/operate/issuance/:credentialId" element={<IssuancePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const reference = formatOfficialReference('cred-open-badge-1', 'credential');
+    const search = await screen.findByPlaceholderText(/search issued credentials/i);
+    await user.type(search, reference);
+    await user.click(screen.getByRole('button', { name: /renew credential/i }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(search).toHaveValue(reference);
+    expect(screen.getAllByText(reference).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: /^close$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(search).toHaveValue(reference);
   });
 
   it('requires a reason and suspends an active credential', async () => {

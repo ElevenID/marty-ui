@@ -756,6 +756,7 @@ async function main() {
     let row = await findCredentialRow(page, credential.id);
     await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.');
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
+    if (RECORD_VIDEO) await page.waitForTimeout(3_000);
 
     report.renewalOffer = await renewCredential(page, row);
     if (!report.renewalOffer.ok || !report.renewalOffer.offerUri) {
@@ -784,6 +785,12 @@ async function main() {
     }
     await page.getByRole('button', { name: /^refresh$/i }).click();
     row = await findCredentialRow(page, credential.id);
+    const pendingRenewalNotice = page.getByRole('alert').filter({
+      hasText: /renewal offer generated.*replacement issuance is pending wallet claim/i,
+    });
+    if (await pendingRenewalNotice.isVisible().catch(() => false)) {
+      await pendingRenewalNotice.getByRole('button', { name: /^close$/i }).click();
+    }
     await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 
