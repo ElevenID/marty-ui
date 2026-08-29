@@ -14,6 +14,10 @@ use marty_issuance_service::{
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
     },
+    canvas_lti_deep_linking::{
+        CanvasLtiDeepLinkingService, SecureCanvasLtiDeepLinkingNonceGenerator,
+    },
+    canvas_lti_deep_linking_postgres::PostgresCanvasLtiDeepLinkingRepository,
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionService,
         SecureCanvasLtiExperienceSessionGenerator,
@@ -42,7 +46,10 @@ use marty_issuance_service::{
     credential_postgres::PostgresCredentialRepository,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
-    http::{router_with_all_services, CanvasLtiServices, IssuanceServices},
+    http::{
+        router_with_all_services, CanvasLtiExperienceSessionServices, CanvasLtiServices,
+        IssuanceServices,
+    },
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
@@ -126,6 +133,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_self_managed_origins.clone(),
     )?;
     let canvas_lti_clock = Arc::new(SystemCanvasLtiClock);
+    let canvas_lti_service_url_validator = Arc::new(MartyCanvasLtiAgsServiceUrlValidator::new(
+        config.canvas_private_origin_allowlist.clone(),
+    ));
     let canvas_lti_launch = CanvasLtiLaunchService::new(
         canvas_lti_login.clone(),
         CanvasLtiLaunchPorts {
@@ -143,9 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )),
             identity_repository: canvas_lti_repository.clone(),
             ags_repository: canvas_lti_repository.clone(),
-            ags_url_validator: Arc::new(MartyCanvasLtiAgsServiceUrlValidator::new(
-                config.canvas_private_origin_allowlist.clone(),
-            )),
+            ags_url_validator: canvas_lti_service_url_validator.clone(),
             capability_repository: canvas_lti_repository.clone(),
             clock: canvas_lti_clock.clone(),
         },
@@ -191,7 +199,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ));
     let canvas_lti_bootstrap = CanvasLtiBootstrapService::new(
         canvas_lti_experience_session.clone(),
-        canvas_lti_repository,
+        canvas_lti_repository.clone(),
         canvas_award_materializer,
         Arc::new(PostgresCanvasLtiBootstrapSyncEnqueuer::new(
             pool.clone(),
@@ -200,7 +208,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Arc::new(UuidCanvasSyncEnqueueIdGenerator),
         )),
         Arc::new(SecureCanvasLtiBootstrapApplicationGenerator),
-        canvas_lti_clock,
+        canvas_lti_clock.clone(),
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
     );
@@ -219,6 +227,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.dependency_timeout,
         )?),
     ));
+    let canvas_lti_deep_linking = CanvasLtiDeepLinkingService::new(
+        canvas_lti_experience_session.clone(),
+        Arc::new(PostgresCanvasLtiDeepLinkingRepository::new(pool.clone())),
+        canvas_lti_service_url_validator,
+        canvas_lti_tool_signer.clone(),
+        canvas_lti_clock.clone(),
+        Arc::new(SecureCanvasLtiDeepLinkingNonceGenerator),
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+        config.canvas_lti_deep_linking_issuer.clone(),
+        &config.issuer_base_url,
+    );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -268,8 +288,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 canvas_lti_launch,
                 canvas_lti_experience,
                 canvas_lti_experience_exchange,
-                canvas_lti_experience_session,
-                canvas_lti_bootstrap,
+                CanvasLtiExperienceSessionServices::new(
+                    canvas_lti_experience_session,
+                    canvas_lti_bootstrap,
+                    canvas_lti_deep_linking,
+                ),
                 canvas_lti_tool_signer,
             ),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),

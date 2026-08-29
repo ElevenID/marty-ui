@@ -818,6 +818,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-exchange" => "exchange_canvas_lti_experience_code_route",
                 "experience-session-current" => "get_canvas_lti_experience_session_route",
                 "experience-bootstrap" => "bootstrap_canvas_lti_experience_application_route",
+                "experience-deep-linking" => "create_canvas_lti_deep_linking_response_route",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
                 "tool-jwks" => "get_canvas_lti_tool_jwks",
                 "launch" => "verify_canvas_lti_launch_route",
@@ -826,7 +827,9 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             let expected_authentication = match behavior_case {
                 "launch" | "experience" => "public-lti-form-post",
                 "experience-exchange" => "public-one-time-code",
-                "experience-session-current" | "experience-bootstrap" => "lti-session-bearer",
+                "experience-session-current"
+                | "experience-bootstrap"
+                | "experience-deep-linking" => "lti-session-bearer",
                 "tool-jwks" => "public",
                 _ => "public-lti-login",
             };
@@ -882,6 +885,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-login",
                 "experience-session-current",
                 "experience-bootstrap",
+                "experience-deep-linking",
                 "launch",
                 "login",
                 "tool-jwks",
@@ -950,6 +954,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
                 "CANVAS_ALLOW_PRIVATE_BASE_URLS",
                 "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+                "CANVAS_LTI_DEEP_LINKING_ISSUER",
                 "CANVAS_LTI_EXPERIENCE_BASE_URL",
                 "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
                 "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
@@ -1072,8 +1077,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 26);
-        assert_eq!(summary.remaining_http, 105);
+        assert_eq!(summary.native_http, 27);
+        assert_eq!(summary.remaining_http, 104);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

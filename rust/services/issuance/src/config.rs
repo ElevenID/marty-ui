@@ -35,6 +35,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_lti_experience_session_ttl: Duration,
     pub canvas_lti_tool_signing_organization_id: String,
     pub canvas_lti_tool_issuer_did: String,
+    pub canvas_lti_deep_linking_issuer: Option<String>,
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
@@ -99,6 +100,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_lti_tool_issuer_did",
                 &self.canvas_lti_tool_issuer_did,
+            )
+            .field(
+                "canvas_lti_deep_linking_issuer",
+                &self.canvas_lti_deep_linking_issuer,
             )
             .field(
                 "canvas_self_managed_origin_count",
@@ -265,6 +270,10 @@ impl IssuanceServiceConfig {
             .map_or("", String::as_str)
             .trim()
             .to_owned();
+        let canvas_lti_deep_linking_issuer = values
+            .get("CANVAS_LTI_DEEP_LINKING_ISSUER")
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         let canvas_self_managed_origins =
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
         let canvas_private_origin_allowlist =
@@ -298,6 +307,7 @@ impl IssuanceServiceConfig {
             canvas_lti_experience_session_ttl,
             canvas_lti_tool_signing_organization_id,
             canvas_lti_tool_issuer_did,
+            canvas_lti_deep_linking_issuer,
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
             canvas_allow_private_base_urls,
@@ -627,6 +637,7 @@ mod tests {
         );
         assert!(config.canvas_lti_tool_signing_organization_id.is_empty());
         assert!(config.canvas_lti_tool_issuer_did.is_empty());
+        assert!(config.canvas_lti_deep_linking_issuer.is_none());
         assert!(config.canvas_self_managed_origins.is_empty());
         assert!(config.canvas_private_origin_allowlist.is_empty());
         assert!(!config.canvas_allow_private_base_urls);
@@ -677,6 +688,10 @@ mod tests {
             (
                 "CANVAS_LTI_TOOL_ISSUER_DID",
                 " did:web:issuer.example:canvas ",
+            ),
+            (
+                "CANVAS_LTI_DEEP_LINKING_ISSUER",
+                " elevenid-deep-link-client ",
             ),
             ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "true"),
             ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "yes"),
@@ -742,6 +757,10 @@ mod tests {
         assert_eq!(
             config.canvas_lti_tool_issuer_did,
             "did:web:issuer.example:canvas"
+        );
+        assert_eq!(
+            config.canvas_lti_deep_linking_issuer.as_deref(),
+            Some("elevenid-deep-link-client")
         );
         assert_eq!(
             config.canvas_self_managed_origins,
