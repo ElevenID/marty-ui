@@ -134,14 +134,26 @@ async function showLifecycleStep(page, title, detail, stage) {
 }
 
 async function dismissLifecycleUpdatedNotification(page) {
-  const alert = page.getByRole('alert')
-    .filter({ hasText: 'Lifecycle updated' })
-    .last();
-  const closeButton = alert.getByRole('button', { name: /^close$/i });
-  if (!await closeButton.isVisible().catch(() => false)) return false;
+  const title = page.getByText('Lifecycle updated', { exact: true }).last();
+  if (!await title.isVisible().catch(() => false)) return false;
+
+  const alert = title.locator('xpath=ancestor::*[@role="alert"][1]');
+  const closeButton = alert.locator('button[aria-label="Close"]');
+  if (!await closeButton.isVisible().catch(() => false)) {
+    throw new Error('Visible lifecycle notification has no dismiss control');
+  }
   await closeButton.click();
-  await alert.waitFor({ state: 'hidden', timeout: 5_000 });
+  await title.waitFor({ state: 'hidden', timeout: 5_000 });
+  if (await title.isVisible().catch(() => false)) {
+    throw new Error('Lifecycle notification remains visible before verifier evidence');
+  }
   return true;
+}
+
+async function requireDismissedLifecycleNotification(page) {
+  if (!await dismissLifecycleUpdatedNotification(page)) {
+    throw new Error('Recording requires the lifecycle notification to be visible and dismissible');
+  }
 }
 
 function resolveVerificationIssuerDid(override, credential) {
@@ -851,7 +863,7 @@ async function main() {
 
     report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
     report.suspend.current = await getCredentialStatus(page, credential.id);
-    if (RECORD_VIDEO) await dismissLifecycleUpdatedNotification(page);
+    if (RECORD_VIDEO) await requireDismissedLifecycleNotification(page);
     report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -867,7 +879,7 @@ async function main() {
 
     report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
     report.reinstate.current = await getCredentialStatus(page, credential.id);
-    if (RECORD_VIDEO) await dismissLifecycleUpdatedNotification(page);
+    if (RECORD_VIDEO) await requireDismissedLifecycleNotification(page);
     report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -883,7 +895,7 @@ async function main() {
 
     report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
     report.revoke.current = await getCredentialStatus(page, credential.id);
-    if (RECORD_VIDEO) await dismissLifecycleUpdatedNotification(page);
+    if (RECORD_VIDEO) await requireDismissedLifecycleNotification(page);
     report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -950,6 +962,7 @@ if (require.main === module) {
 module.exports = {
   candidateUiFileForRequest,
   dismissLifecycleUpdatedNotification,
+  requireDismissedLifecycleNotification,
   ensureActiveRevocationProfile,
   findCredentialRow,
   findIssuedCredential,

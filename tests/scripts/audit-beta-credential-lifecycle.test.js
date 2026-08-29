@@ -10,6 +10,7 @@ const {
   candidateUiFileForRequest,
   dismissLifecycleUpdatedNotification,
   findCredentialRow,
+  requireDismissedLifecycleNotification,
   resolveUiCandidateDist,
   resolveVerificationIssuerDid,
   selectRenewedCredential,
@@ -22,27 +23,44 @@ test('recording flow dismisses lifecycle feedback before presenting verifier evi
     click: async () => calls.push('click'),
   };
   const alert = {
-    getByRole: (role, options) => {
-      assert.equal(role, 'button');
-      assert.match('Close', options.name);
+    locator: (selector) => {
+      assert.equal(selector, 'button[aria-label="Close"]');
       return closeButton;
     },
     waitFor: async (options) => calls.push(`wait:${options.state}`),
   };
+  const title = {
+    isVisible: async () => calls.length === 0,
+    locator: (selector) => {
+      assert.equal(selector, 'xpath=ancestor::*[@role="alert"][1]');
+      return alert;
+    },
+    waitFor: async (options) => calls.push(`wait:${options.state}`),
+  };
   const page = {
-    getByRole: (role) => {
-      assert.equal(role, 'alert');
-      return {
-        filter: ({ hasText }) => {
-          assert.equal(hasText, 'Lifecycle updated');
-          return { last: () => alert };
-        },
-      };
+    getByText: (text, options) => {
+      assert.equal(text, 'Lifecycle updated');
+      assert.equal(options.exact, true);
+      return { last: () => title };
     },
   };
 
   assert.equal(await dismissLifecycleUpdatedNotification(page), true);
   assert.deepEqual(calls, ['click', 'wait:hidden']);
+});
+
+test('recording flow fails closed when lifecycle feedback is missing', async () => {
+  const page = {
+    getByText: () => ({
+      last: () => ({ isVisible: async () => false }),
+    }),
+  };
+
+  assert.equal(await dismissLifecycleUpdatedNotification(page), false);
+  await assert.rejects(
+    requireDismissedLifecycleNotification(page),
+    /requires the lifecycle notification to be visible and dismissible/,
+  );
 });
 
 test('credential row selection uses the exact record id and its stable display reference', async () => {
