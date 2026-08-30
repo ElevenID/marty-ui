@@ -34,6 +34,7 @@ FINAL_PROTOCOLS = {
     "sd-jwt-vc",
     "open-badges-3.0",
     "lti-1.3",
+    "https-webhooks",
 }
 SENSITIVE_KEYS = {
     "credential",
