@@ -61,18 +61,8 @@ impl std::fmt::Debug for CredentialRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CredentialRequest")
-            .field("proof_count", &self.proofs.as_ref().map_or(0, Map::len))
-            .field(
-                "credential_configuration_id",
-                &self.credential_configuration_id,
-            )
-            .field(
-                "has_credential_identifier",
-                &self.credential_identifier.is_some(),
-            )
-            .field("legacy_format", &self.legacy_format)
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -126,10 +116,8 @@ impl std::fmt::Debug for CredentialResponse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CredentialResponse")
-            .field("credential_count", &self.credentials.len())
-            .field("has_notification_id", &!self.notification_id.is_empty())
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -149,10 +137,8 @@ impl std::fmt::Debug for CredentialIssuanceOutcome {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CredentialIssuanceOutcome")
-            .field("response", &self.response)
-            .field("has_issued_credential", &self.issued_credential.is_some())
-            .field("disposition", &self.disposition)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -231,51 +217,8 @@ impl std::fmt::Debug for CredentialTransaction {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CredentialTransaction")
-            .field("status", &self.status)
-            .field(
-                "has_revocation_profile",
-                &self.revocation_profile_id.is_some(),
-            )
-            .field(
-                "has_renewal_source",
-                &self.renewal_of_credential_id.is_some(),
-            )
-            .field("has_applicant", &self.applicant_id.is_some())
-            .field("has_application", &self.application_id.is_some())
-            .field("has_subject_did", &self.subject_did.is_some())
-            .field("has_idempotency_key", &self.idempotency_key_hash.is_some())
-            .field(
-                "has_idempotency_request_hash",
-                &self.idempotency_request_hash.is_some(),
-            )
-            .field("has_nonce", &self.nonce.is_some())
-            .field("claim_count", &self.claims.len())
-            .field("credential_type", &self.credential_type)
-            .field(
-                "selective_disclosure_claim_count",
-                &self.selective_disclosure_claims.len(),
-            )
-            .field("zk_predicate_claim_count", &self.zk_predicate_claims.len())
-            .field("credential_payload_format", &self.credential_payload_format)
-            .field("wallet_config_count", &self.wallet_configs.len())
-            .field("validity_days", &self.validity_days)
-            .field("renewable", &self.renewable)
-            .field("renewal_window_days", &self.renewal_window_days)
-            .field("delivery_mode", &self.delivery_mode)
-            .field("has_issuer_profile", &self.issuer_profile_id.is_some())
-            .field("issuer_mode", &self.issuer_mode)
-            .field("has_issuer_did", &self.issuer_did.is_some())
-            .field("issuer_algorithm", &self.issuer_algorithm)
-            .field("has_signing_service", &self.signing_service_id.is_some())
-            .field(
-                "has_reserved_credential_id",
-                &self.reserved_credential_id.is_some(),
-            )
-            .field("has_oid4vci_client", &self.oid4vci_client_id.is_some())
-            .field("created_at", &self.created_at)
-            .field("expires_at", &self.expires_at)
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -292,14 +235,8 @@ impl std::fmt::Debug for CredentialAuthorizationSession {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CredentialAuthorizationSession")
-            .field("has_issuer_state", &self.issuer_state.is_some())
-            .field(
-                "credential_configuration_count",
-                &self.credential_configuration_ids.len(),
-            )
-            .field("has_dpop_binding", &self.dpop_jkt.is_some())
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -340,21 +277,8 @@ impl std::fmt::Debug for IssuedCredential {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("IssuedCredential")
-            .field("has_applicant", &self.applicant_id.is_some())
-            .field("has_subject_did", &self.subject_did.is_some())
-            .field(
-                "has_revocation_profile",
-                &self.revocation_profile_id.is_some(),
-            )
-            .field(
-                "has_renewal_source",
-                &self.renewed_from_credential_id.is_some(),
-            )
-            .field("status_list_entry_count", &self.status_list_entries.len())
-            .field("issued_at", &self.issued_at)
-            .field("expires_at", &self.expires_at)
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -432,31 +356,8 @@ impl std::fmt::Debug for CredentialBuildRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CredentialBuildRequest")
-            .field("kind", &self.kind)
-            .field("response_format", &self.response_format)
-            .field("remote_credential_format", &self.remote_credential_format)
-            .field("has_achievement_id", &self.achievement_id.is_some())
-            .field("has_subject_did", &self.subject_did.is_some())
-            .field("has_holder_jwk", &self.holder_jwk.is_some())
-            .field("claim_count", &self.claims.len())
-            .field("has_credential_subject", &self.credential_subject.is_some())
-            .field(
-                "has_credential_document",
-                &self.credential_document.is_some(),
-            )
-            .field(
-                "selective_disclosure_claim_count",
-                &self.selective_disclosure_claims.len(),
-            )
-            .field("validity_seconds", &self.validity_seconds)
-            .field("issuer_algorithm", &self.issuer.algorithm)
-            .field(
-                "issuer_certificate_chain_len",
-                &self.issuer.certificate_chain.len(),
-            )
-            .field("status_list_entry_count", &self.status_list_entries.len())
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -485,13 +386,8 @@ impl std::fmt::Debug for AllocatedCredentialStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AllocatedCredentialStatus")
-            .field(
-                "has_revocation_profile",
-                &self.revocation_profile_id.is_some(),
-            )
-            .field("entry_count", &self.entries.len())
-            .field("sensitive_contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
-            .finish_non_exhaustive()
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
     }
 }
 
@@ -1587,7 +1483,7 @@ mod tests {
             "request-document-name-canary",
             "request-document-value-canary",
             "request-disclosure-name-canary",
-            "request-validity-control-canary",
+            "request-status-scalar-canary",
             "request-issuer-profile-canary",
             "request-issuer-did-canary",
             "request-signing-service-canary",
@@ -1601,12 +1497,22 @@ mod tests {
             "request-raw-context-value-canary",
             "request-status-name-canary",
             "request-status-value-canary",
+            "request-issuer-jwk-crv-canary",
+            "request-issuer-jwk-x-canary",
+            "request-issuer-jwk-y-canary",
+            "request-issuer-jwk-p-canary",
+            "request-issuer-jwk-q-canary",
+            "request-issuer-jwk-dp-canary",
+            "request-issuer-jwk-dq-canary",
+            "request-issuer-jwk-qi-canary",
+            "request-issuer-jwk-oth-canary",
+            "request-issuer-jwk-k-canary",
         ];
         let request = CredentialBuildRequest {
             organization_id: REQUEST_CANARIES[0].to_owned(),
             kind: CredentialBuilderKind::SdJwt,
-            response_format: "dc+sd-jwt".to_owned(),
-            remote_credential_format: "dc+sd-jwt".to_owned(),
+            response_format: REQUEST_CANARIES[1].to_owned(),
+            remote_credential_format: REQUEST_CANARIES[2].to_owned(),
             credential_id: REQUEST_CANARIES[3].to_owned(),
             credential_type: REQUEST_CANARIES[4].to_owned(),
             achievement_id: Some(REQUEST_CANARIES[5].to_owned()),
@@ -1637,11 +1543,21 @@ mod tests {
                 issuer_profile_id: REQUEST_CANARIES[27].to_owned(),
                 issuer_did: REQUEST_CANARIES[28].to_owned(),
                 signing_service_id: REQUEST_CANARIES[29].to_owned(),
-                algorithm: "ES256".to_owned(),
+                algorithm: REQUEST_CANARIES[30].to_owned(),
                 verification_method_id: Some(REQUEST_CANARIES[31].to_owned()),
                 public_jwk: Some(json!({
                     "kty": REQUEST_CANARIES[32],
                     "d": REQUEST_CANARIES[33],
+                    "crv": REQUEST_CANARIES[40],
+                    "x": REQUEST_CANARIES[41],
+                    "y": REQUEST_CANARIES[42],
+                    "p": REQUEST_CANARIES[43],
+                    "q": REQUEST_CANARIES[44],
+                    "dp": REQUEST_CANARIES[45],
+                    "dq": REQUEST_CANARIES[46],
+                    "qi": REQUEST_CANARIES[47],
+                    "oth": [{"r": REQUEST_CANARIES[48]}],
+                    "k": REQUEST_CANARIES[49],
                 })),
                 certificate_chain: vec![
                     REQUEST_CANARIES[34].to_owned(),
@@ -1649,7 +1565,10 @@ mod tests {
                 ],
                 raw_context: canary_object(REQUEST_CANARIES[36], REQUEST_CANARIES[37]),
             },
-            status_list_entries: vec![canary_object(REQUEST_CANARIES[38], REQUEST_CANARIES[39])],
+            status_list_entries: vec![
+                canary_object(REQUEST_CANARIES[38], REQUEST_CANARIES[39]),
+                json!(REQUEST_CANARIES[26]),
+            ],
         };
 
         const BUILT_CANARIES: &[&str] = &[
@@ -1673,23 +1592,27 @@ mod tests {
         };
 
         const TRANSPORT_CANARIES: &[&str] = &[
+            "request-proof-name-canary",
             "request-proof-jwt-canary",
+            "request-configuration-id-canary",
             "request-credential-identifier-canary",
+            "request-legacy-format-canary",
+            "response-credential-name-canary",
             "response-signed-credential-canary",
             "response-notification-id-canary",
         ];
         let credential_request = CredentialRequest {
             proofs: Some(Map::from_iter([(
-                "jwt".to_owned(),
-                json!([TRANSPORT_CANARIES[0]]),
+                TRANSPORT_CANARIES[0].to_owned(),
+                json!([TRANSPORT_CANARIES[1]]),
             )])),
-            credential_configuration_id: Some("OpenBadgeCredential#sd-jwt".to_owned()),
-            credential_identifier: Some(TRANSPORT_CANARIES[1].to_owned()),
-            legacy_format: Some("dc+sd-jwt".to_owned()),
+            credential_configuration_id: Some(TRANSPORT_CANARIES[2].to_owned()),
+            credential_identifier: Some(TRANSPORT_CANARIES[3].to_owned()),
+            legacy_format: Some(TRANSPORT_CANARIES[4].to_owned()),
         };
         let response = CredentialResponse {
-            credentials: vec![json!({"credential": TRANSPORT_CANARIES[2]})],
-            notification_id: TRANSPORT_CANARIES[3].to_owned(),
+            credentials: vec![canary_object(TRANSPORT_CANARIES[5], TRANSPORT_CANARIES[6])],
+            notification_id: TRANSPORT_CANARIES[7].to_owned(),
         };
 
         const TRANSACTION_CANARIES: &[&str] = &[
@@ -1715,6 +1638,13 @@ mod tests {
             "transaction-signing-service-canary",
             "transaction-reserved-credential-canary",
             "transaction-client-canary",
+            "transaction-credential-type-canary",
+            "transaction-payload-format-canary",
+            "transaction-delivery-mode-canary",
+            "transaction-issuer-mode-canary",
+            "transaction-issuer-algorithm-canary",
+            "2031-02-03T04:05:06Z",
+            "2032-03-04T05:06:07Z",
         ];
         let mut diagnostic_transaction = transaction();
         diagnostic_transaction.id = TRANSACTION_CANARIES[0].to_owned();
@@ -1739,10 +1669,22 @@ mod tests {
         diagnostic_transaction.wallet_configs = vec![json!(TRANSACTION_CANARIES[16])];
         diagnostic_transaction.issuer_profile_id = Some(TRANSACTION_CANARIES[17].to_owned());
         diagnostic_transaction.issuer_did = Some(TRANSACTION_CANARIES[18].to_owned());
-        diagnostic_transaction.issuer_algorithm = Some("ES256".to_owned());
+        diagnostic_transaction.issuer_algorithm = Some(TRANSACTION_CANARIES[26].to_owned());
         diagnostic_transaction.signing_service_id = Some(TRANSACTION_CANARIES[19].to_owned());
         diagnostic_transaction.reserved_credential_id = Some(TRANSACTION_CANARIES[20].to_owned());
         diagnostic_transaction.oid4vci_client_id = Some(TRANSACTION_CANARIES[21].to_owned());
+        diagnostic_transaction.credential_type = Some(TRANSACTION_CANARIES[22].to_owned());
+        diagnostic_transaction.credential_payload_format = TRANSACTION_CANARIES[23].to_owned();
+        diagnostic_transaction.delivery_mode = TRANSACTION_CANARIES[24].to_owned();
+        diagnostic_transaction.issuer_mode = TRANSACTION_CANARIES[25].to_owned();
+        diagnostic_transaction.created_at =
+            chrono::DateTime::parse_from_rfc3339(TRANSACTION_CANARIES[27])
+                .expect("transaction created-at canary")
+                .with_timezone(&chrono::Utc);
+        diagnostic_transaction.expires_at =
+            chrono::DateTime::parse_from_rfc3339(TRANSACTION_CANARIES[28])
+                .expect("transaction expiry canary")
+                .with_timezone(&chrono::Utc);
 
         const PERSISTENCE_CANARIES: &[&str] = &[
             "authorization-id-canary",
@@ -1766,6 +1708,8 @@ mod tests {
             "issued-credential-hash-canary",
             "allocated-revocation-profile-canary",
             "allocated-entry-canary",
+            "2033-04-05T06:07:08Z",
+            "2034-05-06T07:08:09Z",
         ];
         let authorization = CredentialAuthorizationSession {
             id: PERSISTENCE_CANARIES[0].to_owned(),
@@ -1778,7 +1722,12 @@ mod tests {
             id: PERSISTENCE_CANARIES[5].to_owned(),
             credential: PERSISTENCE_CANARIES[6].to_owned(),
         };
-        let now = chrono::Utc::now();
+        let issued_at = chrono::DateTime::parse_from_rfc3339(PERSISTENCE_CANARIES[21])
+            .expect("issued-at canary")
+            .with_timezone(&chrono::Utc);
+        let expires_at = chrono::DateTime::parse_from_rfc3339(PERSISTENCE_CANARIES[22])
+            .expect("issued expiry canary")
+            .with_timezone(&chrono::Utc);
         let issued = IssuedCredential {
             id: PERSISTENCE_CANARIES[7].to_owned(),
             transaction_id: PERSISTENCE_CANARIES[8].to_owned(),
@@ -1792,17 +1741,62 @@ mod tests {
             status_list_entries: vec![json!(PERSISTENCE_CANARIES[16])],
             credential: PERSISTENCE_CANARIES[17].to_owned(),
             credential_hash: PERSISTENCE_CANARIES[18].to_owned(),
-            issued_at: now,
-            expires_at: now + chrono::Duration::days(1),
+            issued_at,
+            expires_at,
         };
         let allocated = AllocatedCredentialStatus {
             revocation_profile_id: Some(PERSISTENCE_CANARIES[19].to_owned()),
             entries: vec![json!(PERSISTENCE_CANARIES[20])],
         };
+        const OUTCOME_CANARIES: &[&str] = &[
+            "outcome-response-credential-name-canary",
+            "outcome-response-credential-value-canary",
+            "outcome-response-notification-canary",
+            "outcome-issued-id-canary",
+            "outcome-issued-transaction-canary",
+            "outcome-issued-organization-canary",
+            "outcome-issued-template-canary",
+            "outcome-issued-applicant-canary",
+            "outcome-issued-subject-canary",
+            "outcome-issued-issuer-canary",
+            "outcome-issued-revocation-profile-canary",
+            "outcome-issued-renewal-source-canary",
+            "outcome-issued-status-name-canary",
+            "outcome-issued-status-value-canary",
+            "outcome-issued-credential-canary",
+            "outcome-issued-hash-canary",
+            "2035-06-07T08:09:10Z",
+            "2036-07-08T09:10:11Z",
+        ];
         let outcome = CredentialIssuanceOutcome {
-            response: response.clone(),
-            issued_credential: Some(issued.clone()),
-            disposition: CredentialIssuanceDisposition::Committed,
+            response: CredentialResponse {
+                credentials: vec![canary_object(OUTCOME_CANARIES[0], OUTCOME_CANARIES[1])],
+                notification_id: OUTCOME_CANARIES[2].to_owned(),
+            },
+            issued_credential: Some(IssuedCredential {
+                id: OUTCOME_CANARIES[3].to_owned(),
+                transaction_id: OUTCOME_CANARIES[4].to_owned(),
+                organization_id: OUTCOME_CANARIES[5].to_owned(),
+                credential_template_id: OUTCOME_CANARIES[6].to_owned(),
+                applicant_id: Some(OUTCOME_CANARIES[7].to_owned()),
+                subject_did: Some(OUTCOME_CANARIES[8].to_owned()),
+                issuer_did: OUTCOME_CANARIES[9].to_owned(),
+                revocation_profile_id: Some(OUTCOME_CANARIES[10].to_owned()),
+                renewed_from_credential_id: Some(OUTCOME_CANARIES[11].to_owned()),
+                status_list_entries: vec![canary_object(
+                    OUTCOME_CANARIES[12],
+                    OUTCOME_CANARIES[13],
+                )],
+                credential: OUTCOME_CANARIES[14].to_owned(),
+                credential_hash: OUTCOME_CANARIES[15].to_owned(),
+                issued_at: chrono::DateTime::parse_from_rfc3339(OUTCOME_CANARIES[16])
+                    .expect("outcome issued-at canary")
+                    .with_timezone(&chrono::Utc),
+                expires_at: chrono::DateTime::parse_from_rfc3339(OUTCOME_CANARIES[17])
+                    .expect("outcome expiry canary")
+                    .with_timezone(&chrono::Utc),
+            }),
+            disposition: CredentialIssuanceDisposition::ConcurrentRecovery,
         };
 
         assert_eq!(
@@ -1811,22 +1805,46 @@ mod tests {
         );
         assert_eq!(
             assert_redacted(&request, REQUEST_CANARIES),
-            "CredentialBuildRequest { kind: SdJwt, response_format: \"dc+sd-jwt\", remote_credential_format: \"dc+sd-jwt\", has_achievement_id: true, has_subject_did: true, has_holder_jwk: true, claim_count: 1, has_credential_subject: true, has_credential_document: true, selective_disclosure_claim_count: 1, validity_seconds: 9876543210, issuer_algorithm: \"ES256\", issuer_certificate_chain_len: 2, status_list_entry_count: 1, sensitive_contents: \"[REDACTED]\", .. }"
+            "CredentialBuildRequest { contents: \"[REDACTED]\" }"
         );
         assert_eq!(
             assert_redacted(&built, BUILT_CANARIES),
             "BuiltCredential { contents: \"[REDACTED]\" }"
         );
-        assert_redacted(&credential_request, TRANSPORT_CANARIES);
-        assert_redacted(&response, TRANSPORT_CANARIES);
-        assert_redacted(&diagnostic_transaction, TRANSACTION_CANARIES);
-        assert_redacted(&authorization, PERSISTENCE_CANARIES);
-        assert_redacted(&existing, PERSISTENCE_CANARIES);
-        assert_redacted(&issued, PERSISTENCE_CANARIES);
-        assert_redacted(&allocated, PERSISTENCE_CANARIES);
-        assert_redacted(
-            &outcome,
-            &[TRANSPORT_CANARIES, PERSISTENCE_CANARIES].concat(),
+        assert_eq!(
+            assert_redacted(&credential_request, &TRANSPORT_CANARIES[..5]),
+            "CredentialRequest { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&response, &TRANSPORT_CANARIES[5..]),
+            "CredentialResponse { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&diagnostic_transaction, TRANSACTION_CANARIES),
+            "CredentialTransaction { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&authorization, &PERSISTENCE_CANARIES[..5]),
+            "CredentialAuthorizationSession { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&existing, &PERSISTENCE_CANARIES[5..7]),
+            "ExistingCredential { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(
+                &issued,
+                &[&PERSISTENCE_CANARIES[7..19], &PERSISTENCE_CANARIES[21..23],].concat(),
+            ),
+            "IssuedCredential { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&allocated, &PERSISTENCE_CANARIES[19..21]),
+            "AllocatedCredentialStatus { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&outcome, OUTCOME_CANARIES),
+            "CredentialIssuanceOutcome { contents: \"[REDACTED]\" }"
         );
     }
 
