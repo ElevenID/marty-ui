@@ -19,6 +19,7 @@ use marty_issuance_service::initiation::{
     InitiationRepository, InitiationRepositoryError,
 };
 use marty_issuance_service::initiation_dependencies::PostgresInitiationApplicationClaimsResolver;
+use marty_issuance_service::initiation_didcomm::InitiationDidcommRepository;
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
@@ -332,7 +333,6 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .after_issued(&claimed, &issued, "dc+sd-jwt")
         .await
         .unwrap();
-    revocation_server.abort();
     assert!(repository.finalize(&claimed, &issued).await.is_err());
     let persisted = repository
         .credential_by_transaction(&claimed.id)
@@ -460,7 +460,182 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
     assert_initiation_idempotency_race(&repository).await;
     assert_initiation_dependency_reads(&pool, key.as_bytes()).await;
+    assert_didcomm_retry_and_lifecycle_contract(&pool, &repository, &lifecycle).await;
+    revocation_server.abort();
     drop_contract_schema(&pool).await;
+}
+
+async fn assert_didcomm_retry_and_lifecycle_contract(
+    pool: &sqlx::PgPool,
+    repository: &PostgresCredentialRepository,
+    lifecycle: &PostgresCredentialLifecycle,
+) {
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, credential_template_id, status, pre_auth_code,
+              claims, credential_type, credential_payload_format, delivery_mode,
+              issuer_profile_id, issuer_did_override, issuer_algorithm,
+              signing_service_id, subject_did)
+         VALUES ('tx-didcomm-contract', 'org-a', 'template-didcomm', 'pending',
+                 'pre-auth-didcomm-contract', '{\"role\":\"engineer\"}'::jsonb,
+                 'OpenBadgeCredential', 'w3c_vcdm_v2_sd_jwt', 'wallet_only',
+                 'issuer-profile-a', 'did:web:issuer.example', 'ES256',
+                 'kms-service-a', 'did:key:holder')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let pending = repository
+        .transaction_by_id("tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("pending DIDComm transaction");
+    assert_eq!(pending.status, CredentialTransactionStatus::Pending);
+    let credential_id = "urn:uuid:credential-didcomm-contract";
+    let claim = repository
+        .claim_retryably(&pending, credential_id)
+        .await
+        .unwrap()
+        .expect("first DIDComm worker claims the transaction");
+    assert_eq!(claim.previous_status, CredentialTransactionStatus::Pending);
+    assert_eq!(
+        claim.transaction.status,
+        CredentialTransactionStatus::Signing
+    );
+    assert_eq!(
+        claim.transaction.reserved_credential_id.as_deref(),
+        Some(credential_id)
+    );
+    assert!(repository
+        .claim_retryably(&pending, credential_id)
+        .await
+        .unwrap()
+        .is_none());
+
+    repository.release_retryably(&claim).await.unwrap();
+    let released = sqlx::query(
+        "SELECT status, reserved_credential_id
+         FROM issuance_service.issuance_transactions WHERE id = 'tx-didcomm-contract'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(released.try_get::<String, _>("status").unwrap(), "pending");
+    assert!(released
+        .try_get::<Option<String>, _>("reserved_credential_id")
+        .unwrap()
+        .is_none());
+
+    let pending = repository
+        .transaction_by_id("tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("released DIDComm transaction");
+    let claim = repository
+        .claim_retryably(&pending, credential_id)
+        .await
+        .unwrap()
+        .expect("retry reclaims the same stable credential identifier");
+    let now = Utc::now();
+    let issued = IssuedCredential {
+        id: credential_id.to_owned(),
+        transaction_id: claim.transaction.id.clone(),
+        organization_id: claim.transaction.organization_id.clone(),
+        credential_template_id: claim.transaction.credential_template_id.clone(),
+        applicant_id: claim.transaction.applicant_id.clone(),
+        subject_did: claim.transaction.subject_did.clone(),
+        issuer_did: "did:web:issuer.example".to_owned(),
+        revocation_profile_id: None,
+        renewed_from_credential_id: None,
+        status_list_entries: Vec::new(),
+        credential: "didcomm-signed-credential".to_owned(),
+        credential_hash: "didcomm-credential-hash".to_owned(),
+        issued_at: now,
+        expires_at: now + Duration::days(365),
+    };
+    repository
+        .finalize_delivered(&claim.transaction, &issued)
+        .await
+        .unwrap();
+    lifecycle
+        .after_didcomm_issued(
+            &claim.transaction,
+            &issued,
+            "https://holder.example/didcomm",
+            "didcomm-message-contract",
+        )
+        .await
+        .unwrap();
+
+    let finalized = sqlx::query(
+        "SELECT status, reserved_credential_id
+         FROM issuance_service.issuance_transactions WHERE id = 'tx-didcomm-contract'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(finalized.try_get::<String, _>("status").unwrap(), "issued");
+    assert_eq!(
+        finalized
+            .try_get::<Option<String>, _>("reserved_credential_id")
+            .unwrap()
+            .as_deref(),
+        Some(credential_id)
+    );
+    assert!(repository.release_retryably(&claim).await.is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.issuance_transactions
+             WHERE id = 'tx-didcomm-contract'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        "issued"
+    );
+
+    let event_metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM issuance_service.issuance_events
+         WHERE transaction_id = 'tx-didcomm-contract'
+           AND event_type = 'credential_issued'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(event_metadata["credential_id"], credential_id);
+    assert_eq!(event_metadata["delivery_protocol"], "didcomm_v2");
+    assert_eq!(
+        event_metadata["service_endpoint"],
+        "https://holder.example/didcomm"
+    );
+
+    let delivery = sqlx::query(
+        "SELECT delivery_target, status, metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1",
+    )
+    .bind(credential_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        delivery.try_get::<String, _>("delivery_target").unwrap(),
+        "didcomm_v2"
+    );
+    assert_eq!(
+        delivery.try_get::<String, _>("status").unwrap(),
+        "delivered"
+    );
+    let metadata = delivery
+        .try_get::<serde_json::Value, _>("metadata")
+        .unwrap();
+    assert_eq!(metadata["protocol"], "didcomm_v2");
+    assert_eq!(metadata["didcomm_message_id"], "didcomm-message-contract");
+    assert_eq!(
+        metadata["service_endpoint"],
+        "https://holder.example/didcomm"
+    );
 }
 
 async fn assert_initiation_dependency_reads(pool: &sqlx::PgPool, key: &[u8]) {

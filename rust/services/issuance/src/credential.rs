@@ -367,6 +367,18 @@ pub trait CredentialLifecycle: Send + Sync {
         credential: &IssuedCredential,
         response_format: &str,
     ) -> Result<(), CredentialIssuanceError>;
+
+    async fn after_didcomm_issued(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        service_endpoint: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        let _ = (service_endpoint, message_id);
+        self.after_issued(transaction, credential, "vc+sd-jwt")
+            .await
+    }
 }
 
 pub trait NotificationIdGenerator: Send + Sync {
@@ -629,8 +641,11 @@ impl CredentialIssuanceService {
         proof: VerifiedCredentialProof,
     ) -> Result<CredentialResponse, CredentialIssuanceError> {
         let issued = materialize_credential(
-            &self.ports,
-            &self.issuer_base_url,
+            CredentialMaterializationContext {
+                builder: self.ports.builder.as_ref(),
+                lifecycle: self.ports.lifecycle.as_ref(),
+                issuer_base_url: &self.issuer_base_url,
+            },
             transaction,
             credential_id,
             &policy,
@@ -652,16 +667,22 @@ impl CredentialIssuanceService {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct CredentialMaterializationContext<'a> {
+    pub(crate) builder: &'a dyn CredentialBuilder,
+    pub(crate) lifecycle: &'a dyn CredentialLifecycle,
+    pub(crate) issuer_base_url: &'a str,
+}
+
 pub(crate) async fn materialize_credential(
-    ports: &CredentialPorts,
-    issuer_base_url: &str,
+    context: CredentialMaterializationContext<'_>,
     transaction: &CredentialTransaction,
     credential_id: &str,
     policy: &FormatPolicy,
     issuer: IssuerContext,
     proof: VerifiedCredentialProof,
 ) -> Result<IssuedCredential, CredentialIssuanceError> {
-    let status = ports
+    let status = context
         .lifecycle
         .allocate_status(transaction, credential_id, &policy.remote_format)
         .await?;
@@ -683,9 +704,9 @@ pub(crate) async fn materialize_credential(
         response_format: policy.response_format.clone(),
         remote_credential_format: policy.remote_format.clone(),
         credential_id: credential_id.to_owned(),
-        credential_type: signing_credential_type(transaction, policy.kind, issuer_base_url),
+        credential_type: signing_credential_type(transaction, policy.kind, context.issuer_base_url),
         achievement_id: is_open_badge_type(transaction.credential_type.as_deref())
-            .then(|| signing_vct(transaction, issuer_base_url)),
+            .then(|| signing_vct(transaction, context.issuer_base_url)),
         subject_did: if policy.kind == CredentialBuilderKind::Mdoc {
             None
         } else {
@@ -702,7 +723,7 @@ pub(crate) async fn materialize_credential(
         issuer: issuer.clone(),
         status_list_entries: status.entries.clone(),
     };
-    let built = ports.builder.build(&build_request).await?;
+    let built = context.builder.build(&build_request).await?;
     if built.credential_id != credential_id {
         return Err(CredentialIssuanceError::BuilderChangedCredentialId);
     }
@@ -835,6 +856,20 @@ fn format_policy(
         kind,
         response_format,
         remote_format,
+    })
+}
+
+pub(crate) fn didcomm_format_policy(
+    transaction: &CredentialTransaction,
+) -> Result<FormatPolicy, CredentialIssuanceError> {
+    let normalized = normalize_format(&transaction.credential_payload_format);
+    if !SD_JWT_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
+        return Err(CredentialIssuanceError::UnsupportedFormat(normalized));
+    }
+    Ok(FormatPolicy {
+        kind: CredentialBuilderKind::SdJwt,
+        response_format: "vc+sd-jwt".to_owned(),
+        remote_format: remote_credential_format(&transaction.credential_payload_format)?,
     })
 }
 
@@ -973,7 +1008,7 @@ fn clean_claims(claims: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-fn reserved_credential_id(transaction: &CredentialTransaction) -> String {
+pub(crate) fn reserved_credential_id(transaction: &CredentialTransaction) -> String {
     transaction
         .reserved_credential_id
         .clone()
@@ -1056,7 +1091,10 @@ fn is_open_badge_type(value: Option<&str>) -> bool {
     )
 }
 
-fn apply_issuer_context(transaction: &mut CredentialTransaction, issuer: &IssuerContext) {
+pub(crate) fn apply_issuer_context(
+    transaction: &mut CredentialTransaction,
+    issuer: &IssuerContext,
+) {
     transaction.issuer_profile_id = Some(issuer.issuer_profile_id.clone());
     transaction.issuer_did = Some(issuer.issuer_did.clone());
     transaction.issuer_algorithm = Some(issuer.algorithm.clone());

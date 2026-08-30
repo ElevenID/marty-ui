@@ -53,8 +53,13 @@ use marty_issuance_service::{
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
         router_with_all_services, CanvasLtiExperienceSessionServices, CanvasLtiServices,
-        CanvasServices, IssuanceServices,
+        CanvasServices, IssuanceCoreServices, IssuanceServices,
     },
+    initiation_didcomm::{
+        DidcommEndpointValidator, DidcommTransport, NativeDidcommEnvelope,
+        NativeInitiationDidcommDelivery, NativeInitiationDidcommPorts,
+    },
+    initiation_didcomm_http::InitiationDidcommHttpService,
     integration_secret::IntegrationSecretCipher,
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
@@ -281,33 +286,58 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let canvas_lti_evidence_sync =
         CanvasLtiEvidenceSyncService::new(canvas_lti_evidence.clone(), canvas_lti_sync_enqueuer);
+    let credential_repository = Arc::new(PostgresCredentialRepository::new(
+        pool.clone(),
+        token_hmac_key,
+    ));
+    let credential_builder = Arc::new(HttpCredentialBuilder::new(
+        config.signing_keys_internal_url.clone(),
+        config.signing_keys_internal_api_key.as_deref(),
+        config.dependency_timeout,
+    )?);
+    let credential_lifecycle = Arc::new(PostgresCredentialLifecycle::new(
+        pool.clone(),
+        config.revocation_profile_service_url.clone(),
+        config.internal_service_token.as_deref(),
+        config.dependency_timeout,
+        CanvasGuardConfig {
+            enabled: config.canvas_portable_enabled,
+            pilot_organizations: config.canvas_pilot_organizations.clone(),
+            evidence_max_age: config.canvas_evidence_max_age,
+            readiness_max_age: config.canvas_readiness_max_age,
+        },
+    )?);
+    let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
+        NativeInitiationDidcommPorts {
+            repository: credential_repository.clone(),
+            issuer_resolver: issuer_resolver.clone(),
+            builder: credential_builder.clone(),
+            lifecycle: credential_lifecycle.clone(),
+            envelope: Arc::new(NativeDidcommEnvelope::new(
+                config.didcomm_universal_resolver_url.as_deref(),
+                config.didcomm_did_web_internal_base_url.as_deref(),
+                config.didcomm_encryption_policy_file.as_deref(),
+            )),
+            endpoints: Arc::new(DidcommEndpointValidator::new(
+                config.didcomm_allow_private_ips,
+            )),
+            transport: Arc::new(DidcommTransport::new(
+                config.didcomm_tls_ca_file.as_deref(),
+            )?),
+        },
+        &config.issuer_base_url,
+    )?);
+    let didcomm_http =
+        InitiationDidcommHttpService::new(didcomm_delivery, config.issuance_api_key.as_deref());
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
-            repository: Arc::new(PostgresCredentialRepository::new(
-                pool.clone(),
-                token_hmac_key,
-            )),
+            repository: credential_repository,
             nonce_repository,
             dpop_verifier: Arc::new(MartyDpopProofVerifier),
             proof_verifier: Arc::new(NativeCredentialProofVerifier),
             issuer_resolver,
-            builder: Arc::new(HttpCredentialBuilder::new(
-                config.signing_keys_internal_url.clone(),
-                config.signing_keys_internal_api_key.as_deref(),
-                config.dependency_timeout,
-            )?),
-            lifecycle: Arc::new(PostgresCredentialLifecycle::new(
-                pool.clone(),
-                config.revocation_profile_service_url.clone(),
-                config.internal_service_token.as_deref(),
-                config.dependency_timeout,
-                CanvasGuardConfig {
-                    enabled: config.canvas_portable_enabled,
-                    pilot_organizations: config.canvas_pilot_organizations.clone(),
-                    evidence_max_age: config.canvas_evidence_max_age,
-                    readiness_max_age: config.canvas_readiness_max_age,
-                },
-            )?),
+            builder: credential_builder,
+            lifecycle: credential_lifecycle,
             notification_ids: Arc::new(UuidNotificationIdGenerator),
         },
         &config.issuer_base_url,
@@ -320,11 +350,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         discovery,
         transport,
         IssuanceServices::new(
-            tenant_discovery,
-            transaction_reads,
-            token_exchange,
-            proof_nonce,
-            credential,
+            IssuanceCoreServices::new(
+                tenant_discovery,
+                transaction_reads,
+                token_exchange,
+                proof_nonce,
+                credential,
+                didcomm_http,
+            ),
             CanvasServices::new(
                 canvas_oauth,
                 CanvasLtiServices::new(

@@ -521,6 +521,53 @@ impl PostgresCredentialLifecycle {
         Ok(())
     }
 
+    async fn record_didcomm_event_and_deliveries(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        service_endpoint: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        sqlx::query(
+            "INSERT INTO issuance_service.issuance_events
+                 (id, transaction_id, application_id, event_type, metadata, created_at)
+             VALUES ($1, $2, $3, 'credential_issued', $4, clock_timestamp())",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&transaction.id)
+        .bind(&transaction.application_id)
+        .bind(json!({
+            "credential_id": credential.id,
+            "credential_type": transaction.credential_type,
+            "delivery_protocol": "didcomm_v2",
+            "service_endpoint": service_endpoint,
+        }))
+        .execute(&self.pool)
+        .await
+        .map_err(database_error)?;
+
+        let delivery_id = delivery_record_id(&credential.id, "didcomm_v2", None);
+        self.upsert_delivery(
+            &delivery_id,
+            transaction,
+            credential,
+            "didcomm_v2",
+            "delivered",
+            None,
+            None,
+            json!({
+                "protocol": "didcomm_v2",
+                "service_endpoint": service_endpoint,
+                "didcomm_message_id": message_id,
+            }),
+        )
+        .await?;
+        if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
+            self.record_canvas_delivery(transaction, credential).await?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn upsert_delivery(
         &self,
@@ -756,6 +803,25 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
         self.finalize_renewal(transaction, credential).await?;
         self.record_event_and_deliveries(transaction, credential, response_format)
             .await
+    }
+
+    async fn after_didcomm_issued(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        service_endpoint: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        self.record_canvas_drift(transaction, &credential.id)
+            .await?;
+        self.finalize_renewal(transaction, credential).await?;
+        self.record_didcomm_event_and_deliveries(
+            transaction,
+            credential,
+            service_endpoint,
+            message_id,
+        )
+        .await
     }
 }
 

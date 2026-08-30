@@ -47,6 +47,7 @@ pub mod http;
 pub mod initiation;
 pub mod initiation_dependencies;
 pub mod initiation_didcomm;
+pub mod initiation_didcomm_http;
 pub mod initiation_http;
 pub mod initiation_response;
 pub mod integration_secret;

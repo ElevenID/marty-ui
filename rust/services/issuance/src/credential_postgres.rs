@@ -17,6 +17,7 @@ use crate::{
     initiation::{
         IdempotencyBinding, InitiationRepository, InitiationRepositoryError, InitiationReservation,
     },
+    initiation_didcomm::{InitiationDidcommClaim, InitiationDidcommRepository},
     token_postgres::hash_access_token,
 };
 
@@ -47,6 +48,8 @@ macro_rules! transaction_query {
 const TRANSACTION_BY_ACCESS_TOKEN: &str = transaction_query!("access_token = $1");
 const TRANSACTION_BY_PRE_AUTH_CODE: &str = transaction_query!("pre_auth_code = $1");
 const TRANSACTION_BY_ID: &str = transaction_query!("id = $1");
+const TRANSACTION_BY_ID_AND_ORGANIZATION: &str =
+    transaction_query!("id = $1 AND organization_id = $2");
 const TRANSACTION_BY_IDEMPOTENCY: &str =
     transaction_query!("organization_id = $1 AND idempotency_key_hash = $2");
 const CLAIM_FOR_SIGNING: &str = concat!(
@@ -55,6 +58,16 @@ const CLAIM_FOR_SIGNING: &str = concat!(
          issuer_profile_id = $4, issuer_mode = $5, issuer_did_override = $6,
          issuer_algorithm = $7, signing_service_id = $8
      WHERE id = $1 AND status = 'authorized'
+     RETURNING ",
+    transaction_columns!()
+);
+
+const CLAIM_FOR_DIDCOMM: &str = concat!(
+    "UPDATE issuance_service.issuance_transactions
+     SET status = 'signing', reserved_credential_id = $2, credential_type = $3,
+         issuer_profile_id = $4, issuer_mode = $5, issuer_did_override = $6,
+         issuer_algorithm = $7, signing_service_id = $8
+     WHERE id = $1 AND organization_id = $9 AND status = $10
      RETURNING ",
     transaction_columns!()
 );
@@ -352,6 +365,89 @@ impl CredentialRepository for PostgresCredentialRepository {
         .await
         .map_err(repository_error)?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl InitiationDidcommRepository for PostgresCredentialRepository {
+    async fn transaction_for_delivery(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
+        sqlx::query(TRANSACTION_BY_ID_AND_ORGANIZATION)
+            .bind(transaction_id)
+            .bind(organization_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(transaction_row)
+            .transpose()
+    }
+
+    async fn claim_retryably(
+        &self,
+        transaction: &CredentialTransaction,
+        credential_id: &str,
+    ) -> Result<Option<InitiationDidcommClaim>, CredentialIssuanceError> {
+        if !matches!(
+            transaction.status,
+            CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
+        ) {
+            return Ok(None);
+        }
+        let previous_status = transaction.status;
+        let claimed = sqlx::query(CLAIM_FOR_DIDCOMM)
+            .bind(&transaction.id)
+            .bind(credential_id)
+            .bind(&transaction.credential_type)
+            .bind(&transaction.issuer_profile_id)
+            .bind(&transaction.issuer_mode)
+            .bind(&transaction.issuer_did)
+            .bind(&transaction.issuer_algorithm)
+            .bind(&transaction.signing_service_id)
+            .bind(&transaction.organization_id)
+            .bind(transaction_status(transaction.status))
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(transaction_row)
+            .transpose()?;
+        Ok(claimed.map(|transaction| InitiationDidcommClaim {
+            transaction,
+            previous_status,
+        }))
+    }
+
+    async fn release_retryably(
+        &self,
+        claim: &InitiationDidcommClaim,
+    ) -> Result<(), CredentialIssuanceError> {
+        let released = sqlx::query(
+            "UPDATE issuance_service.issuance_transactions
+             SET status = $1, reserved_credential_id = NULL
+             WHERE id = $2 AND organization_id = $3 AND status = 'signing'
+               AND reserved_credential_id = $4",
+        )
+        .bind(transaction_status(claim.previous_status))
+        .bind(&claim.transaction.id)
+        .bind(&claim.transaction.organization_id)
+        .bind(&claim.transaction.reserved_credential_id)
+        .execute(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        if released.rows_affected() != 1 {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        Ok(())
+    }
+
+    async fn finalize_delivered(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+    ) -> Result<(), CredentialIssuanceError> {
+        CredentialRepository::finalize(self, transaction, credential).await
     }
 }
 

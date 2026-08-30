@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_didcomm::{
     encrypt_for_recipient, encrypt_for_recipient_authenticated, pack_credential_for_holder,
@@ -17,12 +18,23 @@ use marty_didcomm::{
 use reqwest::{redirect::Policy, Certificate, Client, Url};
 use serde::{
     de::{self, MapAccess, Visitor},
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serialize,
 };
 use serde_json::json;
 use thiserror::Error;
 
-use crate::network_policy::is_public_ip;
+use crate::{
+    credential::{
+        apply_issuer_context, didcomm_format_policy, materialize_credential,
+        reserved_credential_id, CredentialBuilder, CredentialIssuanceError, CredentialLifecycle,
+        CredentialMaterializationContext, CredentialTransaction, CredentialTransactionStatus,
+        IssuedCredential, IssuerContextResolver, VerifiedCredentialProof,
+    },
+    initiation_response::{
+        InitiationDidcommDelivery, InitiationDidcommDeliveryError, InitiationDidcommDeliveryReceipt,
+    },
+    network_policy::is_public_ip,
+};
 
 const MAX_ENDPOINT_LENGTH: usize = 2_048;
 const MAX_POLICY_BYTES: u64 = 64 * 1_024;
@@ -58,6 +70,85 @@ pub enum NativeDidcommError {
     TlsUnavailable,
     #[error("DIDComm transport is unavailable")]
     TransportUnavailable,
+}
+
+#[derive(Clone, Debug)]
+pub struct InitiationDidcommClaim {
+    pub transaction: CredentialTransaction,
+    pub previous_status: CredentialTransactionStatus,
+}
+
+#[async_trait]
+pub trait InitiationDidcommRepository: Send + Sync {
+    async fn transaction_for_delivery(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>;
+
+    async fn claim_retryably(
+        &self,
+        transaction: &CredentialTransaction,
+        credential_id: &str,
+    ) -> Result<Option<InitiationDidcommClaim>, CredentialIssuanceError>;
+
+    async fn release_retryably(
+        &self,
+        claim: &InitiationDidcommClaim,
+    ) -> Result<(), CredentialIssuanceError>;
+
+    async fn finalize_delivered(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+    ) -> Result<(), CredentialIssuanceError>;
+}
+
+#[async_trait]
+pub trait DidcommEnvelopePort: Send + Sync {
+    async fn resolve_recipient(
+        &self,
+        holder_did: &str,
+    ) -> Result<ResolvedDidcommRecipient, NativeDidcommError>;
+
+    async fn prepare_encryption(
+        &self,
+        issuer_did: &str,
+        recipient_document: DidDocument,
+    ) -> Result<PreparedDidcommEncryption, NativeDidcommError>;
+
+    fn pack_credential(
+        &self,
+        credential: &str,
+        credential_format: &str,
+        issuer_did: &str,
+        holder_did: &str,
+        transaction_id: &str,
+        credential_id: &str,
+    ) -> Result<PackedDidcommCredential, NativeDidcommError>;
+
+    fn encrypt_prepared(
+        &self,
+        plaintext: &str,
+        prepared: &PreparedDidcommEncryption,
+    ) -> Result<String, NativeDidcommError>;
+}
+
+#[async_trait]
+pub trait DidcommEndpointPort: Send + Sync {
+    async fn validate(
+        &self,
+        endpoint: &str,
+    ) -> Result<ValidatedDidcommEndpoint, NativeDidcommError>;
+}
+
+#[async_trait]
+pub trait DidcommTransportPort: Send + Sync {
+    async fn deliver(
+        &self,
+        endpoint: &ValidatedDidcommEndpoint,
+        encrypted_message: String,
+    ) -> DidcommTransportOutcome;
 }
 
 #[derive(Clone)]
@@ -216,6 +307,52 @@ impl NativeDidcommEnvelope {
     }
 }
 
+#[async_trait]
+impl DidcommEnvelopePort for NativeDidcommEnvelope {
+    async fn resolve_recipient(
+        &self,
+        holder_did: &str,
+    ) -> Result<ResolvedDidcommRecipient, NativeDidcommError> {
+        NativeDidcommEnvelope::resolve_recipient(self, holder_did).await
+    }
+
+    async fn prepare_encryption(
+        &self,
+        issuer_did: &str,
+        recipient_document: DidDocument,
+    ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
+        NativeDidcommEnvelope::prepare_encryption(self, issuer_did, recipient_document).await
+    }
+
+    fn pack_credential(
+        &self,
+        credential: &str,
+        credential_format: &str,
+        issuer_did: &str,
+        holder_did: &str,
+        transaction_id: &str,
+        credential_id: &str,
+    ) -> Result<PackedDidcommCredential, NativeDidcommError> {
+        NativeDidcommEnvelope::pack_credential(
+            self,
+            credential,
+            credential_format,
+            issuer_did,
+            holder_did,
+            transaction_id,
+            credential_id,
+        )
+    }
+
+    fn encrypt_prepared(
+        &self,
+        plaintext: &str,
+        prepared: &PreparedDidcommEncryption,
+    ) -> Result<String, NativeDidcommError> {
+        NativeDidcommEnvelope::encrypt_prepared(self, plaintext, prepared)
+    }
+}
+
 pub struct ResolvedDidcommRecipient {
     pub document: DidDocument,
     pub endpoint: String,
@@ -332,6 +469,16 @@ impl DidcommEndpointValidator {
     }
 }
 
+#[async_trait]
+impl DidcommEndpointPort for DidcommEndpointValidator {
+    async fn validate(
+        &self,
+        endpoint: &str,
+    ) -> Result<ValidatedDidcommEndpoint, NativeDidcommError> {
+        DidcommEndpointValidator::validate(self, endpoint).await
+    }
+}
+
 pub struct ValidatedDidcommEndpoint {
     original: String,
     url: Url,
@@ -420,10 +567,344 @@ impl DidcommTransport {
     }
 }
 
+#[async_trait]
+impl DidcommTransportPort for DidcommTransport {
+    async fn deliver(
+        &self,
+        endpoint: &ValidatedDidcommEndpoint,
+        encrypted_message: String,
+    ) -> DidcommTransportOutcome {
+        DidcommTransport::deliver(self, endpoint, encrypted_message).await
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DidcommTransportOutcome {
     Delivered,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum NativeInitiationDidcommDeliveryError {
+    #[error("DIDComm delivery is misconfigured")]
+    InvalidConfiguration,
+    #[error("DIDComm delivery request is invalid")]
+    InvalidRequest,
+    #[error("issuance transaction was not found")]
+    TransactionNotFound,
+    #[error("issuance transaction is not retryable for DIDComm delivery")]
+    InvalidTransactionState,
+    #[error("DIDComm delivery prerequisites are unavailable")]
+    DidcommUnavailable,
+    #[error("credential materialization is unavailable")]
+    CredentialUnavailable,
+    #[error("another delivery attempt owns the issuance transaction")]
+    ConcurrentDelivery,
+    #[error("DIDComm transport failed")]
+    TransportFailed,
+    #[error("DIDComm post-issuance projection is unavailable")]
+    PostIssuanceUnavailable,
+    #[error("DIDComm retry state could not be restored")]
+    RetryStateUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeDidcommDeliveryStatus {
+    Delivered,
+    DeliveryFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NativeInitiationDidcommDeliveryReceipt {
+    pub transaction_id: String,
+    pub credential_id: String,
+    pub holder_did: String,
+    pub service_endpoint: String,
+    pub didcomm_message_id: String,
+    pub status: NativeDidcommDeliveryStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct NativeInitiationDidcommPorts {
+    pub repository: Arc<dyn InitiationDidcommRepository>,
+    pub issuer_resolver: Arc<dyn IssuerContextResolver>,
+    pub builder: Arc<dyn CredentialBuilder>,
+    pub lifecycle: Arc<dyn CredentialLifecycle>,
+    pub envelope: Arc<dyn DidcommEnvelopePort>,
+    pub endpoints: Arc<dyn DidcommEndpointPort>,
+    pub transport: Arc<dyn DidcommTransportPort>,
+}
+
+impl fmt::Debug for NativeInitiationDidcommPorts {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NativeInitiationDidcommPorts")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeInitiationDidcommDelivery {
+    ports: NativeInitiationDidcommPorts,
+    issuer_base_url: Arc<str>,
+}
+
+impl fmt::Debug for NativeInitiationDidcommDelivery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NativeInitiationDidcommDelivery")
+            .field("issuer_base_url", &self.issuer_base_url)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NativeInitiationDidcommDelivery {
+    pub fn new(
+        ports: NativeInitiationDidcommPorts,
+        issuer_base_url: &str,
+    ) -> Result<Self, NativeInitiationDidcommDeliveryError> {
+        let issuer_base_url = issuer_base_url.trim_end_matches('/');
+        if issuer_base_url.is_empty() {
+            return Err(NativeInitiationDidcommDeliveryError::InvalidConfiguration);
+        }
+        Ok(Self {
+            ports,
+            issuer_base_url: Arc::from(issuer_base_url),
+        })
+    }
+
+    pub async fn deliver_for_organization(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+        holder_did: &str,
+    ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
+        let organization_id = organization_id.trim();
+        let transaction_id = transaction_id.trim();
+        let holder_did = holder_did.trim();
+        if organization_id.is_empty()
+            || transaction_id.is_empty()
+            || !holder_did.starts_with("did:")
+            || holder_did.len() <= "did:".len()
+        {
+            return Err(NativeInitiationDidcommDeliveryError::InvalidRequest);
+        }
+        let transaction = self
+            .ports
+            .repository
+            .transaction_for_delivery(organization_id, transaction_id)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?
+            .ok_or(NativeInitiationDidcommDeliveryError::TransactionNotFound)?;
+        self.deliver_native(&transaction, holder_did).await
+    }
+
+    pub async fn deliver_native(
+        &self,
+        transaction: &CredentialTransaction,
+        holder_did: &str,
+    ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
+        if !matches!(
+            transaction.status,
+            CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
+        ) {
+            return Err(NativeInitiationDidcommDeliveryError::InvalidTransactionState);
+        }
+        let policy = didcomm_format_policy(transaction)
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
+        let recipient = self
+            .ports
+            .envelope
+            .resolve_recipient(holder_did)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+        let endpoint = self
+            .ports
+            .endpoints
+            .validate(&recipient.endpoint)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+
+        let mut prepared_transaction = transaction.clone();
+        let initial_issuer = self
+            .ports
+            .issuer_resolver
+            .resolve(&prepared_transaction, &policy.remote_format, false)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
+        apply_issuer_context(&mut prepared_transaction, &initial_issuer);
+        let issuer = self
+            .ports
+            .issuer_resolver
+            .resolve(&prepared_transaction, &policy.remote_format, true)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
+        apply_issuer_context(&mut prepared_transaction, &issuer);
+        self.ports
+            .lifecycle
+            .ensure_ready(&prepared_transaction, &issuer)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
+        let prepared_encryption = self
+            .ports
+            .envelope
+            .prepare_encryption(&issuer.issuer_did, recipient.document)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+
+        let credential_id = reserved_credential_id(&prepared_transaction);
+        let claim = self
+            .ports
+            .repository
+            .claim_retryably(&prepared_transaction, &credential_id)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?
+            .ok_or(NativeInitiationDidcommDeliveryError::ConcurrentDelivery)?;
+        let issued = match materialize_credential(
+            CredentialMaterializationContext {
+                builder: self.ports.builder.as_ref(),
+                lifecycle: self.ports.lifecycle.as_ref(),
+                issuer_base_url: &self.issuer_base_url,
+            },
+            &claim.transaction,
+            &credential_id,
+            &policy,
+            issuer,
+            VerifiedCredentialProof {
+                holder_did: holder_did.to_owned(),
+                holder_jwk: None,
+            },
+        )
+        .await
+        {
+            Ok(issued) => issued,
+            Err(_) => {
+                return self
+                    .release_failure(
+                        &claim,
+                        NativeInitiationDidcommDeliveryError::CredentialUnavailable,
+                    )
+                    .await
+            }
+        };
+        let packed = match self.ports.envelope.pack_credential(
+            &issued.credential,
+            &claim.transaction.credential_payload_format,
+            &issued.issuer_did,
+            holder_did,
+            &claim.transaction.id,
+            &credential_id,
+        ) {
+            Ok(packed) => packed,
+            Err(_) => {
+                return self
+                    .release_failure(
+                        &claim,
+                        NativeInitiationDidcommDeliveryError::DidcommUnavailable,
+                    )
+                    .await
+            }
+        };
+        let encrypted = match self
+            .ports
+            .envelope
+            .encrypt_prepared(&packed.plaintext, &prepared_encryption)
+        {
+            Ok(encrypted) => encrypted,
+            Err(_) => {
+                return self
+                    .release_failure(
+                        &claim,
+                        NativeInitiationDidcommDeliveryError::DidcommUnavailable,
+                    )
+                    .await
+            }
+        };
+        if self.ports.transport.deliver(&endpoint, encrypted).await
+            != DidcommTransportOutcome::Delivered
+        {
+            self.ports
+                .repository
+                .release_retryably(&claim)
+                .await
+                .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+            return Ok(NativeInitiationDidcommDeliveryReceipt {
+                transaction_id: claim.transaction.id,
+                credential_id,
+                holder_did: holder_did.to_owned(),
+                service_endpoint: endpoint.as_str().to_owned(),
+                didcomm_message_id: packed.message_id,
+                status: NativeDidcommDeliveryStatus::DeliveryFailed,
+                error: Some("didcomm_delivery_failed".to_owned()),
+            });
+        }
+        if self
+            .ports
+            .repository
+            .finalize_delivered(&claim.transaction, &issued)
+            .await
+            .is_err()
+        {
+            return self
+                .release_failure(
+                    &claim,
+                    NativeInitiationDidcommDeliveryError::CredentialUnavailable,
+                )
+                .await;
+        }
+        self.ports
+            .lifecycle
+            .after_didcomm_issued(
+                &claim.transaction,
+                &issued,
+                endpoint.as_str(),
+                &packed.message_id,
+            )
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::PostIssuanceUnavailable)?;
+        Ok(NativeInitiationDidcommDeliveryReceipt {
+            transaction_id: claim.transaction.id,
+            credential_id,
+            holder_did: holder_did.to_owned(),
+            service_endpoint: endpoint.as_str().to_owned(),
+            didcomm_message_id: packed.message_id,
+            status: NativeDidcommDeliveryStatus::Delivered,
+            error: None,
+        })
+    }
+
+    async fn release_failure<T>(
+        &self,
+        claim: &InitiationDidcommClaim,
+        error: NativeInitiationDidcommDeliveryError,
+    ) -> Result<T, NativeInitiationDidcommDeliveryError> {
+        self.ports
+            .repository
+            .release_retryably(claim)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+        Err(error)
+    }
+}
+
+#[async_trait]
+impl InitiationDidcommDelivery for NativeInitiationDidcommDelivery {
+    async fn deliver(
+        &self,
+        transaction: &CredentialTransaction,
+        holder_did: &str,
+    ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError> {
+        match self.deliver_native(transaction, holder_did).await {
+            Ok(receipt) if receipt.status == NativeDidcommDeliveryStatus::Delivered => {
+                Ok(InitiationDidcommDeliveryReceipt {
+                    service_endpoint: receipt.service_endpoint,
+                })
+            }
+            Ok(_) | Err(_) => Err(InitiationDidcommDeliveryError),
+        }
+    }
 }
 
 enum ActiveEncryptionPolicy {
@@ -643,7 +1124,18 @@ fn preflight_plaintext(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
+
+    use crate::credential::{
+        AllocatedCredentialStatus, BuiltCredential, CredentialBuildRequest, CredentialBuilder,
+        CredentialLifecycle, IssuerContext,
+    };
+    use chrono::{TimeZone, Utc};
     use marty_didcomm::types::{Jwk, VerificationMethod};
+    use serde_json::Map;
 
     fn recipient_document() -> DidDocument {
         let did = "did:example:holder";
@@ -683,6 +1175,547 @@ mod tests {
         ));
         std::fs::write(&path, contents).unwrap();
         path
+    }
+
+    type Order = Arc<Mutex<Vec<&'static str>>>;
+
+    fn record(order: &Order, stage: &'static str) {
+        order.lock().unwrap().push(stage);
+    }
+
+    fn transaction() -> CredentialTransaction {
+        CredentialTransaction {
+            id: "transaction-1".to_owned(),
+            organization_id: "org-a".to_owned(),
+            credential_template_id: "template-a".to_owned(),
+            revocation_profile_id: Some("profile-a".to_owned()),
+            renewal_of_credential_id: None,
+            applicant_id: None,
+            application_id: None,
+            subject_did: None,
+            idempotency_key_hash: None,
+            idempotency_request_hash: None,
+            status: CredentialTransactionStatus::Pending,
+            pre_authorized_code: "pre-auth".to_owned(),
+            nonce: None,
+            claims: Map::from_iter([("given_name".to_owned(), json!("Alice"))]),
+            credential_type: Some("EmployeeCredential".to_owned()),
+            selective_disclosure_claims: Vec::new(),
+            zk_predicate_claims: Vec::new(),
+            credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+            wallet_configs: Vec::new(),
+            validity_days: 365,
+            renewable: false,
+            renewal_window_days: 30,
+            delivery_mode: "wallet_only".to_owned(),
+            issuer_profile_id: Some("issuer-profile-a".to_owned()),
+            issuer_mode: "org_managed".to_owned(),
+            issuer_did: Some("did:example:issuer".to_owned()),
+            issuer_algorithm: Some("ES256".to_owned()),
+            signing_service_id: None,
+            reserved_credential_id: None,
+            oid4vci_client_id: None,
+            created_at: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+            expires_at: Utc.timestamp_opt(1_700_003_600, 0).single().unwrap(),
+        }
+    }
+
+    fn issuer() -> IssuerContext {
+        IssuerContext {
+            issuer_profile_id: "issuer-profile-a".to_owned(),
+            issuer_did: "did:example:issuer".to_owned(),
+            signing_service_id: "signing-service-a".to_owned(),
+            algorithm: "ES256".to_owned(),
+            verification_method_id: Some("did:example:issuer#key-1".to_owned()),
+            public_jwk: None,
+            certificate_chain: Vec::new(),
+            raw_context: json!({}),
+        }
+    }
+
+    struct HarnessRepository {
+        order: Order,
+        releases: AtomicUsize,
+        finalizations: AtomicUsize,
+    }
+
+    impl HarnessRepository {
+        fn new(order: Order) -> Self {
+            Self {
+                order,
+                releases: AtomicUsize::new(0),
+                finalizations: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl InitiationDidcommRepository for HarnessRepository {
+        async fn transaction_for_delivery(
+            &self,
+            organization_id: &str,
+            transaction_id: &str,
+        ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
+            record(&self.order, "load-transaction");
+            let transaction = transaction();
+            Ok(
+                (transaction.organization_id == organization_id
+                    && transaction.id == transaction_id)
+                    .then_some(transaction),
+            )
+        }
+
+        async fn claim_retryably(
+            &self,
+            transaction: &CredentialTransaction,
+            credential_id: &str,
+        ) -> Result<Option<InitiationDidcommClaim>, CredentialIssuanceError> {
+            record(&self.order, "claim");
+            let mut claimed = transaction.clone();
+            claimed.status = CredentialTransactionStatus::Signing;
+            claimed.reserved_credential_id = Some(credential_id.to_owned());
+            Ok(Some(InitiationDidcommClaim {
+                transaction: claimed,
+                previous_status: transaction.status,
+            }))
+        }
+
+        async fn release_retryably(
+            &self,
+            claim: &InitiationDidcommClaim,
+        ) -> Result<(), CredentialIssuanceError> {
+            record(&self.order, "release");
+            assert_eq!(
+                claim.transaction.status,
+                CredentialTransactionStatus::Signing
+            );
+            assert!(matches!(
+                claim.previous_status,
+                CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
+            ));
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn finalize_delivered(
+            &self,
+            transaction: &CredentialTransaction,
+            credential: &IssuedCredential,
+        ) -> Result<(), CredentialIssuanceError> {
+            record(&self.order, "finalize");
+            assert_eq!(transaction.status, CredentialTransactionStatus::Signing);
+            assert_eq!(
+                transaction.reserved_credential_id.as_deref(),
+                Some(credential.id.as_str())
+            );
+            self.finalizations.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct HarnessIssuerResolver {
+        order: Order,
+    }
+
+    #[async_trait]
+    impl IssuerContextResolver for HarnessIssuerResolver {
+        async fn resolve(
+            &self,
+            _transaction: &CredentialTransaction,
+            _credential_format: &str,
+            _force: bool,
+        ) -> Result<IssuerContext, CredentialIssuanceError> {
+            record(&self.order, "resolve-issuer");
+            Ok(issuer())
+        }
+    }
+
+    struct HarnessBuilder {
+        order: Order,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl CredentialBuilder for HarnessBuilder {
+        async fn build(
+            &self,
+            request: &CredentialBuildRequest,
+        ) -> Result<BuiltCredential, CredentialIssuanceError> {
+            record(&self.order, "build");
+            if self.fail {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
+            Ok(BuiltCredential {
+                credential_id: request.credential_id.clone(),
+                credential: "signed-credential".to_owned(),
+            })
+        }
+    }
+
+    struct HarnessLifecycle {
+        order: Order,
+        post_issuance_fail: bool,
+    }
+
+    #[async_trait]
+    impl CredentialLifecycle for HarnessLifecycle {
+        async fn ensure_ready(
+            &self,
+            _transaction: &CredentialTransaction,
+            _issuer: &IssuerContext,
+        ) -> Result<(), CredentialIssuanceError> {
+            record(&self.order, "ensure-ready");
+            Ok(())
+        }
+
+        async fn allocate_status(
+            &self,
+            _transaction: &CredentialTransaction,
+            _credential_id: &str,
+            _credential_format: &str,
+        ) -> Result<AllocatedCredentialStatus, CredentialIssuanceError> {
+            record(&self.order, "allocate-status");
+            Ok(AllocatedCredentialStatus::default())
+        }
+
+        async fn after_issued(
+            &self,
+            _transaction: &CredentialTransaction,
+            _credential: &IssuedCredential,
+            _response_format: &str,
+        ) -> Result<(), CredentialIssuanceError> {
+            panic!("OID4VCI lifecycle must not project a DIDComm delivery")
+        }
+
+        async fn after_didcomm_issued(
+            &self,
+            _transaction: &CredentialTransaction,
+            _credential: &IssuedCredential,
+            service_endpoint: &str,
+            message_id: &str,
+        ) -> Result<(), CredentialIssuanceError> {
+            record(&self.order, "after-didcomm");
+            assert_eq!(service_endpoint, "https://wallet.example/inbox");
+            assert_eq!(message_id, "message-1");
+            if self.post_issuance_fail {
+                Err(CredentialIssuanceError::RepositoryUnavailable)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct HarnessEnvelope {
+        order: Order,
+    }
+
+    #[async_trait]
+    impl DidcommEnvelopePort for HarnessEnvelope {
+        async fn resolve_recipient(
+            &self,
+            _holder_did: &str,
+        ) -> Result<ResolvedDidcommRecipient, NativeDidcommError> {
+            record(&self.order, "resolve-recipient");
+            Ok(ResolvedDidcommRecipient {
+                document: recipient_document(),
+                endpoint: "https://wallet.example/inbox".to_owned(),
+            })
+        }
+
+        async fn prepare_encryption(
+            &self,
+            _issuer_did: &str,
+            recipient_document: DidDocument,
+        ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
+            record(&self.order, "prepare-encryption");
+            Ok(PreparedDidcommEncryption {
+                issuer_did: "did:example:issuer".to_owned(),
+                recipient_document,
+                mode: PreparedEncryptionMode::Anoncrypt,
+            })
+        }
+
+        fn pack_credential(
+            &self,
+            credential: &str,
+            _credential_format: &str,
+            _issuer_did: &str,
+            _holder_did: &str,
+            _transaction_id: &str,
+            _credential_id: &str,
+        ) -> Result<PackedDidcommCredential, NativeDidcommError> {
+            record(&self.order, "pack");
+            assert_eq!(credential, "signed-credential");
+            Ok(PackedDidcommCredential {
+                plaintext: "packed-credential".to_owned(),
+                message_id: "message-1".to_owned(),
+            })
+        }
+
+        fn encrypt_prepared(
+            &self,
+            plaintext: &str,
+            _prepared: &PreparedDidcommEncryption,
+        ) -> Result<String, NativeDidcommError> {
+            record(&self.order, "encrypt");
+            assert_eq!(plaintext, "packed-credential");
+            Ok("encrypted-credential".to_owned())
+        }
+    }
+
+    struct HarnessEndpoint {
+        order: Order,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl DidcommEndpointPort for HarnessEndpoint {
+        async fn validate(
+            &self,
+            endpoint: &str,
+        ) -> Result<ValidatedDidcommEndpoint, NativeDidcommError> {
+            record(&self.order, "validate-endpoint");
+            if self.fail {
+                return Err(NativeDidcommError::EndpointNotPublic);
+            }
+            Ok(ValidatedDidcommEndpoint {
+                original: endpoint.to_owned(),
+                url: Url::parse(endpoint).unwrap(),
+                hostname: "wallet.example".to_owned(),
+                addresses: vec!["1.1.1.1:443".parse().unwrap()],
+            })
+        }
+    }
+
+    struct HarnessTransport {
+        order: Order,
+        outcome: DidcommTransportOutcome,
+    }
+
+    #[async_trait]
+    impl DidcommTransportPort for HarnessTransport {
+        async fn deliver(
+            &self,
+            _endpoint: &ValidatedDidcommEndpoint,
+            encrypted_message: String,
+        ) -> DidcommTransportOutcome {
+            record(&self.order, "transport");
+            assert_eq!(encrypted_message, "encrypted-credential");
+            self.outcome
+        }
+    }
+
+    struct HarnessOptions {
+        endpoint_fail: bool,
+        builder_fail: bool,
+        transport_outcome: DidcommTransportOutcome,
+        post_issuance_fail: bool,
+    }
+
+    fn delivery_harness(
+        options: HarnessOptions,
+    ) -> (
+        NativeInitiationDidcommDelivery,
+        Arc<HarnessRepository>,
+        Order,
+    ) {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let repository = Arc::new(HarnessRepository::new(order.clone()));
+        let delivery = NativeInitiationDidcommDelivery::new(
+            NativeInitiationDidcommPorts {
+                repository: repository.clone(),
+                issuer_resolver: Arc::new(HarnessIssuerResolver {
+                    order: order.clone(),
+                }),
+                builder: Arc::new(HarnessBuilder {
+                    order: order.clone(),
+                    fail: options.builder_fail,
+                }),
+                lifecycle: Arc::new(HarnessLifecycle {
+                    order: order.clone(),
+                    post_issuance_fail: options.post_issuance_fail,
+                }),
+                envelope: Arc::new(HarnessEnvelope {
+                    order: order.clone(),
+                }),
+                endpoints: Arc::new(HarnessEndpoint {
+                    order: order.clone(),
+                    fail: options.endpoint_fail,
+                }),
+                transport: Arc::new(HarnessTransport {
+                    order: order.clone(),
+                    outcome: options.transport_outcome,
+                }),
+            },
+            "https://issuer.example",
+        )
+        .unwrap();
+        (delivery, repository, order)
+    }
+
+    #[tokio::test]
+    async fn delivery_orders_irreversible_work_after_security_preflight() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        let receipt = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.transaction_id, "transaction-1");
+        assert_eq!(
+            receipt.credential_id,
+            reserved_credential_id(&transaction())
+        );
+        assert_eq!(receipt.holder_did, "did:example:holder");
+        assert_eq!(receipt.service_endpoint, "https://wallet.example/inbox");
+        assert_eq!(receipt.didcomm_message_id, "message-1");
+        assert_eq!(receipt.status, NativeDidcommDeliveryStatus::Delivered);
+        assert_eq!(receipt.error, None);
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *order.lock().unwrap(),
+            [
+                "resolve-recipient",
+                "validate-endpoint",
+                "resolve-issuer",
+                "resolve-issuer",
+                "ensure-ready",
+                "prepare-encryption",
+                "claim",
+                "allocate-status",
+                "build",
+                "pack",
+                "encrypt",
+                "transport",
+                "finalize",
+                "after-didcomm",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_delivery_is_exactly_tenant_bound_before_prerequisite_work() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        assert_eq!(
+            delivery
+                .deliver_for_organization("org-other", "transaction-1", "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::TransactionNotFound)
+        );
+        assert_eq!(*order.lock().unwrap(), ["load-transaction"]);
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+
+        order.lock().unwrap().clear();
+        assert_eq!(
+            delivery
+                .deliver_for_organization("org-1", "transaction-1", "https://holder.example")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::InvalidRequest)
+        );
+        assert!(order.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn endpoint_rejection_precedes_issuer_status_and_claim_work() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: true,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable)
+        );
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["resolve-recipient", "validate-endpoint"]
+        );
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn materialization_failure_restores_the_retryable_claim() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: true,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::CredentialUnavailable)
+        );
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+        let order = order.lock().unwrap();
+        assert!(order.contains(&"build"));
+        assert_eq!(order.last(), Some(&"release"));
+    }
+
+    #[tokio::test]
+    async fn transport_failure_is_retryable_and_returns_a_sanitized_receipt() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Failed,
+            post_issuance_fail: false,
+        });
+        let receipt = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, "transaction-1");
+        assert_eq!(
+            receipt.credential_id,
+            reserved_credential_id(&transaction())
+        );
+        assert_eq!(receipt.holder_did, "did:example:holder");
+        assert_eq!(receipt.service_endpoint, "https://wallet.example/inbox");
+        assert_eq!(receipt.didcomm_message_id, "message-1");
+        assert_eq!(receipt.status, NativeDidcommDeliveryStatus::DeliveryFailed);
+        assert_eq!(receipt.error.as_deref(), Some("didcomm_delivery_failed"));
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+        let order = order.lock().unwrap();
+        assert!(order.contains(&"transport"));
+        assert_eq!(order.last(), Some(&"release"));
+    }
+
+    #[tokio::test]
+    async fn post_issuance_failure_never_reopens_a_finalized_transaction() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: true,
+        });
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::PostIssuanceUnavailable)
+        );
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(order.lock().unwrap().last(), Some(&"after-didcomm"));
     }
 
     #[tokio::test]
