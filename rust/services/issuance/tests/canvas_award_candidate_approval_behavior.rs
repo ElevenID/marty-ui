@@ -198,6 +198,35 @@ fn issuer() -> IssuerContext {
 }
 
 #[test]
+fn approval_debug_output_redacts_snapshots_and_capabilities() {
+    let application_secret = "private-application";
+    let template_secret = "private-template";
+    let binding_secret = "private-binding";
+    let capability_secret = "private-pre-authorized-code";
+    let private_snapshot = CanvasAwardApprovalSnapshot {
+        application: object(json!({"secret": application_secret})),
+        application_template: object(json!({"secret": template_secret})),
+        binding: object(json!({"secret": binding_secret})),
+        identity_still_linked: true,
+    };
+    let snapshot_debug = format!("{private_snapshot:?}");
+    assert!(snapshot_debug.contains("[REDACTED]"));
+    assert!(snapshot_debug.contains("identity_still_linked: true"));
+    for secret in [application_secret, template_secret, binding_secret] {
+        assert!(!snapshot_debug.contains(secret));
+    }
+
+    let private_seed = CanvasAwardApprovalSeed {
+        transaction_id: "transaction-safe-id".to_owned(),
+        pre_authorized_code: capability_secret.to_owned(),
+    };
+    let seed_debug = format!("{private_seed:?}");
+    assert!(seed_debug.contains("transaction-safe-id"));
+    assert!(seed_debug.contains("[REDACTED]"));
+    assert!(!seed_debug.contains(capability_secret));
+}
+
+#[test]
 fn approval_plan_uses_only_the_validated_template_snapshot() {
     let transaction = plan_canvas_award_approval(
         &context(),

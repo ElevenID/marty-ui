@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -20,7 +20,9 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, PartialEq)]
+const REDACTED: &str = "[REDACTED]";
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasAwardApprovalSnapshot {
     pub application: Map<String, Value>,
     pub application_template: Map<String, Value>,
@@ -28,10 +30,32 @@ pub struct CanvasAwardApprovalSnapshot {
     pub identity_still_linked: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for CanvasAwardApprovalSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasAwardApprovalSnapshot")
+            .field("application", &REDACTED)
+            .field("application_template", &REDACTED)
+            .field("binding", &REDACTED)
+            .field("identity_still_linked", &self.identity_still_linked)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasAwardApprovalSeed {
     pub transaction_id: String,
     pub pre_authorized_code: String,
+}
+
+impl fmt::Debug for CanvasAwardApprovalSeed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasAwardApprovalSeed")
+            .field("transaction_id", &self.transaction_id)
+            .field("pre_authorized_code", &REDACTED)
+            .finish()
+    }
 }
 
 #[async_trait]
