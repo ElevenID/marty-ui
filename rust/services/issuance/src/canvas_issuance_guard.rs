@@ -461,7 +461,7 @@ pub(crate) fn binding_readiness_is_current(
         })
 }
 
-fn credential_snapshot<'a>(
+pub(crate) fn credential_snapshot<'a>(
     binding: &'a Map<String, Value>,
     organization_id: &str,
 ) -> Result<&'a Map<String, Value>, &'static str> {
@@ -579,7 +579,10 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
-fn resolved_issuer_matches(binding: &Map<String, Value>, issuer: &IssuerContext) -> bool {
+pub(crate) fn resolved_issuer_matches(
+    binding: &Map<String, Value>,
+    issuer: &IssuerContext,
+) -> bool {
     let expected = binding
         .get("credential_template_snapshot")
         .and_then(Value::as_object);

@@ -1,20 +1,30 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_award_candidate::{
         plan_selected_canvas_award_candidate_materialization, select_canvas_award_candidate,
         CanvasIdentityJoin,
     },
+    canvas_award_candidate_approval::{
+        plan_canvas_award_approval, CanvasAwardApprovalRepository, CanvasAwardApprovalSeed,
+        CanvasAwardApprovalSeedGenerator, CanvasAwardCandidateApprovalService,
+    },
+    canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
     canvas_award_candidate_postgres::PostgresCanvasAwardCandidateRepository,
     canvas_award_candidate_service::{
-        CanvasAwardCandidateRepository, CanvasAwardCandidateRepositoryError,
+        CanvasAwardCandidateApprover, CanvasAwardCandidateRepository,
+        CanvasAwardCandidateRepositoryError,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::{
         canvas_lti_experience_session_context, CanvasLtiExperienceSessionContext,
     },
-    canvas_lti_launch::CanvasLtiStoredLaunchState,
+    canvas_lti_launch::{CanvasLtiClock, CanvasLtiStoredLaunchState},
+    credential::{
+        CredentialIssuanceError, CredentialTransaction, IssuerContext, IssuerContextResolver,
+    },
 };
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, Row};
@@ -92,6 +102,72 @@ fn revised_fact(fact: &Value, id: &str, score: i64, timestamp: &str) -> Value {
     fact["effective_at"] = json!(timestamp);
     fact["created_at"] = json!(timestamp);
     fact
+}
+
+struct ApprovalSeeds;
+
+impl CanvasAwardApprovalSeedGenerator for ApprovalSeeds {
+    fn generate(&self) -> CanvasAwardApprovalSeed {
+        CanvasAwardApprovalSeed {
+            transaction_id: "transaction-1".to_owned(),
+            pre_authorized_code: "pre-authorized-code-1".to_owned(),
+        }
+    }
+}
+
+struct ApprovalClock;
+
+impl CanvasLtiClock for ApprovalClock {
+    fn now(&self) -> DateTime<Utc> {
+        now()
+    }
+}
+
+struct ApprovalIssuer;
+
+#[async_trait]
+impl IssuerContextResolver for ApprovalIssuer {
+    async fn resolve(
+        &self,
+        transaction: &CredentialTransaction,
+        credential_format: &str,
+        force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        assert_eq!(
+            transaction.issuer_did.as_deref(),
+            Some("did:web:issuer.example:orgs:org-1")
+        );
+        assert_eq!(credential_format, "dc+sd-jwt");
+        assert!(force);
+        let issuer_did = "did:web:issuer.example:orgs:org-1";
+        Ok(IssuerContext {
+            issuer_profile_id: "issuer-profile-1".to_owned(),
+            issuer_did: issuer_did.to_owned(),
+            signing_service_id: "kms-service-1".to_owned(),
+            algorithm: "ES256".to_owned(),
+            verification_method_id: Some(format!("{issuer_did}#badge-key-1")),
+            public_jwk: Some(json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
+            certificate_chain: Vec::new(),
+            raw_context: json!({
+                "organization_id":"org-1",
+                "issuer_did":issuer_did,
+                "algorithm":"ES256",
+                "issuer_profile_id":"issuer-profile-1",
+                "signing_service_id":"kms-service-1",
+                "signing_key_reference":"org_secret://org-1/badge-key",
+                "verification_method_id":format!("{issuer_did}#badge-key-1"),
+                "key_purpose":"vc_jwt_issuer",
+                "public_jwk":{"kty":"EC","crv":"P-256","x":"x","y":"y"},
+                "issuer_profile":{
+                    "id":"issuer-profile-1","status":"active","organization_id":"org-1",
+                    "issuer_did":issuer_did,
+                    "verification_method_id":format!("{issuer_did}#badge-key-1"),
+                    "key_purpose":"vc_jwt_issuer"
+                },
+                "service":{"id":"kms-service-1","algorithm":"ES256"}
+            }),
+        })
+    }
 }
 
 #[tokio::test]
@@ -191,6 +267,84 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         integration["canvas"]["canvas_award_candidate_id"],
         "candidate-1"
     );
+
+    let approval = CanvasAwardCandidateApprovalService::new(
+        Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone())),
+        Arc::new(ApprovalIssuer),
+        Arc::new(ApprovalSeeds),
+        Arc::new(ApprovalClock),
+        Duration::from_secs(900),
+    );
+    approval
+        .approve_if_ready(&context, &application, &plan, true)
+        .await
+        .unwrap();
+    let approved = sqlx::query(
+        "SELECT status, reviewer_id, review_notes, issuance_transaction_id
+         FROM issuance_service.applications WHERE id = 'application-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(approved.get::<String, _>("status"), "approved");
+    assert_eq!(
+        approved.get::<Option<String>, _>("reviewer_id").as_deref(),
+        Some("canvas-pending-award-claim")
+    );
+    assert_eq!(
+        approved.get::<Option<String>, _>("review_notes").as_deref(),
+        Some("Learner claimed an eligible Canvas pending award")
+    );
+    assert_eq!(
+        approved
+            .get::<Option<String>, _>("issuance_transaction_id")
+            .as_deref(),
+        Some("transaction-1")
+    );
+    let transaction = sqlx::query(
+        "SELECT status, credential_template_id, credential_type,
+                credential_payload_format, revocation_profile_id, issuer_profile_id,
+                issuer_did_override, issuer_algorithm, signing_service_id,
+                pre_auth_code, expires_at > created_at AS future_expiry
+         FROM issuance_service.issuance_transactions WHERE id = 'transaction-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(transaction.get::<String, _>("status"), "pending");
+    assert_eq!(
+        transaction.get::<String, _>("credential_template_id"),
+        "credential-template-1"
+    );
+    assert_eq!(
+        transaction
+            .get::<Option<String>, _>("credential_type")
+            .as_deref(),
+        Some("OpenBadgeCredential")
+    );
+    assert_eq!(
+        transaction
+            .get::<Option<String>, _>("revocation_profile_id")
+            .as_deref(),
+        Some("revocation-profile-1")
+    );
+    assert_eq!(
+        transaction
+            .get::<Option<String>, _>("issuer_profile_id")
+            .as_deref(),
+        Some("issuer-profile-1")
+    );
+    assert_eq!(
+        transaction
+            .get::<Option<String>, _>("signing_service_id")
+            .as_deref(),
+        Some("kms-service-1")
+    );
+    assert_eq!(
+        transaction.get::<String, _>("pre_auth_code"),
+        "pre-authorized-code-1"
+    );
+    assert!(transaction.get::<bool, _>("future_expiry"));
 
     // Same payload and same identifier are both replay-safe no-ops.
     assert!(repository
@@ -327,6 +481,95 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     );
     assert!(claimed.get::<bool, _>("resolution_recovery_pending"));
 
+    // Approval locks and rechecks the exact identity; drift after planning cannot reserve.
+    sqlx::query(
+        "INSERT INTO issuance_service.applications
+         VALUES ('application-approval-race', 'org-1', 'application-template-1',
+                 'canvas_lti:learner-subject-1',
+                 '{\"achievement\":\"Portable Canvas\"}'::json,
+                 '{\"canvas\":{\"source\":\"canvas_lti_bootstrap\"}}'::json,
+                 'pending', NULL, NULL, NULL, NULL, NULL, clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_award_candidates
+         (id, organization_id, platform_id, binding_id, learner_identity_id,
+          candidate_key, canvas_user_id, lti_subject, state, application_id,
+          observed_at, created_at, updated_at)
+         VALUES ('candidate-approval-race', 'org-1', 'platform-1', 'binding-1',
+                 'identity-1', 'approval-race', '42', 'learner-subject-1', 'eligible',
+                 'application-approval-race', clock_timestamp(), clock_timestamp(),
+                 clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut race_application = application.clone();
+    race_application.id = "application-approval-race".to_owned();
+    let mut approval_race_plan = plan.clone();
+    approval_race_plan.candidate_id = "candidate-approval-race".to_owned();
+    let approval_repository = PostgresCanvasAwardApprovalRepository::new(pool.clone());
+    let approval_snapshot = approval_repository
+        .load_approval_snapshot(&context, &race_application, &approval_race_plan)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut approval_transaction = plan_canvas_award_approval(
+        &context,
+        &race_application,
+        &approval_race_plan,
+        &approval_snapshot,
+        &CanvasAwardApprovalSeed {
+            transaction_id: "transaction-approval-race".to_owned(),
+            pre_authorized_code: "pre-authorized-code-race".to_owned(),
+        },
+        now(),
+        Duration::from_secs(900),
+    )
+    .unwrap();
+    approval_transaction.issuer_profile_id = Some("issuer-profile-1".to_owned());
+    approval_transaction.signing_service_id = Some("kms-service-1".to_owned());
+    sqlx::query(
+        "UPDATE issuance_service.canvas_learner_identities SET status = 'quarantined'
+         WHERE id = 'identity-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        approval_repository
+            .reserve_issuance(
+                &approval_transaction,
+                &context,
+                &approval_race_plan,
+                &approval_snapshot,
+            )
+            .await,
+        Err(marty_issuance_service::canvas_award_candidate_service::CanvasAwardCandidateApprovalError::ReadinessDrift)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.applications
+             WHERE id = 'application-approval-race'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_transactions
+             WHERE id = 'transaction-approval-race'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+
     // A concurrent state change makes linking fail atomically and leaves the app untouched.
     sqlx::query(
         "INSERT INTO issuance_service.canvas_award_candidates
@@ -405,9 +648,24 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             activated_at timestamptz, archived_at timestamptz)",
         "CREATE TABLE issuance_service.applications (
             id text PRIMARY KEY, organization_id text NOT NULL,
-            application_template_id text NOT NULL, integration_context json NOT NULL,
-            status text NOT NULL, issuance_transaction_id text, credential_id text,
+            application_template_id text NOT NULL, applicant_identifier text NOT NULL,
+            form_data json NOT NULL, integration_context json NOT NULL,
+            status text NOT NULL, review_notes text, reviewer_id text,
+            reviewed_at timestamptz, issuance_transaction_id text, credential_id text,
             updated_at timestamptz NOT NULL DEFAULT clock_timestamp())",
+        "CREATE TABLE issuance_service.issuance_transactions (
+            id text PRIMARY KEY, organization_id text NOT NULL,
+            credential_template_id text NOT NULL, revocation_profile_id text,
+            renewal_of_credential_id text, applicant_id text, application_id text,
+            subject_did text, status text NOT NULL, pre_auth_code text NOT NULL UNIQUE,
+            c_nonce text, claims json NOT NULL, credential_type text,
+            selective_disclosure_claims json NOT NULL, zk_predicate_claims json NOT NULL,
+            credential_payload_format text NOT NULL, wallet_configs json NOT NULL,
+            validity_days integer NOT NULL, renewable boolean NOT NULL,
+            renewal_window_days integer NOT NULL, delivery_mode text NOT NULL,
+            issuer_profile_id text, issuer_mode text NOT NULL,
+            issuer_did_override text, issuer_algorithm text, signing_service_id text,
+            created_at timestamptz NOT NULL, expires_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.canvas_learner_identities (
             id text PRIMARY KEY, organization_id text NOT NULL, platform_id text NOT NULL,
             deployment_id text NOT NULL, lti_subject text NOT NULL, canvas_user_id text,
@@ -468,12 +726,15 @@ async fn seed_candidate(pool: &sqlx::PgPool) {
             '[{\"requirement_id\":\"score-1\",\"source\":\"ags_result\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"course-1\",\"resource_id\":\"marty:score\",\"line_item_url\":\"https://canvas.example.edu/api/lti/courses/1/line_items/1\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]'::json,
             '{\"enable_canvas_evidence\":true}'::json, true, 3, 3,
             '[{\"code\":\"kms\",\"status\":\"ready\",\"blocking\":true}]'::json,
-            '2026-08-29T15:59:00Z', '{\"id\":\"credential-template-1\"}'::json,
+            '2026-08-29T15:59:00Z',
+            '{\"id\":\"credential-template-1\",\"organization_id\":\"org-1\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"revocation-profile-1\",\"issuer_did\":\"did:web:issuer.example:orgs:org-1\",\"issuer_algorithm\":\"ES256\",\"wallet_configs\":[],\"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],\"validity_rules\":{\"default_validity_days\":365,\"renewable\":false,\"renewal_window_days\":30}}'::json,
             '2026-08-29T15:00:00Z', NULL)",
         "INSERT INTO issuance_service.applications
          VALUES ('application-1', 'org-1', 'application-template-1',
+                 'canvas_lti:learner-subject-1',
+                 '{\"achievement\":\"Portable Canvas\"}'::json,
                  '{\"canvas\":{\"source\":\"canvas_lti_bootstrap\"}}'::json,
-                 'pending', NULL, NULL, clock_timestamp())",
+                 'pending', NULL, NULL, NULL, NULL, NULL, clock_timestamp())",
         "INSERT INTO issuance_service.canvas_learner_identities
          VALUES ('identity-1', 'org-1', 'platform-1', 'deployment-123',
                  'learner-subject-1', '42', 'linked')",

@@ -809,18 +809,29 @@ fn format_policy(
     } else {
         return Err(CredentialIssuanceError::UnsupportedFormat(normalized));
     };
-    let remote_format = match kind {
-        CredentialBuilderKind::SdJwt => "dc+sd-jwt",
-        CredentialBuilderKind::JwtVcJson => "jwt_vc_json",
-        CredentialBuilderKind::DataIntegrity => "ldp_vc",
-        CredentialBuilderKind::Mdoc => "mso_mdoc",
-    }
-    .to_owned();
+    let remote_format = remote_credential_format(&transaction.credential_payload_format)?;
     Ok(FormatPolicy {
         kind,
         response_format,
         remote_format,
     })
+}
+
+pub(crate) fn remote_credential_format(
+    payload_format: &str,
+) -> Result<String, CredentialIssuanceError> {
+    let normalized = normalize_format(payload_format);
+    if MDOC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
+        Ok("mso_mdoc".to_owned())
+    } else if DATA_INTEGRITY_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
+        Ok("ldp_vc".to_owned())
+    } else if SD_JWT_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
+        Ok("dc+sd-jwt".to_owned())
+    } else if JWT_VC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
+        Ok("jwt_vc_json".to_owned())
+    } else {
+        Err(CredentialIssuanceError::UnsupportedFormat(normalized))
+    }
 }
 
 fn normalize_format(value: &str) -> String {
