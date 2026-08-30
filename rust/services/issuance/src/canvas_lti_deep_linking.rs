@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -23,6 +23,7 @@ const MESSAGE_TYPE_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/mess
 const VERSION_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
 const CONTENT_ITEMS_CLAIM: &str = "https://purl.imsglobal.org/spec/lti-dl/claim/content_items";
 const DATA_CLAIM: &str = "https://purl.imsglobal.org/spec/lti-dl/claim/data";
+const REDACTED: &str = "[REDACTED]";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanvasLtiDeepLinkingPlatform {
@@ -48,7 +49,7 @@ pub struct CanvasLtiDeepLinkingBinding {
     pub config_version: i64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasLtiDeepLinkingPersistenceScope {
     pub session_id: String,
     pub session_state: String,
@@ -60,14 +61,41 @@ pub struct CanvasLtiDeepLinkingPersistenceScope {
     pub canvas_account_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl fmt::Debug for CanvasLtiDeepLinkingPersistenceScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiDeepLinkingPersistenceScope")
+            .field("session_id", &REDACTED)
+            .field("session_state", &REDACTED)
+            .field("platform_id", &self.platform_id)
+            .field("platform_config_version", &self.platform_config_version)
+            .field("binding_id", &self.binding_id)
+            .field("binding_config_version", &self.binding_config_version)
+            .field("organization_id", &self.organization_id)
+            .field("canvas_account_id", &self.canvas_account_id)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiDeepLinkingPlan {
     pub persistence_scope: CanvasLtiDeepLinkingPersistenceScope,
     pub jwt_payload: Value,
     pub response: CanvasLtiDeepLinkingResponse,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+impl fmt::Debug for CanvasLtiDeepLinkingPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiDeepLinkingPlan")
+            .field("persistence_scope", &self.persistence_scope)
+            .field("jwt_payload", &REDACTED)
+            .field("response", &REDACTED)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct CanvasLtiDeepLinkingResponse {
     pub canvas_platform_id: String,
     pub organization_id: String,
@@ -76,6 +104,21 @@ pub struct CanvasLtiDeepLinkingResponse {
     pub content_items: Vec<Value>,
     pub jwt: String,
     pub form_post: Value,
+}
+
+impl fmt::Debug for CanvasLtiDeepLinkingResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiDeepLinkingResponse")
+            .field("canvas_platform_id", &self.canvas_platform_id)
+            .field("organization_id", &self.organization_id)
+            .field("canvas_account_id", &self.canvas_account_id)
+            .field("deep_link_return_url", &REDACTED)
+            .field("content_items", &REDACTED)
+            .field("jwt", &REDACTED)
+            .field("form_post", &REDACTED)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]

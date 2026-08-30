@@ -744,7 +744,7 @@ async fn create_canvas_lti_deep_linking_response(
         .ok_or(CanvasLtiDeepLinkingError::RepositoryUnavailable)?
         .create_response(&token)
         .await?;
-    Ok(Json(response).into_response())
+    Ok(private_no_store(Json(response).into_response()))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1462,7 +1462,7 @@ impl From<CanvasLtiDeepLinkingError> for CanvasLtiDeepLinkingHttpError {
 impl IntoResponse for CanvasLtiDeepLinkingHttpError {
     fn into_response(self) -> Response {
         use CanvasLtiDeepLinkingError as Error;
-        match self {
+        let response = match self {
             Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
             Self::Service(Error::SessionNotFound) => (
                 StatusCode::NOT_FOUND,
@@ -1489,8 +1489,12 @@ impl IntoResponse for CanvasLtiDeepLinkingHttpError {
                 | Error::InvalidEvidenceRequirements(_)
                 | Error::ConfigurationDrift),
             ) => (StatusCode::CONFLICT, Json(json!({"detail": error.to_string()}))).into_response(),
-            Self::Service(Error::SigningUnavailable(detail)) => {
-                (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"detail": detail}))).into_response()
+            Self::Service(Error::SigningUnavailable(_)) => {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
+                )
+                    .into_response()
             }
             Self::Service(Error::RepositoryUnavailable) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -1505,7 +1509,8 @@ impl IntoResponse for CanvasLtiDeepLinkingHttpError {
                 Json(json!({"detail": "Canvas LTI Deep Linking body exceeds the size limit"})),
             )
                 .into_response(),
-        }
+        };
+        private_no_store(response)
     }
 }
 

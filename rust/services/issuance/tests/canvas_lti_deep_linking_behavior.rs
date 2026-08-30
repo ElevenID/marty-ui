@@ -189,6 +189,28 @@ fn plan_preserves_python_content_item_and_lti_claim_contract() {
     );
     assert_eq!(plan.persistence_scope.platform_config_version, 7);
     assert_eq!(plan.persistence_scope.binding_config_version, 11);
+
+    let plan_debug = format!("{plan:?}");
+    assert!(plan_debug.contains("platform-1"));
+    assert!(plan_debug.contains("[REDACTED]"));
+    assert!(!plan_debug.contains("opaque-canvas-state"));
+    assert!(!plan_debug.contains("00112233445566778899aabbccddeeff"));
+
+    let mut private_scope = plan.persistence_scope.clone();
+    private_scope.session_id = "private-session-id".to_owned();
+    private_scope.session_state = "private-session-state".to_owned();
+    let scope_debug = format!("{private_scope:?}");
+    assert!(!scope_debug.contains("private-session-id"));
+    assert!(!scope_debug.contains("private-session-state"));
+
+    let mut private_response = plan.response;
+    private_response.jwt = "private-deep-link-jwt".to_owned();
+    private_response.form_post = json!({"secret": "private-form-post"});
+    let response_debug = format!("{private_response:?}");
+    assert!(response_debug.contains("platform-1"));
+    assert!(response_debug.contains("[REDACTED]"));
+    assert!(!response_debug.contains("private-deep-link-jwt"));
+    assert!(!response_debug.contains("private-form-post"));
 }
 
 #[test]
@@ -341,6 +363,21 @@ impl CanvasLtiToolJwtSigner for Signer {
     }
 }
 
+struct FailingSigner;
+
+#[async_trait]
+impl CanvasLtiToolJwtSigner for FailingSigner {
+    async fn sign_jwt(&self, _payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+        Err(CanvasLtiToolSigningError::SigningFailed(
+            "private-signing-outage-detail".to_owned(),
+        ))
+    }
+
+    async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError> {
+        unreachable!("Deep Linking does not publish keys")
+    }
+}
+
 struct FixedClock;
 
 impl CanvasLtiClock for FixedClock {
@@ -361,7 +398,7 @@ fn service(
     session: CanvasLtiStoredLaunchState,
     repository: Arc<Repository>,
     validator: Arc<Validator>,
-    signer: Arc<Signer>,
+    signer: Arc<dyn CanvasLtiToolJwtSigner>,
 ) -> CanvasLtiDeepLinkingService {
     CanvasLtiDeepLinkingService::new(
         CanvasLtiExperienceSessionService::new(Arc::new(SessionRepository {
@@ -396,6 +433,11 @@ async fn response_json(response: axum::response::Response) -> Value {
         .await
         .unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+fn assert_private_no_store(response: &axum::response::Response) {
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
 }
 
 #[tokio::test]
@@ -540,6 +582,7 @@ async fn http_route_requires_bearer_before_body_and_forbids_caller_owned_fields(
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert_private_no_store(&response);
 
     let response = make_app()
         .oneshot(
@@ -552,6 +595,7 @@ async fn http_route_requires_bearer_before_body_and_forbids_caller_owned_fields(
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_private_no_store(&response);
     let body = response_json(response).await;
     assert_eq!(body["detail"][0]["type"], "extra_forbidden");
     assert_eq!(body["detail"][0]["loc"], json!(["body", "caller_owned"]));
@@ -567,8 +611,44 @@ async fn http_route_requires_bearer_before_body_and_forbids_caller_owned_fields(
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_private_no_store(&response);
     let body = response_json(response).await;
     assert_eq!(body["canvas_platform_id"], "platform-1");
     assert_eq!(body["jwt"], "signed.deep-link.jwt");
     assert_eq!(body["form_post"]["method"], "POST");
+}
+
+#[tokio::test]
+async fn http_route_sanitizes_signing_failures_and_prevents_caching() {
+    let response = service_app(service(
+        stored_session(),
+        Arc::new(Repository {
+            feature_enabled: Some(true),
+            platform: Some(platform()),
+            binding: Some(binding()),
+            persisted: Mutex::new(Vec::new()),
+        }),
+        Arc::new(Validator(Mutex::new(Vec::new()))),
+        Arc::new(FailingSigner),
+    ))
+    .oneshot(
+        Request::post(
+            "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+        )
+        .header(header::AUTHORIZATION, "Bearer private-session-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_private_no_store(&response);
+    let body = response_json(response).await;
+    assert_eq!(
+        body,
+        json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})
+    );
+    assert!(!body.to_string().contains("private-signing-outage-detail"));
 }
