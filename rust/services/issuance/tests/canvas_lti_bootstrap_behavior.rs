@@ -14,9 +14,8 @@ use marty_issuance_service::{
         CanvasLtiBootstrapApplication, CanvasLtiBootstrapApplicationAction,
         CanvasLtiBootstrapApplicationGenerator, CanvasLtiBootstrapApplicationSeed,
         CanvasLtiBootstrapPersistence, CanvasLtiBootstrapPlan, CanvasLtiBootstrapPlanError,
-        CanvasLtiBootstrapRepository,
-        CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
-        CanvasLtiBootstrapServiceError, CanvasLtiBootstrapSyncEnqueuer,
+        CanvasLtiBootstrapRepository, CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest,
+        CanvasLtiBootstrapService, CanvasLtiBootstrapServiceError, CanvasLtiBootstrapSyncEnqueuer,
         CanvasLtiBootstrapSyncError, CanvasLtiBootstrapTemplate,
     },
     canvas_lti_experience::{
@@ -260,7 +259,7 @@ impl CanvasLtiBootstrapRepository for TemplateValidationRepository {
         &self,
         _context: &marty_issuance_service::canvas_lti_experience::CanvasLtiExperienceSessionContext,
         _plan: &CanvasLtiBootstrapPlan,
-    ) -> Result<(), CanvasLtiBootstrapRepositoryError> {
+    ) -> Result<CanvasLtiBootstrapPersistence, CanvasLtiBootstrapRepositoryError> {
         unreachable!("invalid templates must not be persisted")
     }
 
