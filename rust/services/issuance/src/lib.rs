@@ -36,6 +36,7 @@ pub mod credential_builder;
 pub mod credential_issuer;
 pub mod credential_lifecycle;
 pub mod credential_management;
+pub mod credential_management_postgres;
 pub mod credential_postgres;
 pub mod dpop;
 pub mod ephemeral_postgres;

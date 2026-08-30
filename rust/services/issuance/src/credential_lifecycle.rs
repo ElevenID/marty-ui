@@ -1063,7 +1063,7 @@ mod tests {
             id: "credential-a".to_owned(),
             organization_id: "org-a".to_owned(),
             credential_template_id: "template-a".to_owned(),
-            issuer_did: "did:web:issuer.example".to_owned(),
+            issuer_did: Some("did:web:issuer.example".to_owned()),
             status: crate::credential_management::ManagedCredentialStatus::Active,
             status_updated_at: Utc::now(),
             revoked: false,

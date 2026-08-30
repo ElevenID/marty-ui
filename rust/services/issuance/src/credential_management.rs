@@ -68,7 +68,7 @@ pub struct ManagedCredential {
     pub id: String,
     pub organization_id: String,
     pub credential_template_id: String,
-    pub issuer_did: String,
+    pub issuer_did: Option<String>,
     pub status: ManagedCredentialStatus,
     pub status_updated_at: DateTime<Utc>,
     pub revoked: bool,
@@ -81,7 +81,7 @@ pub struct ManagedCredential {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CredentialStatusView {
     pub id: String,
-    pub issuer_did: String,
+    pub issuer_did: Option<String>,
     pub status: String,
     pub status_updated_at: DateTime<Utc>,
     pub reason: Option<String>,
@@ -347,7 +347,7 @@ mod tests {
                     id: "credential-a".to_owned(),
                     organization_id: "org-a".to_owned(),
                     credential_template_id: "template-a".to_owned(),
-                    issuer_did: "did:web:issuer.example".to_owned(),
+                    issuer_did: Some("did:web:issuer.example".to_owned()),
                     status,
                     status_updated_at: Utc
                         .with_ymd_and_hms(2026, 8, 30, 8, 0, 0)

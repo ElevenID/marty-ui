@@ -9,6 +9,10 @@ use marty_issuance_service::credential::{
     CredentialTransactionStatus, IssuedCredential, IssuerContext,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
+use marty_issuance_service::credential_management::{
+    CredentialLifecycleAction, CredentialManagementRepository, ManagedCredentialStatus,
+};
+use marty_issuance_service::credential_management_postgres::PostgresCredentialManagementRepository;
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
 use serde_json::json;
 use sha2::Sha256;
@@ -21,6 +25,121 @@ fn token_digest(key: &[u8], token: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
     mac.update(token.as_bytes());
     hex::encode(mac.finalize().into_bytes())
+}
+
+#[tokio::test]
+async fn credential_management_repository_is_concurrency_safe_and_canvas_durable() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let database_name = url::Url::parse(&database_url)
+        .expect("credential PostgreSQL contract URL must parse")
+        .path()
+        .trim_start_matches('/')
+        .to_owned();
+    assert!(
+        database_name.ends_with("_test"),
+        "ISSUANCE_POSTGRES_TEST_URL must name a dedicated *_test database"
+    );
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .expect("credential PostgreSQL contract database must connect");
+    create_contract_schema(&pool).await;
+    sqlx::query(
+        "INSERT INTO issuance_service.issued_credentials
+             (id, transaction_id, organization_id, credential_template_id,
+              issuer_did, revocation_profile_id, status_list_entries,
+              credential_jwt, credential_hash, status, status_updated_at,
+              revoked, issued_at)
+         VALUES ('credential-managed', 'transaction-managed', 'org-managed', 'template-managed',
+                 NULL, 'profile-managed',
+                 '[{\"status_list_id\":\"profile-managed\",\"index\":11}]'::jsonb,
+                 'credential', 'hash', 'active', clock_timestamp(), false, clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.credential_delivery_records
+             (id, credential_id, transaction_id, organization_id, delivery_target,
+              delivery_mode, status, metadata, created_at, updated_at)
+         VALUES ('delivery-managed', 'credential-managed', 'transaction-managed',
+                 'org-managed', 'canvas_credentials', 'wallet_plus_canvas_mirror',
+                 'delivered', '{}'::jsonb, clock_timestamp(), clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let repository = PostgresCredentialManagementRepository::new(pool.clone());
+    let mut credential = repository
+        .get("credential-managed")
+        .await
+        .unwrap()
+        .expect("managed credential");
+    assert_eq!(credential.status, ManagedCredentialStatus::Active);
+    assert_eq!(
+        credential.issuer_did, None,
+        "nullable issuer DID is preserved"
+    );
+    credential.status = ManagedCredentialStatus::Suspended;
+    credential.status_updated_at = Utc::now();
+    let credential = repository
+        .persist(&credential, ManagedCredentialStatus::Active)
+        .await
+        .expect("conditional status persistence");
+    assert_eq!(credential.status, ManagedCredentialStatus::Suspended);
+    assert!(
+        repository
+            .persist(&credential, ManagedCredentialStatus::Active)
+            .await
+            .is_err(),
+        "a stale lifecycle writer must not overwrite the canonical status"
+    );
+    repository
+        .synchronize_canvas(
+            &credential,
+            CredentialLifecycleAction::Suspend,
+            Some("manual review"),
+        )
+        .await
+        .expect("durable Canvas lifecycle request");
+    let metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM issuance_service.credential_delivery_records
+         WHERE id = 'delivery-managed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(metadata["status_sync_state"], "pending");
+    assert_eq!(metadata["last_status_sync_action"], "suspend");
+    assert_eq!(metadata["requested_credential_status"], "suspended");
+    assert_eq!(metadata["requested_status_sync_reason"], "manual review");
+
+    let mut credential = credential;
+    credential.status = ManagedCredentialStatus::Active;
+    credential.status_updated_at = Utc::now();
+    let credential = repository
+        .persist(&credential, ManagedCredentialStatus::Suspended)
+        .await
+        .expect("reinstate projection persistence");
+    repository
+        .synchronize_canvas(&credential, CredentialLifecycleAction::Reinstate, None)
+        .await
+        .expect("nullable Canvas lifecycle reason");
+    let metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM issuance_service.credential_delivery_records
+         WHERE id = 'delivery-managed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(metadata["requested_credential_status"], "active");
+    assert!(metadata["requested_status_sync_reason"].is_null());
+
+    drop_contract_schema(&pool).await;
 }
 
 #[tokio::test]
