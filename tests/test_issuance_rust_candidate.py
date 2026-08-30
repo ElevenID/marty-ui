@@ -426,9 +426,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
         "http": 99,
-        "grpc": 12,
+        "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 58,
+        "literal_environment_variables": 56,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -455,6 +455,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "DATABASE_URL",
         "GRPC_SERVICE_TOKEN",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
+        "ISSUANCE_GRPC_ENABLED",
+        "ISSUANCE_GRPC_PORT",
         "ISSUANCE_SERVICE_PORT",
         "ISSUANCE_API_KEY",
         "ISSUER_BASE_URL",

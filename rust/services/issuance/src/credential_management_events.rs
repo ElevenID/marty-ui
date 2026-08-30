@@ -208,6 +208,7 @@ mod tests {
         CredentialLifecycleEvent {
             event_type: event_type.to_owned(),
             credential_id: format!("credential-{event_type}"),
+            transaction_id: String::new(),
             organization_id: organization_id.to_owned(),
             credential_template_id: credential_template_id.to_owned(),
             status: event_type.to_owned(),

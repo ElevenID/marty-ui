@@ -308,6 +308,11 @@ impl PostgresCredentialLifecycle {
         })
     }
 
+    #[must_use]
+    pub fn status_publisher(&self) -> HttpCredentialStatusAllocator {
+        self.status.clone()
+    }
+
     async fn record_canvas_drift(
         &self,
         transaction: &CredentialTransaction,
@@ -518,6 +523,62 @@ impl PostgresCredentialLifecycle {
         if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
             self.record_canvas_delivery(transaction, credential).await?;
         }
+        Ok(())
+    }
+
+    async fn record_didcomm_event_and_deliveries(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        service_endpoint: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        sqlx::query(
+            "INSERT INTO issuance_service.issuance_events
+                 (id, transaction_id, application_id, event_type, metadata, created_at)
+             VALUES ($1, $2, $3, 'credential_issued', $4, clock_timestamp())
+             ON CONFLICT (id) DO UPDATE SET
+                 transaction_id = EXCLUDED.transaction_id,
+                 application_id = EXCLUDED.application_id,
+                 event_type = EXCLUDED.event_type,
+                 metadata = EXCLUDED.metadata",
+        )
+        .bind(delivery_record_id(
+            &credential.id,
+            "credential_issued",
+            Some("didcomm_v2"),
+        ))
+        .bind(&transaction.id)
+        .bind(&transaction.application_id)
+        .bind(json!({
+            "credential_id": credential.id,
+            "credential_type": transaction.credential_type,
+            "delivery_protocol": "didcomm_v2",
+            "service_endpoint": service_endpoint,
+        }))
+        .execute(&self.pool)
+        .await
+        .map_err(database_error)?;
+
+        if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
+            self.record_canvas_delivery(transaction, credential).await?;
+        }
+        let delivery_id = delivery_record_id(&credential.id, "didcomm_v2", None);
+        self.upsert_delivery(
+            &delivery_id,
+            transaction,
+            credential,
+            "didcomm_v2",
+            "delivered",
+            None,
+            None,
+            json!({
+                "protocol": "didcomm_v2",
+                "service_endpoint": service_endpoint,
+                "didcomm_message_id": message_id,
+            }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -757,6 +818,25 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
         self.record_event_and_deliveries(transaction, credential, response_format)
             .await
     }
+
+    async fn after_didcomm_issued(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        service_endpoint: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        self.record_canvas_drift(transaction, &credential.id)
+            .await?;
+        self.finalize_renewal(transaction, credential).await?;
+        self.record_didcomm_event_and_deliveries(
+            transaction,
+            credential,
+            service_endpoint,
+            message_id,
+        )
+        .await
+    }
 }
 
 fn canvas_delivery_metadata(canvas: Option<&Map<String, Value>>) -> Value {
@@ -802,7 +882,11 @@ fn canvas_delivery_metadata(canvas: Option<&Map<String, Value>>) -> Value {
     Value::Object(metadata)
 }
 
-fn delivery_record_id(credential_id: &str, target: &str, scope_id: Option<&str>) -> String {
+pub(crate) fn delivery_record_id(
+    credential_id: &str,
+    target: &str,
+    scope_id: Option<&str>,
+) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         format!("{credential_id}:{target}:{}", scope_id.unwrap_or("-")).as_bytes(),
@@ -888,6 +972,8 @@ mod tests {
             applicant_id: None,
             application_id: None,
             subject_did: None,
+            idempotency_key_hash: None,
+            idempotency_request_hash: None,
             status: CredentialTransactionStatus::Signing,
             pre_authorized_code: "pre-auth".to_owned(),
             nonce: None,
@@ -907,6 +993,9 @@ mod tests {
             issuer_algorithm: Some("ES256".to_owned()),
             signing_service_id: Some("service".to_owned()),
             reserved_credential_id: None,
+            oid4vci_client_id: None,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(7),
         }
     }
 

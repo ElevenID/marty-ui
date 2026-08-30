@@ -25,6 +25,7 @@ const CANVAS_OAUTH: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
+const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -47,7 +48,9 @@ struct Coverage {
     canvas_lti_behavior_contract: Upstream,
     canvas_oauth_behavior_contract: Upstream,
     credential_lifecycle_behavior_contract: Upstream,
+    initiation_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
+    native_grpc: Vec<String>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
     native_environment_variables: Vec<String>,
@@ -636,6 +639,17 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid credential lifecycle provenance",
     )?;
     require(
+        coverage.initiation_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.initiation_behavior_contract.path == "contracts/issuance-initiation.json"
+            && coverage.initiation_behavior_contract.commit.len() == 40
+            && coverage
+                .initiation_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid initiation provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -718,6 +732,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_credential_lifecycle == coverage.credential_lifecycle_behavior_contract.sha256,
         "credential lifecycle hash does not match provenance",
     )?;
+    let canonical_initiation = canonical_lf(INITIATION);
+    let actual_initiation = format!("{:x}", Sha256::digest(&canonical_initiation));
+    require(
+        actual_initiation == coverage.initiation_behavior_contract.sha256,
+        "initiation hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -738,6 +758,20 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         grpc_count == grpc_methods.len() as u64,
         "issuance gRPC method count is inconsistent",
+    )?;
+    let frozen_grpc_methods = grpc_methods
+        .iter()
+        .filter_map(|method| method["method"].as_str())
+        .collect::<BTreeSet<_>>();
+    let native_grpc_methods = coverage
+        .native_grpc
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    require(
+        native_grpc_methods.len() == coverage.native_grpc.len()
+            && native_grpc_methods.is_subset(&frozen_grpc_methods),
+        "native issuance gRPC coverage is invalid",
     )?;
 
     let mut native = BTreeSet::new();
@@ -1082,8 +1116,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "native and remaining issuance HTTP counts are inconsistent",
     )?;
     require(
-        coverage.remaining.grpc == grpc_count,
-        "remaining issuance gRPC count is inconsistent",
+        coverage.remaining.grpc + coverage.native_grpc.len() as u64 == grpc_count,
+        "native and remaining issuance gRPC counts are inconsistent",
     )?;
     let environment_count = surface["configuration"]["environment_variable_count"]
         .as_u64()
@@ -1123,6 +1157,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "DATABASE_URL",
                 "GRPC_SERVICE_TOKEN",
                 "INTEGRATION_SECRET_MASTER_KEY_ENV",
+                "ISSUANCE_GRPC_ENABLED",
+                "ISSUANCE_GRPC_PORT",
                 "ISSUANCE_SERVICE_PORT",
                 "ISSUANCE_API_KEY",
                 "ISSUER_BASE_URL",
@@ -1206,7 +1242,7 @@ mod tests {
 
     use super::{
         canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, COVERAGE,
-        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING,
+        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, INITIATION,
     };
 
     #[test]
@@ -1230,6 +1266,10 @@ mod tests {
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_LIFECYCLE))),
             coverage.credential_lifecycle_behavior_contract.sha256
         );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(INITIATION))),
+            coverage.initiation_behavior_contract.sha256
+        );
     }
 
     #[test]
@@ -1237,6 +1277,6 @@ mod tests {
         let summary = validate_embedded_contract().expect("contract");
         assert_eq!(summary.native_http, 32);
         assert_eq!(summary.remaining_http, 99);
-        assert_eq!(summary.remaining_grpc, 12);
+        assert_eq!(summary.remaining_grpc, 0);
     }
 }

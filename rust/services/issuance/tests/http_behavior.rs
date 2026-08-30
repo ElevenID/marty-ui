@@ -83,7 +83,8 @@ async fn native_health_preserves_the_legacy_body_and_mmf_readiness() {
         .expect("response");
     assert_eq!(not_ready.status(), 503);
 
-    runtime.mark_listener_healthy().expect("listener");
+    runtime.mark_http_listener_healthy().expect("HTTP listener");
+    runtime.mark_grpc_listener_healthy().expect("gRPC listener");
     runtime.activate().expect("active");
     let ready = app
         .oneshot(Request::get("/ready").body(Body::empty()).expect("request"))
@@ -91,6 +92,44 @@ async fn native_health_preserves_the_legacy_body_and_mmf_readiness() {
         .expect("response");
     assert_eq!(ready.status(), 200);
     assert_eq!(json_body(ready).await["ready"], true);
+}
+
+#[tokio::test]
+async fn readiness_does_not_require_an_explicitly_disabled_grpc_listener() {
+    let config = IssuanceServiceConfig::from_values([(
+        "ISSUANCE_GRPC_ENABLED".to_owned(),
+        "false".to_owned(),
+    )])
+    .expect("HTTP-only configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let app = router(
+        runtime.state(),
+        StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+        TransportPolicy::new(config.cors_allowed_origins.clone()),
+    );
+    runtime.mark_http_listener_healthy().expect("HTTP listener");
+    runtime.activate().expect("active");
+
+    let ready = app
+        .clone()
+        .oneshot(Request::get("/ready").body(Body::empty()).expect("request"))
+        .await
+        .expect("response");
+    assert_eq!(ready.status(), 200);
+    let version = app
+        .oneshot(
+            Request::get("/version")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let version = json_body(version).await;
+    assert!(!version["enabled_features"]
+        .as_array()
+        .expect("feature list")
+        .iter()
+        .any(|feature| feature == "grpc"));
 }
 
 #[tokio::test]

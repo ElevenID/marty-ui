@@ -12,6 +12,8 @@ use serde_json::{json, Map, Value};
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
+    pub grpc_addr: SocketAddr,
+    pub grpc_enabled: bool,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -25,6 +27,18 @@ pub struct IssuanceServiceConfig {
     pub signing_keys_internal_api_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
     pub internal_service_token: Option<String>,
+    pub organization_grpc_target: String,
+    pub credential_template_grpc_target: String,
+    pub revocation_profile_grpc_target: String,
+    pub credential_template_service_url: String,
+    pub vcdm_related_resource_urls: Vec<String>,
+    pub vcdm_related_resource_max_bytes: usize,
+    pub vcdm_related_resource_timeout: Duration,
+    pub didcomm_universal_resolver_url: Option<String>,
+    pub didcomm_did_web_internal_base_url: Option<String>,
+    pub didcomm_encryption_policy_file: Option<String>,
+    pub didcomm_tls_ca_file: Option<String>,
+    pub didcomm_allow_private_ips: bool,
     pub canvas_portable_enabled: bool,
     pub canvas_pilot_organizations: BTreeSet<String>,
     pub canvas_evidence_max_age: Duration,
@@ -52,6 +66,8 @@ impl std::fmt::Debug for IssuanceServiceConfig {
         formatter
             .debug_struct("IssuanceServiceConfig")
             .field("http_addr", &self.http_addr)
+            .field("grpc_addr", &self.grpc_addr)
+            .field("grpc_enabled", &self.grpc_enabled)
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
@@ -80,6 +96,48 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 "internal_service_token_configured",
                 &self.internal_service_token.is_some(),
             )
+            .field("organization_grpc_target", &self.organization_grpc_target)
+            .field(
+                "credential_template_grpc_target",
+                &self.credential_template_grpc_target,
+            )
+            .field(
+                "revocation_profile_grpc_target",
+                &self.revocation_profile_grpc_target,
+            )
+            .field(
+                "credential_template_service_url",
+                &self.credential_template_service_url,
+            )
+            .field(
+                "vcdm_related_resource_url_count",
+                &self.vcdm_related_resource_urls.len(),
+            )
+            .field(
+                "vcdm_related_resource_max_bytes",
+                &self.vcdm_related_resource_max_bytes,
+            )
+            .field(
+                "vcdm_related_resource_timeout",
+                &self.vcdm_related_resource_timeout,
+            )
+            .field(
+                "didcomm_universal_resolver_configured",
+                &self.didcomm_universal_resolver_url.is_some(),
+            )
+            .field(
+                "didcomm_did_web_internal_base_configured",
+                &self.didcomm_did_web_internal_base_url.is_some(),
+            )
+            .field(
+                "didcomm_encryption_policy_configured",
+                &self.didcomm_encryption_policy_file.is_some(),
+            )
+            .field(
+                "didcomm_tls_ca_configured",
+                &self.didcomm_tls_ca_file.is_some(),
+            )
+            .field("didcomm_allow_private_ips", &self.didcomm_allow_private_ips)
             .field("canvas_portable_enabled", &self.canvas_portable_enabled)
             .field(
                 "canvas_pilot_organizations",
@@ -144,6 +202,8 @@ struct Settings {
     build: BuildSettings,
     discovery: DiscoverySettings,
     dependencies: DependencySettings,
+    initiation: InitiationSettings,
+    didcomm: DidcommSettings,
     rate_limit: RateLimitSettings,
 }
 
@@ -151,6 +211,8 @@ struct Settings {
 struct ServerSettings {
     host: IpAddr,
     port: u16,
+    grpc_port: u16,
+    grpc_enabled: bool,
     cors_allowed_origins: Vec<String>,
 }
 
@@ -174,6 +236,26 @@ struct DependencySettings {
 }
 
 #[derive(Deserialize)]
+struct InitiationSettings {
+    organization_grpc_target: String,
+    credential_template_grpc_target: String,
+    revocation_profile_grpc_target: String,
+    credential_template_service_url: String,
+    related_resource_urls: Vec<String>,
+    related_resource_max_bytes: usize,
+    related_resource_timeout_seconds: f64,
+}
+
+#[derive(Deserialize)]
+struct DidcommSettings {
+    universal_resolver_url: Option<String>,
+    did_web_internal_base_url: Option<String>,
+    encryption_policy_file: Option<String>,
+    tls_ca_file: Option<String>,
+    allow_private_ips: bool,
+}
+
+#[derive(Deserialize)]
 struct RateLimitSettings {
     requests: usize,
     window_seconds: u64,
@@ -194,6 +276,10 @@ impl IssuanceServiceConfig {
                 "INTEGRATION_SECRET_MASTER_KEY or INTEGRATION_SECRET_MASTER_KEY_FILE is required",
             ));
         }
+        validate_production_grpc_service_token(
+            config.internal_service_token.as_deref(),
+            &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_owned()),
+        )?;
         Ok(config)
     }
 
@@ -207,6 +293,8 @@ impl IssuanceServiceConfig {
                 "server": {
                     "host": "0.0.0.0",
                     "port": 8005,
+                    "grpc_port": 9005,
+                    "grpc_enabled": true,
                     "cors_allowed_origins": ["http://localhost:3000"]
                 },
                 "build": {
@@ -221,6 +309,22 @@ impl IssuanceServiceConfig {
                     "database_url": "postgresql://marty:marty_dev@postgres:5432/marty_credentials",
                     "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys",
                     "revocation_profile_service_url": "http://revocation-profile:8013"
+                },
+                "initiation": {
+                    "organization_grpc_target": "organization:9002",
+                    "credential_template_grpc_target": "credential-template:9003",
+                    "revocation_profile_grpc_target": "revocation-profile:9013",
+                    "credential_template_service_url": "http://credential-template:8003",
+                    "related_resource_urls": [],
+                    "related_resource_max_bytes": 2000000,
+                    "related_resource_timeout_seconds": 10.0
+                },
+                "didcomm": {
+                    "universal_resolver_url": null,
+                    "did_web_internal_base_url": null,
+                    "encryption_policy_file": null,
+                    "tls_ca_file": null,
+                    "allow_private_ips": false
                 },
                 "rate_limit": {
                     "requests": 30,
@@ -242,12 +346,59 @@ impl IssuanceServiceConfig {
                 .with_detail("cause", error.to_string())
         })?;
         let http_addr = SocketAddr::new(settings.server.host, settings.server.port);
+        let grpc_addr = SocketAddr::new(settings.server.host, settings.server.grpc_port);
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
         let revocation_profile_service_url =
             validate_internal_url(&settings.dependencies.revocation_profile_service_url)?;
+        let organization_grpc_target = validate_grpc_target(
+            &settings.initiation.organization_grpc_target,
+            "ORG_GRPC_TARGET",
+        )?;
+        let credential_template_grpc_target = validate_grpc_target(
+            &settings.initiation.credential_template_grpc_target,
+            "CT_GRPC_TARGET",
+        )?;
+        let revocation_profile_grpc_target = validate_grpc_target(
+            &settings.initiation.revocation_profile_grpc_target,
+            "RP_GRPC_TARGET",
+        )?;
+        let credential_template_service_url = validate_http_base_url(
+            &settings.initiation.credential_template_service_url,
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        )?;
+        if settings.initiation.related_resource_max_bytes == 0 {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "VCDM_RELATED_RESOURCE_MAX_BYTES must be a positive integer",
+            ));
+        }
+        let related_resource_timeout_seconds = settings.initiation.related_resource_timeout_seconds;
+        if !related_resource_timeout_seconds.is_finite() || related_resource_timeout_seconds <= 0.0
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS must be a positive number",
+            ));
+        }
+        let vcdm_related_resource_timeout =
+            Duration::try_from_secs_f64(related_resource_timeout_seconds).map_err(|error| {
+                MmfError::new(
+                    ErrorCode::Configuration,
+                    "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS must be within range",
+                )
+                .with_detail("cause", error.to_string())
+            })?;
+        let didcomm_universal_resolver_url = optional_http_base_url(
+            settings.didcomm.universal_resolver_url,
+            "DIDCOMM_UNIVERSAL_RESOLVER_URL",
+        )?;
+        let didcomm_did_web_internal_base_url = optional_http_base_url(
+            settings.didcomm.did_web_internal_base_url,
+            "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+        )?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
         let integration_secret_key_name = values
@@ -259,7 +410,21 @@ impl IssuanceServiceConfig {
         let integration_secret_master_key = secret_value(&values, integration_secret_key_name)?;
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
-        let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?;
+        if values
+            .get("GRPC_SERVICE_TOKEN")
+            .is_some_and(|value| !value.trim().is_empty())
+            && values
+                .get("GRPC_SERVICE_TOKEN_FILE")
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are mutually exclusive",
+            ));
+        }
+        let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         let canvas_portable_enabled =
             environment_flag(&values, "CANVAS_PORTABLE_INTEGRATION_ENABLED");
         let canvas_pilot_organizations =
@@ -320,6 +485,8 @@ impl IssuanceServiceConfig {
             environment_flag(&values, "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS");
         Ok(Self {
             http_addr,
+            grpc_addr,
+            grpc_enabled: settings.server.grpc_enabled,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
@@ -333,6 +500,20 @@ impl IssuanceServiceConfig {
             signing_keys_internal_api_key,
             revocation_profile_service_url,
             internal_service_token,
+            organization_grpc_target,
+            credential_template_grpc_target,
+            revocation_profile_grpc_target,
+            credential_template_service_url,
+            vcdm_related_resource_urls: settings.initiation.related_resource_urls,
+            vcdm_related_resource_max_bytes: settings.initiation.related_resource_max_bytes,
+            vcdm_related_resource_timeout,
+            didcomm_universal_resolver_url,
+            didcomm_did_web_internal_base_url,
+            didcomm_encryption_policy_file: optional_trimmed(
+                settings.didcomm.encryption_policy_file,
+            ),
+            didcomm_tls_ca_file: optional_trimmed(settings.didcomm.tls_ca_file),
+            didcomm_allow_private_ips: settings.didcomm.allow_private_ips,
             canvas_portable_enabled,
             canvas_pilot_organizations,
             canvas_evidence_max_age,
@@ -368,6 +549,22 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             .with_detail("cause", error.to_string())
         })?;
         server.insert("port".to_owned(), json!(parsed));
+    }
+    if let Some(port) = values.get("ISSUANCE_GRPC_PORT") {
+        let parsed = port.parse::<u16>().map_err(|error| {
+            MmfError::new(
+                ErrorCode::Configuration,
+                "ISSUANCE_GRPC_PORT must be a valid TCP port",
+            )
+            .with_detail("cause", error.to_string())
+        })?;
+        server.insert("grpc_port".to_owned(), json!(parsed));
+    }
+    if values.contains_key("ISSUANCE_GRPC_ENABLED") {
+        server.insert(
+            "grpc_enabled".to_owned(),
+            json!(environment_flag(values, "ISSUANCE_GRPC_ENABLED")),
+        );
     }
     if let Some(origins) = values.get("CORS_ALLOWED_ORIGINS") {
         server.insert(
@@ -409,6 +606,89 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             json!(revocation_profile_service_url),
         );
     }
+    let mut initiation = Map::new();
+    for (environment_name, setting_name) in [
+        ("ORG_GRPC_TARGET", "organization_grpc_target"),
+        ("CT_GRPC_TARGET", "credential_template_grpc_target"),
+        ("RP_GRPC_TARGET", "revocation_profile_grpc_target"),
+        (
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+            "credential_template_service_url",
+        ),
+    ] {
+        if let Some(value) = values.get(environment_name) {
+            initiation.insert(setting_name.to_owned(), json!(value));
+        }
+    }
+    if values.contains_key("VCDM_RELATED_RESOURCE_URLS") {
+        initiation.insert(
+            "related_resource_urls".to_owned(),
+            json!(comma_separated_values(values, "VCDM_RELATED_RESOURCE_URLS")),
+        );
+    }
+    if let Some(value) = values.get("VCDM_RELATED_RESOURCE_MAX_BYTES") {
+        initiation.insert(
+            "related_resource_max_bytes".to_owned(),
+            json!(parse_legacy_number::<usize>(
+                "VCDM_RELATED_RESOURCE_MAX_BYTES",
+                value
+            )?),
+        );
+    }
+    if let Some(value) = values.get("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS") {
+        initiation.insert(
+            "related_resource_timeout_seconds".to_owned(),
+            json!(value.parse::<f64>().map_err(|error| {
+                MmfError::new(
+                    ErrorCode::Configuration,
+                    "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS must be a number",
+                )
+                .with_detail("cause", error.to_string())
+            })?),
+        );
+    }
+    let mut didcomm = Map::new();
+    let resolver = values
+        .get("DIDCOMM_UNIVERSAL_RESOLVER_URL")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            values
+                .get("UNIVERSAL_RESOLVER_URL")
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    if let Some(value) = resolver {
+        didcomm.insert("universal_resolver_url".to_owned(), json!(value));
+    }
+    for (environment_name, setting_name) in [
+        (
+            "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+            "did_web_internal_base_url",
+        ),
+        ("DIDCOMM_ENCRYPTION_POLICY_FILE", "encryption_policy_file"),
+        ("DIDCOMM_TLS_CA_FILE", "tls_ca_file"),
+    ] {
+        if let Some(value) = values
+            .get(environment_name)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            didcomm.insert(setting_name.to_owned(), json!(value));
+        }
+    }
+    if let Some(value) = values.get("DIDCOMM_ALLOW_PRIVATE_IPS") {
+        didcomm.insert(
+            "allow_private_ips".to_owned(),
+            json!(matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )),
+        );
+    }
     let mut rate_limit = Map::new();
     if let Some(requests) = values.get("TOKEN_RATE_LIMIT") {
         rate_limit.insert(
@@ -430,6 +710,8 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
         "build": build,
         "discovery": discovery,
         "dependencies": dependencies,
+        "initiation": initiation,
+        "didcomm": didcomm,
         "rate_limit": rate_limit
     }))
 }
@@ -520,6 +802,47 @@ where
     })
 }
 
+pub(crate) fn normalize_grpc_target(value: &str) -> Option<String> {
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(if value.contains("://") {
+        value.to_owned()
+    } else {
+        format!("http://{value}")
+    })
+}
+
+fn validate_grpc_target(value: &str, name: &str) -> Result<String, MmfError> {
+    let normalized = normalize_grpc_target(value).ok_or_else(|| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a valid gRPC HTTP(S) target"),
+        )
+    })?;
+    let parsed = url::Url::parse(&normalized).map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a valid gRPC HTTP(S) target"),
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+    {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a credential-free gRPC HTTP(S) target"),
+        ));
+    }
+    Ok(normalized)
+}
+
 fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
     validate_http_base_url(value, "ISSUER_BASE_URL")
 }
@@ -546,6 +869,20 @@ fn validate_http_base_url(value: &str, name: &str) -> Result<String, MmfError> {
         ));
     }
     Ok(normalized.to_owned())
+}
+
+fn optional_http_base_url(value: Option<String>, name: &str) -> Result<Option<String>, MmfError> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| validate_http_base_url(&value, name))
+        .transpose()
+}
+
+fn optional_trimmed(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
@@ -650,11 +987,51 @@ fn secret_value(values: &BTreeMap<String, String>, name: &str) -> Result<Option<
     Ok(Some(value.to_owned()))
 }
 
+fn validate_production_grpc_service_token(
+    token: Option<&str>,
+    environment: &str,
+) -> Result<(), MmfError> {
+    if ["development", "dev", "local", "test"]
+        .contains(&environment.trim().to_ascii_lowercase().as_str())
+    {
+        return Ok(());
+    }
+    let token = token.ok_or_else(|| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN is required outside development environments",
+        )
+    })?;
+    let normalized = token.to_ascii_lowercase();
+    if [
+        "change-me",
+        "change_me",
+        "changeme",
+        "replace-me",
+        "replace_me",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+    {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN must not be a placeholder in production",
+        ));
+    }
+    if token.chars().count() < 32 {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN must contain at least 32 characters in production",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use mmf_core::ErrorCode;
 
-    use super::IssuanceServiceConfig;
+    use super::{validate_production_grpc_service_token, IssuanceServiceConfig};
 
     fn values(entries: &[(&str, &str)]) -> Vec<(String, String)> {
         entries
@@ -668,6 +1045,8 @@ mod tests {
         let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
             .expect("defaults");
         assert_eq!(config.http_addr.to_string(), "0.0.0.0:8005");
+        assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9005");
+        assert!(config.grpc_enabled);
         assert_eq!(config.release_version, "0.1.0");
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.issuer_base_url, "https://beta.elevenidllc.com");
@@ -681,6 +1060,30 @@ mod tests {
             config.signing_keys_internal_url.as_str(),
             "http://gateway:8000/internal/signing-keys/"
         );
+        assert_eq!(config.organization_grpc_target, "http://organization:9002");
+        assert_eq!(
+            config.credential_template_grpc_target,
+            "http://credential-template:9003"
+        );
+        assert_eq!(
+            config.revocation_profile_grpc_target,
+            "http://revocation-profile:9013"
+        );
+        assert_eq!(
+            config.credential_template_service_url,
+            "http://credential-template:8003"
+        );
+        assert!(config.vcdm_related_resource_urls.is_empty());
+        assert_eq!(config.vcdm_related_resource_max_bytes, 2_000_000);
+        assert_eq!(
+            config.vcdm_related_resource_timeout,
+            std::time::Duration::from_secs(10)
+        );
+        assert!(config.didcomm_universal_resolver_url.is_none());
+        assert!(config.didcomm_did_web_internal_base_url.is_none());
+        assert!(config.didcomm_encryption_policy_file.is_none());
+        assert!(config.didcomm_tls_ca_file.is_none());
+        assert!(!config.didcomm_allow_private_ips);
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
         assert!(config.token_hmac_key.is_none());
@@ -724,10 +1127,14 @@ mod tests {
     fn hierarchical_configuration_overrides_the_legacy_adapter() {
         let config = IssuanceServiceConfig::from_values(values(&[
             ("ISSUANCE_SERVICE_PORT", "8006"),
+            ("ISSUANCE_GRPC_PORT", "9006"),
+            ("ISSUANCE_GRPC_ENABLED", "false"),
             ("MARTY_RELEASE_VERSION", "1.2.3"),
             ("MARTY_UI_SHA", "abc123"),
             ("MARTY_ISSUANCE__SERVER__HOST", "127.0.0.1"),
             ("MARTY_ISSUANCE__SERVER__PORT", "8010"),
+            ("MARTY_ISSUANCE__SERVER__GRPC_PORT", "9010"),
+            ("MARTY_ISSUANCE__SERVER__GRPC_ENABLED", "true"),
             ("ISSUER_BASE_URL", "https://legacy.example/"),
             ("ISSUER_DISPLAY_NAME", "Legacy Issuer"),
             (
@@ -782,6 +1189,8 @@ mod tests {
         ]))
         .expect("configuration");
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8010");
+        assert_eq!(config.grpc_addr.to_string(), "127.0.0.1:9010");
+        assert!(config.grpc_enabled);
         assert_eq!(config.release_version, "1.2.3");
         assert_eq!(config.build_revision, "abc123");
         assert_eq!(config.issuer_base_url, "https://issuer.example");
@@ -857,10 +1266,55 @@ mod tests {
 
     #[test]
     fn invalid_legacy_port_fails_closed() {
-        let error =
-            IssuanceServiceConfig::from_values(values(&[("ISSUANCE_SERVICE_PORT", "not-a-port")]))
+        for name in ["ISSUANCE_SERVICE_PORT", "ISSUANCE_GRPC_PORT"] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, "not-a-port")]))
                 .expect_err("invalid port");
-        assert_eq!(error.code, ErrorCode::Configuration);
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn legacy_grpc_listener_switch_preserves_python_boolean_semantics() {
+        for disabled in ["false", "0", "no", "unexpected"] {
+            let config =
+                IssuanceServiceConfig::from_values(values(&[("ISSUANCE_GRPC_ENABLED", disabled)]))
+                    .expect("disabled gRPC listener");
+            assert!(!config.grpc_enabled, "{disabled}");
+        }
+        for enabled in ["true", "1", "yes", "TRUE"] {
+            let config =
+                IssuanceServiceConfig::from_values(values(&[("ISSUANCE_GRPC_ENABLED", enabled)]))
+                    .expect("enabled gRPC listener");
+            assert!(config.grpc_enabled, "{enabled}");
+        }
+    }
+
+    #[test]
+    fn grpc_service_token_configuration_preserves_the_fail_closed_python_boundary() {
+        let conflict = IssuanceServiceConfig::from_values(values(&[
+            ("GRPC_SERVICE_TOKEN", "direct-token"),
+            ("GRPC_SERVICE_TOKEN_FILE", "mounted-token"),
+        ]))
+        .expect_err("one service-token source is required");
+        assert_eq!(conflict.code, ErrorCode::Configuration);
+
+        for token in [
+            "change-me-production-token-that-is-long-enough",
+            "too-short",
+        ] {
+            assert_eq!(
+                validate_production_grpc_service_token(Some(token), "production")
+                    .expect_err("weak production service token")
+                    .code,
+                ErrorCode::Configuration
+            );
+        }
+        assert!(validate_production_grpc_service_token(
+            Some("production-service-token-with-at-least-32-bytes"),
+            "production"
+        )
+        .is_ok());
+        assert!(validate_production_grpc_service_token(None, "test").is_ok());
     }
 
     #[test]
@@ -869,6 +1323,150 @@ mod tests {
             let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
                 .expect_err("invalid rate limit");
             assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn legacy_initiation_configuration_is_normalized_once() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("ORG_GRPC_TARGET", "organization.internal:9102"),
+            (
+                "CT_GRPC_TARGET",
+                "https://credential-template.internal:9103",
+            ),
+            ("RP_GRPC_TARGET", "http://revocation-profile.internal:9113"),
+            (
+                "CREDENTIAL_TEMPLATE_SERVICE_URL",
+                "https://templates.internal/api/",
+            ),
+            (
+                "VCDM_RELATED_RESOURCE_URLS",
+                " https://www.w3.org/ns/credentials/v2,https://example.test/context ,,",
+            ),
+            ("VCDM_RELATED_RESOURCE_MAX_BYTES", "42"),
+            ("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "0.25"),
+        ]))
+        .expect("initiation configuration");
+
+        assert_eq!(
+            config.organization_grpc_target,
+            "http://organization.internal:9102"
+        );
+        assert_eq!(
+            config.credential_template_grpc_target,
+            "https://credential-template.internal:9103"
+        );
+        assert_eq!(
+            config.revocation_profile_grpc_target,
+            "http://revocation-profile.internal:9113"
+        );
+        assert_eq!(
+            config.credential_template_service_url,
+            "https://templates.internal/api"
+        );
+        assert_eq!(
+            config.vcdm_related_resource_urls,
+            [
+                "https://www.w3.org/ns/credentials/v2",
+                "https://example.test/context"
+            ]
+        );
+        assert_eq!(config.vcdm_related_resource_max_bytes, 42);
+        assert_eq!(
+            config.vcdm_related_resource_timeout,
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn didcomm_configuration_preserves_managed_fallbacks_and_redaction() {
+        let fallback = IssuanceServiceConfig::from_values(values(&[
+            (
+                "UNIVERSAL_RESOLVER_URL",
+                "https://resolver.example/1.0/identifiers/",
+            ),
+            ("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", "http://gateway:8000/"),
+            (
+                "DIDCOMM_ENCRYPTION_POLICY_FILE",
+                " /run/secrets/didcomm-policy.json ",
+            ),
+            ("DIDCOMM_TLS_CA_FILE", " /run/secrets/didcomm-root-ca.pem "),
+            ("DIDCOMM_ALLOW_PRIVATE_IPS", "yes"),
+        ]))
+        .expect("DIDComm fallback configuration");
+        assert_eq!(
+            fallback.didcomm_universal_resolver_url.as_deref(),
+            Some("https://resolver.example/1.0/identifiers")
+        );
+        assert_eq!(
+            fallback.didcomm_did_web_internal_base_url.as_deref(),
+            Some("http://gateway:8000")
+        );
+        assert_eq!(
+            fallback.didcomm_encryption_policy_file.as_deref(),
+            Some("/run/secrets/didcomm-policy.json")
+        );
+        assert_eq!(
+            fallback.didcomm_tls_ca_file.as_deref(),
+            Some("/run/secrets/didcomm-root-ca.pem")
+        );
+        assert!(fallback.didcomm_allow_private_ips);
+        let diagnostic = format!("{fallback:?}");
+        assert!(!diagnostic.contains("didcomm-policy.json"));
+        assert!(!diagnostic.contains("didcomm-root-ca.pem"));
+
+        let explicit = IssuanceServiceConfig::from_values(values(&[
+            ("UNIVERSAL_RESOLVER_URL", "https://fallback.example"),
+            (
+                "DIDCOMM_UNIVERSAL_RESOLVER_URL",
+                "https://didcomm-resolver.example/api/",
+            ),
+            ("DIDCOMM_ALLOW_PRIVATE_IPS", "on"),
+        ]))
+        .expect("explicit DIDComm resolver");
+        assert_eq!(
+            explicit.didcomm_universal_resolver_url.as_deref(),
+            Some("https://didcomm-resolver.example/api")
+        );
+        assert!(!explicit.didcomm_allow_private_ips);
+    }
+
+    #[test]
+    fn invalid_didcomm_resolver_configuration_fails_closed() {
+        for (name, value) in [
+            ("DIDCOMM_UNIVERSAL_RESOLVER_URL", "ftp://resolver.example"),
+            (
+                "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+                "https://user:secret@gateway.example",
+            ),
+            (
+                "UNIVERSAL_RESOLVER_URL",
+                "https://resolver.example/api?caller=holder",
+            ),
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
+                .expect_err("invalid DIDComm configuration");
+            assert_eq!(error.code, ErrorCode::Configuration, "{name}={value}");
+        }
+    }
+
+    #[test]
+    fn invalid_initiation_configuration_fails_closed() {
+        for (name, value) in [
+            ("ORG_GRPC_TARGET", " organization:9002"),
+            ("CT_GRPC_TARGET", "ftp://credential-template:9003"),
+            ("RP_GRPC_TARGET", "http://revocation-profile:9013/path"),
+            (
+                "CREDENTIAL_TEMPLATE_SERVICE_URL",
+                "ftp://credential-template:8003",
+            ),
+            ("VCDM_RELATED_RESOURCE_MAX_BYTES", "0"),
+            ("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "0"),
+            ("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "-1"),
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
+                .expect_err("invalid initiation configuration");
+            assert_eq!(error.code, ErrorCode::Configuration, "{name}={value}");
         }
     }
 

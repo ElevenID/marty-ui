@@ -254,6 +254,8 @@ pub fn plan_canvas_award_approval(
         applicant_id: optional_text(current.get("applicant_identifier")),
         application_id: Some(application.id.clone()),
         subject_did: None,
+        idempotency_key_hash: None,
+        idempotency_request_hash: None,
         status: CredentialTransactionStatus::Pending,
         pre_authorized_code: seed.pre_authorized_code.clone(),
         nonce: None,
@@ -282,6 +284,9 @@ pub fn plan_canvas_award_approval(
         issuer_algorithm,
         signing_service_id: None,
         reserved_credential_id: None,
+        oid4vci_client_id: None,
+        created_at: now,
+        expires_at: now + chrono::Duration::days(7),
     })
 }
 

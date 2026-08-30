@@ -1,11 +1,11 @@
 use axum::{routing::post, Json, Router};
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use hmac::{Hmac, Mac};
 use marty_issuance_service::canvas_issuance_guard::{
     CanvasGuardConfig, PostgresCanvasIssuanceGuard,
 };
 use marty_issuance_service::credential::{
-    CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
+    CredentialIssuanceError, CredentialLifecycle, CredentialRepository, CredentialTransaction,
     CredentialTransactionStatus, IssuedCredential, IssuerContext,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
@@ -14,6 +14,15 @@ use marty_issuance_service::credential_management::{
 };
 use marty_issuance_service::credential_management_postgres::PostgresCredentialManagementRepository;
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
+use marty_issuance_service::initiation::{
+    IdempotencyBinding, InitiationApplicationClaimsResolver, InitiationClientRepository,
+    InitiationRepository, InitiationRepositoryError,
+};
+use marty_issuance_service::initiation_dependencies::PostgresInitiationApplicationClaimsResolver;
+use marty_issuance_service::initiation_didcomm::{
+    InitiationDidcommRepository, StagedInitiationDidcommDelivery,
+};
+use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
@@ -326,7 +335,6 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .after_issued(&claimed, &issued, "dc+sd-jwt")
         .await
         .unwrap();
-    revocation_server.abort();
     assert!(repository.finalize(&claimed, &issued).await.is_err());
     let persisted = repository
         .credential_by_transaction(&claimed.id)
@@ -452,7 +460,281 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     );
 
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
+    assert_initiation_idempotency_race(&repository).await;
+    assert_initiation_dependency_reads(&pool, key.as_bytes()).await;
+    assert_didcomm_retry_and_lifecycle_contract(&pool, &repository, &lifecycle).await;
+    revocation_server.abort();
     drop_contract_schema(&pool).await;
+}
+
+async fn assert_didcomm_retry_and_lifecycle_contract(
+    pool: &sqlx::PgPool,
+    repository: &PostgresCredentialRepository,
+    lifecycle: &PostgresCredentialLifecycle,
+) {
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, credential_template_id, status, pre_auth_code,
+              claims, credential_type, credential_payload_format, delivery_mode,
+              issuer_profile_id, issuer_did_override, issuer_algorithm,
+              signing_service_id, subject_did)
+         VALUES ('tx-didcomm-contract', 'org-a', 'template-didcomm', 'pending',
+                 'pre-auth-didcomm-contract', '{\"role\":\"engineer\"}'::jsonb,
+                 'OpenBadgeCredential', 'w3c_vcdm_v2_sd_jwt', 'wallet_only',
+                 'issuer-profile-a', 'did:web:issuer.example', 'ES256',
+                 'kms-service-a', 'did:key:holder')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let pending = repository
+        .transaction_by_id("tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("pending DIDComm transaction");
+    assert_eq!(pending.status, CredentialTransactionStatus::Pending);
+    let credential_id = "urn:uuid:credential-didcomm-contract";
+    let claim = repository
+        .claim_retryably(&pending, credential_id)
+        .await
+        .unwrap()
+        .expect("first DIDComm worker claims the transaction");
+    assert_eq!(claim.previous_status, CredentialTransactionStatus::Pending);
+    assert_eq!(
+        claim.transaction.status,
+        CredentialTransactionStatus::Signing
+    );
+    assert_eq!(
+        claim.transaction.reserved_credential_id.as_deref(),
+        Some(credential_id)
+    );
+    assert!(repository
+        .claim_retryably(&pending, credential_id)
+        .await
+        .unwrap()
+        .is_none());
+
+    repository.release_retryably(&claim).await.unwrap();
+    let released = sqlx::query(
+        "SELECT status, reserved_credential_id
+         FROM issuance_service.issuance_transactions WHERE id = 'tx-didcomm-contract'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(released.try_get::<String, _>("status").unwrap(), "pending");
+    assert!(released
+        .try_get::<Option<String>, _>("reserved_credential_id")
+        .unwrap()
+        .is_none());
+
+    let pending = repository
+        .transaction_by_id("tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("released DIDComm transaction");
+    let claim = repository
+        .claim_retryably(&pending, credential_id)
+        .await
+        .unwrap()
+        .expect("retry reclaims the same stable credential identifier");
+    // PostgreSQL `timestamptz` is microsecond-precise. Use a non-zero,
+    // microsecond-aligned value so this round-trip contract verifies the
+    // precision the production repository can actually preserve instead of
+    // comparing an unrepresentable nanosecond remainder.
+    let now = Utc
+        .timestamp_opt(1_700_000_000, 123_456_000)
+        .single()
+        .unwrap();
+    let issued = IssuedCredential {
+        id: credential_id.to_owned(),
+        transaction_id: claim.transaction.id.clone(),
+        organization_id: claim.transaction.organization_id.clone(),
+        credential_template_id: claim.transaction.credential_template_id.clone(),
+        applicant_id: claim.transaction.applicant_id.clone(),
+        subject_did: claim.transaction.subject_did.clone(),
+        issuer_did: "did:web:issuer.example".to_owned(),
+        revocation_profile_id: None,
+        renewed_from_credential_id: None,
+        status_list_entries: Vec::new(),
+        credential: "didcomm-signed-credential".to_owned(),
+        credential_hash: "didcomm-credential-hash".to_owned(),
+        issued_at: now,
+        expires_at: now + Duration::days(365),
+    };
+    let staged = StagedInitiationDidcommDelivery {
+        holder_did: "did:key:holder".to_owned(),
+        service_endpoint: "https://holder.example/didcomm".to_owned(),
+        message_id: "didcomm-message-contract".to_owned(),
+        encrypted_message: "encrypted-didcomm-contract".to_owned(),
+    };
+    repository
+        .stage_delivery(&claim.transaction, &issued, &staged)
+        .await
+        .unwrap();
+    let pending_delivery = repository
+        .pending_delivery("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("finalization atomically stages DIDComm delivery");
+    assert_eq!(pending_delivery.credential, issued);
+    assert_eq!(pending_delivery.delivery, staged);
+    assert!(!pending_delivery.transported);
+
+    repository
+        .mark_transport_failed("tx-didcomm-contract", "didcomm-message-contract")
+        .await
+        .unwrap();
+    let failed_delivery = repository
+        .pending_delivery("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("a failed transport remains retryable");
+    assert_eq!(failed_delivery.delivery, staged);
+    assert!(!failed_delivery.transported);
+
+    repository
+        .mark_transport_delivered("tx-didcomm-contract", "didcomm-message-contract")
+        .await
+        .unwrap();
+    let transported_delivery = repository
+        .pending_delivery("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("transport completion remains pending until lifecycle projection");
+    assert_eq!(transported_delivery.delivery, staged);
+    assert!(transported_delivery.transported);
+    lifecycle
+        .after_didcomm_issued(
+            &claim.transaction,
+            &issued,
+            "https://holder.example/didcomm",
+            "didcomm-message-contract",
+        )
+        .await
+        .unwrap();
+    assert!(repository
+        .pending_delivery("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .is_none());
+
+    let finalized = sqlx::query(
+        "SELECT status, reserved_credential_id
+         FROM issuance_service.issuance_transactions WHERE id = 'tx-didcomm-contract'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(finalized.try_get::<String, _>("status").unwrap(), "issued");
+    assert_eq!(
+        finalized
+            .try_get::<Option<String>, _>("reserved_credential_id")
+            .unwrap()
+            .as_deref(),
+        Some(credential_id)
+    );
+    assert!(repository.release_retryably(&claim).await.is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.issuance_transactions
+             WHERE id = 'tx-didcomm-contract'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        "issued"
+    );
+
+    let event_metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM issuance_service.issuance_events
+         WHERE transaction_id = 'tx-didcomm-contract'
+           AND event_type = 'credential_issued'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(event_metadata["credential_id"], credential_id);
+    assert_eq!(event_metadata["delivery_protocol"], "didcomm_v2");
+    assert_eq!(
+        event_metadata["service_endpoint"],
+        "https://holder.example/didcomm"
+    );
+
+    let delivery = sqlx::query(
+        "SELECT delivery_target, status, metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1",
+    )
+    .bind(credential_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        delivery.try_get::<String, _>("delivery_target").unwrap(),
+        "didcomm_v2"
+    );
+    assert_eq!(
+        delivery.try_get::<String, _>("status").unwrap(),
+        "delivered"
+    );
+    let metadata = delivery
+        .try_get::<serde_json::Value, _>("metadata")
+        .unwrap();
+    assert_eq!(metadata["protocol"], "didcomm_v2");
+    assert_eq!(metadata["didcomm_message_id"], "didcomm-message-contract");
+    assert_eq!(
+        metadata["service_endpoint"],
+        "https://holder.example/didcomm"
+    );
+}
+
+async fn assert_initiation_dependency_reads(pool: &sqlx::PgPool, key: &[u8]) {
+    sqlx::query(
+        "UPDATE issuance_service.applications
+         SET form_data = '{\"employee_id\":\"employee-1\",\"role\":\"engineer\"}'::jsonb
+         WHERE id = 'application-a'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let applications = PostgresInitiationApplicationClaimsResolver::new(pool.clone());
+    let claims = applications
+        .resolve("application-a")
+        .await
+        .unwrap()
+        .expect("application claims");
+    assert_eq!(claims["employee_id"], "employee-1");
+    assert_eq!(claims["role"], "engineer");
+    assert!(applications
+        .resolve("application-missing")
+        .await
+        .unwrap()
+        .is_none());
+
+    sqlx::query(
+        "INSERT INTO issuance_service.oid4vci_registered_clients
+             (organization_id, client_id, jwks, token_endpoint_auth_method, active)
+         VALUES ('org-a', 'wallet-client-a', '{}'::jsonb, 'private_key_jwt', true)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let clients = PostgresTokenExchangeRepository::new(pool.clone(), key);
+    let client = InitiationClientRepository::get(&clients, "org-a", "wallet-client-a")
+        .await
+        .unwrap()
+        .expect("registered initiation client");
+    assert_eq!(client.client_id, "wallet-client-a");
+    assert!(client.active);
+    assert_eq!(client.token_endpoint_auth_method, "private_key_jwt");
+    assert!(
+        InitiationClientRepository::get(&clients, "org-b", "wallet-client-a")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 async fn revocation_server() -> (Url, tokio::task::JoinHandle<()>) {
@@ -575,6 +857,86 @@ async fn assert_authorization_only_race(
     );
 }
 
+async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepository) {
+    let now = Utc::now();
+    let key_hash = "a".repeat(64);
+    let request_hash = "b".repeat(64);
+    let transaction = CredentialTransaction {
+        id: Uuid::new_v4().to_string(),
+        organization_id: "org-initiation-race".to_owned(),
+        credential_template_id: "template-initiation".to_owned(),
+        revocation_profile_id: Some("profile-initiation".to_owned()),
+        renewal_of_credential_id: None,
+        applicant_id: Some("applicant-initiation".to_owned()),
+        application_id: Some("application-initiation".to_owned()),
+        subject_did: Some("did:key:initiation-holder".to_owned()),
+        idempotency_key_hash: Some(key_hash.clone()),
+        idempotency_request_hash: Some(request_hash.clone()),
+        status: CredentialTransactionStatus::Pending,
+        pre_authorized_code: format!("pre-auth-{}", Uuid::new_v4()),
+        nonce: None,
+        claims: serde_json::from_value(json!({"degree": "BSc"})).unwrap(),
+        credential_type: Some("OpenBadgeCredential".to_owned()),
+        selective_disclosure_claims: vec!["degree".to_owned()],
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+        wallet_configs: vec![json!({"wallet_id": "default"})],
+        validity_days: 365,
+        renewable: true,
+        renewal_window_days: 30,
+        delivery_mode: "wallet_only".to_owned(),
+        issuer_profile_id: Some("issuer-profile-initiation".to_owned()),
+        issuer_mode: "org_managed".to_owned(),
+        issuer_did: Some("did:web:issuer.example".to_owned()),
+        issuer_algorithm: Some("ES256".to_owned()),
+        signing_service_id: Some("kms-initiation".to_owned()),
+        reserved_credential_id: None,
+        oid4vci_client_id: Some("wallet-client-initiation".to_owned()),
+        created_at: now,
+        expires_at: now + Duration::days(7),
+    };
+    let mut retry = transaction.clone();
+    retry.id = Uuid::new_v4().to_string();
+    retry.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
+    let (first, second) = tokio::join!(
+        repository.reserve_idempotently(&transaction),
+        repository.reserve_idempotently(&retry)
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_ne!(first.created, second.created);
+    assert_eq!(first.transaction.id, second.transaction.id);
+    assert_eq!(first.transaction.created_at, second.transaction.created_at);
+    assert_eq!(first.transaction.expires_at, second.transaction.expires_at);
+    assert_eq!(
+        repository
+            .recover_idempotently(
+                &transaction.organization_id,
+                &IdempotencyBinding {
+                    key_hash: key_hash.clone(),
+                    request_hash: request_hash.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        first.transaction.id
+    );
+    assert_eq!(
+        repository
+            .recover_idempotently(
+                &transaction.organization_id,
+                &IdempotencyBinding {
+                    key_hash,
+                    request_hash: "c".repeat(64),
+                },
+            )
+            .await,
+        Err(InitiationRepositoryError::IdempotencyConflict)
+    );
+}
+
 async fn create_contract_schema(pool: &sqlx::PgPool) {
     sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
         .execute(pool)
@@ -590,7 +952,8 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL DEFAULT '', revocation_profile_id TEXT,
             renewal_of_credential_id TEXT, applicant_id TEXT, application_id TEXT,
-            subject_did TEXT, status TEXT NOT NULL, pre_auth_code TEXT NOT NULL UNIQUE,
+            subject_did TEXT, idempotency_key_hash TEXT, idempotency_request_hash TEXT,
+            status TEXT NOT NULL, pre_auth_code TEXT NOT NULL UNIQUE,
             access_token TEXT, c_nonce TEXT, claims JSONB NOT NULL DEFAULT '{}'::jsonb,
             credential_type TEXT, selective_disclosure_claims JSONB DEFAULT '[]'::jsonb,
             zk_predicate_claims JSONB DEFAULT '[]'::jsonb,
@@ -601,9 +964,11 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             delivery_mode TEXT NOT NULL DEFAULT 'wallet_only',
             issuer_profile_id TEXT, issuer_mode TEXT NOT NULL DEFAULT 'org_managed',
             issuer_did_override TEXT, issuer_algorithm TEXT, signing_service_id TEXT,
-            reserved_credential_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            reserved_credential_id TEXT, oid4vci_client_id TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
             expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + interval '15 minutes',
-            issued_at TIMESTAMPTZ)",
+            issued_at TIMESTAMPTZ,
+            UNIQUE (organization_id, idempotency_key_hash))",
         "CREATE TABLE issuance_service.issued_credentials (
             id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL UNIQUE,
             organization_id TEXT NOT NULL, credential_template_id TEXT NOT NULL,
@@ -618,9 +983,14 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE issuance_service.applications (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             application_template_id TEXT, status TEXT, issuance_transaction_id TEXT,
-            credential_id TEXT,
+            credential_id TEXT, form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
             integration_context JSONB NOT NULL DEFAULT '{}'::jsonb,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())",
+        "CREATE TABLE issuance_service.oid4vci_registered_clients (
+            organization_id TEXT NOT NULL, client_id TEXT NOT NULL,
+            jwks JSONB NOT NULL, token_endpoint_auth_method TEXT NOT NULL,
+            active BOOLEAN NOT NULL,
+            PRIMARY KEY (organization_id, client_id))",
         "CREATE TABLE issuance_service.application_templates (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL, approval_policy_set_id TEXT,
@@ -684,6 +1054,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
 async fn drop_contract_schema(pool: &sqlx::PgPool) {
     for statement in [
         "DROP TABLE IF EXISTS issuance_service.credential_delivery_records",
+        "DROP TABLE IF EXISTS issuance_service.oid4vci_registered_clients",
         "DROP TABLE IF EXISTS issuance_service.issuance_events",
         "DROP TABLE IF EXISTS issuance_service.canvas_evidence_sync_targets",
         "DROP TABLE IF EXISTS issuance_service.evidence_fact_heads",

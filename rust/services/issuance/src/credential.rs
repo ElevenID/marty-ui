@@ -53,6 +53,7 @@ pub struct CredentialRequest {
     pub proofs: Option<Map<String, Value>>,
     pub credential_configuration_id: Option<String>,
     pub credential_identifier: Option<String>,
+    pub(crate) legacy_format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +91,7 @@ impl<'de> Deserialize<'de> for CredentialRequest {
             proofs: canonical.proofs,
             credential_configuration_id: canonical.credential_configuration_id,
             credential_identifier: canonical.credential_identifier,
+            legacy_format: None,
         })
     }
 }
@@ -98,6 +100,25 @@ impl<'de> Deserialize<'de> for CredentialRequest {
 pub struct CredentialResponse {
     pub credentials: Vec<Value>,
     pub notification_id: String,
+}
+
+/// Transport-neutral result metadata for callers that must project a newly
+/// committed issuance into another boundary, such as the legacy gRPC event
+/// stream. Replayed or concurrently recovered credentials intentionally have
+/// no `issued_credential`, matching the legacy adapter's one-event-per-commit
+/// behavior.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CredentialIssuanceOutcome {
+    pub response: CredentialResponse,
+    pub issued_credential: Option<IssuedCredential>,
+    pub disposition: CredentialIssuanceDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialIssuanceDisposition {
+    Committed,
+    Replay,
+    ConcurrentRecovery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +159,8 @@ pub struct CredentialTransaction {
     pub applicant_id: Option<String>,
     pub application_id: Option<String>,
     pub subject_did: Option<String>,
+    pub idempotency_key_hash: Option<String>,
+    pub idempotency_request_hash: Option<String>,
     pub status: CredentialTransactionStatus,
     pub pre_authorized_code: String,
     pub nonce: Option<String>,
@@ -157,6 +180,9 @@ pub struct CredentialTransaction {
     pub issuer_algorithm: Option<String>,
     pub signing_service_id: Option<String>,
     pub reserved_credential_id: Option<String>,
+    pub oid4vci_client_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -362,6 +388,18 @@ pub trait CredentialLifecycle: Send + Sync {
         credential: &IssuedCredential,
         response_format: &str,
     ) -> Result<(), CredentialIssuanceError>;
+
+    async fn after_didcomm_issued(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        service_endpoint: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        let _ = (service_endpoint, message_id);
+        self.after_issued(transaction, credential, "vc+sd-jwt")
+            .await
+    }
 }
 
 pub trait NotificationIdGenerator: Send + Sync {
@@ -419,6 +457,18 @@ impl CredentialIssuanceService {
         dpop_proof: Option<&str>,
         endpoint_url: &str,
     ) -> Result<CredentialResponse, CredentialIssuanceError> {
+        self.issue_with_outcome(request, authorization, dpop_proof, endpoint_url)
+            .await
+            .map(|outcome| outcome.response)
+    }
+
+    pub async fn issue_with_outcome(
+        &self,
+        request: &CredentialRequest,
+        authorization: Option<&str>,
+        dpop_proof: Option<&str>,
+        endpoint_url: &str,
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let access_token = bearer_token(authorization)?;
         let (mut transaction, authorization_session) = self.transaction(access_token).await?;
         self.verify_dpop(&transaction, dpop_proof, endpoint_url)?;
@@ -536,7 +586,7 @@ impl CredentialIssuanceService {
         &self,
         request: &CredentialRequest,
         transaction: &CredentialTransaction,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let existing = self
             .ports
             .repository
@@ -544,12 +594,17 @@ impl CredentialIssuanceService {
             .await?
             .ok_or(CredentialIssuanceError::CredentialAlreadyIssued)?;
         let policy = format_policy(request, transaction)?;
-        response(
+        let response = response(
             &existing.credential,
             policy.kind,
             &policy.response_format,
             self.ports.notification_ids.generate(),
-        )
+        )?;
+        Ok(CredentialIssuanceOutcome {
+            response,
+            issued_credential: None,
+            disposition: CredentialIssuanceDisposition::Replay,
+        })
     }
 
     async fn sign_and_finalize(
@@ -558,7 +613,7 @@ impl CredentialIssuanceService {
         policy: FormatPolicy,
         issuer: IssuerContext,
         proof: VerifiedCredentialProof,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         if policy.kind == CredentialBuilderKind::Mdoc && proof.holder_jwk.is_none() {
             return Err(CredentialIssuanceError::MdocHolderKeyRequired);
         }
@@ -588,7 +643,7 @@ impl CredentialIssuanceService {
         &self,
         transaction_id: &str,
         policy: &FormatPolicy,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let current = self
             .ports
             .repository
@@ -604,12 +659,17 @@ impl CredentialIssuanceService {
             .is_some_and(|transaction| transaction.status == CredentialTransactionStatus::Issued)
         {
             if let Some(existing) = existing {
-                return response(
+                let response = response(
                     &existing.credential,
                     policy.kind,
                     &policy.response_format,
                     self.ports.notification_ids.generate(),
-                );
+                )?;
+                return Ok(CredentialIssuanceOutcome {
+                    response,
+                    issued_credential: None,
+                    disposition: CredentialIssuanceDisposition::ConcurrentRecovery,
+                });
             }
         }
         Err(CredentialIssuanceError::IssuanceInProgress)
@@ -622,94 +682,124 @@ impl CredentialIssuanceService {
         policy: FormatPolicy,
         issuer: IssuerContext,
         proof: VerifiedCredentialProof,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
-        let status = self
-            .ports
-            .lifecycle
-            .allocate_status(transaction, credential_id, &policy.remote_format)
-            .await?;
-        let clean_claims = clean_claims(&transaction.claims);
-        let disclosures = if policy.kind == CredentialBuilderKind::SdJwt
-            && transaction.selective_disclosure_claims.is_empty()
-        {
-            clean_claims
-                .keys()
-                .filter(|name| !name.starts_with('_'))
-                .cloned()
-                .collect()
-        } else {
-            transaction.selective_disclosure_claims.clone()
-        };
-        let build_request = CredentialBuildRequest {
-            organization_id: transaction.organization_id.clone(),
-            kind: policy.kind,
-            response_format: policy.response_format.clone(),
-            remote_credential_format: policy.remote_format,
-            credential_id: credential_id.to_owned(),
-            credential_type: signing_credential_type(
-                transaction,
-                policy.kind,
-                &self.issuer_base_url,
-            ),
-            achievement_id: is_open_badge_type(transaction.credential_type.as_deref())
-                .then(|| signing_vct(transaction, &self.issuer_base_url)),
-            subject_did: if policy.kind == CredentialBuilderKind::Mdoc {
-                None
-            } else {
-                (!proof.holder_did.is_empty())
-                    .then_some(proof.holder_did.clone())
-                    .or_else(|| transaction.subject_did.clone())
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
+        let issued = materialize_credential(
+            CredentialMaterializationContext {
+                builder: self.ports.builder.as_ref(),
+                lifecycle: self.ports.lifecycle.as_ref(),
+                issuer_base_url: &self.issuer_base_url,
             },
-            holder_jwk: proof.holder_jwk,
-            claims: clean_claims,
-            credential_subject: transaction.claims.get("_credential_subject").cloned(),
-            credential_document: transaction.claims.get("_credential_document").cloned(),
-            selective_disclosure_claims: disclosures,
-            validity_seconds: transaction.validity_days.saturating_mul(86_400),
-            issuer: issuer.clone(),
-            status_list_entries: status.entries.clone(),
-        };
-        let built = self.ports.builder.build(&build_request).await?;
-        if built.credential_id != credential_id {
-            return Err(CredentialIssuanceError::BuilderChangedCredentialId);
-        }
-        let issued_at = Utc::now();
-        let expires_at = issued_at + Duration::days(transaction.validity_days);
-        let issued = IssuedCredential {
-            id: credential_id.to_owned(),
-            transaction_id: transaction.id.clone(),
-            organization_id: transaction.organization_id.clone(),
-            credential_template_id: transaction.credential_template_id.clone(),
-            applicant_id: transaction.applicant_id.clone(),
-            subject_did: build_request.subject_did.clone(),
-            issuer_did: issuer.issuer_did,
-            revocation_profile_id: status.revocation_profile_id,
-            renewed_from_credential_id: transaction.renewal_of_credential_id.clone(),
-            status_list_entries: status.entries,
-            credential_hash: format!("{:x}", Sha256::digest(built.credential.as_bytes())),
-            credential: built.credential.clone(),
-            issued_at,
-            expires_at,
-        };
+            transaction,
+            credential_id,
+            &policy,
+            issuer,
+            proof,
+        )
+        .await?;
         self.ports.repository.finalize(transaction, &issued).await?;
         self.ports
             .lifecycle
             .after_issued(transaction, &issued, &policy.response_format)
             .await?;
-        response(
-            &built.credential,
+        let response = response(
+            &issued.credential,
             policy.kind,
             &policy.response_format,
             self.ports.notification_ids.generate(),
-        )
+        )?;
+        Ok(CredentialIssuanceOutcome {
+            response,
+            issued_credential: Some(issued),
+            disposition: CredentialIssuanceDisposition::Committed,
+        })
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct CredentialMaterializationContext<'a> {
+    pub(crate) builder: &'a dyn CredentialBuilder,
+    pub(crate) lifecycle: &'a dyn CredentialLifecycle,
+    pub(crate) issuer_base_url: &'a str,
+}
+
+pub(crate) async fn materialize_credential(
+    context: CredentialMaterializationContext<'_>,
+    transaction: &CredentialTransaction,
+    credential_id: &str,
+    policy: &FormatPolicy,
+    issuer: IssuerContext,
+    proof: VerifiedCredentialProof,
+) -> Result<IssuedCredential, CredentialIssuanceError> {
+    let status = context
+        .lifecycle
+        .allocate_status(transaction, credential_id, &policy.remote_format)
+        .await?;
+    let clean_claims = clean_claims(&transaction.claims);
+    let disclosures = if policy.kind == CredentialBuilderKind::SdJwt
+        && transaction.selective_disclosure_claims.is_empty()
+    {
+        clean_claims
+            .keys()
+            .filter(|name| !name.starts_with('_'))
+            .cloned()
+            .collect()
+    } else {
+        transaction.selective_disclosure_claims.clone()
+    };
+    let build_request = CredentialBuildRequest {
+        organization_id: transaction.organization_id.clone(),
+        kind: policy.kind,
+        response_format: policy.response_format.clone(),
+        remote_credential_format: policy.remote_format.clone(),
+        credential_id: credential_id.to_owned(),
+        credential_type: signing_credential_type(transaction, policy.kind, context.issuer_base_url),
+        achievement_id: is_open_badge_type(transaction.credential_type.as_deref())
+            .then(|| signing_vct(transaction, context.issuer_base_url)),
+        subject_did: if policy.kind == CredentialBuilderKind::Mdoc {
+            None
+        } else {
+            (!proof.holder_did.is_empty())
+                .then_some(proof.holder_did.clone())
+                .or_else(|| transaction.subject_did.clone())
+        },
+        holder_jwk: proof.holder_jwk,
+        claims: clean_claims,
+        credential_subject: transaction.claims.get("_credential_subject").cloned(),
+        credential_document: transaction.claims.get("_credential_document").cloned(),
+        selective_disclosure_claims: disclosures,
+        validity_seconds: transaction.validity_days.saturating_mul(86_400),
+        issuer: issuer.clone(),
+        status_list_entries: status.entries.clone(),
+    };
+    let built = context.builder.build(&build_request).await?;
+    if built.credential_id != credential_id {
+        return Err(CredentialIssuanceError::BuilderChangedCredentialId);
+    }
+    let issued_at = Utc::now();
+    let expires_at = issued_at + Duration::days(transaction.validity_days);
+    Ok(IssuedCredential {
+        id: credential_id.to_owned(),
+        transaction_id: transaction.id.clone(),
+        organization_id: transaction.organization_id.clone(),
+        credential_template_id: transaction.credential_template_id.clone(),
+        applicant_id: transaction.applicant_id.clone(),
+        subject_did: build_request.subject_did,
+        issuer_did: issuer.issuer_did,
+        revocation_profile_id: status.revocation_profile_id,
+        renewed_from_credential_id: transaction.renewal_of_credential_id.clone(),
+        status_list_entries: status.entries,
+        credential_hash: format!("{:x}", Sha256::digest(built.credential.as_bytes())),
+        credential: built.credential,
+        issued_at,
+        expires_at,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct FormatPolicy {
-    kind: CredentialBuilderKind,
-    response_format: String,
-    remote_format: String,
+pub(crate) struct FormatPolicy {
+    pub(crate) kind: CredentialBuilderKind,
+    pub(crate) response_format: String,
+    pub(crate) remote_format: String,
 }
 
 fn bearer_token(authorization: Option<&str>) -> Result<&str, CredentialIssuanceError> {
@@ -720,7 +810,13 @@ fn bearer_token(authorization: Option<&str>) -> Result<&str, CredentialIssuanceE
 }
 
 fn validate_selector(request: &CredentialRequest) -> Result<(), CredentialIssuanceError> {
-    if request.credential_configuration_id.is_some() == request.credential_identifier.is_some() {
+    if request.credential_configuration_id.is_some() && request.credential_identifier.is_some() {
+        return Err(CredentialIssuanceError::SelectorRequired);
+    }
+    if request.credential_configuration_id.is_none()
+        && request.credential_identifier.is_none()
+        && request.legacy_format.is_none()
+    {
         return Err(CredentialIssuanceError::SelectorRequired);
     }
     Ok(())
@@ -790,13 +886,15 @@ fn format_policy(
     request: &CredentialRequest,
     transaction: &CredentialTransaction,
 ) -> Result<FormatPolicy, CredentialIssuanceError> {
-    let response_format = request
-        .credential_configuration_id
-        .as_deref()
-        .or(request.credential_identifier.as_deref())
-        .and_then(format_from_configuration_id)
-        .map(str::to_owned)
-        .unwrap_or_else(|| default_request_format(&transaction.credential_payload_format));
+    let response_format = request.legacy_format.clone().unwrap_or_else(|| {
+        request
+            .credential_configuration_id
+            .as_deref()
+            .or(request.credential_identifier.as_deref())
+            .and_then(format_from_configuration_id)
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_request_format(&transaction.credential_payload_format))
+    });
     let normalized = normalize_format(&transaction.credential_payload_format);
     let kind = if MDOC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
         CredentialBuilderKind::Mdoc
@@ -814,6 +912,20 @@ fn format_policy(
         kind,
         response_format,
         remote_format,
+    })
+}
+
+pub(crate) fn didcomm_format_policy(
+    transaction: &CredentialTransaction,
+) -> Result<FormatPolicy, CredentialIssuanceError> {
+    let normalized = normalize_format(&transaction.credential_payload_format);
+    if !SD_JWT_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
+        return Err(CredentialIssuanceError::UnsupportedFormat(normalized));
+    }
+    Ok(FormatPolicy {
+        kind: CredentialBuilderKind::SdJwt,
+        response_format: "vc+sd-jwt".to_owned(),
+        remote_format: remote_credential_format(&transaction.credential_payload_format)?,
     })
 }
 
@@ -865,7 +977,7 @@ fn default_request_format(payload_format: &str) -> String {
     .to_owned()
 }
 
-fn credential_configuration_id_for_format(base: &str, variant: &str) -> String {
+pub(crate) fn credential_configuration_id_for_format(base: &str, variant: &str) -> String {
     let normalized = normalize_format(variant);
     if MDOC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
         format!("{base}#mdoc")
@@ -952,7 +1064,7 @@ fn clean_claims(claims: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
-fn reserved_credential_id(transaction: &CredentialTransaction) -> String {
+pub(crate) fn reserved_credential_id(transaction: &CredentialTransaction) -> String {
     transaction
         .reserved_credential_id
         .clone()
@@ -1035,7 +1147,10 @@ fn is_open_badge_type(value: Option<&str>) -> bool {
     )
 }
 
-fn apply_issuer_context(transaction: &mut CredentialTransaction, issuer: &IssuerContext) {
+pub(crate) fn apply_issuer_context(
+    transaction: &mut CredentialTransaction,
+    issuer: &IssuerContext,
+) {
     transaction.issuer_profile_id = Some(issuer.issuer_profile_id.clone());
     transaction.issuer_did = Some(issuer.issuer_did.clone());
     transaction.issuer_algorithm = Some(issuer.algorithm.clone());
@@ -1133,8 +1248,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        clean_claims, credential_configuration_id_for_format, reserved_credential_id,
-        validate_audience, CredentialRequest, CredentialTransaction, CredentialTransactionStatus,
+        clean_claims, credential_configuration_id_for_format, format_policy,
+        reserved_credential_id, validate_audience, validate_selector, CredentialRequest,
+        CredentialTransaction, CredentialTransactionStatus,
     };
 
     fn transaction() -> CredentialTransaction {
@@ -1147,6 +1263,8 @@ mod tests {
             applicant_id: None,
             application_id: None,
             subject_did: None,
+            idempotency_key_hash: None,
+            idempotency_request_hash: None,
             status: CredentialTransactionStatus::Authorized,
             pre_authorized_code: "pre-auth".to_owned(),
             nonce: Some("proof-nonce".to_owned()),
@@ -1170,6 +1288,9 @@ mod tests {
             issuer_algorithm: None,
             signing_service_id: None,
             reserved_credential_id: None,
+            oid4vci_client_id: None,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(7),
         }
     }
 
@@ -1191,6 +1312,21 @@ mod tests {
             credential_configuration_id_for_format("OpenBadgeCredential", "w3c_vcdm_v2_sd_jwt"),
             "OpenBadgeCredential#sd-jwt"
         );
+    }
+
+    #[test]
+    fn grpc_legacy_format_remains_transport_scoped_and_preserves_response_shape() {
+        let request = CredentialRequest {
+            legacy_format: Some("dc+sd-jwt".to_owned()),
+            ..CredentialRequest::default()
+        };
+        assert!(validate_selector(&request).is_ok());
+        let policy = format_policy(&request, &transaction()).expect("format policy");
+        assert_eq!(policy.response_format, "dc+sd-jwt");
+        assert_eq!(policy.remote_format, "dc+sd-jwt");
+
+        let http_request = CredentialRequest::default();
+        assert!(validate_selector(&http_request).is_err());
     }
 
     #[test]
