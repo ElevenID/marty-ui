@@ -1018,12 +1018,14 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_embedded_contract, CANVAS_LTI, CREDENTIAL_ADMISSION,
-        CREDENTIAL_SIGNING,
+        canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, COVERAGE,
+        CREDENTIAL_ADMISSION, CREDENTIAL_SIGNING,
     };
 
     #[test]
     fn provenance_hash_is_independent_of_checkout_line_endings() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).expect("coverage contract");
+
         assert_eq!(canonical_lf(b"first\r\nsecond\n"), b"first\nsecond\n");
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_ADMISSION))),
@@ -1035,7 +1037,7 @@ mod tests {
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CANVAS_LTI))),
-            "75a27ca50f65249001ef74132529400820db937e1397b91ca20850da634d5c37"
+            coverage.canvas_lti_behavior_contract.sha256
         );
     }
 
