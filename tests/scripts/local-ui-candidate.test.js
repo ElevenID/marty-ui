@@ -40,6 +40,8 @@ test('serves only candidate UI files and never intercepts APIs or escaped paths'
   assert.equal(candidateUiFileForRequest(candidate, '/console/applicant', 'document'), path.join(dist, 'console', 'index.html'));
   assert.equal(candidateUiFileForRequest(candidate, '/assets/app.js', 'script'), path.join(dist, 'assets', 'app.js'));
   assert.equal(candidateUiFileForRequest(candidate, '/v1/auth/me', 'fetch'), null);
+  assert.equal(candidateUiFileForRequest(candidate, '/realms/elevenid/protocol/openid-connect/auth', 'document'), null);
+  assert.equal(candidateUiFileForRequest(candidate, '/resources/login/theme.css', 'stylesheet'), null);
   assert.equal(candidateUiFileForRequest(candidate, '/../secret', 'script'), null);
   assert.equal(contentTypeFor('font.woff2'), 'font/woff2');
 });

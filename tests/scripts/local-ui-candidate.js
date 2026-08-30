@@ -40,7 +40,8 @@ function resolveUiCandidateDist(root, configured = process.env.MARTY_UI_CANDIDAT
 }
 
 function candidateUiFileForRequest(candidate, pathname, resourceType) {
-  if (!candidate || ['/v1/', '/api/', '/auth/'].some((prefix) => pathname.startsWith(prefix))) return null;
+  if (!candidate || ['/v1/', '/api/', '/auth/', '/realms/', '/resources/']
+    .some((prefix) => pathname.startsWith(prefix))) return null;
   const relative = resourceType === 'document' && (pathname === '/console' || pathname.startsWith('/console/'))
     ? path.join('console', 'index.html')
     : decodeURIComponent(pathname).replace(/^[/\\]+/, '');
