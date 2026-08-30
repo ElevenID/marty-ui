@@ -138,7 +138,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["canvas_lti_behavior_contract"]["commit"]
-        == "8c92e52bb56c1b817153ea1c57fc63625f614190"
+        == "abd4b2fba844d537766c4020fcf159fdb19c0be5"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
@@ -178,6 +178,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "text/plain",
         ],
     }
+    experience_session = canvas_lti["experience"]["session_current"]
+    assert len(experience_session["ordered_stages"]) == 9
+    assert len(experience_session["lookup"]["required"]) == 6
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }

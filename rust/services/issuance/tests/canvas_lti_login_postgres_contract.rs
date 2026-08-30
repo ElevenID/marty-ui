@@ -6,7 +6,7 @@ use marty_issuance_service::{
     canvas_lti_experience::{
         sha256_hex, CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
         CanvasLtiExperienceExchangeRepository, CanvasLtiExperienceSessionGenerator,
-        CanvasLtiExperienceSessionSeed,
+        CanvasLtiExperienceSessionSeed, CanvasLtiExperienceSessionService,
     },
     canvas_lti_launch::{
         CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiCapabilitySnapshotRequest,
@@ -716,7 +716,7 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         .unwrap()
         .is_some());
 
-    let handoff_repository = PostgresCanvasLtiLoginRepository::new(pool.clone());
+    let handoff_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
     let consumed_state = handoff_repository
         .get_launch_state(&state)
         .await
@@ -736,7 +736,12 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         expires_at: Utc::now() + chrono::Duration::seconds(60),
         code_metadata: json!({
             "kind": "canvas_lti_experience_code",
-            "launch_state": consumed_state.state
+            "launch_state": consumed_state.state,
+            "verified_launch": {
+                "deployment_id": "deployment-123",
+                "subject": "learner-123"
+            },
+            "mip_primitives": {"context": {}}
         }),
         consumed_state: consumed_state.clone(),
         consumed_state_metadata: json!({"experience_code_id": "code-1"}),
@@ -767,9 +772,7 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     let session_id = Uuid::new_v4().to_string();
     let session_token = "session-token-contract-0123456789abcdef".to_owned();
     let session_state = sha256_hex(&session_token);
-    let created_at = DateTime::parse_from_rfc3339("2026-08-29T12:02:00+00:00")
-        .unwrap()
-        .with_timezone(&Utc);
+    let created_at = DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
     let exchange = CanvasLtiExperienceExchangePersistence {
         code: code_state.clone(),
         session_ttl: Duration::from_secs(30 * 60),
@@ -838,6 +841,24 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     .await
     .unwrap();
     assert_eq!(plaintext_rows, 0);
+    let current = CanvasLtiExperienceSessionService::new(handoff_repository.clone())
+        .current(&session_token)
+        .await
+        .unwrap();
+    assert_eq!(current.organization_id, "org-123");
+    assert_eq!(current.canvas_account_id, "account-123");
+    assert_eq!(current.canvas_platform_id, "platform-123");
+    assert_eq!(current.status, "session");
+    assert_eq!(current.canvas_context, json!({}));
+    assert_eq!(
+        current.lti_capabilities,
+        json!({
+            "resource_link": false,
+            "deep_linking": false,
+            "assignment_grade_services": false,
+            "names_roles": false,
+        })
+    );
     let spent = handoff_repository
         .get_launch_state(&code_state)
         .await
