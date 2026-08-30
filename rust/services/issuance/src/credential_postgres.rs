@@ -19,7 +19,8 @@ use crate::{
         IdempotencyBinding, InitiationRepository, InitiationRepositoryError, InitiationReservation,
     },
     initiation_didcomm::{
-        InitiationDidcommClaim, InitiationDidcommRepository, PendingInitiationDidcommDelivery,
+        DeliveredInitiationDidcommDelivery, InitiationDidcommClaim, InitiationDidcommDeliveryState,
+        InitiationDidcommRepository, PendingInitiationDidcommDelivery,
         StagedInitiationDidcommDelivery,
     },
     token_postgres::hash_access_token,
@@ -335,13 +336,13 @@ impl CredentialRepository for PostgresCredentialRepository {
     }
 }
 
-#[async_trait]
-impl InitiationDidcommRepository for PostgresCredentialRepository {
-    async fn pending_delivery(
+impl PostgresCredentialRepository {
+    async fn load_didcomm_delivery_state(
         &self,
         organization_id: &str,
         transaction_id: &str,
-    ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError> {
+        include_delivered: bool,
+    ) -> Result<Option<InitiationDidcommDeliveryState>, CredentialIssuanceError> {
         let Some(transaction) = self.transaction_by_id(transaction_id).await? else {
             return Ok(None);
         };
@@ -366,10 +367,12 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
              WHERE credential.transaction_id = $1
                AND credential.organization_id = $2
                AND delivery.delivery_target = 'didcomm_v2'
-               AND delivery.status IN ('pending', 'failed', 'transported')",
+               AND (delivery.status IN ('pending', 'failed', 'transported')
+                    OR ($3 AND delivery.status = 'delivered'))",
         )
         .bind(transaction_id)
         .bind(organization_id)
+        .bind(include_delivered)
         .fetch_optional(&self.pool)
         .await
         .map_err(repository_error)?;
@@ -387,32 +390,71 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
                 .ok_or(CredentialIssuanceError::RepositoryUnavailable)
         };
         let delivery_status = get::<String>(&row, "delivery_status")?;
-        Ok(Some(PendingInitiationDidcommDelivery {
-            transaction,
-            credential: IssuedCredential {
-                id: get(&row, "id")?,
-                transaction_id: get(&row, "transaction_id")?,
-                organization_id: get(&row, "organization_id")?,
-                credential_template_id: get(&row, "credential_template_id")?,
-                applicant_id: get(&row, "applicant_id")?,
-                subject_did: get(&row, "subject_did")?,
-                issuer_did: get(&row, "issuer_did")?,
-                revocation_profile_id: get(&row, "revocation_profile_id")?,
-                renewed_from_credential_id: get(&row, "renewed_from_credential_id")?,
-                status_list_entries: json_vec(&row, "status_list_entries")?,
-                credential: get(&row, "credential_jwt")?,
-                credential_hash: get(&row, "credential_hash")?,
-                issued_at: get(&row, "issued_at")?,
-                expires_at: get(&row, "expires_at")?,
+        if delivery_status == "delivered" {
+            return Ok(Some(InitiationDidcommDeliveryState::Delivered(
+                DeliveredInitiationDidcommDelivery {
+                    transaction_id: transaction.id,
+                    organization_id: transaction.organization_id,
+                    credential_id: get(&row, "id")?,
+                    holder_did: metadata_text("holder_did")?,
+                    service_endpoint: metadata_text("service_endpoint")?,
+                    message_id: metadata_text("didcomm_message_id")?,
+                },
+            )));
+        }
+        Ok(Some(InitiationDidcommDeliveryState::Pending(Box::new(
+            PendingInitiationDidcommDelivery {
+                transaction,
+                credential: IssuedCredential {
+                    id: get(&row, "id")?,
+                    transaction_id: get(&row, "transaction_id")?,
+                    organization_id: get(&row, "organization_id")?,
+                    credential_template_id: get(&row, "credential_template_id")?,
+                    applicant_id: get(&row, "applicant_id")?,
+                    subject_did: get(&row, "subject_did")?,
+                    issuer_did: get(&row, "issuer_did")?,
+                    revocation_profile_id: get(&row, "revocation_profile_id")?,
+                    renewed_from_credential_id: get(&row, "renewed_from_credential_id")?,
+                    status_list_entries: json_vec(&row, "status_list_entries")?,
+                    credential: get(&row, "credential_jwt")?,
+                    credential_hash: get(&row, "credential_hash")?,
+                    issued_at: get(&row, "issued_at")?,
+                    expires_at: get(&row, "expires_at")?,
+                },
+                delivery: StagedInitiationDidcommDelivery {
+                    holder_did: metadata_text("holder_did")?,
+                    service_endpoint: metadata_text("service_endpoint")?,
+                    message_id: metadata_text("didcomm_message_id")?,
+                    encrypted_message: metadata_text("encrypted_message")?,
+                },
+                transported: delivery_status == "transported",
             },
-            delivery: StagedInitiationDidcommDelivery {
-                holder_did: metadata_text("holder_did")?,
-                service_endpoint: metadata_text("service_endpoint")?,
-                message_id: metadata_text("didcomm_message_id")?,
-                encrypted_message: metadata_text("encrypted_message")?,
-            },
-            transported: delivery_status == "transported",
-        }))
+        ))))
+    }
+}
+
+#[async_trait]
+impl InitiationDidcommRepository for PostgresCredentialRepository {
+    async fn pending_delivery(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError> {
+        self.load_didcomm_delivery_state(organization_id, transaction_id, false)
+            .await
+            .map(|state| match state {
+                Some(InitiationDidcommDeliveryState::Pending(pending)) => Some(*pending),
+                Some(InitiationDidcommDeliveryState::Delivered(_)) | None => None,
+            })
+    }
+
+    async fn delivery_state(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<InitiationDidcommDeliveryState>, CredentialIssuanceError> {
+        self.load_didcomm_delivery_state(organization_id, transaction_id, true)
+            .await
     }
 
     async fn transaction_for_delivery(

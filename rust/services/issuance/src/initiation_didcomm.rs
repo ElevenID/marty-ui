@@ -94,6 +94,22 @@ pub struct PendingInitiationDidcommDelivery {
     pub transported: bool,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct DeliveredInitiationDidcommDelivery {
+    pub transaction_id: String,
+    pub organization_id: String,
+    pub credential_id: String,
+    pub holder_did: String,
+    pub service_endpoint: String,
+    pub message_id: String,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum InitiationDidcommDeliveryState {
+    Pending(Box<PendingInitiationDidcommDelivery>),
+    Delivered(DeliveredInitiationDidcommDelivery),
+}
+
 #[async_trait]
 pub trait InitiationDidcommRepository: Send + Sync {
     async fn pending_delivery(
@@ -101,6 +117,18 @@ pub trait InitiationDidcommRepository: Send + Sync {
         organization_id: &str,
         transaction_id: &str,
     ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError>;
+
+    async fn delivery_state(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<InitiationDidcommDeliveryState>, CredentialIssuanceError> {
+        self.pending_delivery(organization_id, transaction_id)
+            .await
+            .map(|pending| {
+                pending.map(|pending| InitiationDidcommDeliveryState::Pending(Box::new(pending)))
+            })
+    }
 
     async fn transaction_for_delivery(
         &self,
@@ -747,23 +775,31 @@ impl NativeInitiationDidcommDelivery {
         transaction: &CredentialTransaction,
         holder_did: &str,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
-        if let Some(pending) = self
+        if let Some(delivery_state) = self
             .ports
             .repository
-            .pending_delivery(&transaction.organization_id, &transaction.id)
+            .delivery_state(&transaction.organization_id, &transaction.id)
             .await
             .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?
         {
-            if pending.delivery.holder_did != holder_did {
-                return Err(NativeInitiationDidcommDeliveryError::InvalidRequest);
+            match delivery_state {
+                InitiationDidcommDeliveryState::Delivered(delivered) => {
+                    Self::validate_terminal_delivery(transaction, holder_did, &delivered)?;
+                    return Ok(Self::terminal_receipt(delivered));
+                }
+                InitiationDidcommDeliveryState::Pending(pending) => {
+                    if pending.delivery.holder_did != holder_did {
+                        return Err(NativeInitiationDidcommDeliveryError::InvalidRequest);
+                    }
+                    let endpoint = self
+                        .ports
+                        .endpoints
+                        .validate(&pending.delivery.service_endpoint)
+                        .await
+                        .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+                    return self.deliver_staged(*pending, endpoint).await;
+                }
             }
-            let endpoint = self
-                .ports
-                .endpoints
-                .validate(&pending.delivery.service_endpoint)
-                .await
-                .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
-            return self.deliver_staged(pending, endpoint).await;
         }
         if !matches!(
             transaction.status,
@@ -957,7 +993,13 @@ impl NativeInitiationDidcommDelivery {
             )
             .await
             .map_err(|_| NativeInitiationDidcommDeliveryError::PostIssuanceUnavailable)?;
-        Ok(NativeInitiationDidcommDeliveryReceipt {
+        Ok(Self::delivered_receipt(pending))
+    }
+
+    fn delivered_receipt(
+        pending: PendingInitiationDidcommDelivery,
+    ) -> NativeInitiationDidcommDeliveryReceipt {
+        NativeInitiationDidcommDeliveryReceipt {
             transaction_id: pending.transaction.id,
             credential_id: pending.credential.id,
             holder_did: pending.delivery.holder_did,
@@ -965,7 +1007,43 @@ impl NativeInitiationDidcommDelivery {
             didcomm_message_id: pending.delivery.message_id,
             status: NativeDidcommDeliveryStatus::Delivered,
             error: None,
-        })
+        }
+    }
+
+    fn terminal_receipt(
+        delivered: DeliveredInitiationDidcommDelivery,
+    ) -> NativeInitiationDidcommDeliveryReceipt {
+        NativeInitiationDidcommDeliveryReceipt {
+            transaction_id: delivered.transaction_id,
+            credential_id: delivered.credential_id,
+            holder_did: delivered.holder_did,
+            service_endpoint: delivered.service_endpoint,
+            didcomm_message_id: delivered.message_id,
+            status: NativeDidcommDeliveryStatus::Delivered,
+            error: None,
+        }
+    }
+
+    fn validate_terminal_delivery(
+        transaction: &CredentialTransaction,
+        holder_did: &str,
+        delivered: &DeliveredInitiationDidcommDelivery,
+    ) -> Result<(), NativeInitiationDidcommDeliveryError> {
+        let required = [
+            delivered.credential_id.as_str(),
+            delivered.holder_did.as_str(),
+            delivered.service_endpoint.as_str(),
+            delivered.message_id.as_str(),
+        ];
+        if required.iter().any(|value| value.trim().is_empty())
+            || delivered.transaction_id != transaction.id
+            || delivered.organization_id != transaction.organization_id
+            || delivered.credential_id != reserved_credential_id(transaction)
+            || delivered.holder_did != holder_did
+        {
+            return Err(NativeInitiationDidcommDeliveryError::InvalidRequest);
+        }
+        Ok(())
     }
 
     async fn release_failure<T>(
@@ -1328,18 +1406,20 @@ mod tests {
 
     struct HarnessRepository {
         order: Order,
+        lookups: AtomicUsize,
         releases: AtomicUsize,
         finalizations: AtomicUsize,
-        pending: Mutex<Option<PendingInitiationDidcommDelivery>>,
+        delivery: Arc<Mutex<Option<InitiationDidcommDeliveryState>>>,
     }
 
     impl HarnessRepository {
         fn new(order: Order) -> Self {
             Self {
                 order,
+                lookups: AtomicUsize::new(0),
                 releases: AtomicUsize::new(0),
                 finalizations: AtomicUsize::new(0),
-                pending: Mutex::new(None),
+                delivery: Arc::new(Mutex::new(None)),
             }
         }
     }
@@ -1351,11 +1431,21 @@ mod tests {
             organization_id: &str,
             transaction_id: &str,
         ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError> {
-            Ok(self.pending.lock().unwrap().as_ref().and_then(|pending| {
-                (pending.transaction.organization_id == organization_id
-                    && pending.transaction.id == transaction_id)
-                    .then(|| pending.clone())
-            }))
+            self.delivery_state(organization_id, transaction_id)
+                .await
+                .map(|state| match state {
+                    Some(InitiationDidcommDeliveryState::Pending(pending)) => Some(*pending),
+                    Some(InitiationDidcommDeliveryState::Delivered(_)) | None => None,
+                })
+        }
+
+        async fn delivery_state(
+            &self,
+            _organization_id: &str,
+            _transaction_id: &str,
+        ) -> Result<Option<InitiationDidcommDeliveryState>, CredentialIssuanceError> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
+            Ok(self.delivery.lock().unwrap().clone())
         }
 
         async fn transaction_for_delivery(
@@ -1428,12 +1518,14 @@ mod tests {
             self.finalize_delivered(transaction, credential).await?;
             let mut finalized = transaction.clone();
             finalized.status = CredentialTransactionStatus::Issued;
-            *self.pending.lock().unwrap() = Some(PendingInitiationDidcommDelivery {
-                transaction: finalized,
-                credential: credential.clone(),
-                delivery: delivery.clone(),
-                transported: false,
-            });
+            *self.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+                Box::new(PendingInitiationDidcommDelivery {
+                    transaction: finalized,
+                    credential: credential.clone(),
+                    delivery: delivery.clone(),
+                    transported: false,
+                }),
+            ));
             Ok(())
         }
 
@@ -1443,10 +1535,10 @@ mod tests {
             message_id: &str,
         ) -> Result<(), CredentialIssuanceError> {
             record(&self.order, "mark-transported");
-            let mut pending = self.pending.lock().unwrap();
-            let pending = pending
-                .as_mut()
-                .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+            let mut delivery = self.delivery.lock().unwrap();
+            let Some(InitiationDidcommDeliveryState::Pending(pending)) = delivery.as_mut() else {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            };
             if pending.transaction.id != transaction_id || pending.delivery.message_id != message_id
             {
                 return Err(CredentialIssuanceError::RepositoryUnavailable);
@@ -1461,10 +1553,10 @@ mod tests {
             message_id: &str,
         ) -> Result<(), CredentialIssuanceError> {
             record(&self.order, "mark-transport-failed");
-            let pending = self.pending.lock().unwrap();
-            let pending = pending
-                .as_ref()
-                .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+            let delivery = self.delivery.lock().unwrap();
+            let Some(InitiationDidcommDeliveryState::Pending(pending)) = delivery.as_ref() else {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            };
             if pending.transaction.id != transaction_id || pending.delivery.message_id != message_id
             {
                 return Err(CredentialIssuanceError::RepositoryUnavailable);
@@ -1515,6 +1607,7 @@ mod tests {
     struct HarnessLifecycle {
         order: Order,
         post_issuance_fail: bool,
+        delivery: Arc<Mutex<Option<InitiationDidcommDeliveryState>>>,
     }
 
     #[async_trait]
@@ -1560,6 +1653,21 @@ mod tests {
             if self.post_issuance_fail {
                 Err(CredentialIssuanceError::RepositoryUnavailable)
             } else {
+                let mut delivery = self.delivery.lock().unwrap();
+                let Some(InitiationDidcommDeliveryState::Pending(pending)) = delivery.as_ref()
+                else {
+                    return Err(CredentialIssuanceError::RepositoryUnavailable);
+                };
+                *delivery = Some(InitiationDidcommDeliveryState::Delivered(
+                    DeliveredInitiationDidcommDelivery {
+                        transaction_id: pending.transaction.id.clone(),
+                        organization_id: pending.transaction.organization_id.clone(),
+                        credential_id: pending.credential.id.clone(),
+                        holder_did: pending.delivery.holder_did.clone(),
+                        service_endpoint: service_endpoint.to_owned(),
+                        message_id: message_id.to_owned(),
+                    },
+                ));
                 Ok(())
             }
         }
@@ -1694,6 +1802,7 @@ mod tests {
                 lifecycle: Arc::new(HarnessLifecycle {
                     order: order.clone(),
                     post_issuance_fail: options.post_issuance_fail,
+                    delivery: repository.delivery.clone(),
                 }),
                 envelope: Arc::new(HarnessEnvelope {
                     order: order.clone(),
@@ -1758,6 +1867,145 @@ mod tests {
                 "after-didcomm",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn delivered_retry_returns_the_same_receipt_without_repeating_side_effects() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        let first = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        let first_order = order.lock().unwrap().clone();
+        assert_eq!(first.status, NativeDidcommDeliveryStatus::Delivered);
+        assert_eq!(
+            first_order
+                .iter()
+                .filter(|stage| **stage == "transport")
+                .count(),
+            1
+        );
+        assert_eq!(
+            first_order
+                .iter()
+                .filter(|stage| **stage == "after-didcomm")
+                .count(),
+            1
+        );
+        assert_eq!(
+            first_order
+                .iter()
+                .filter(|stage| **stage == "build")
+                .count(),
+            1
+        );
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+
+        order.lock().unwrap().clear();
+        let lookups_before_retry = repository.lookups.load(Ordering::SeqCst);
+        let second = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(second, first);
+        assert_eq!(
+            repository.lookups.load(Ordering::SeqCst),
+            lookups_before_retry + 1
+        );
+        assert!(
+            order.lock().unwrap().is_empty(),
+            "a terminal retry must perform only the unrecorded repository lookup"
+        );
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+
+        let terminal = repository.delivery.lock().unwrap().clone().unwrap();
+        let InitiationDidcommDeliveryState::Delivered(terminal) = terminal else {
+            panic!("the first delivery must leave terminal state")
+        };
+        let invalid_terminal_states = [
+            (
+                "transaction",
+                DeliveredInitiationDidcommDelivery {
+                    transaction_id: "another-transaction".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+            (
+                "organization",
+                DeliveredInitiationDidcommDelivery {
+                    organization_id: "another-organization".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+            (
+                "credential",
+                DeliveredInitiationDidcommDelivery {
+                    credential_id: "another-credential".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+            (
+                "blank credential",
+                DeliveredInitiationDidcommDelivery {
+                    credential_id: "  ".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+            (
+                "blank holder",
+                DeliveredInitiationDidcommDelivery {
+                    holder_did: "  ".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+            (
+                "blank endpoint",
+                DeliveredInitiationDidcommDelivery {
+                    service_endpoint: "  ".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+            (
+                "blank message",
+                DeliveredInitiationDidcommDelivery {
+                    message_id: "  ".to_owned(),
+                    ..terminal.clone()
+                },
+            ),
+        ];
+        for (case, invalid) in invalid_terminal_states {
+            *repository.delivery.lock().unwrap() =
+                Some(InitiationDidcommDeliveryState::Delivered(invalid));
+            let lookups_before_mismatch = repository.lookups.load(Ordering::SeqCst);
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::InvalidRequest),
+                "terminal {case} mismatch must fail closed"
+            );
+            assert_eq!(
+                repository.lookups.load(Ordering::SeqCst),
+                lookups_before_mismatch + 1
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+        }
+        *repository.delivery.lock().unwrap() =
+            Some(InitiationDidcommDeliveryState::Delivered(terminal));
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:other-holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::InvalidRequest)
+        );
+        assert!(order.lock().unwrap().is_empty());
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
