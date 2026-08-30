@@ -19,6 +19,7 @@ pub mod canvas_lti_experience;
 pub mod canvas_lti_launch;
 pub mod canvas_lti_login;
 pub mod canvas_lti_postgres;
+pub mod canvas_lti_sync_enqueue;
 pub mod client_auth;
 pub mod config;
 pub mod contract;
