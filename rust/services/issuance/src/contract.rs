@@ -804,6 +804,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "login" => "initiate_canvas_lti_login_route",
                 "experience" => "launch_canvas_lti_experience_route",
                 "experience-exchange" => "exchange_canvas_lti_experience_code_route",
+                "experience-session-current" => "get_canvas_lti_experience_session_route",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
                 "launch" => "verify_canvas_lti_launch_route",
                 _ => return Err(invalid("unknown native Canvas LTI behavior case")),
@@ -811,11 +812,17 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             let expected_authentication = match behavior_case {
                 "launch" | "experience" => "public-lti-form-post",
                 "experience-exchange" => "public-one-time-code",
+                "experience-session-current" => "lti-session-bearer",
                 _ => "public-lti-login",
+            };
+            let expected_method = if behavior_case == "experience-session-current" {
+                "GET"
+            } else {
+                "POST"
             };
             require(
                 operation.operation == expected_operation
-                    && operation.method == "POST"
+                    && operation.method == expected_method
                     && native_canvas_lti_cases.insert(behavior_case)
                     && canvas_lti["scope"]["routes"]
                         .as_array()
@@ -857,6 +864,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience",
                 "experience-exchange",
                 "experience-login",
+                "experience-session-current",
                 "launch",
                 "login",
             ]),
@@ -1044,8 +1052,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 23);
-        assert_eq!(summary.remaining_http, 108);
+        assert_eq!(summary.native_http, 24);
+        assert_eq!(summary.remaining_http, 107);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

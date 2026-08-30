@@ -52,7 +52,7 @@
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-canvas-lti-foundation.json",
     "commit": "abd4b2fba844d537766c4020fcf159fdb19c0be5",
-    "sha256": "a5d094f3ac647ff936988d5e234476a5154cfe8c490fcbccf00609d5e0129e17"
+    "sha256": "5bfc611d7e61478bf4be5ef42e86a09390ef5da365047721e9d15d4aa40b98a8"
   },
   "native_http": [
     {
@@ -191,6 +191,12 @@
       "canvas_lti_behavior_case": "experience-exchange"
     },
     {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current",
+      "operation": "get_canvas_lti_experience_session_route",
+      "canvas_lti_behavior_case": "experience-session-current"
+    },
+    {
       "method": "POST",
       "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
       "operation": "verify_canvas_lti_launch_route",
@@ -202,7 +208,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 108,
+    "http": 107,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 63,

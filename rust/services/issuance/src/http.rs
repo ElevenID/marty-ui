@@ -18,7 +18,10 @@ use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde_json::{json, Map, Value};
 
 use crate::{
-    canvas_lti_experience::{CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangeService},
+    canvas_lti_experience::{
+        CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangeService,
+        CanvasLtiExperienceSessionError, CanvasLtiExperienceSessionService,
+    },
     canvas_lti_launch::{
         public_launch_response, CanvasLtiExperienceService, CanvasLtiLaunchPlanError,
         CanvasLtiLaunchService, CanvasLtiLaunchServiceError, CanvasLtiLaunchSubmission,
@@ -50,6 +53,7 @@ struct IssuanceState {
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
+    canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
 }
 
 pub struct IssuanceServices {
@@ -68,6 +72,7 @@ pub struct CanvasLtiServices {
     launch: CanvasLtiLaunchService,
     experience: CanvasLtiExperienceService,
     experience_exchange: CanvasLtiExperienceExchangeService,
+    experience_session: CanvasLtiExperienceSessionService,
 }
 
 impl CanvasLtiServices {
@@ -77,12 +82,14 @@ impl CanvasLtiServices {
         launch: CanvasLtiLaunchService,
         experience: CanvasLtiExperienceService,
         experience_exchange: CanvasLtiExperienceExchangeService,
+        experience_session: CanvasLtiExperienceSessionService,
     ) -> Self {
         Self {
             login,
             launch,
             experience,
             experience_exchange,
+            experience_session,
         }
     }
 }
@@ -121,6 +128,7 @@ struct OptionalServices {
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
+    canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -192,6 +200,7 @@ pub fn router_with_all_services(
             canvas_lti_launch: Some(services.canvas_lti.launch),
             canvas_lti_experience: Some(services.canvas_lti.experience),
             canvas_lti_experience_exchange: Some(services.canvas_lti.experience_exchange),
+            canvas_lti_experience_session: Some(services.canvas_lti.experience_session),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -338,6 +347,23 @@ pub fn router_with_canvas_lti_experience_exchange(
     )
 }
 
+pub fn router_with_canvas_lti_experience_session(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_experience_session: CanvasLtiExperienceSessionService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_experience_session: Some(canvas_lti_experience_session),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -441,6 +467,12 @@ fn router_with_optional_services(
             post(exchange_canvas_lti_experience_code),
         );
     }
+    if services.canvas_lti_experience_session.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/experience-sessions/current",
+            get(get_canvas_lti_experience_session),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -452,6 +484,7 @@ fn router_with_optional_services(
         canvas_lti_launch: services.canvas_lti_launch,
         canvas_lti_experience: services.canvas_lti_experience,
         canvas_lti_experience_exchange: services.canvas_lti_experience_exchange,
+        canvas_lti_experience_session: services.canvas_lti_experience_session,
     });
     system
         .merge(api)
@@ -513,11 +546,15 @@ async fn exchange_canvas_lti_experience_code(
         .ok_or(CanvasLtiExperienceExchangeError::RepositoryUnavailable)?
         .exchange(&code)
         .await?;
-    let mut response = Json(json!({
+    let response = Json(json!({
         "session_token": result.session_token,
         "expires_at": result.expires_at.to_rfc3339(),
     }))
     .into_response();
+    Ok(private_no_store(response))
+}
+
+fn private_no_store(mut response: Response) -> Response {
     response.headers_mut().insert(
         http_header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),
@@ -525,7 +562,39 @@ async fn exchange_canvas_lti_experience_code(
     response
         .headers_mut()
         .insert(http_header::PRAGMA, HeaderValue::from_static("no-cache"));
-    Ok(response)
+    response
+}
+
+async fn get_canvas_lti_experience_session(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Response, CanvasLtiExperienceSessionHttpError> {
+    let token = canvas_lti_experience_bearer_token(request.headers())?;
+    let session = state
+        .canvas_lti_experience_session
+        .as_ref()
+        .ok_or(CanvasLtiExperienceSessionError::RepositoryUnavailable)?
+        .current(token)
+        .await?;
+    Ok(private_no_store(Json(session).into_response()))
+}
+
+fn canvas_lti_experience_bearer_token(
+    headers: &HeaderMap,
+) -> Result<&str, CanvasLtiExperienceSessionHttpError> {
+    let authorization = headers
+        .get(http_header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .trim();
+    let Some((scheme, token)) = authorization.split_once(' ') else {
+        return Err(CanvasLtiExperienceSessionHttpError::Unauthorized);
+    };
+    let token = token.trim();
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+        return Err(CanvasLtiExperienceSessionHttpError::Unauthorized);
+    }
+    Ok(token)
 }
 
 async fn initiate_canvas_lti_experience_login(
@@ -1030,6 +1099,47 @@ enum CanvasLtiExperienceExchangeHttpError {
     Validation(Vec<Value>),
     InvalidJson,
     BodyTooLarge,
+}
+
+enum CanvasLtiExperienceSessionHttpError {
+    Unauthorized,
+    Service(CanvasLtiExperienceSessionError),
+}
+
+impl From<CanvasLtiExperienceSessionError> for CanvasLtiExperienceSessionHttpError {
+    fn from(value: CanvasLtiExperienceSessionError) -> Self {
+        Self::Service(value)
+    }
+}
+
+impl IntoResponse for CanvasLtiExperienceSessionHttpError {
+    fn into_response(self) -> Response {
+        let response = match self {
+            Self::Unauthorized => {
+                let mut response = (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "detail": "Canvas LTI experience session bearer token is required"
+                    })),
+                )
+                    .into_response();
+                response.headers_mut().insert(
+                    http_header::WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Bearer"),
+                );
+                response
+            }
+            Self::Service(CanvasLtiExperienceSessionError::NotFound) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Canvas LTI experience session not found"})),
+            )
+                .into_response(),
+            Self::Service(CanvasLtiExperienceSessionError::RepositoryUnavailable) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
+        };
+        private_no_store(response)
+    }
 }
 
 impl From<CanvasLtiExperienceExchangeError> for CanvasLtiExperienceExchangeHttpError {
