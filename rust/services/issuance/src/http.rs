@@ -1206,9 +1206,10 @@ impl From<CanvasLtiToolSigningError> for CanvasLtiToolSigningHttpError {
 
 impl IntoResponse for CanvasLtiToolSigningHttpError {
     fn into_response(self) -> Response {
+        let _cause = self.0;
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"detail": self.0.to_string()})),
+            Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
         )
             .into_response()
     }

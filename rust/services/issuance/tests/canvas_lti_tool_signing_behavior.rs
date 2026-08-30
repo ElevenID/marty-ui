@@ -272,6 +272,6 @@ async fn jwks_http_route_preserves_the_sanitized_signing_outage_boundary() {
     assert_eq!(response.status(), 503);
     assert_eq!(
         response_json(response).await,
-        json!({"detail": CanvasLtiToolSigningError::ConfigurationIncomplete.to_string()})
+        json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})
     );
 }
