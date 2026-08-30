@@ -610,7 +610,14 @@ impl PostgresCredentialLifecycle {
                  status = EXCLUDED.status,
                  canvas_account_id = EXCLUDED.canvas_account_id,
                  last_error = EXCLUDED.last_error,
-                 metadata = EXCLUDED.metadata,
+                  metadata = CASE
+                      WHEN EXCLUDED.delivery_target = 'didcomm_v2'
+                      THEN EXCLUDED.metadata || jsonb_build_object(
+                          'holder_did',
+                          issuance_service.credential_delivery_records.metadata -> 'holder_did'
+                      )
+                      ELSE EXCLUDED.metadata
+                  END,
                  updated_at = clock_timestamp()",
         )
         .bind(id)

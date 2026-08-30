@@ -20,7 +20,7 @@ use marty_issuance_service::initiation::{
 };
 use marty_issuance_service::initiation_dependencies::PostgresInitiationApplicationClaimsResolver;
 use marty_issuance_service::initiation_didcomm::{
-    InitiationDidcommRepository, StagedInitiationDidcommDelivery,
+    InitiationDidcommDeliveryState, InitiationDidcommRepository, StagedInitiationDidcommDelivery,
 };
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
@@ -573,24 +573,37 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         .stage_delivery(&claim.transaction, &issued, &staged)
         .await
         .unwrap();
-    let pending_delivery = repository
-        .pending_delivery("org-a", "tx-didcomm-contract")
+    let pending_state = repository
+        .delivery_state("org-a", "tx-didcomm-contract")
         .await
         .unwrap()
         .expect("finalization atomically stages DIDComm delivery");
+    let InitiationDidcommDeliveryState::Pending(pending_delivery) = pending_state else {
+        panic!("a staged delivery must remain pending");
+    };
     assert_eq!(pending_delivery.credential, issued);
     assert_eq!(pending_delivery.delivery, staged);
     assert!(!pending_delivery.transported);
+    let compatibility_pending = repository
+        .pending_delivery("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("the public pending-delivery compatibility method must remain available");
+    assert_eq!(compatibility_pending.credential, issued);
+    assert_eq!(compatibility_pending.delivery, staged);
 
     repository
         .mark_transport_failed("tx-didcomm-contract", "didcomm-message-contract")
         .await
         .unwrap();
-    let failed_delivery = repository
-        .pending_delivery("org-a", "tx-didcomm-contract")
+    let failed_state = repository
+        .delivery_state("org-a", "tx-didcomm-contract")
         .await
         .unwrap()
         .expect("a failed transport remains retryable");
+    let InitiationDidcommDeliveryState::Pending(failed_delivery) = failed_state else {
+        panic!("a failed transport must remain pending");
+    };
     assert_eq!(failed_delivery.delivery, staged);
     assert!(!failed_delivery.transported);
 
@@ -598,11 +611,14 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         .mark_transport_delivered("tx-didcomm-contract", "didcomm-message-contract")
         .await
         .unwrap();
-    let transported_delivery = repository
-        .pending_delivery("org-a", "tx-didcomm-contract")
+    let transported_state = repository
+        .delivery_state("org-a", "tx-didcomm-contract")
         .await
         .unwrap()
         .expect("transport completion remains pending until lifecycle projection");
+    let InitiationDidcommDeliveryState::Pending(transported_delivery) = transported_state else {
+        panic!("a transported delivery must remain pending until projection");
+    };
     assert_eq!(transported_delivery.delivery, staged);
     assert!(transported_delivery.transported);
     lifecycle
@@ -614,8 +630,27 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         )
         .await
         .unwrap();
+    let delivered_state = repository
+        .delivery_state("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .expect("a completed delivery remains available for receipt-only retries");
+    let InitiationDidcommDeliveryState::Delivered(delivered) = delivered_state else {
+        panic!("a completed delivery must expose only its terminal receipt state");
+    };
+    assert_eq!(delivered.transaction_id, "tx-didcomm-contract");
+    assert_eq!(delivered.organization_id, "org-a");
+    assert_eq!(delivered.credential_id, issued.id);
+    assert_eq!(delivered.holder_did, staged.holder_did);
+    assert_eq!(delivered.service_endpoint, staged.service_endpoint);
+    assert_eq!(delivered.message_id, staged.message_id);
     assert!(repository
         .pending_delivery("org-a", "tx-didcomm-contract")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .delivery_state("org-other", "tx-didcomm-contract")
         .await
         .unwrap()
         .is_none());
@@ -684,10 +719,47 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         .unwrap();
     assert_eq!(metadata["protocol"], "didcomm_v2");
     assert_eq!(metadata["didcomm_message_id"], "didcomm-message-contract");
+    assert_eq!(metadata["holder_did"], "did:key:holder");
+    assert!(metadata.get("encrypted_message").is_none());
     assert_eq!(
         metadata["service_endpoint"],
         "https://holder.example/didcomm"
     );
+
+    for required_key in ["holder_did", "service_endpoint", "didcomm_message_id"] {
+        sqlx::query(
+            "UPDATE issuance_service.credential_delivery_records
+             SET metadata = $2 - $3
+             WHERE credential_id = $1",
+        )
+        .bind(credential_id)
+        .bind(metadata.clone())
+        .bind(required_key)
+        .execute(pool)
+        .await
+        .unwrap();
+        assert!(repository
+            .pending_delivery("org-a", "tx-didcomm-contract")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            repository
+                .delivery_state("org-a", "tx-didcomm-contract")
+                .await,
+            Err(CredentialIssuanceError::RepositoryUnavailable)
+        ));
+    }
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = $2
+         WHERE credential_id = $1",
+    )
+    .bind(credential_id)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn assert_initiation_dependency_reads(pool: &sqlx::PgPool, key: &[u8]) {
