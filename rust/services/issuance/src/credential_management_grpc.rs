@@ -8,6 +8,7 @@ use tonic::{Request, Response, Status};
 use crate::{
     credential::{
         CredentialIssuanceError, CredentialIssuanceService, CredentialRequest, CredentialResponse,
+        IssuedCredential,
     },
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
@@ -201,6 +202,10 @@ impl CredentialManagementGrpcService {
             .map(Response::new)
             .map_err(lifecycle_status)
     }
+
+    async fn emit_issued(&self, credential: &IssuedCredential) {
+        self.events.emit(issued_event(credential)).await;
+    }
 }
 
 #[tonic::async_trait]
@@ -277,9 +282,9 @@ impl IssuanceService for CredentialManagementGrpcService {
         let platform = self.platform()?;
         let request = request.into_inner();
         let authorization = format!("Bearer {}", request.access_token);
-        let response = platform
+        let outcome = platform
             .credential
-            .issue(
+            .issue_with_outcome(
                 &credential_request(request)?,
                 Some(&authorization),
                 None,
@@ -287,7 +292,11 @@ impl IssuanceService for CredentialManagementGrpcService {
             )
             .await
             .map_err(credential_status)?;
-        Ok(Response::new(credential_response(response)?))
+        let response = credential_response(outcome.response)?;
+        if let Some(credential) = outcome.issued_credential.as_ref() {
+            self.emit_issued(credential).await;
+        }
+        Ok(Response::new(response))
     }
 
     async fn get_offer(
@@ -758,6 +767,18 @@ fn status_response(value: CredentialStatusView) -> CredentialStatusResponse {
             .status_updated_at
             .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false),
         reason: value.reason.unwrap_or_default(),
+    }
+}
+
+fn issued_event(credential: &IssuedCredential) -> CredentialLifecycleEvent {
+    CredentialLifecycleEvent {
+        event_type: "issued".to_owned(),
+        credential_id: credential.id.clone(),
+        transaction_id: credential.transaction_id.clone(),
+        organization_id: credential.organization_id.clone(),
+        credential_template_id: credential.credential_template_id.clone(),
+        status: "issued".to_owned(),
+        timestamp: chrono::Utc::now(),
     }
 }
 
@@ -1259,6 +1280,51 @@ mod tests {
         assert_eq!(event.organization_id, "org-a");
         assert_eq!(event.credential_template_id, "template-a");
         assert_eq!(event.status, "suspended");
+        assert!(event.timestamp.ends_with("+00:00"));
+    }
+
+    #[tokio::test]
+    async fn committed_issuance_preserves_the_legacy_issued_stream_event() {
+        let (service, _calls) = candidate();
+        let mut events = service
+            .stream_credential_events(authenticated(StreamCredentialEventsRequest {
+                organization_id: "org-a".to_owned(),
+                credential_template_id: "template-a".to_owned(),
+                event_types: vec!["issued".to_owned()],
+            }))
+            .await
+            .expect("stream")
+            .into_inner();
+        let issued_at = Utc
+            .with_ymd_and_hms(2026, 8, 30, 12, 0, 0)
+            .single()
+            .expect("timestamp");
+        service
+            .emit_issued(&IssuedCredential {
+                id: "credential-issued".to_owned(),
+                transaction_id: "transaction-issued".to_owned(),
+                organization_id: "org-a".to_owned(),
+                credential_template_id: "template-a".to_owned(),
+                applicant_id: Some("applicant-a".to_owned()),
+                subject_did: Some("did:key:holder".to_owned()),
+                issuer_did: "did:web:issuer.example".to_owned(),
+                revocation_profile_id: Some("profile-a".to_owned()),
+                renewed_from_credential_id: None,
+                status_list_entries: vec![json!({"index": 1})],
+                credential: "header.payload.signature".to_owned(),
+                credential_hash: "credential-hash".to_owned(),
+                issued_at,
+                expires_at: issued_at + chrono::Duration::days(365),
+            })
+            .await;
+
+        let event = events.next().await.expect("stream item").expect("event");
+        assert_eq!(event.event_type, "issued");
+        assert_eq!(event.credential_id, "credential-issued");
+        assert_eq!(event.transaction_id, "transaction-issued");
+        assert_eq!(event.organization_id, "org-a");
+        assert_eq!(event.credential_template_id, "template-a");
+        assert_eq!(event.status, "issued");
         assert!(event.timestamp.ends_with("+00:00"));
     }
 

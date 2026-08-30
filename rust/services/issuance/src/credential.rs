@@ -102,6 +102,17 @@ pub struct CredentialResponse {
     pub notification_id: String,
 }
 
+/// Transport-neutral result metadata for callers that must project a newly
+/// committed issuance into another boundary, such as the legacy gRPC event
+/// stream. Replayed or concurrently recovered credentials intentionally have
+/// no `issued_credential`, matching the legacy adapter's one-event-per-commit
+/// behavior.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CredentialIssuanceOutcome {
+    pub response: CredentialResponse,
+    pub issued_credential: Option<IssuedCredential>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CredentialTransactionStatus {
     Pending,
@@ -438,6 +449,18 @@ impl CredentialIssuanceService {
         dpop_proof: Option<&str>,
         endpoint_url: &str,
     ) -> Result<CredentialResponse, CredentialIssuanceError> {
+        self.issue_with_outcome(request, authorization, dpop_proof, endpoint_url)
+            .await
+            .map(|outcome| outcome.response)
+    }
+
+    pub async fn issue_with_outcome(
+        &self,
+        request: &CredentialRequest,
+        authorization: Option<&str>,
+        dpop_proof: Option<&str>,
+        endpoint_url: &str,
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let access_token = bearer_token(authorization)?;
         let (mut transaction, authorization_session) = self.transaction(access_token).await?;
         self.verify_dpop(&transaction, dpop_proof, endpoint_url)?;
@@ -555,7 +578,7 @@ impl CredentialIssuanceService {
         &self,
         request: &CredentialRequest,
         transaction: &CredentialTransaction,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let existing = self
             .ports
             .repository
@@ -563,12 +586,16 @@ impl CredentialIssuanceService {
             .await?
             .ok_or(CredentialIssuanceError::CredentialAlreadyIssued)?;
         let policy = format_policy(request, transaction)?;
-        response(
+        let response = response(
             &existing.credential,
             policy.kind,
             &policy.response_format,
             self.ports.notification_ids.generate(),
-        )
+        )?;
+        Ok(CredentialIssuanceOutcome {
+            response,
+            issued_credential: None,
+        })
     }
 
     async fn sign_and_finalize(
@@ -577,7 +604,7 @@ impl CredentialIssuanceService {
         policy: FormatPolicy,
         issuer: IssuerContext,
         proof: VerifiedCredentialProof,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         if policy.kind == CredentialBuilderKind::Mdoc && proof.holder_jwk.is_none() {
             return Err(CredentialIssuanceError::MdocHolderKeyRequired);
         }
@@ -607,7 +634,7 @@ impl CredentialIssuanceService {
         &self,
         transaction_id: &str,
         policy: &FormatPolicy,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let current = self
             .ports
             .repository
@@ -623,12 +650,16 @@ impl CredentialIssuanceService {
             .is_some_and(|transaction| transaction.status == CredentialTransactionStatus::Issued)
         {
             if let Some(existing) = existing {
-                return response(
+                let response = response(
                     &existing.credential,
                     policy.kind,
                     &policy.response_format,
                     self.ports.notification_ids.generate(),
-                );
+                )?;
+                return Ok(CredentialIssuanceOutcome {
+                    response,
+                    issued_credential: None,
+                });
             }
         }
         Err(CredentialIssuanceError::IssuanceInProgress)
@@ -641,7 +672,7 @@ impl CredentialIssuanceService {
         policy: FormatPolicy,
         issuer: IssuerContext,
         proof: VerifiedCredentialProof,
-    ) -> Result<CredentialResponse, CredentialIssuanceError> {
+    ) -> Result<CredentialIssuanceOutcome, CredentialIssuanceError> {
         let issued = materialize_credential(
             CredentialMaterializationContext {
                 builder: self.ports.builder.as_ref(),
@@ -660,12 +691,16 @@ impl CredentialIssuanceService {
             .lifecycle
             .after_issued(transaction, &issued, &policy.response_format)
             .await?;
-        response(
+        let response = response(
             &issued.credential,
             policy.kind,
             &policy.response_format,
             self.ports.notification_ids.generate(),
-        )
+        )?;
+        Ok(CredentialIssuanceOutcome {
+            response,
+            issued_credential: Some(issued),
+        })
     }
 }
 
