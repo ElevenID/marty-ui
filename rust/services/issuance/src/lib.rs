@@ -35,6 +35,11 @@ pub mod credential;
 pub mod credential_builder;
 pub mod credential_issuer;
 pub mod credential_lifecycle;
+pub mod credential_management;
+pub mod credential_management_events;
+pub mod credential_management_grpc;
+pub mod credential_management_http;
+pub mod credential_management_postgres;
 pub mod credential_postgres;
 pub mod dpop;
 pub mod ephemeral_postgres;
@@ -56,3 +61,7 @@ pub mod transport;
 pub use config::*;
 pub use contract::*;
 pub use runtime::*;
+
+pub mod issuance_proto {
+    tonic::include_proto!("marty.ui.issuance.v1");
+}

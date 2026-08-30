@@ -23,6 +23,8 @@ const CANVAS_LTI: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-lti-foundation.json");
 const CANVAS_OAUTH: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
+const CREDENTIAL_LIFECYCLE: &[u8] =
+    include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -44,6 +46,7 @@ struct Coverage {
     credential_signing_behavior_contract: Upstream,
     canvas_lti_behavior_contract: Upstream,
     canvas_oauth_behavior_contract: Upstream,
+    credential_lifecycle_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -240,6 +243,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid Canvas LTI contract", error))?;
     let canvas_oauth: Value = serde_json::from_slice(CANVAS_OAUTH)
         .map_err(|error| contract_error("invalid Canvas OAuth contract", error))?;
+    let credential_lifecycle: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE)
+        .map_err(|error| contract_error("invalid credential lifecycle contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -479,6 +484,41 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected Canvas OAuth behavior contract",
     )?;
     require(
+        credential_lifecycle["schema"] == "marty.issuance-credential-lifecycle/v1"
+            && credential_lifecycle["scope"]["http"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 4)
+            && credential_lifecycle["scope"]["grpc"]
+                .as_array()
+                .is_some_and(|methods| methods.len() == 4)
+            && credential_lifecycle["request"]["reason"]["maximum_characters"] == 2000
+            && credential_lifecycle["transitions"]
+                .as_array()
+                .is_some_and(|transitions| transitions.len() == 3)
+            && credential_lifecycle["mutation_order"]
+                == serde_json::json!([
+                    "load-credential",
+                    "enforce-resource-organization-when-http",
+                    "validate-transition",
+                    "publish-revocation-profile-status",
+                    "persist-local-status",
+                    "synchronize-canvas-delivery-records",
+                    "emit-grpc-stream-event",
+                    "return-response"
+                ])
+            && credential_lifecycle["publication"]["revocation_profile"]
+                == "required-before-local-persistence"
+            && credential_lifecycle["publication"]["grpc_stream_event"]
+                == "after-canonical-handler-success"
+            && credential_lifecycle["failures"]
+                .as_array()
+                .is_some_and(|failures| failures.len() == 7)
+            && credential_lifecycle["security_invariants"]
+                .as_array()
+                .is_some_and(|invariants| invariants.len() == 4),
+        "unexpected credential lifecycle behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -584,6 +624,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid Canvas OAuth provenance",
     )?;
     require(
+        coverage.credential_lifecycle_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.credential_lifecycle_behavior_contract.path
+                == "contracts/issuance-credential-lifecycle.json"
+            && coverage.credential_lifecycle_behavior_contract.commit.len() == 40
+            && coverage
+                .credential_lifecycle_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid credential lifecycle provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -658,6 +710,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         actual_canvas_oauth == coverage.canvas_oauth_behavior_contract.sha256,
         "Canvas OAuth hash does not match provenance",
+    )?;
+    let canonical_credential_lifecycle = canonical_lf(CREDENTIAL_LIFECYCLE);
+    let actual_credential_lifecycle =
+        format!("{:x}", Sha256::digest(&canonical_credential_lifecycle));
+    require(
+        actual_credential_lifecycle == coverage.credential_lifecycle_behavior_contract.sha256,
+        "credential lifecycle hash does not match provenance",
     )?;
 
     let routes = surface["http"]["routes"]
@@ -1147,7 +1206,7 @@ mod tests {
 
     use super::{
         canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, COVERAGE,
-        CREDENTIAL_ADMISSION, CREDENTIAL_SIGNING,
+        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING,
     };
 
     #[test]
@@ -1166,6 +1225,10 @@ mod tests {
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CANVAS_LTI))),
             coverage.canvas_lti_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_LIFECYCLE))),
+            coverage.credential_lifecycle_behavior_contract.sha256
         );
     }
 
