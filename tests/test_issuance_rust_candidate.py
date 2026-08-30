@@ -38,6 +38,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-canvas-oauth-lifecycle.json"
     ).read_bytes()
     canvas_oauth = json.loads(canvas_oauth_bytes)
+    credential_lifecycle_bytes = (
+        ROOT / "contracts/issuance-credential-lifecycle.json"
+    ).read_bytes()
+    credential_lifecycle = json.loads(credential_lifecycle_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -159,6 +163,35 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert canvas_oauth["start"]["authorization"]["persisted_state"] == "sha256-only"
     assert canvas_oauth["callback"]["publication"]["browser_token_disclosure"] is False
     assert canvas_oauth["disconnect"]["retry"]["durable"] is True
+    assert (
+        hashlib.sha256(credential_lifecycle_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["credential_lifecycle_behavior_contract"]["sha256"]
+    )
+    assert (
+        coverage["credential_lifecycle_behavior_contract"]["commit"]
+        == "335c8566af4c873a30f960635db2624723008ae3"
+    )
+    assert credential_lifecycle["schema"] == (
+        "marty.issuance-credential-lifecycle/v1"
+    )
+    assert len(credential_lifecycle["scope"]["http"]) == 4
+    assert len(credential_lifecycle["scope"]["grpc"]) == 4
+    assert len(credential_lifecycle["transitions"]) == 3
+    assert credential_lifecycle["mutation_order"] == [
+        "load-credential",
+        "enforce-resource-organization-when-http",
+        "validate-transition",
+        "publish-revocation-profile-status",
+        "persist-local-status",
+        "synchronize-canvas-delivery-records",
+        "emit-grpc-stream-event",
+        "return-response",
+    ]
+    assert credential_lifecycle["publication"]["revocation_profile"] == (
+        "required-before-local-persistence"
+    )
+    assert len(credential_lifecycle["failures"]) == 7
+    assert len(credential_lifecycle["security_invariants"]) == 4
     capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
     assert capability_policy["authority"] == "verified-signed-launch-claims"
     assert capability_policy["authorization_index"] == "verified_binding_launches"
