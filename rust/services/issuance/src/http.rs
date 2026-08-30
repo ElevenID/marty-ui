@@ -22,6 +22,7 @@ use crate::{
         CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
         CanvasLtiBootstrapServiceError,
     },
+    canvas_lti_deep_linking::{CanvasLtiDeepLinkingError, CanvasLtiDeepLinkingService},
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangeService,
         CanvasLtiExperienceSessionError, CanvasLtiExperienceSessionService,
@@ -60,6 +61,7 @@ struct IssuanceState {
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
+    canvas_lti_deep_linking: Option<CanvasLtiDeepLinkingService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
 }
 
@@ -79,9 +81,30 @@ pub struct CanvasLtiServices {
     launch: CanvasLtiLaunchService,
     experience: CanvasLtiExperienceService,
     experience_exchange: CanvasLtiExperienceExchangeService,
-    experience_session: CanvasLtiExperienceSessionService,
-    bootstrap: CanvasLtiBootstrapService,
+    session: CanvasLtiExperienceSessionServices,
     tool_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CanvasLtiExperienceSessionServices {
+    current: CanvasLtiExperienceSessionService,
+    bootstrap: CanvasLtiBootstrapService,
+    deep_linking: CanvasLtiDeepLinkingService,
+}
+
+impl CanvasLtiExperienceSessionServices {
+    #[must_use]
+    pub fn new(
+        current: CanvasLtiExperienceSessionService,
+        bootstrap: CanvasLtiBootstrapService,
+        deep_linking: CanvasLtiDeepLinkingService,
+    ) -> Self {
+        Self {
+            current,
+            bootstrap,
+            deep_linking,
+        }
+    }
 }
 
 impl CanvasLtiServices {
@@ -91,8 +114,7 @@ impl CanvasLtiServices {
         launch: CanvasLtiLaunchService,
         experience: CanvasLtiExperienceService,
         experience_exchange: CanvasLtiExperienceExchangeService,
-        experience_session: CanvasLtiExperienceSessionService,
-        bootstrap: CanvasLtiBootstrapService,
+        session: CanvasLtiExperienceSessionServices,
         tool_signer: Arc<dyn CanvasLtiToolJwtSigner>,
     ) -> Self {
         Self {
@@ -100,8 +122,7 @@ impl CanvasLtiServices {
             launch,
             experience,
             experience_exchange,
-            experience_session,
-            bootstrap,
+            session,
             tool_signer,
         }
     }
@@ -151,6 +172,7 @@ struct OptionalServices {
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
+    canvas_lti_deep_linking: Option<CanvasLtiDeepLinkingService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
@@ -223,8 +245,9 @@ pub fn router_with_all_services(
             canvas_lti_launch: Some(services.canvas_lti.launch),
             canvas_lti_experience: Some(services.canvas_lti.experience),
             canvas_lti_experience_exchange: Some(services.canvas_lti.experience_exchange),
-            canvas_lti_experience_session: Some(services.canvas_lti.experience_session),
-            canvas_lti_bootstrap: Some(services.canvas_lti.bootstrap),
+            canvas_lti_experience_session: Some(services.canvas_lti.session.current),
+            canvas_lti_bootstrap: Some(services.canvas_lti.session.bootstrap),
+            canvas_lti_deep_linking: Some(services.canvas_lti.session.deep_linking),
             canvas_lti_tool_signer: Some(services.canvas_lti.tool_signer),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
@@ -406,6 +429,23 @@ pub fn router_with_canvas_lti_bootstrap(
     )
 }
 
+pub fn router_with_canvas_lti_deep_linking(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_deep_linking: CanvasLtiDeepLinkingService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_deep_linking: Some(canvas_lti_deep_linking),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 pub fn router_with_canvas_lti_tool_signer(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -544,6 +584,12 @@ fn router_with_optional_services(
             post(bootstrap_canvas_lti_experience_application),
         );
     }
+    if services.canvas_lti_deep_linking.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+            post(create_canvas_lti_deep_linking_response),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -557,6 +603,7 @@ fn router_with_optional_services(
         canvas_lti_experience_exchange: services.canvas_lti_experience_exchange,
         canvas_lti_experience_session: services.canvas_lti_experience_session,
         canvas_lti_bootstrap: services.canvas_lti_bootstrap,
+        canvas_lti_deep_linking: services.canvas_lti_deep_linking,
         canvas_lti_tool_signer: services.canvas_lti_tool_signer,
     });
     system
@@ -677,6 +724,25 @@ async fn bootstrap_canvas_lti_experience_application(
         .as_ref()
         .ok_or(CanvasLtiBootstrapServiceError::RepositoryUnavailable)?
         .bootstrap(&token, &request)
+        .await?;
+    Ok(private_no_store(Json(response).into_response()))
+}
+
+async fn create_canvas_lti_deep_linking_response(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Response, CanvasLtiDeepLinkingHttpError> {
+    // Match the session-bound Python boundary: authenticate before validating
+    // even the confirmation-only request body.
+    let token = canvas_lti_experience_bearer_token(request.headers())
+        .map_err(|_| CanvasLtiDeepLinkingHttpError::Unauthorized)?
+        .to_owned();
+    parse_canvas_lti_deep_linking_request(request).await?;
+    let response = state
+        .canvas_lti_deep_linking
+        .as_ref()
+        .ok_or(CanvasLtiDeepLinkingError::RepositoryUnavailable)?
+        .create_response(&token)
         .await?;
     Ok(private_no_store(Json(response).into_response()))
 }
@@ -1300,6 +1366,74 @@ async fn parse_canvas_lti_bootstrap_request(
     })
 }
 
+async fn parse_canvas_lti_deep_linking_request(
+    request: Request,
+) -> Result<(), CanvasLtiDeepLinkingHttpError> {
+    const MAX_DEEP_LINKING_BODY_BYTES: usize = 64 * 1024;
+    let is_json = request
+        .headers()
+        .get(http_header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            let media_type = value.trim().to_ascii_lowercase();
+            media_type == "application/json"
+                || (media_type.starts_with("application/") && media_type.ends_with("+json"))
+        });
+    let bytes = to_bytes(request.into_body(), MAX_DEEP_LINKING_BODY_BYTES)
+        .await
+        .map_err(|_| CanvasLtiDeepLinkingHttpError::BodyTooLarge)?;
+    if bytes.is_empty() {
+        return Err(CanvasLtiDeepLinkingHttpError::Validation(vec![json!({
+            "type": "missing",
+            "loc": ["body"],
+            "msg": "Field required",
+            "input": null,
+        })]));
+    }
+    if !is_json {
+        return Err(CanvasLtiDeepLinkingHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": String::from_utf8_lossy(&bytes),
+        })]));
+    }
+    let input: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        CanvasLtiDeepLinkingHttpError::Validation(vec![json!({
+            "type": "json_invalid",
+            "loc": ["body", error.line(), error.column()],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {"error": error.to_string()},
+        })])
+    })?;
+    let Some(object) = input.as_object() else {
+        return Err(CanvasLtiDeepLinkingHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": input,
+        })]));
+    };
+    if object.is_empty() {
+        return Ok(());
+    }
+    Err(CanvasLtiDeepLinkingHttpError::Validation(
+        object
+            .iter()
+            .map(|(name, value)| {
+                json!({
+                    "type": "extra_forbidden",
+                    "loc": ["body", name],
+                    "msg": "Extra inputs are not permitted",
+                    "input": value,
+                })
+            })
+            .collect(),
+    ))
+}
+
 enum CanvasLtiExperienceSessionHttpError {
     Unauthorized,
     Service(CanvasLtiExperienceSessionError),
@@ -1310,6 +1444,75 @@ enum CanvasLtiBootstrapHttpError {
     Service(CanvasLtiBootstrapServiceError),
     Validation(Vec<Value>),
     BodyTooLarge,
+}
+
+enum CanvasLtiDeepLinkingHttpError {
+    Unauthorized,
+    Service(CanvasLtiDeepLinkingError),
+    Validation(Vec<Value>),
+    BodyTooLarge,
+}
+
+impl From<CanvasLtiDeepLinkingError> for CanvasLtiDeepLinkingHttpError {
+    fn from(value: CanvasLtiDeepLinkingError) -> Self {
+        Self::Service(value)
+    }
+}
+
+impl IntoResponse for CanvasLtiDeepLinkingHttpError {
+    fn into_response(self) -> Response {
+        use CanvasLtiDeepLinkingError as Error;
+        let response = match self {
+            Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
+            Self::Service(Error::SessionNotFound) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Canvas LTI experience session not found"})),
+            )
+                .into_response(),
+            Self::Service(error @ (Error::PilotDisabled | Error::PlatformNotFound)) => {
+                (StatusCode::NOT_FOUND, Json(json!({"detail": error.to_string()}))).into_response()
+            }
+            Self::Service(Error::StaffRoleRequired) => (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "detail": "Canvas Deep Linking requires an authenticated Instructor or Administrator role"
+                })),
+            )
+                .into_response(),
+            Self::Service(
+                error @ (Error::FeatureDisabled
+                | Error::BindingMismatch
+                | Error::CapabilityMissing
+                | Error::ResourceLinksNotAccepted
+                | Error::ReturnUrlMissing
+                | Error::ReturnUrlUntrusted
+                | Error::InvalidEvidenceRequirements(_)
+                | Error::SigningClaimsInvalid
+                | Error::ConfigurationDrift),
+            ) => (StatusCode::CONFLICT, Json(json!({"detail": error.to_string()}))).into_response(),
+            Self::Service(Error::NonceGenerationFailed | Error::SigningUnavailable(_)) => {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
+                )
+                    .into_response()
+            }
+            Self::Service(Error::RepositoryUnavailable) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
+            Self::Validation(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail": errors})),
+            )
+                .into_response(),
+            Self::BodyTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "Canvas LTI Deep Linking body exceeds the size limit"})),
+            )
+                .into_response(),
+        };
+        private_no_store(response)
+    }
 }
 
 impl From<CanvasLtiBootstrapServiceError> for CanvasLtiBootstrapHttpError {
