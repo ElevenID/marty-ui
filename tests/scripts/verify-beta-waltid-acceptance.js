@@ -184,6 +184,7 @@ async function collectBetaOffer(browser, {
   contextOptions = {},
   keepContext = false,
   onStep = null,
+  setupContext = null,
 } = {}) {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
@@ -198,6 +199,7 @@ async function collectBetaOffer(browser, {
     ignoreHTTPSErrors: LOCAL_BETA_PROXY,
     ...contextOptions,
   });
+  if (setupContext) await setupContext(context);
   const page = await context.newPage();
   const issueResponses = [];
   const badResponses = [];

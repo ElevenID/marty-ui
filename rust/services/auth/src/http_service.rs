@@ -531,8 +531,10 @@ async fn credential_login_finalize(
             state.origins.primary().trim_end_matches('/')
         ));
     };
-    let mut response =
-        redirect_response(&build_ui_redirect_url(Some("/"), state.origins.primary()));
+    let mut response = redirect_response(&build_ui_redirect_url(
+        Some("/console/applicant/catalog?auth_method=credential"),
+        state.origins.primary(),
+    ));
     set_session_cookie(&mut response, &state.cookie, &session_id);
     response
 }
