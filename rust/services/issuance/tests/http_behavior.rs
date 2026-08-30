@@ -3,9 +3,18 @@ use axum::{
     body::Body,
     http::{Method, Request},
 };
-use chrono::DateTime;
+use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
-    http::{router, router_with_services, router_with_tenant_discovery},
+    credential_management::{
+        CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
+        CredentialManagementPortError, CredentialManagementRepository, CredentialManagementService,
+        CredentialStatusPublisher, ManagedCredential, ManagedCredentialStatus,
+    },
+    credential_management_http::CredentialManagementHttpService,
+    http::{
+        router, router_with_credential_management, router_with_services,
+        router_with_tenant_discovery,
+    },
     tenant_discovery::{
         ProofPolicyResolver, TenantDiscoveryError, TenantDiscoveryRepository,
         TenantDiscoveryService,
@@ -790,6 +799,306 @@ async fn native_offer_transaction_read_edges_and_failures_match_the_python_oracl
                 .expect("repository calls"),
             "{}",
             failure["name"]
+        );
+    }
+}
+
+#[derive(Clone)]
+struct CredentialLifecycleHarness {
+    credential: Arc<Mutex<ManagedCredential>>,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl CredentialManagementRepository for CredentialLifecycleHarness {
+    async fn get(
+        &self,
+        credential_id: &str,
+    ) -> Result<Option<ManagedCredential>, CredentialManagementPortError> {
+        self.calls
+            .lock()
+            .expect("lifecycle calls")
+            .push("load-credential".to_owned());
+        let credential = self.credential.lock().expect("credential").clone();
+        Ok((credential.id == credential_id).then_some(credential))
+    }
+
+    async fn persist(
+        &self,
+        credential: &ManagedCredential,
+        expected_status: ManagedCredentialStatus,
+    ) -> Result<ManagedCredential, CredentialManagementPortError> {
+        self.calls
+            .lock()
+            .expect("lifecycle calls")
+            .push("persist-local-status".to_owned());
+        let mut stored = self.credential.lock().expect("credential");
+        if stored.status != expected_status {
+            return Err(CredentialManagementPortError("stale status".to_owned()));
+        }
+        *stored = credential.clone();
+        Ok(stored.clone())
+    }
+
+    async fn synchronize_canvas(
+        &self,
+        _credential: &ManagedCredential,
+        action: CredentialLifecycleAction,
+        _reason: Option<&str>,
+    ) -> Result<(), CredentialManagementPortError> {
+        self.calls
+            .lock()
+            .expect("lifecycle calls")
+            .push(format!("synchronize-canvas:{}", action.as_str()));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CredentialStatusPublisher for CredentialLifecycleHarness {
+    async fn publish(
+        &self,
+        _credential: &ManagedCredential,
+        action: CredentialLifecycleAction,
+        _reason: Option<&str>,
+    ) -> Result<(), CredentialManagementPortError> {
+        self.calls
+            .lock()
+            .expect("lifecycle calls")
+            .push(format!("publish-status:{}", action.as_str()));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CredentialLifecycleEventSink for CredentialLifecycleHarness {
+    async fn emit(&self, event: CredentialLifecycleEvent) {
+        self.calls
+            .lock()
+            .expect("lifecycle calls")
+            .push(format!("emit-event:{}", event.event_type));
+    }
+}
+
+fn credential_lifecycle_app() -> (axum::Router, Arc<Mutex<Vec<String>>>) {
+    let config =
+        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).expect("config");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let harness = CredentialLifecycleHarness {
+        credential: Arc::new(Mutex::new(ManagedCredential {
+            id: "credential-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: "template-1".to_owned(),
+            issuer_did: None,
+            status: ManagedCredentialStatus::Active,
+            status_updated_at: Utc
+                .with_ymd_and_hms(2026, 8, 30, 11, 0, 0)
+                .single()
+                .expect("timestamp"),
+            revoked: false,
+            revoked_at: None,
+            revocation_reason: None,
+            revocation_profile_id: Some("profile-1".to_owned()),
+            status_list_entries: vec![serde_json::json!({"index": 7})],
+        })),
+        calls: calls.clone(),
+    };
+    let lifecycle = CredentialManagementService::new(
+        Arc::new(harness.clone()),
+        Arc::new(harness.clone()),
+        Arc::new(harness),
+    );
+    let app = router_with_credential_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+        TransportPolicy::new(config.cors_allowed_origins),
+        CredentialManagementHttpService::new(lifecycle, Some("management-key")),
+    );
+    (app, calls)
+}
+
+fn lifecycle_mutation_request(path: &str, body: Value) -> Request<Body> {
+    Request::post(path)
+        .header("content-type", "application/json")
+        .header("X-API-Key", "management-key")
+        .header("X-Organization-ID", "org-1")
+        .body(Body::from(serde_json::to_vec(&body).expect("request JSON")))
+        .expect("request")
+}
+
+#[tokio::test]
+async fn native_credential_lifecycle_http_routes_preserve_auth_parity_and_one_handler_order() {
+    let (app, calls) = credential_lifecycle_app();
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/issuance/credentials/credential-1/suspend")
+                .header("content-type", "application/json")
+                .header("X-Organization-ID", "org-1")
+                .body(Body::from(r#"{"reason":null}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unauthorized.status(), 401);
+    assert_eq!(
+        json_body(unauthorized).await,
+        serde_json::json!({"detail": "X-API-Key header is missing"})
+    );
+    assert!(calls.lock().expect("calls").is_empty());
+
+    let missing_organization = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/issuance/credentials/credential-1/status")
+                .header("X-API-Key", "management-key")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(missing_organization.status(), 403);
+    assert_eq!(
+        json_body(missing_organization).await,
+        serde_json::json!({"detail": "Trusted organization context is required"})
+    );
+    assert!(calls.lock().expect("calls").is_empty());
+
+    let hidden = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/issuance/credentials/credential-1/status")
+                .header("X-API-Key", "management-key")
+                .header("X-Organization-ID", "org-other")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(hidden.status(), 404);
+    assert_eq!(
+        json_body(hidden).await,
+        serde_json::json!({"detail": "Resource not found"})
+    );
+    assert_eq!(
+        calls.lock().expect("calls").drain(..).collect::<Vec<_>>(),
+        ["load-credential"]
+    );
+
+    let suspended = app
+        .clone()
+        .oneshot(lifecycle_mutation_request(
+            "/v1/issuance/credentials/credential-1/suspend",
+            serde_json::json!({"reason": null}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(suspended.status(), 200);
+    let suspended = json_body(suspended).await;
+    assert_eq!(suspended["status"], "suspended");
+    assert_eq!(suspended["issuer_did"], Value::Null);
+    assert_eq!(suspended["reason"], Value::Null);
+    assert!(suspended["status_updated_at"]
+        .as_str()
+        .expect("timestamp")
+        .ends_with("+00:00"));
+    assert_eq!(
+        calls.lock().expect("calls").drain(..).collect::<Vec<_>>(),
+        [
+            "load-credential",
+            "publish-status:suspend",
+            "persist-local-status",
+            "synchronize-canvas:suspend",
+            "emit-event:suspended",
+        ]
+    );
+
+    let reinstated = app
+        .clone()
+        .oneshot(lifecycle_mutation_request(
+            "/v1/issuance/credentials/credential-1/reinstate",
+            serde_json::json!({"reason": "review complete"}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(reinstated.status(), 200);
+    assert_eq!(json_body(reinstated).await["status"], "active");
+    calls.lock().expect("calls").clear();
+
+    let revoked = app
+        .clone()
+        .oneshot(lifecycle_mutation_request(
+            "/v1/issuance/credentials/credential-1/revoke",
+            serde_json::json!({"reason": "policy violation"}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(revoked.status(), 200);
+    assert_eq!(json_body(revoked).await["status"], "revoked");
+    calls.lock().expect("calls").clear();
+
+    let status = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/issuance/credentials/credential-1/status")
+                .header("X-API-Key", "management-key")
+                .header("X-Organization-ID", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(status.status(), 200);
+    let status = json_body(status).await;
+    assert_eq!(status["status"], "revoked");
+    assert_eq!(status["reason"], "policy violation");
+
+    calls.lock().expect("calls").clear();
+    let oversized = app
+        .oneshot(lifecycle_mutation_request(
+            "/v1/issuance/credentials/credential-1/suspend",
+            serde_json::json!({"reason": "x".repeat(2001)}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(oversized.status(), 422);
+    assert_eq!(calls.lock().expect("calls").as_slice(), ["load-credential"]);
+}
+
+#[tokio::test]
+async fn native_credential_lifecycle_http_request_schema_is_strict_optional_and_nullable() {
+    let (app, calls) = credential_lifecycle_app();
+    let unknown_field = app
+        .oneshot(lifecycle_mutation_request(
+            "/v1/issuance/credentials/credential-1/suspend",
+            serde_json::json!({"reason": null, "unexpected": true}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(unknown_field.status(), 422);
+    assert!(calls.lock().expect("calls").is_empty());
+
+    for body in [serde_json::json!({}), serde_json::json!({"reason": null})] {
+        let (app, calls) = credential_lifecycle_app();
+        let response = app
+            .oneshot(lifecycle_mutation_request(
+                "/v1/issuance/credentials/credential-1/suspend",
+                body,
+            ))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), 200);
+        assert_eq!(json_body(response).await["reason"], Value::Null);
+        assert_eq!(
+            calls.lock().expect("calls").as_slice(),
+            [
+                "load-credential",
+                "publish-status:suspend",
+                "persist-local-status",
+                "synchronize-canvas:suspend",
+                "emit-event:suspended",
+            ]
         );
     }
 }

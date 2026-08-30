@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use mmf_security::constant_time_secret_eq;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -283,7 +284,12 @@ fn enforce_organization(
     trusted_organization_id: Option<&str>,
 ) -> Result<(), CredentialManagementError> {
     if trusted_organization_id.is_some_and(|organization_id| {
-        organization_id.trim().is_empty() || organization_id != credential.organization_id
+        let organization_id = organization_id.trim();
+        organization_id.is_empty()
+            || !constant_time_secret_eq(
+                organization_id.as_bytes(),
+                credential.organization_id.as_bytes(),
+            )
     }) {
         Err(CredentialManagementError::ResourceNotFound)
     } else {

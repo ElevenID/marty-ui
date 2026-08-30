@@ -15,6 +15,7 @@ use marty_oid4vci::discovery::{
 };
 use mmf_core::HealthReport;
 use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
@@ -43,6 +44,10 @@ use crate::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
     },
     credential::{CredentialIssuanceError, CredentialIssuanceService, CredentialRequest},
+    credential_management::{
+        CredentialLifecycleAction, CredentialManagementError, CredentialStatusView,
+    },
+    credential_management_http::{CredentialManagementHttpError, CredentialManagementHttpService},
     proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
@@ -62,6 +67,7 @@ struct IssuanceState {
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
+    credential_management: Option<CredentialManagementHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
@@ -195,6 +201,7 @@ struct OptionalServices {
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
+    credential_management: Option<CredentialManagementHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
@@ -273,6 +280,7 @@ pub fn router_with_all_services(
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
             credential: Some(services.credential),
+            credential_management: None,
             canvas_oauth: Some(services.canvas.oauth),
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
@@ -357,6 +365,23 @@ pub fn router_with_credential_issuance(
         transport,
         OptionalServices {
             credential: Some(credential),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_credential_management(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    credential_management: CredentialManagementHttpService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            credential_management: Some(credential_management),
             ..OptionalServices::default()
         },
     )
@@ -623,6 +648,25 @@ fn router_with_optional_services(
     if services.credential.is_some() {
         api = api.route("/v1/issuance/credential", post(issue_credential));
     }
+    if services.credential_management.is_some() {
+        api = api
+            .route(
+                "/v1/issuance/credentials/{credential_id}/revoke",
+                post(revoke_credential),
+            )
+            .route(
+                "/v1/issuance/credentials/{credential_id}/suspend",
+                post(suspend_credential),
+            )
+            .route(
+                "/v1/issuance/credentials/{credential_id}/reinstate",
+                post(reinstate_credential),
+            )
+            .route(
+                "/v1/issuance/credentials/{credential_id}/status",
+                get(get_credential_status),
+            );
+    }
     if services.canvas_oauth.is_some() {
         api = api
             .route(
@@ -710,6 +754,7 @@ fn router_with_optional_services(
         token_exchange: services.token_exchange,
         proof_nonce: services.proof_nonce,
         credential: services.credential,
+        credential_management: services.credential_management,
         canvas_oauth: services.canvas_oauth,
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
@@ -1577,6 +1622,129 @@ fn external_endpoint_url(headers: &HeaderMap, path: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("localhost");
     format!("{protocol}://{host}{path}")
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialStatusRequest {
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CredentialStatusHttpResponse {
+    id: String,
+    issuer_did: Option<String>,
+    status: String,
+    status_updated_at: String,
+    reason: Option<String>,
+}
+
+impl From<CredentialStatusView> for CredentialStatusHttpResponse {
+    fn from(value: CredentialStatusView) -> Self {
+        Self {
+            id: value.id,
+            issuer_did: value.issuer_did,
+            status: value.status,
+            status_updated_at: value
+                .status_updated_at
+                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false),
+            reason: value.reason,
+        }
+    }
+}
+
+async fn revoke_credential(
+    State(state): State<IssuanceState>,
+    Path(credential_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<CredentialStatusRequest>,
+) -> Result<Json<CredentialStatusHttpResponse>, CredentialManagementHttpError> {
+    transition_credential(
+        &state,
+        &credential_id,
+        &headers,
+        CredentialLifecycleAction::Revoke,
+        request.reason.as_deref(),
+    )
+    .await
+}
+
+async fn suspend_credential(
+    State(state): State<IssuanceState>,
+    Path(credential_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<CredentialStatusRequest>,
+) -> Result<Json<CredentialStatusHttpResponse>, CredentialManagementHttpError> {
+    transition_credential(
+        &state,
+        &credential_id,
+        &headers,
+        CredentialLifecycleAction::Suspend,
+        request.reason.as_deref(),
+    )
+    .await
+}
+
+async fn reinstate_credential(
+    State(state): State<IssuanceState>,
+    Path(credential_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<CredentialStatusRequest>,
+) -> Result<Json<CredentialStatusHttpResponse>, CredentialManagementHttpError> {
+    transition_credential(
+        &state,
+        &credential_id,
+        &headers,
+        CredentialLifecycleAction::Reinstate,
+        request.reason.as_deref(),
+    )
+    .await
+}
+
+async fn transition_credential(
+    state: &IssuanceState,
+    credential_id: &str,
+    headers: &HeaderMap,
+    action: CredentialLifecycleAction,
+    reason: Option<&str>,
+) -> Result<Json<CredentialStatusHttpResponse>, CredentialManagementHttpError> {
+    credential_management(state)?
+        .transition(
+            credential_id,
+            header(headers, "X-API-Key"),
+            header(headers, "X-Organization-ID"),
+            action,
+            reason,
+        )
+        .await
+        .map(CredentialStatusHttpResponse::from)
+        .map(Json)
+}
+
+async fn get_credential_status(
+    State(state): State<IssuanceState>,
+    Path(credential_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CredentialStatusHttpResponse>, CredentialManagementHttpError> {
+    credential_management(&state)?
+        .get_status(
+            &credential_id,
+            header(&headers, "X-API-Key"),
+            header(&headers, "X-Organization-ID"),
+        )
+        .await
+        .map(CredentialStatusHttpResponse::from)
+        .map(Json)
+}
+
+fn credential_management(
+    state: &IssuanceState,
+) -> Result<&CredentialManagementHttpService, CredentialManagementHttpError> {
+    state.credential_management.as_ref().ok_or_else(|| {
+        CredentialManagementHttpError::Lifecycle(CredentialManagementError::RepositoryUnavailable(
+            "service unavailable".to_owned(),
+        ))
+    })
 }
 
 async fn list_transactions(
@@ -2448,6 +2616,79 @@ impl IntoResponse for CredentialIssuanceHttpError {
             ),
         };
         (status, Json(body)).into_response()
+    }
+}
+
+impl IntoResponse for CredentialManagementHttpError {
+    fn into_response(self) -> Response {
+        let (status, detail) = match self {
+            Self::Security(error) => match error {
+                TransactionReadError::ApiKeyNotConfigured => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "ISSUANCE_API_KEY not configured on server",
+                ),
+                TransactionReadError::ApiKeyMissing => {
+                    (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
+                }
+                TransactionReadError::InvalidApiKey => {
+                    (StatusCode::UNAUTHORIZED, "Invalid API Key")
+                }
+                TransactionReadError::TrustedOrganizationRequired => (
+                    StatusCode::FORBIDDEN,
+                    "Trusted organization context is required",
+                ),
+                TransactionReadError::ResourceNotFound => {
+                    (StatusCode::NOT_FOUND, "Resource not found")
+                }
+                TransactionReadError::OrganizationMismatch => (
+                    StatusCode::FORBIDDEN,
+                    "Organization context does not match requested organization",
+                ),
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Credential lifecycle service is temporarily unavailable",
+                ),
+            },
+            Self::Lifecycle(error) => match error {
+                CredentialManagementError::NotFound => {
+                    (StatusCode::NOT_FOUND, "Credential not found")
+                }
+                CredentialManagementError::ResourceNotFound => {
+                    (StatusCode::NOT_FOUND, "Resource not found")
+                }
+                CredentialManagementError::AlreadyRevoked => {
+                    (StatusCode::BAD_REQUEST, "Credential already revoked")
+                }
+                CredentialManagementError::CannotSuspendRevoked => {
+                    (StatusCode::BAD_REQUEST, "Cannot suspend revoked credential")
+                }
+                CredentialManagementError::CannotReinstateRevoked => (
+                    StatusCode::BAD_REQUEST,
+                    "Cannot reinstate revoked credential",
+                ),
+                CredentialManagementError::NotSuspended => (
+                    StatusCode::BAD_REQUEST,
+                    "Only suspended credentials can be reinstated",
+                ),
+                CredentialManagementError::ReasonTooLong => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Credential lifecycle reason exceeds 2000 characters",
+                ),
+                CredentialManagementError::RepositoryUnavailable(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Credential repository is temporarily unavailable",
+                ),
+                CredentialManagementError::PublicationUnavailable(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Revocation service unavailable",
+                ),
+                CredentialManagementError::CanvasRetryUnavailable(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Canvas lifecycle retry could not be recorded",
+                ),
+            },
+        };
+        (status, Json(json!({"detail": detail}))).into_response()
     }
 }
 
