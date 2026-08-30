@@ -187,6 +187,35 @@ const PERSIST_REGISTRATION_STATE: &str = "UPDATE issuance_service.canvas_platfor
      last_connection_error, config_version, archived_at, enabled, created_at,
      updated_at";
 
+const PERSIST_LTI_INSTALLATION: &str = "UPDATE issuance_service.canvas_platforms
+ SET canvas_base_url = $5,
+     lti_client_id = $6,
+     lti_deployment_id = $7,
+     lti_trust_profile = $8,
+     lti_issuer = $9,
+     lti_jwks_url = $10,
+     lti_jwks_json = $11,
+     lti_jwks_fetched_at = $12,
+     lti_jwks_expires_at = $13,
+     lti_openid_configuration = $14,
+     registration_status = $15,
+     connection_config = $16,
+     capability_snapshot = $17,
+     last_validated_at = $18,
+     last_connection_error = $19,
+     config_version = $20,
+     enabled = $21,
+     updated_at = $22
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND archived_at IS NULL
+ RETURNING id, organization_id, canvas_account_id, display_name,
+     canvas_base_url, lti_client_id, lti_deployment_id, lti_trust_profile,
+     lti_issuer, lti_jwks_url, lti_jwks_json, lti_jwks_fetched_at,
+     lti_jwks_expires_at, lti_openid_configuration, registration_status,
+     connection_config, capability_snapshot, last_validated_at,
+     last_connection_error, config_version, archived_at, enabled, created_at,
+     updated_at";
+
 const ARCHIVE_PLATFORM_BINDINGS: &str = "UPDATE issuance_service.canvas_program_bindings
  SET enabled = false, archived_at = $3, updated_at = $3
  WHERE organization_id = $1 AND platform_id = $2 AND archived_at IS NULL";
@@ -449,6 +478,43 @@ impl PostgresCanvasManagementRepository {
             .map(platform_from_row)
             .transpose()
     }
+
+    pub async fn save_lti_installation(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+        invalidate_bindings: bool,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        let expected_version = version_i32(expected_config_version)?;
+        let persisted_version = version_i32(platform.config_version)?;
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let row = bind_lti_installation(
+            sqlx::query(PERSIST_LTI_INSTALLATION),
+            platform,
+            expected_version,
+            expected_updated_at,
+            persisted_version,
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        let Some(row) = row else {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Ok(None);
+        };
+        if invalidate_bindings {
+            sqlx::query(INVALIDATE_PLATFORM_BINDINGS)
+                .bind(&platform.organization_id)
+                .bind(&platform.id)
+                .bind(platform.updated_at)
+                .execute(&mut *transaction)
+                .await
+                .map_err(repository_error)?;
+        }
+        transaction.commit().await.map_err(repository_error)?;
+        platform_from_row(row).map(Some)
+    }
 }
 
 #[async_trait::async_trait]
@@ -542,6 +608,55 @@ impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
         )
         .await
     }
+
+    async fn save_lti_installation(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+        invalidate_bindings: bool,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::save_lti_installation(
+            self,
+            platform,
+            expected_config_version,
+            expected_updated_at,
+            invalidate_bindings,
+        )
+        .await
+    }
+}
+
+fn bind_lti_installation<'query>(
+    query: sqlx::query::Query<'query, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    platform: &'query CanvasPlatformRecord,
+    expected_config_version: i32,
+    expected_updated_at: DateTime<Utc>,
+    persisted_config_version: i32,
+) -> sqlx::query::Query<'query, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    query
+        .bind(&platform.organization_id)
+        .bind(&platform.id)
+        .bind(expected_config_version)
+        .bind(expected_updated_at)
+        .bind(&platform.canvas_base_url)
+        .bind(&platform.lti_client_id)
+        .bind(&platform.lti_deployment_id)
+        .bind(&platform.lti_trust_profile)
+        .bind(&platform.lti_issuer)
+        .bind(&platform.lti_jwks_url)
+        .bind(&platform.lti_jwks_json)
+        .bind(platform.lti_jwks_fetched_at)
+        .bind(platform.lti_jwks_expires_at)
+        .bind(&platform.lti_openid_configuration)
+        .bind(&platform.registration_status)
+        .bind(Value::Object(platform.connection_config.clone()))
+        .bind(Value::Object(platform.capability_snapshot.clone()))
+        .bind(platform.last_validated_at)
+        .bind(&platform.last_connection_error)
+        .bind(persisted_config_version)
+        .bind(platform.enabled)
+        .bind(platform.updated_at)
 }
 
 fn bind_platform_insert<'query>(

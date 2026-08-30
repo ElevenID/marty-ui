@@ -183,6 +183,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
         },
     )?;
+    let canvas_lti_jwks_refresh_config = CanvasLtiJwksRefreshConfig {
+        timeout: config.dependency_timeout,
+        ttl: config.canvas_lti_jwks_ttl,
+        self_managed_origins: config.canvas_self_managed_origins.clone(),
+        allow_private_networks: config.canvas_allow_private_base_urls,
+        allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+    };
     let canvas_management =
         CanvasPlatformManagementHttpService::new(CanvasPlatformManagementService::new(
             Arc::new(PostgresCanvasManagementRepository::new(pool.clone())),
@@ -193,6 +200,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 self_managed_origin_allowlist: config.canvas_self_managed_origins.clone(),
             },
             &config.issuer_base_url,
+            canvas_lti_jwks_refresh_config.clone(),
         ));
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
@@ -213,13 +221,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             context_repository: canvas_lti_repository.clone(),
             jwks_refresher: Arc::new(PostgresCanvasLtiJwksRefresher::new(
                 pool.clone(),
-                CanvasLtiJwksRefreshConfig {
-                    timeout: config.dependency_timeout,
-                    ttl: config.canvas_lti_jwks_ttl,
-                    self_managed_origins: config.canvas_self_managed_origins.clone(),
-                    allow_private_networks: config.canvas_allow_private_base_urls,
-                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-                },
+                canvas_lti_jwks_refresh_config,
             )),
             identity_repository: canvas_lti_repository.clone(),
             ags_repository: canvas_lti_repository.clone(),

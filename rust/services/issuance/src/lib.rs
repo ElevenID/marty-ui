@@ -24,6 +24,7 @@ pub mod canvas_lti_experience;
 pub mod canvas_lti_launch;
 pub mod canvas_lti_login;
 pub mod canvas_lti_postgres;
+pub mod canvas_lti_probe;
 pub mod canvas_lti_sync_enqueue;
 pub mod canvas_lti_tool_signing;
 pub mod canvas_management;

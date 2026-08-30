@@ -6,7 +6,7 @@ use axum::{
     http::{header as http_header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use marty_oid4vci::discovery::{
@@ -42,8 +42,8 @@ use crate::{
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
     canvas_management::CanvasPlatformRequest,
     canvas_management_http::{
-        organization_id_from_query, parse_platform_request, CanvasManagementHttpError,
-        CanvasPlatformManagementHttpService, CanvasPlatformResponse,
+        organization_id_from_query, parse_lti_installation_request, parse_platform_request,
+        CanvasManagementHttpError, CanvasPlatformManagementHttpService, CanvasPlatformResponse,
     },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
@@ -821,6 +821,10 @@ fn router_with_optional_services(
                 get(get_canvas_lti_registration_config),
             )
             .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+                put(update_canvas_lti_installation),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1005,6 +1009,21 @@ async fn get_public_canvas_lti_config(
         HeaderValue::from_static("no-store"),
     );
     Ok(response)
+}
+
+async fn update_canvas_lti_installation(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let installation = parse_lti_installation_request(request).await?;
+    service
+        .update_lti_installation(&headers, &platform_id, installation)
+        .await
+        .map(|response| Json(response).into_response())
 }
 
 fn canvas_management(

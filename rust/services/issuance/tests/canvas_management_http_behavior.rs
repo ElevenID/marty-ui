@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -7,6 +10,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
+    canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient},
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
     canvas_management_service::{
@@ -17,7 +21,7 @@ use marty_issuance_service::{
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
 };
-use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+use marty_oid4vci::{discovery::StaticDiscoveryDocuments, lti::CanvasLtiPlatformProbe};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -27,6 +31,44 @@ struct MemoryRepository {
     force_conflict: Mutex<bool>,
     force_oauth_conflict: Mutex<bool>,
     create_calls: Mutex<usize>,
+    installation_invalidations: Mutex<Vec<bool>>,
+}
+
+struct SuccessfulProbe;
+
+#[async_trait]
+impl CanvasLtiProbeClient for SuccessfulProbe {
+    async fn probe(
+        &self,
+        canvas_base_url: &str,
+        _config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String> {
+        Ok(CanvasLtiPlatformProbe {
+            canvas_base_url: canvas_base_url.to_owned(),
+            issuer: "https://canvas.instructure.com".to_owned(),
+            authorization_endpoint: Some(
+                "https://sso.canvaslms.com/api/lti/authorize_redirect".to_owned(),
+            ),
+            token_endpoint: Some(format!("{canvas_base_url}/login/oauth2/token")),
+            jwks_uri: "https://sso.canvaslms.com/api/lti/security/jwks".to_owned(),
+            registration_endpoint: None,
+            raw_openid_configuration: json!({"issuer": "https://canvas.instructure.com"}),
+            jwks_json: json!({"keys": [{"kid": "canvas-key"}]}),
+        })
+    }
+}
+
+struct FailedProbe;
+
+#[async_trait]
+impl CanvasLtiProbeClient for FailedProbe {
+    async fn probe(
+        &self,
+        _canvas_base_url: &str,
+        _config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String> {
+        Err("provider metadata unavailable".to_owned())
+    }
 }
 
 #[async_trait]
@@ -178,18 +220,63 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         existing.updated_at = platform.updated_at;
         Ok(Some(existing.clone()))
     }
+
+    async fn save_lti_installation(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+        invalidate_bindings: bool,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        if *self.force_conflict.lock().expect("conflict") {
+            return Ok(None);
+        }
+        self.installation_invalidations
+            .lock()
+            .expect("installation invalidations")
+            .push(invalidate_bindings);
+        let mut platforms = self.platforms.lock().expect("platforms");
+        let Some(existing) = platforms.iter_mut().find(|candidate| {
+            candidate.organization_id == platform.organization_id
+                && candidate.id == platform.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == expected_config_version
+                && candidate.updated_at == expected_updated_at
+        }) else {
+            return Ok(None);
+        };
+        *existing = platform.clone();
+        Ok(Some(existing.clone()))
+    }
 }
 
 fn app(repository: Arc<MemoryRepository>) -> axum::Router {
+    app_with_probe(repository, Arc::new(SuccessfulProbe))
+}
+
+fn app_with_probe(
+    repository: Arc<MemoryRepository>,
+    probe_client: Arc<dyn CanvasLtiProbeClient>,
+) -> axum::Router {
     let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
         .expect("configuration");
     let runtime = IssuanceRuntime::new(&config).expect("runtime");
-    let service = CanvasPlatformManagementHttpService::new(CanvasPlatformManagementService::new(
-        repository,
-        Some("management-key"),
-        CanvasOriginPolicy::default(),
-        "https://issuer.example.edu",
-    ));
+    let service = CanvasPlatformManagementHttpService::new(
+        CanvasPlatformManagementService::with_probe_client(
+            repository,
+            Some("management-key"),
+            CanvasOriginPolicy::default(),
+            "https://issuer.example.edu",
+            CanvasLtiJwksRefreshConfig {
+                timeout: Duration::from_secs(10),
+                ttl: Duration::from_secs(3_600),
+                self_managed_origins: Vec::new(),
+                allow_private_networks: false,
+                allow_http_localhost: false,
+            },
+            probe_client,
+        ),
+    );
     router_with_canvas_management(
         runtime.state(),
         StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
@@ -665,4 +752,186 @@ async fn registration_config_rotates_digest_only_tokens_and_public_lookup_is_no_
         .await
         .expect("response");
     assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn lti_installation_probes_trust_rotates_token_and_invalidates_changed_bindings() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Install", "old-client"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+
+    let installed = app
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation"
+            )),
+            json!({
+                "lti_client_id": " installed-client ",
+                "lti_deployment_id": " installed-deployment "
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(installed.status(), StatusCode::OK);
+    let installed_response = response_json(installed).await;
+    assert!(installed_response["installation"]["config_url"]
+        .as_str()
+        .is_some());
+
+    let persisted = repository.platforms.lock().expect("platforms")[0].clone();
+    assert_eq!(persisted.lti_client_id.as_deref(), Some("installed-client"));
+    assert_eq!(
+        persisted.lti_deployment_id.as_deref(),
+        Some("installed-deployment")
+    );
+    assert_eq!(persisted.registration_status, "installed");
+    assert!(persisted.enabled);
+    assert_eq!(persisted.config_version, 2);
+    assert_eq!(
+        persisted.lti_issuer.as_deref(),
+        Some("https://canvas.instructure.com")
+    );
+    assert_eq!(
+        persisted.lti_jwks_url.as_deref(),
+        Some("https://sso.canvaslms.com/api/lti/security/jwks")
+    );
+    assert!(persisted.lti_jwks_fetched_at.is_some());
+    assert!(persisted.lti_jwks_expires_at > persisted.lti_jwks_fetched_at);
+    assert_eq!(
+        repository
+            .installation_invalidations
+            .lock()
+            .expect("installation invalidations")
+            .as_slice(),
+        &[true]
+    );
+
+    let revoked = app
+        .oneshot(management_request(
+            Request::put(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation"
+            )),
+            json!({
+                "lti_client_id": "installed-client",
+                "lti_deployment_id": "installed-deployment",
+                "revoke_config_token": "yes"
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(revoked.status(), StatusCode::OK);
+    let revoked = response_json(revoked).await;
+    assert!(revoked["installation"].get("config_url").is_none());
+    let persisted = repository.platforms.lock().expect("platforms")[0].clone();
+    assert_eq!(persisted.config_version, 2);
+    assert_eq!(
+        persisted.connection_config["lti_config_token_status"],
+        "revoked"
+    );
+    assert_eq!(
+        repository
+            .installation_invalidations
+            .lock()
+            .expect("installation invalidations")
+            .as_slice(),
+        &[true, false]
+    );
+}
+
+#[tokio::test]
+async fn lti_installation_persists_probe_failure_and_rejects_conflicting_token_actions() {
+    let repository = Arc::new(MemoryRepository::default());
+    let healthy_app = app(repository.clone());
+    let created = healthy_app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Failure", "old-client"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+    let registration = healthy_app
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/registration-config"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(registration.status(), StatusCode::OK);
+
+    let failed_app = app_with_probe(repository.clone(), Arc::new(FailedProbe));
+    let failed = failed_app
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation"
+            )),
+            json!({
+                "lti_client_id": "new-client",
+                "lti_deployment_id": "new-deployment"
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(failed.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(failed).await,
+        json!({"detail": "Canvas LTI metadata probe failed: provider metadata unavailable"})
+    );
+    let persisted = repository.platforms.lock().expect("platforms")[0].clone();
+    assert_eq!(persisted.config_version, 2);
+    assert!(!persisted.enabled);
+    assert_eq!(persisted.registration_status, "draft");
+    assert_eq!(
+        persisted.last_connection_error.as_deref(),
+        Some("provider metadata unavailable")
+    );
+    assert_eq!(
+        persisted.connection_config["lti_config_token_status"],
+        "revoked"
+    );
+    assert!(!persisted
+        .connection_config
+        .contains_key("lti_config_token_hash"));
+
+    let conflicting = failed_app
+        .oneshot(management_request(
+            Request::put(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation"
+            )),
+            json!({
+                "lti_client_id": "new-client",
+                "lti_deployment_id": "new-deployment",
+                "rotate_config_token": true,
+                "revoke_config_token": true
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(conflicting.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(conflicting).await,
+        json!({"detail": "Rotate and revoke are mutually exclusive"})
+    );
 }

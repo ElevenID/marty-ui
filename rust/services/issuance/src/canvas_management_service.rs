@@ -13,7 +13,13 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    canvas_management::CanvasPlatformRequest,
+    canvas_lti_probe::{
+        probe_canvas_lti_metadata, CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient,
+        MartyCanvasLtiProbeClient,
+    },
+    canvas_management::{
+        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasRequestValidationError,
+    },
     canvas_management_domain::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
     },
@@ -45,6 +51,10 @@ pub enum CanvasPlatformManagementError {
     PlatformNotFound,
     #[error("Canvas LTI configuration not found")]
     LtiConfigurationNotFound,
+    #[error("Rotate and revoke are mutually exclusive")]
+    ConflictingTokenMutation,
+    #[error("Canvas LTI metadata probe failed: {0}")]
+    LtiMetadataProbeFailed(String),
     #[error("Canvas platform configuration changed; retry the request")]
     ConfigurationChanged,
     #[error("Canvas platform configuration changed; retry platform archival")]
@@ -107,6 +117,14 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_config_version: i64,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
+    async fn save_lti_installation(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+        invalidate_bindings: bool,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -122,6 +140,8 @@ pub struct CanvasPlatformManagementService {
     security: ManagementSecurity,
     origin_policy: CanvasOriginPolicy,
     issuer_base_url: String,
+    lti_probe_config: CanvasLtiJwksRefreshConfig,
+    lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
 }
 
 impl std::fmt::Debug for CanvasPlatformManagementService {
@@ -131,6 +151,7 @@ impl std::fmt::Debug for CanvasPlatformManagementService {
             .field("security", &self.security)
             .field("origin_policy", &self.origin_policy)
             .field("issuer_base_url", &self.issuer_base_url)
+            .field("lti_probe_config", &self.lti_probe_config)
             .finish_non_exhaustive()
     }
 }
@@ -142,12 +163,34 @@ impl CanvasPlatformManagementService {
         management_api_key: Option<&str>,
         origin_policy: CanvasOriginPolicy,
         issuer_base_url: &str,
+        lti_probe_config: CanvasLtiJwksRefreshConfig,
     ) -> Self {
         Self {
             repository,
             security: ManagementSecurity::new(management_api_key),
             origin_policy,
             issuer_base_url: issuer_base_url.trim_end_matches('/').to_owned(),
+            lti_probe_config,
+            lti_probe_client: Arc::new(MartyCanvasLtiProbeClient),
+        }
+    }
+
+    #[must_use]
+    pub fn with_probe_client(
+        repository: Arc<dyn CanvasPlatformManagementRepository>,
+        management_api_key: Option<&str>,
+        origin_policy: CanvasOriginPolicy,
+        issuer_base_url: &str,
+        lti_probe_config: CanvasLtiJwksRefreshConfig,
+        lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
+    ) -> Self {
+        Self {
+            repository,
+            security: ManagementSecurity::new(management_api_key),
+            origin_policy,
+            issuer_base_url: issuer_base_url.trim_end_matches('/').to_owned(),
+            lti_probe_config,
+            lti_probe_client,
         }
     }
 
@@ -307,6 +350,87 @@ impl CanvasPlatformManagementService {
         Ok(self
             .registration_response(&platform, None)
             .developer_key_configuration)
+    }
+
+    pub async fn update_lti_installation(
+        &self,
+        platform_id: &str,
+        request: CanvasLtiInstallationRequest,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasLtiRegistrationResponse, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let mut platform = self
+            .repository
+            .active_platform(organization_id, platform_id)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::PlatformNotFound)?;
+        let expected_config_version = platform.config_version;
+        let expected_updated_at = platform.updated_at;
+        let changed = platform
+            .prepare_lti_installation(&request, Utc::now())
+            .map_err(|error| match error {
+                CanvasManagementDomainError::InvalidRequest(
+                    CanvasRequestValidationError::ConflictingTokenMutation,
+                ) => CanvasPlatformManagementError::ConflictingTokenMutation,
+                error => CanvasPlatformManagementError::Domain(error),
+            })?;
+
+        if let Some(canvas_base_url) = platform.canvas_base_url.clone() {
+            match probe_canvas_lti_metadata(
+                &canvas_base_url,
+                &platform.lti_trust_profile,
+                &self.lti_probe_config,
+                self.lti_probe_client.as_ref(),
+            )
+            .await
+            {
+                Ok(probe) => platform.apply_lti_metadata_probe(
+                    probe,
+                    self.lti_probe_config.ttl,
+                    Utc::now(),
+                )?,
+                Err(error) => {
+                    platform.record_lti_probe_failure(error.clone(), Utc::now());
+                    self.repository
+                        .save_lti_installation(
+                            &platform,
+                            expected_config_version,
+                            expected_updated_at,
+                            changed,
+                        )
+                        .await
+                        .map_err(map_repository_error)?
+                        .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+                    return Err(CanvasPlatformManagementError::LtiMetadataProbeFailed(error));
+                }
+            }
+        }
+
+        let mut token = None;
+        if request.revoke_config_token {
+            platform.revoke_lti_config_token(Utc::now());
+        } else if changed
+            || request.rotate_config_token
+            || platform.active_lti_config_token_hash().is_none()
+        {
+            let issued = issue_config_token(&platform.id);
+            platform.issue_lti_config_token(token_hash(&issued), Utc::now());
+            token = Some(issued);
+        }
+        let platform = self
+            .repository
+            .save_lti_installation(
+                &platform,
+                expected_config_version,
+                expected_updated_at,
+                changed,
+            )
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(self.registration_response(&platform, token.as_deref()))
     }
 
     fn registration_response(
@@ -647,6 +771,27 @@ mod tests {
             existing.updated_at = platform.updated_at;
             Ok(Some(existing.clone()))
         }
+
+        async fn save_lti_installation(
+            &self,
+            platform: &CanvasPlatformRecord,
+            expected_config_version: i64,
+            expected_updated_at: DateTime<Utc>,
+            _invalidate_bindings: bool,
+        ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+            let mut platforms = self.platforms.lock().await;
+            let Some(existing) = platforms.iter_mut().find(|candidate| {
+                candidate.organization_id == platform.organization_id
+                    && candidate.id == platform.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == expected_config_version
+                    && candidate.updated_at == expected_updated_at
+            }) else {
+                return Ok(None);
+            };
+            *existing = platform.clone();
+            Ok(Some(existing.clone()))
+        }
     }
 
     fn request(name: &str, enabled: bool) -> CanvasPlatformRequest {
@@ -665,6 +810,13 @@ mod tests {
             Some("management-secret"),
             CanvasOriginPolicy::default(),
             "https://issuer.example.edu",
+            CanvasLtiJwksRefreshConfig {
+                timeout: std::time::Duration::from_secs(10),
+                ttl: std::time::Duration::from_secs(3_600),
+                self_managed_origins: Vec::new(),
+                allow_private_networks: false,
+                allow_http_localhost: false,
+            },
         )
     }
 

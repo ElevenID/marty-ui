@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::{
-    canvas_management::CanvasPlatformRequest,
+    canvas_management::{CanvasLtiInstallationRequest, CanvasPlatformRequest},
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
         CanvasLtiRegistrationResponse, CanvasPlatformManagementError,
@@ -161,6 +161,23 @@ impl CanvasPlatformManagementHttpService {
             .await
             .map_err(Into::into)
     }
+
+    pub async fn update_lti_installation(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+        request: CanvasLtiInstallationRequest,
+    ) -> Result<CanvasLtiRegistrationResponse, CanvasManagementHttpError> {
+        self.management
+            .update_lti_installation(
+                platform_id,
+                request,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map_err(Into::into)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -262,6 +279,36 @@ impl IntoResponse for CanvasManagementHttpError {
 pub async fn parse_platform_request(
     request: axum::extract::Request,
 ) -> Result<CanvasPlatformRequest, CanvasManagementHttpError> {
+    let mut value = parse_management_json(request).await?;
+    validate_platform_request_value(&mut value)?;
+    serde_json::from_value(value).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid Canvas platform request",
+            "input": null,
+        })])
+    })
+}
+
+pub async fn parse_lti_installation_request(
+    request: axum::extract::Request,
+) -> Result<CanvasLtiInstallationRequest, CanvasManagementHttpError> {
+    let mut value = parse_management_json(request).await?;
+    validate_lti_installation_value(&mut value)?;
+    serde_json::from_value(value).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid Canvas LTI installation request",
+            "input": null,
+        })])
+    })
+}
+
+async fn parse_management_json(
+    request: axum::extract::Request,
+) -> Result<Value, CanvasManagementHttpError> {
     let content_type = request
         .headers()
         .get(CONTENT_TYPE)
@@ -280,20 +327,11 @@ pub async fn parse_platform_request(
     let bytes = to_bytes(request.into_body(), MAX_MANAGEMENT_BODY_BYTES)
         .await
         .map_err(|_| CanvasManagementHttpError::BodyTooLarge)?;
-    let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| {
+    serde_json::from_slice(&bytes).map_err(|_| {
         CanvasManagementHttpError::Validation(vec![json!({
             "type": "json_invalid",
             "loc": ["body"],
             "msg": "JSON decode error",
-            "input": null,
-        })])
-    })?;
-    validate_platform_request_value(&mut value)?;
-    serde_json::from_value(value).map_err(|_| {
-        CanvasManagementHttpError::Validation(vec![json!({
-            "type": "model_attributes_type",
-            "loc": ["body"],
-            "msg": "Input should be a valid Canvas platform request",
             "input": null,
         })])
     })
@@ -344,6 +382,68 @@ fn validate_platform_request_value(value: &mut Value) -> Result<(), CanvasManage
         !matches!(
             name.as_str(),
             "display_name" | "canvas_base_url" | "lti_client_id" | "lti_deployment_id" | "enabled"
+        )
+    }) {
+        errors.push(json!({
+            "type": "extra_forbidden",
+            "loc": ["body", name],
+            "msg": "Extra inputs are not permitted",
+            "input": input,
+        }));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanvasManagementHttpError::Validation(errors))
+    }
+}
+
+fn validate_lti_installation_value(value: &mut Value) -> Result<(), CanvasManagementHttpError> {
+    let invalid_input = value.clone();
+    let Some(object) = value.as_object_mut() else {
+        return Err(CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": invalid_input,
+        })]));
+    };
+    let mut errors = Vec::new();
+    validate_required_string(
+        object,
+        "lti_client_id",
+        MAX_MANAGEMENT_BODY_BYTES,
+        &mut errors,
+    );
+    validate_required_string(
+        object,
+        "lti_deployment_id",
+        MAX_MANAGEMENT_BODY_BYTES,
+        &mut errors,
+    );
+    for name in ["rotate_config_token", "revoke_config_token"] {
+        if let Some(input) = object.get(name).cloned() {
+            if let Some(normalized) = pydantic_bool(&input) {
+                object.insert(name.to_owned(), Value::Bool(normalized));
+            } else {
+                let structured = input.is_array() || input.is_object() || input.is_null();
+                errors.push(json!({
+                    "type": if structured { "bool_type" } else { "bool_parsing" },
+                    "loc": ["body", name],
+                    "msg": if structured {
+                        "Input should be a valid boolean"
+                    } else {
+                        "Input should be a valid boolean, unable to interpret input"
+                    },
+                    "input": input,
+                }));
+            }
+        }
+    }
+    for (name, input) in object.iter().filter(|(name, _)| {
+        !matches!(
+            name.as_str(),
+            "lti_client_id" | "lti_deployment_id" | "rotate_config_token" | "revoke_config_token"
         )
     }) {
         errors.push(json!({
@@ -499,6 +599,10 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
                 StatusCode::CONFLICT,
                 "Canvas platform configuration version is exhausted".to_owned(),
             ),
+            CanvasManagementDomainError::InvalidJwksTtl => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Canvas JWKS cache TTL is invalid".to_owned(),
+            ),
         },
         CanvasPlatformManagementError::PlatformNotFound => (
             StatusCode::NOT_FOUND,
@@ -507,6 +611,14 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
         CanvasPlatformManagementError::LtiConfigurationNotFound => (
             StatusCode::NOT_FOUND,
             "Canvas LTI configuration not found".to_owned(),
+        ),
+        CanvasPlatformManagementError::ConflictingTokenMutation => (
+            StatusCode::BAD_REQUEST,
+            "Rotate and revoke are mutually exclusive".to_owned(),
+        ),
+        CanvasPlatformManagementError::LtiMetadataProbeFailed(error) => (
+            StatusCode::CONFLICT,
+            format!("Canvas LTI metadata probe failed: {error}"),
         ),
         CanvasPlatformManagementError::ConfigurationChanged => (
             StatusCode::CONFLICT,

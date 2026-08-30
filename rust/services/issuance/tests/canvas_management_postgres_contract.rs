@@ -1,10 +1,11 @@
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
-    canvas_management::CanvasPlatformRequest,
+    canvas_management::{CanvasLtiInstallationRequest, CanvasPlatformRequest},
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_postgres::PostgresCanvasManagementRepository,
     canvas_management_service::CanvasManagementRepositoryError,
 };
+use marty_oid4vci::lti::CanvasLtiPlatformProbe;
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, Row};
 
@@ -323,13 +324,111 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .unwrap()
         .is_none());
 
+    let mut installation = CanvasPlatformRecord::new_draft(
+        "org-management".to_owned(),
+        platform_request("Installation", true),
+        CanvasOriginPolicy::default()
+            .resolve("https://canvas.example.edu")
+            .unwrap(),
+        now + chrono::Duration::seconds(4),
+    )
+    .unwrap();
+    repository.create_platform(&installation).await.unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings
+             (id, organization_id, platform_id, enabled, validated_config_version,
+              readiness_checks, readiness_validated_at, activated_at,
+              archived_at, updated_at)
+         VALUES ('binding-installation', 'org-management', $1, true, 1,
+                 '[{\"status\":\"ready\"}]'::jsonb, clock_timestamp(),
+                 clock_timestamp(), NULL, clock_timestamp())",
+    )
+    .bind(&installation.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let installation_updated_at = installation.updated_at;
+    let changed = installation
+        .prepare_lti_installation(
+            &CanvasLtiInstallationRequest {
+                lti_client_id: "installed-client".to_owned(),
+                lti_deployment_id: "installed-deployment".to_owned(),
+                rotate_config_token: false,
+                revoke_config_token: false,
+            },
+            now + chrono::Duration::seconds(5),
+        )
+        .unwrap();
+    assert!(changed);
+    installation
+        .apply_lti_metadata_probe(
+            CanvasLtiPlatformProbe {
+                canvas_base_url: "https://canvas.example.edu".to_owned(),
+                issuer: "https://canvas.instructure.com".to_owned(),
+                authorization_endpoint: Some(
+                    "https://sso.canvaslms.com/api/lti/authorize_redirect".to_owned(),
+                ),
+                token_endpoint: Some("https://canvas.example.edu/login/oauth2/token".to_owned()),
+                jwks_uri: "https://sso.canvaslms.com/api/lti/security/jwks".to_owned(),
+                registration_endpoint: None,
+                raw_openid_configuration: json!({"issuer": "https://canvas.instructure.com"}),
+                jwks_json: json!({"keys": [{"kid": "installation-key"}]}),
+            },
+            std::time::Duration::from_secs(3_600),
+            now + chrono::Duration::seconds(6),
+        )
+        .unwrap();
+    installation.issue_lti_config_token("b".repeat(64), now + chrono::Duration::seconds(7));
+    let installed = repository
+        .save_lti_installation(&installation, 1, installation_updated_at, changed)
+        .await
+        .unwrap()
+        .expect("installation CAS");
+    assert_eq!(installed.config_version, 2);
+    assert_eq!(installed.registration_status, "installed");
+    assert!(installed.enabled);
+    assert_eq!(installed.lti_client_id.as_deref(), Some("installed-client"));
+    assert_eq!(
+        installed.lti_jwks_json,
+        Some(json!({"keys": [{"kid": "installation-key"}]}))
+    );
+    assert_eq!(
+        installed.active_lti_config_token_hash(),
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+    let binding = sqlx::query(
+        "SELECT enabled, validated_config_version, readiness_checks,
+                readiness_validated_at, activated_at
+         FROM issuance_service.canvas_program_bindings
+         WHERE id = 'binding-installation'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!binding.try_get::<bool, _>("enabled").unwrap());
+    assert!(binding
+        .try_get::<Option<i32>, _>("validated_config_version")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        binding
+            .try_get::<serde_json::Value, _>("readiness_checks")
+            .unwrap(),
+        json!([])
+    );
+    assert!(repository
+        .save_lti_installation(&installation, 1, installation_updated_at, true)
+        .await
+        .unwrap()
+        .is_none());
+
     let conflicting = CanvasPlatformRecord::new_draft(
         "org-management".to_owned(),
         platform_request("Conflict", false),
         CanvasOriginPolicy::default()
             .resolve("https://canvas.example.edu")
             .unwrap(),
-        now + chrono::Duration::seconds(4),
+        now + chrono::Duration::seconds(8),
     )
     .unwrap();
     repository.create_platform(&conflicting).await.unwrap();
@@ -350,7 +449,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
                 "org-management",
                 &conflicting.id,
                 conflicting.config_version + 1,
-                now + chrono::Duration::seconds(5),
+                now + chrono::Duration::seconds(9),
             )
             .await,
         Err(CanvasManagementRepositoryError::ConfigurationChanged)
@@ -372,7 +471,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
                 "org-management",
                 &conflicting.id,
                 conflicting.config_version,
-                now + chrono::Duration::seconds(6),
+                now + chrono::Duration::seconds(10),
             )
             .await,
         Err(CanvasManagementRepositoryError::OAuthConnectionChanged)

@@ -3,9 +3,9 @@
 //! Provider I/O and persistence stay in adapters. This module owns the state
 //! transitions that must remain identical across HTTP and worker consumers.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use marty_oid4vci::lti::{
-    normalize_canvas_base_url, CANVAS_LTI_TRUST_HOSTED_GLOBAL,
+    normalize_canvas_base_url, CanvasLtiPlatformProbe, CANVAS_LTI_TRUST_HOSTED_GLOBAL,
     CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
 };
 use serde_json::{json, Map, Value};
@@ -13,7 +13,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::canvas_management::{
-    CanvasPlatformRequest, CanvasRequestValidationError, ValidateCanvasRequest,
+    CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasRequestValidationError,
+    ValidateCanvasRequest,
 };
 
 const ENABLED_INTENT: &str = "enabled_intent";
@@ -33,6 +34,8 @@ pub enum CanvasManagementDomainError {
     OriginUntrusted,
     #[error("Canvas platform configuration version is exhausted")]
     VersionExhausted,
+    #[error("Canvas JWKS cache TTL is invalid")]
+    InvalidJwksTtl,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -317,6 +320,73 @@ impl CanvasPlatformRecord {
         })
         .flatten()
         .filter(|value| !value.is_empty())
+    }
+
+    /// Apply institution-owned LTI identifiers. A changed installation makes
+    /// every previously validated binding stale and revokes its public config
+    /// token before any provider I/O occurs.
+    pub fn prepare_lti_installation(
+        &mut self,
+        request: &CanvasLtiInstallationRequest,
+        now: DateTime<Utc>,
+    ) -> Result<bool, CanvasManagementDomainError> {
+        request.validate()?;
+        let client_id = request.lti_client_id.trim().to_owned();
+        let deployment_id = request.lti_deployment_id.trim().to_owned();
+        let changed = self.lti_client_id.as_deref() != Some(client_id.as_str())
+            || self.lti_deployment_id.as_deref() != Some(deployment_id.as_str());
+        self.lti_client_id = Some(client_id);
+        self.lti_deployment_id = Some(deployment_id);
+        if changed {
+            self.config_version = self
+                .config_version
+                .checked_add(1)
+                .ok_or(CanvasManagementDomainError::VersionExhausted)?;
+            self.enabled = false;
+            self.registration_status = "draft".to_owned();
+            self.capability_snapshot.clear();
+            self.last_validated_at = None;
+            self.revoke_lti_config_token(now);
+        }
+        self.updated_at = now;
+        Ok(changed)
+    }
+
+    /// Persist only metadata that has already passed the shared origin and
+    /// trust-profile probe. Enabling reflects the caller's stored intent; each
+    /// binding still requires its own validation and activation.
+    pub fn apply_lti_metadata_probe(
+        &mut self,
+        probe: CanvasLtiPlatformProbe,
+        ttl: std::time::Duration,
+        now: DateTime<Utc>,
+    ) -> Result<(), CanvasManagementDomainError> {
+        let ttl = Duration::from_std(ttl)
+            .ok()
+            .filter(|ttl| *ttl > Duration::zero())
+            .ok_or(CanvasManagementDomainError::InvalidJwksTtl)?;
+        let expires_at = now
+            .checked_add_signed(ttl)
+            .ok_or(CanvasManagementDomainError::InvalidJwksTtl)?;
+        self.canvas_base_url = Some(probe.canvas_base_url);
+        self.lti_issuer = Some(probe.issuer);
+        self.lti_jwks_url = Some(probe.jwks_uri);
+        self.lti_jwks_json = Some(probe.jwks_json);
+        self.lti_jwks_fetched_at = Some(now);
+        self.lti_jwks_expires_at = Some(expires_at);
+        self.lti_openid_configuration = Some(probe.raw_openid_configuration);
+        self.last_connection_error = None;
+        if self.enabled_intent() {
+            self.enabled = true;
+            self.registration_status = "installed".to_owned();
+        }
+        self.updated_at = now;
+        Ok(())
+    }
+
+    pub fn record_lti_probe_failure(&mut self, error: String, now: DateTime<Utc>) {
+        self.last_connection_error = Some(error);
+        self.updated_at = now;
     }
 
     fn apply_archival_oauth_state(&mut self, oauth_connection_exists: bool) {
