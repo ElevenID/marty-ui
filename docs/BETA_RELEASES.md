@@ -67,6 +67,49 @@ Retain the last known-good beta images, release manifest, SBOMs, signature
 bundles, checksums, lifecycle report, and wallet attestation until a newer
 aggregate release completes the same gates.
 
+## Official release deployment on the beta host
+
+Use the official-stack mode for a release produced by `.github/workflows/cd.yml`.
+It is intentionally separate from the non-promotable local-worktree snapshot
+mode. The official mode accepts only the downloaded `stack-manifest.json` and
+its exact `SHA256SUMS` entry, an annotated release tag at the executing commit,
+and the current protected `marty-demo-recorder/main` revision. It verifies the
+manifest attestation, pulls every runtime image by digest, verifies OCI version
+and revision labels, and records registry digests in deployment evidence. It
+does not rebuild released images.
+
+Create a clean detached worktree at the published tag. Keep the release bundle
+under that worktree's ignored `tests/artifacts` directory and reference the
+host's existing beta environment files explicitly:
+
+```powershell
+$releaseTag = "v1.1.205"
+$releaseWorktree = "C:\beta-release-worktrees\marty-ui-$releaseTag"
+$releaseArtifacts = Join-Path $releaseWorktree "tests\artifacts\$releaseTag-official"
+$recorderRevision = (git ls-remote https://github.com/ElevenID/marty-demo-recorder.git refs/heads/main).Split()[0]
+
+git fetch origin --tags
+git worktree add --detach $releaseWorktree $releaseTag
+New-Item -ItemType Directory -Force -Path $releaseArtifacts | Out-Null
+gh release download $releaseTag --repo ElevenID/marty-ui --dir $releaseArtifacts
+
+& (Join-Path $releaseWorktree "scripts\deploy-canvas-oss-beta.ps1") `
+  -ArtifactDir $releaseArtifacts `
+  -AuditPath (Join-Path $releaseArtifacts "beta-deployment-audit.json") `
+  -OfficialStackRelease `
+  -RecorderRevision $recorderRevision `
+  -TunnelEnvFile "C:\beta-runtime\.env.tunnel.beta.local" `
+  -GeneratedEnvFile "C:\beta-runtime\.env.beta.generated.local"
+```
+
+The runner validates every release and source input twice, with the final check
+immediately before the maintenance window. It retains the existing preflight
+backup, isolated migration rehearsal, quiesced backup, supervised rollback,
+runtime-marker, public-origin, and self-host-production invariant gates. A
+`-PlanOnly` invocation of the lower-level runner performs no artifact writes;
+the governed Canvas wrapper intentionally performs the actual maintenance-window
+deployment and audit.
+
 ## Recovery dispatch
 
 The **Stack release** workflow re-downloads the completed preparation evidence.
