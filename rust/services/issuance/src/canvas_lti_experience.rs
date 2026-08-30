@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -593,6 +593,16 @@ pub(crate) fn python_string(value: &Value) -> Option<String> {
         Value::String(value) => Some(value.clone()),
         Value::Array(_) | Value::Object(_) => Some(value.to_string()),
     }
+}
+
+pub(crate) fn portable_canvas_pilot_enabled(
+    enabled: bool,
+    pilot_organizations: &BTreeSet<String>,
+    organization_id: &str,
+) -> bool {
+    enabled
+        && !organization_id.trim().is_empty()
+        && pilot_organizations.contains(organization_id.trim())
 }
 
 pub(crate) fn lti_subject(verified: &Map<String, Value>) -> Option<String> {

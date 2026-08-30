@@ -23,6 +23,7 @@ use crate::{
         CanvasLtiBootstrapServiceError,
     },
     canvas_lti_deep_linking::{CanvasLtiDeepLinkingError, CanvasLtiDeepLinkingService},
+    canvas_lti_evidence::{CanvasLtiEvidenceError, CanvasLtiEvidenceService},
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangeService,
         CanvasLtiExperienceSessionError, CanvasLtiExperienceSessionService,
@@ -62,6 +63,7 @@ struct IssuanceState {
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
     canvas_lti_deep_linking: Option<CanvasLtiDeepLinkingService>,
+    canvas_lti_evidence: Option<CanvasLtiEvidenceService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
 }
 
@@ -90,6 +92,7 @@ pub struct CanvasLtiExperienceSessionServices {
     current: CanvasLtiExperienceSessionService,
     bootstrap: CanvasLtiBootstrapService,
     deep_linking: CanvasLtiDeepLinkingService,
+    evidence: CanvasLtiEvidenceService,
 }
 
 impl CanvasLtiExperienceSessionServices {
@@ -98,11 +101,13 @@ impl CanvasLtiExperienceSessionServices {
         current: CanvasLtiExperienceSessionService,
         bootstrap: CanvasLtiBootstrapService,
         deep_linking: CanvasLtiDeepLinkingService,
+        evidence: CanvasLtiEvidenceService,
     ) -> Self {
         Self {
             current,
             bootstrap,
             deep_linking,
+            evidence,
         }
     }
 }
@@ -173,6 +178,7 @@ struct OptionalServices {
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
     canvas_lti_deep_linking: Option<CanvasLtiDeepLinkingService>,
+    canvas_lti_evidence: Option<CanvasLtiEvidenceService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
@@ -248,6 +254,7 @@ pub fn router_with_all_services(
             canvas_lti_experience_session: Some(services.canvas_lti.session.current),
             canvas_lti_bootstrap: Some(services.canvas_lti.session.bootstrap),
             canvas_lti_deep_linking: Some(services.canvas_lti.session.deep_linking),
+            canvas_lti_evidence: Some(services.canvas_lti.session.evidence),
             canvas_lti_tool_signer: Some(services.canvas_lti.tool_signer),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
@@ -446,6 +453,23 @@ pub fn router_with_canvas_lti_deep_linking(
     )
 }
 
+pub fn router_with_canvas_lti_evidence(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_evidence: CanvasLtiEvidenceService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_evidence: Some(canvas_lti_evidence),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 pub fn router_with_canvas_lti_tool_signer(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -590,6 +614,12 @@ fn router_with_optional_services(
             post(create_canvas_lti_deep_linking_response),
         );
     }
+    if services.canvas_lti_evidence.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
+            get(get_canvas_lti_evidence_status),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -604,6 +634,7 @@ fn router_with_optional_services(
         canvas_lti_experience_session: services.canvas_lti_experience_session,
         canvas_lti_bootstrap: services.canvas_lti_bootstrap,
         canvas_lti_deep_linking: services.canvas_lti_deep_linking,
+        canvas_lti_evidence: services.canvas_lti_evidence,
         canvas_lti_tool_signer: services.canvas_lti_tool_signer,
     });
     system
@@ -745,6 +776,21 @@ async fn create_canvas_lti_deep_linking_response(
         .create_response(&token)
         .await?;
     Ok(private_no_store(Json(response).into_response()))
+}
+
+async fn get_canvas_lti_evidence_status(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Response, CanvasLtiEvidenceHttpError> {
+    let token = canvas_lti_experience_bearer_token(request.headers())
+        .map_err(|_| CanvasLtiEvidenceHttpError::Unauthorized)?;
+    let status = state
+        .canvas_lti_evidence
+        .as_ref()
+        .ok_or(CanvasLtiEvidenceError::RepositoryUnavailable)?
+        .status(token)
+        .await?;
+    Ok(private_no_store(Json(status).into_response()))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1451,6 +1497,47 @@ enum CanvasLtiDeepLinkingHttpError {
     Service(CanvasLtiDeepLinkingError),
     Validation(Vec<Value>),
     BodyTooLarge,
+}
+
+enum CanvasLtiEvidenceHttpError {
+    Unauthorized,
+    Service(CanvasLtiEvidenceError),
+}
+
+impl From<CanvasLtiEvidenceError> for CanvasLtiEvidenceHttpError {
+    fn from(value: CanvasLtiEvidenceError) -> Self {
+        Self::Service(value)
+    }
+}
+
+impl IntoResponse for CanvasLtiEvidenceHttpError {
+    fn into_response(self) -> Response {
+        use CanvasLtiEvidenceError as Error;
+        let response = match self {
+            Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
+            Self::Service(Error::SessionNotFound) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Canvas LTI experience session not found"})),
+            )
+                .into_response(),
+            Self::Service(error @ (Error::ContextNotFound | Error::PilotDisabled)) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": error.to_string()})),
+            )
+                .into_response(),
+            Self::Service(
+                error @ (Error::BootstrapRequired | Error::EvidenceConfigurationUnavailable),
+            ) => (
+                StatusCode::CONFLICT,
+                Json(json!({"detail": error.to_string()})),
+            )
+                .into_response(),
+            Self::Service(Error::RepositoryUnavailable) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
+        };
+        private_no_store(response)
+    }
 }
 
 impl From<CanvasLtiDeepLinkingError> for CanvasLtiDeepLinkingHttpError {

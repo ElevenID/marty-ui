@@ -18,6 +18,8 @@ use marty_issuance_service::{
         CanvasLtiDeepLinkingService, SecureCanvasLtiDeepLinkingNonceGenerator,
     },
     canvas_lti_deep_linking_postgres::PostgresCanvasLtiDeepLinkingRepository,
+    canvas_lti_evidence::CanvasLtiEvidenceService,
+    canvas_lti_evidence_postgres::PostgresCanvasLtiEvidenceRepository,
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionService,
         SecureCanvasLtiExperienceSessionGenerator,
@@ -239,6 +241,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_lti_deep_linking_issuer.clone(),
         &config.issuer_base_url,
     );
+    let canvas_lti_evidence = CanvasLtiEvidenceService::new(
+        canvas_lti_experience_session.clone(),
+        Arc::new(PostgresCanvasLtiEvidenceRepository::new(pool.clone())),
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+    );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -292,6 +300,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     canvas_lti_experience_session,
                     canvas_lti_bootstrap,
                     canvas_lti_deep_linking,
+                    canvas_lti_evidence,
                 ),
                 canvas_lti_tool_signer,
             ),

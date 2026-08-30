@@ -819,6 +819,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-session-current" => "get_canvas_lti_experience_session_route",
                 "experience-bootstrap" => "bootstrap_canvas_lti_experience_application_route",
                 "experience-deep-linking" => "create_canvas_lti_deep_linking_response_route",
+                "experience-evidence-status" => "get_canvas_lti_evidence_status",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
                 "tool-jwks" => "get_canvas_lti_tool_jwks",
                 "launch" => "verify_canvas_lti_launch_route",
@@ -829,16 +830,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-exchange" => "public-one-time-code",
                 "experience-session-current"
                 | "experience-bootstrap"
-                | "experience-deep-linking" => "lti-session-bearer",
+                | "experience-deep-linking"
+                | "experience-evidence-status" => "lti-session-bearer",
                 "tool-jwks" => "public",
                 _ => "public-lti-login",
             };
-            let expected_method =
-                if matches!(behavior_case, "experience-session-current" | "tool-jwks") {
-                    "GET"
-                } else {
-                    "POST"
-                };
+            let expected_method = if matches!(
+                behavior_case,
+                "experience-session-current" | "experience-evidence-status" | "tool-jwks"
+            ) {
+                "GET"
+            } else {
+                "POST"
+            };
             require(
                 operation.operation == expected_operation
                     && operation.method == expected_method
@@ -886,6 +890,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "experience-session-current",
                 "experience-bootstrap",
                 "experience-deep-linking",
+                "experience-evidence-status",
                 "launch",
                 "login",
                 "tool-jwks",
@@ -1077,8 +1082,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 27);
-        assert_eq!(summary.remaining_http, 104);
+        assert_eq!(summary.native_http, 28);
+        assert_eq!(summary.remaining_http, 103);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

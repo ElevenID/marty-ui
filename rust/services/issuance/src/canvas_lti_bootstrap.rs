@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::canvas_lti_experience::{
-    browser_safe_canvas_context, first_text, lti_subject, signed_canvas_identifier,
-    CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError,
+    browser_safe_canvas_context, first_text, lti_subject, portable_canvas_pilot_enabled,
+    signed_canvas_identifier, CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError,
     CanvasLtiExperienceSessionService,
 };
 use crate::canvas_lti_launch::CanvasLtiClock;
@@ -317,11 +317,11 @@ impl CanvasLtiBootstrapService {
         if bound_feature_enabled == Some(false) {
             return Err(CanvasLtiBootstrapPlanError::FeatureDisabled.into());
         }
-        let pilot_enabled = self.portable_enabled
-            && !context.launch_state.organization_id.trim().is_empty()
-            && self
-                .pilot_organizations
-                .contains(context.launch_state.organization_id.trim());
+        let pilot_enabled = portable_canvas_pilot_enabled(
+            self.portable_enabled,
+            &self.pilot_organizations,
+            &context.launch_state.organization_id,
+        );
         if !pilot_enabled {
             return Err(CanvasLtiBootstrapPlanError::PilotDisabled.into());
         }

@@ -9,8 +9,9 @@ use thiserror::Error;
 use crate::{
     canvas_issuance_guard::validated_requirements,
     canvas_lti_experience::{
-        python_string, python_truthy, CanvasLtiExperienceSessionContext,
-        CanvasLtiExperienceSessionError, CanvasLtiExperienceSessionService,
+        portable_canvas_pilot_enabled, python_string, python_truthy,
+        CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError,
+        CanvasLtiExperienceSessionService,
     },
     canvas_lti_launch::{CanvasLtiAgsServiceUrlValidator, CanvasLtiClock},
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
@@ -261,10 +262,11 @@ impl CanvasLtiDeepLinkingService {
             .await
             .map_err(session_error)?;
         let organization_id = context.launch_state.organization_id.trim();
-        if !self.portable_enabled
-            || organization_id.is_empty()
-            || !self.pilot_organizations.contains(organization_id)
-        {
+        if !portable_canvas_pilot_enabled(
+            self.portable_enabled,
+            &self.pilot_organizations,
+            organization_id,
+        ) {
             return Err(CanvasLtiDeepLinkingError::PilotDisabled);
         }
         let binding_id = context
