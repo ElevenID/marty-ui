@@ -375,10 +375,10 @@ function isUuid(value) {
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-export function startServer(config = process.env) {
-  const app = createNorthstarApp(loadRunConfig(config));
+export function startServer(config = process.env, { fetchImpl = fetch } = {}) {
+  const app = createNorthstarApp(loadRunConfig(config), { fetchImpl });
   const receiverTestControlsEnabled = String(config.NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED || '').toLowerCase() === 'true';
-  const server = createServer(async (request, response) => {
+  async function handleRequest(request, response) {
     const url = new URL(request.url, 'http://northstar.local');
     if (request.method === 'GET' && url.pathname === '/health') {
       return json(response, 200, { status: 'healthy', service: 'northstar-admissions' });
@@ -418,6 +418,19 @@ export function startServer(config = process.env) {
       return response.end(content);
     }
     return json(response, 404, { detail: 'Not found' });
+  }
+  const server = createServer((request, response) => {
+    void handleRequest(request, response).catch(() => {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      json(response, 503, {
+        status: 'unavailable',
+        code: 'PUBLIC_GATEWAY_UNAVAILABLE',
+        detail: 'Northstar could not reach the Marty public gateway. Retry when the integration is available.',
+      });
+    });
   });
   const port = Number(config.PORT || 4175);
   server.listen(port, config.HOST || '127.0.0.1');
