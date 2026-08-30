@@ -1146,6 +1146,9 @@ fn oauth_debug_output_redacts_states_codes_tokens_and_secret_material() {
         "refresh-token-sensitive",
         "secret=sensitive",
     ] {
-        assert!(!output.contains(secret), "debug output leaked {secret}");
+        assert!(
+            !output.contains(secret),
+            "debug output included a redacted field"
+        );
     }
 }

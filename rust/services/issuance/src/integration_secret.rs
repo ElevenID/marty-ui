@@ -3,7 +3,6 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use rand::RngCore;
 use serde_json::Value;
 use std::fmt;
 use thiserror::Error;
@@ -89,8 +88,7 @@ impl IntegrationSecretCipher {
     }
 
     pub fn encrypt(&self, plaintext: &str) -> Result<String, IntegrationSecretError> {
-        let mut nonce = [0_u8; NONCE_LENGTH];
-        rand::rng().fill_bytes(&mut nonce);
+        let nonce: [u8; NONCE_LENGTH] = rand::random();
         self.encrypt_with_nonce(plaintext, nonce)
     }
 
