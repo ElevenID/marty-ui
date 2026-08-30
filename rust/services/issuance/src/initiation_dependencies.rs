@@ -520,7 +520,8 @@ fn verify_sri(value: Option<&str>, content: &[u8]) -> Result<(), InitiationDepen
 }
 
 fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDependencyError> {
-    Endpoint::from_shared(target.to_owned())
+    let target = grpc_endpoint_target(target)?;
+    Endpoint::from_shared(target)
         .map_err(|_| InitiationDependencyError::Invalid("invalid gRPC target".into()))
         .map(|endpoint| {
             endpoint
@@ -528,6 +529,19 @@ fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDepende
                 .timeout(timeout)
                 .connect_lazy()
         })
+}
+
+fn grpc_endpoint_target(target: &str) -> Result<String, InitiationDependencyError> {
+    if target.is_empty() || target.chars().any(char::is_whitespace) {
+        return Err(InitiationDependencyError::Invalid(
+            "invalid gRPC target".into(),
+        ));
+    }
+    Ok(if target.contains("://") {
+        target.to_owned()
+    } else {
+        format!("http://{target}")
+    })
 }
 
 fn grpc_dependency_error(status: tonic::Status) -> InitiationDependencyError {
@@ -608,6 +622,28 @@ mod tests {
     use serde_json::json;
 
     const TEST_SERVICE_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn grpc_targets_preserve_legacy_host_port_configuration() {
+        assert_eq!(
+            grpc_endpoint_target("organization:9002").unwrap(),
+            "http://organization:9002"
+        );
+        assert_eq!(
+            grpc_endpoint_target("https://organization.example:9002").unwrap(),
+            "https://organization.example:9002"
+        );
+        channel("organization:9002", Duration::from_secs(1)).unwrap();
+
+        for invalid in ["", " organization:9002", "organization:9002 ", "org name:9002"] {
+            assert_eq!(
+                grpc_endpoint_target(invalid),
+                Err(InitiationDependencyError::Invalid(
+                    "invalid gRPC target".into()
+                ))
+            );
+        }
+    }
 
     async fn template_fallback(headers: HeaderMap) -> Json<Value> {
         assert_eq!(
