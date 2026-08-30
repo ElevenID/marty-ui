@@ -705,6 +705,26 @@ impl CanvasOAuthService {
                 );
             }
         };
+        let token_expires_at = match checked_token_expiration(now, token_bundle.expires_in_seconds)
+        {
+            Ok(value) => value,
+            Err(()) => {
+                self.repository
+                    .patch_validation(
+                        &platform.organization_id,
+                        &platform.id,
+                        authorization.platform_config_version,
+                        None,
+                        Some("oauth_token_exchange_failed"),
+                    )
+                    .await?;
+                return self.callback_response(
+                    Some(&platform.id),
+                    "error",
+                    Some("oauth_token_exchange_failed"),
+                );
+            }
+        };
         if !self
             .repository
             .patch_platform(
@@ -725,8 +745,14 @@ impl CanvasOAuthService {
                 Some("oauth_configuration_changed"),
             );
         }
-        self.publish_token_bundle(&platform, authorization, token_bundle, now)
-            .await
+        self.publish_token_bundle(
+            &platform,
+            authorization,
+            token_bundle,
+            token_expires_at,
+            now,
+        )
+        .await
     }
 
     async fn publish_token_bundle(
@@ -734,6 +760,7 @@ impl CanvasOAuthService {
         platform: &CanvasOAuthPlatform,
         authorization: CanvasOAuthAuthorization,
         token_bundle: CanvasOAuthTokenBundle,
+        token_expires_at: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
     ) -> Result<CanvasOAuthCallbackResponse, CanvasOAuthError> {
         let access = NewIntegrationSecret {
@@ -768,9 +795,6 @@ impl CanvasOAuthService {
                 return Err(error);
             }
         }
-        let token_expires_at = token_bundle
-            .expires_in_seconds
-            .map(|seconds| now + Duration::seconds(seconds.max(0)));
         let connection = CanvasOAuthConnection {
             id: Uuid::new_v4().to_string(),
             organization_id: platform.organization_id.clone(),
@@ -1056,6 +1080,18 @@ impl CanvasOAuthService {
     async fn best_effort_revoke(&self, canvas_base_url: &str, access_token: &str) {
         let _ = self.provider.revoke(canvas_base_url, access_token).await;
     }
+}
+
+fn checked_token_expiration(
+    now: DateTime<Utc>,
+    expires_in_seconds: Option<i64>,
+) -> Result<Option<DateTime<Utc>>, ()> {
+    expires_in_seconds.map_or(Ok(None), |seconds| {
+        Duration::try_seconds(seconds.max(0))
+            .and_then(|duration| now.checked_add_signed(duration))
+            .map(Some)
+            .ok_or(())
+    })
 }
 
 fn trusted_organization(value: Option<&str>) -> Result<&str, CanvasOAuthError> {

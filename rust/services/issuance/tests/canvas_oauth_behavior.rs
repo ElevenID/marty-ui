@@ -314,6 +314,7 @@ struct ProviderState {
     exchanges: Vec<(String, String, String)>,
     revocations: Vec<(String, String)>,
     fail_revoke_with_retry_after: Option<u64>,
+    exchange_bundle: Option<CanvasOAuthTokenBundle>,
 }
 
 #[async_trait]
@@ -326,16 +327,20 @@ impl CanvasOAuthProvider for MemoryProvider {
         code: &str,
         _redirect_uri: &str,
     ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError> {
-        self.state.lock().expect("provider state").exchanges.push((
+        let mut state = self.state.lock().expect("provider state");
+        state.exchanges.push((
             canvas_base_url.to_owned(),
             client_secret.to_owned(),
             code.to_owned(),
         ));
-        Ok(CanvasOAuthTokenBundle {
-            access_token: "access-token-value".to_owned(),
-            refresh_token: Some("refresh-token-value".to_owned()),
-            expires_in_seconds: Some(3_600),
-        })
+        Ok(state
+            .exchange_bundle
+            .clone()
+            .unwrap_or(CanvasOAuthTokenBundle {
+                access_token: "access-token-value".to_owned(),
+                refresh_token: Some("refresh-token-value".to_owned()),
+                expires_in_seconds: Some(3_600),
+            }))
     }
 
     async fn revoke(
@@ -616,6 +621,47 @@ async fn callback_is_single_use_never_reflects_provider_error_and_publishes_encr
         stored.patches.last(),
         Some(CanvasOAuthPlatformPatch::Connected { .. })
     ));
+}
+
+#[tokio::test]
+async fn callback_rejects_overflowing_token_expiry_before_storing_secrets() {
+    let (service, repository, vault, provider) = fixture();
+    provider
+        .state
+        .lock()
+        .expect("provider state")
+        .exchange_bundle = Some(CanvasOAuthTokenBundle {
+        access_token: "access-token-value".to_owned(),
+        refresh_token: Some("refresh-token-value".to_owned()),
+        expires_in_seconds: Some(i64::MAX),
+    });
+    let started = service
+        .start(
+            "platform-1",
+            start_request(),
+            Some("management-key"),
+            Some("org-1"),
+        )
+        .await
+        .expect("start");
+    let response = service
+        .callback(CanvasOAuthCallbackRequest {
+            code: Some("authorization-code".to_owned()),
+            state: state_from_authorization_url(&started.authorization_url),
+            error: None,
+        })
+        .await
+        .expect("sanitized token failure redirect");
+    assert!(response
+        .location
+        .contains("error_code=oauth_token_exchange_failed"));
+    assert!(vault.state.lock().expect("vault state").saved.is_empty());
+    assert!(repository
+        .state
+        .lock()
+        .expect("repository state")
+        .connections
+        .is_empty());
 }
 
 #[tokio::test]
