@@ -6,7 +6,7 @@ use axum::{
     http::{header as http_header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use marty_oid4vci::discovery::{
@@ -39,6 +39,9 @@ use crate::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
+    canvas_oauth::{
+        CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
+    },
     credential::{CredentialIssuanceError, CredentialIssuanceService, CredentialRequest},
     proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
@@ -69,6 +72,7 @@ struct IssuanceState {
     canvas_lti_evidence: Option<CanvasLtiEvidenceService>,
     canvas_lti_evidence_sync: Option<CanvasLtiEvidenceSyncService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
+    canvas_oauth: Option<CanvasOAuthService>,
 }
 
 pub struct IssuanceServices {
@@ -77,8 +81,21 @@ pub struct IssuanceServices {
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
     credential: CredentialIssuanceService,
-    canvas_lti: CanvasLtiServices,
+    canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
+}
+
+#[derive(Clone, Debug)]
+pub struct CanvasServices {
+    oauth: CanvasOAuthService,
+    lti: CanvasLtiServices,
+}
+
+impl CanvasServices {
+    #[must_use]
+    pub fn new(oauth: CanvasOAuthService, lti: CanvasLtiServices) -> Self {
+        Self { oauth, lti }
+    }
 }
 
 #[derive(Clone)]
@@ -156,7 +173,7 @@ impl IssuanceServices {
         token_exchange: TokenExchangeService,
         proof_nonce: ProofNonceService,
         credential: CredentialIssuanceService,
-        canvas_lti: CanvasLtiServices,
+        canvas: CanvasServices,
         token_rate_limiter: TokenRateLimiter,
     ) -> Self {
         Self {
@@ -165,7 +182,7 @@ impl IssuanceServices {
             token_exchange,
             proof_nonce,
             credential,
-            canvas_lti,
+            canvas,
             token_rate_limiter,
         }
     }
@@ -188,6 +205,7 @@ struct OptionalServices {
     canvas_lti_evidence: Option<CanvasLtiEvidenceService>,
     canvas_lti_evidence_sync: Option<CanvasLtiEvidenceSyncService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
+    canvas_oauth: Option<CanvasOAuthService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -255,16 +273,17 @@ pub fn router_with_all_services(
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
             credential: Some(services.credential),
-            canvas_lti_login: Some(services.canvas_lti.login),
-            canvas_lti_launch: Some(services.canvas_lti.launch),
-            canvas_lti_experience: Some(services.canvas_lti.experience),
-            canvas_lti_experience_exchange: Some(services.canvas_lti.experience_exchange),
-            canvas_lti_experience_session: Some(services.canvas_lti.session.current),
-            canvas_lti_bootstrap: Some(services.canvas_lti.session.bootstrap),
-            canvas_lti_deep_linking: Some(services.canvas_lti.session.deep_linking),
-            canvas_lti_evidence: Some(services.canvas_lti.session.evidence),
-            canvas_lti_evidence_sync: Some(services.canvas_lti.session.evidence_sync),
-            canvas_lti_tool_signer: Some(services.canvas_lti.tool_signer),
+            canvas_oauth: Some(services.canvas.oauth),
+            canvas_lti_login: Some(services.canvas.lti.login),
+            canvas_lti_launch: Some(services.canvas.lti.launch),
+            canvas_lti_experience: Some(services.canvas.lti.experience),
+            canvas_lti_experience_exchange: Some(services.canvas.lti.experience_exchange),
+            canvas_lti_experience_session: Some(services.canvas.lti.session.current),
+            canvas_lti_bootstrap: Some(services.canvas.lti.session.bootstrap),
+            canvas_lti_deep_linking: Some(services.canvas.lti.session.deep_linking),
+            canvas_lti_evidence: Some(services.canvas.lti.session.evidence),
+            canvas_lti_evidence_sync: Some(services.canvas.lti.session.evidence_sync),
+            canvas_lti_tool_signer: Some(services.canvas.lti.tool_signer),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -355,6 +374,23 @@ pub fn router_with_canvas_lti_login(
         transport,
         OptionalServices {
             canvas_lti_login: Some(canvas_lti_login),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_canvas_oauth(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_oauth: CanvasOAuthService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_oauth: Some(canvas_oauth),
             ..OptionalServices::default()
         },
     )
@@ -587,6 +623,21 @@ fn router_with_optional_services(
     if services.credential.is_some() {
         api = api.route("/v1/issuance/credential", post(issue_credential));
     }
+    if services.canvas_oauth.is_some() {
+        api = api
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
+                post(start_canvas_oauth_connection),
+            )
+            .route(
+                "/v1/integrations/canvas/oauth/callback",
+                get(complete_canvas_oauth_connection),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/oauth",
+                delete(disconnect_canvas_oauth_connection),
+            );
+    }
     if services.canvas_lti_login.is_some() {
         api = api
             .route(
@@ -659,6 +710,7 @@ fn router_with_optional_services(
         token_exchange: services.token_exchange,
         proof_nonce: services.proof_nonce,
         credential: services.credential,
+        canvas_oauth: services.canvas_oauth,
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
         canvas_lti_experience: services.canvas_lti_experience,
@@ -673,6 +725,276 @@ fn router_with_optional_services(
     system
         .merge(api)
         .layer(middleware::from_fn_with_state(transport, legacy_transport))
+}
+
+async fn start_canvas_oauth_connection(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<Response, CanvasOAuthHttpError> {
+    let service = canvas_oauth(&state)?;
+    let organization_id = service.authorize_management(
+        header(&headers, "X-API-Key"),
+        header(&headers, "X-Organization-ID"),
+    )?;
+    let input = parse_canvas_oauth_start(request).await?;
+    let result = service
+        .start_authorized(&platform_id, input, organization_id)
+        .await?;
+    Ok(canvas_oauth_no_store(Json(result).into_response()))
+}
+
+async fn complete_canvas_oauth_connection(
+    State(state): State<IssuanceState>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Response, CanvasOAuthHttpError> {
+    let input = parse_canvas_oauth_callback(raw_query.as_deref())?;
+    let result = canvas_oauth(&state)?.callback(input).await?;
+    let location = HeaderValue::from_str(&result.location)
+        .map_err(|_| CanvasOAuthHttpError::Service(CanvasOAuthError::InvalidConfiguration))?;
+    Ok(canvas_oauth_no_store(
+        (StatusCode::SEE_OTHER, [(http_header::LOCATION, location)]).into_response(),
+    ))
+}
+
+fn canvas_oauth_no_store(mut response: Response) -> Response {
+    response = private_no_store(response);
+    response.headers_mut().insert(
+        http_header::HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+
+async fn disconnect_canvas_oauth_connection(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasOAuthHttpError> {
+    let result = canvas_oauth(&state)?
+        .disconnect(
+            &platform_id,
+            header(&headers, "X-API-Key"),
+            header(&headers, "X-Organization-ID"),
+        )
+        .await?;
+    Ok(canvas_oauth_no_store(Json(result).into_response()))
+}
+
+fn canvas_oauth(state: &IssuanceState) -> Result<&CanvasOAuthService, CanvasOAuthHttpError> {
+    state
+        .canvas_oauth
+        .as_ref()
+        .ok_or_else(|| CanvasOAuthHttpError::Service(CanvasOAuthError::RepositoryUnavailable))
+}
+
+async fn parse_canvas_oauth_start(
+    request: Request,
+) -> Result<CanvasOAuthStartRequest, CanvasOAuthHttpError> {
+    const MAX_BODY_BYTES: usize = 64 * 1024;
+    let json_content_type = request
+        .headers()
+        .get(http_header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("application/json")
+                || value.to_ascii_lowercase().ends_with("+json")
+        });
+    let bytes = to_bytes(request.into_body(), MAX_BODY_BYTES)
+        .await
+        .map_err(|_| CanvasOAuthHttpError::BodyTooLarge)?;
+    if !bytes.is_empty() && !json_content_type {
+        return Err(CanvasOAuthHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": String::from_utf8_lossy(&bytes),
+        })]));
+    }
+    let input: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        CanvasOAuthHttpError::Validation(vec![json!({
+            "type": "json_invalid",
+            "loc": ["body", error.line(), error.column()],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {"error": error.to_string()},
+        })])
+    })?;
+    let Some(object) = input.as_object() else {
+        return Err(CanvasOAuthHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": input,
+        })]));
+    };
+    let mut errors = Vec::new();
+    let client_id = oauth_string_field(object, "client_id", 1, 512, &mut errors);
+    let client_secret_secret_id =
+        oauth_string_field(object, "client_secret_secret_id", 1, 512, &mut errors);
+    let capabilities = match object.get("capabilities") {
+        None => {
+            errors.push(json!({
+                "type": "missing", "loc": ["body", "capabilities"],
+                "msg": "Field required", "input": object,
+            }));
+            None
+        }
+        Some(Value::Array(values)) => {
+            if values.is_empty() {
+                errors.push(json!({
+                    "type": "too_short", "loc": ["body", "capabilities"],
+                    "msg": "List should have at least 1 item after validation, not 0",
+                    "input": values, "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
+                }));
+            } else if values.len() > 5 {
+                errors.push(json!({
+                    "type": "too_long", "loc": ["body", "capabilities"],
+                    "msg": format!("List should have at most 5 items after validation, not {}", values.len()),
+                    "input": values, "ctx": {"field_type": "List", "max_length": 5, "actual_length": values.len()},
+                }));
+            }
+            let mut capabilities = Vec::new();
+            for (index, value) in values.iter().enumerate() {
+                if let Some(value) = value.as_str() {
+                    capabilities.push(value.to_owned());
+                } else {
+                    errors.push(json!({
+                        "type": "string_type", "loc": ["body", "capabilities", index],
+                        "msg": "Input should be a valid string", "input": value,
+                    }));
+                }
+            }
+            Some(capabilities)
+        }
+        Some(value) => {
+            errors.push(json!({
+                "type": "list_type", "loc": ["body", "capabilities"],
+                "msg": "Input should be a valid list", "input": value,
+            }));
+            None
+        }
+    };
+    for (name, value) in object {
+        if !matches!(
+            name.as_str(),
+            "client_id" | "client_secret_secret_id" | "capabilities"
+        ) {
+            errors.push(json!({
+                "type": "extra_forbidden", "loc": ["body", name],
+                "msg": "Extra inputs are not permitted", "input": value,
+            }));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(CanvasOAuthHttpError::Validation(errors));
+    }
+    Ok(CanvasOAuthStartRequest {
+        client_id: client_id.expect("validated"),
+        client_secret_secret_id: client_secret_secret_id.expect("validated"),
+        capabilities: capabilities.expect("validated"),
+    })
+}
+
+fn oauth_string_field(
+    object: &Map<String, Value>,
+    name: &str,
+    minimum: usize,
+    maximum: usize,
+    errors: &mut Vec<Value>,
+) -> Option<String> {
+    match object.get(name) {
+        None => {
+            errors.push(json!({
+                "type": "missing", "loc": ["body", name],
+                "msg": "Field required", "input": object,
+            }));
+            None
+        }
+        Some(Value::String(value)) => {
+            let length = value.chars().count();
+            if length < minimum {
+                errors.push(json!({
+                    "type": "string_too_short", "loc": ["body", name],
+                    "msg": format!("String should have at least {minimum} character"),
+                    "input": value, "ctx": {"min_length": minimum},
+                }));
+            } else if length > maximum {
+                errors.push(json!({
+                    "type": "string_too_long", "loc": ["body", name],
+                    "msg": format!("String should have at most {maximum} characters"),
+                    "input": value, "ctx": {"max_length": maximum},
+                }));
+            }
+            Some(value.clone())
+        }
+        Some(value) => {
+            errors.push(json!({
+                "type": "string_type", "loc": ["body", name],
+                "msg": "Input should be a valid string", "input": value,
+            }));
+            None
+        }
+    }
+}
+
+fn parse_canvas_oauth_callback(
+    raw_query: Option<&str>,
+) -> Result<CanvasOAuthCallbackRequest, CanvasOAuthHttpError> {
+    let values = raw_query
+        .into_iter()
+        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()))
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut errors = Vec::new();
+    let state = query_string(&values, "state", true, 32, 512, &mut errors);
+    let code = query_string(&values, "code", false, 1, 4096, &mut errors);
+    let error = query_string(&values, "error", false, 1, 256, &mut errors);
+    if !errors.is_empty() {
+        return Err(CanvasOAuthHttpError::Validation(errors));
+    }
+    Ok(CanvasOAuthCallbackRequest {
+        code,
+        state: state.expect("required and validated"),
+        error,
+    })
+}
+
+fn query_string(
+    values: &std::collections::BTreeMap<String, String>,
+    name: &str,
+    required: bool,
+    minimum: usize,
+    maximum: usize,
+    errors: &mut Vec<Value>,
+) -> Option<String> {
+    let Some(value) = values.get(name) else {
+        if required {
+            errors.push(json!({
+                "type": "missing", "loc": ["query", name],
+                "msg": "Field required", "input": null,
+            }));
+        }
+        return None;
+    };
+    let length = value.chars().count();
+    if length < minimum {
+        errors.push(json!({
+            "type": "string_too_short", "loc": ["query", name],
+            "msg": format!("String should have at least {minimum} characters"),
+            "input": "[REDACTED]", "ctx": {"min_length": minimum},
+        }));
+    } else if length > maximum {
+        errors.push(json!({
+            "type": "string_too_long", "loc": ["query", name],
+            "msg": format!("String should have at most {maximum} characters"),
+            "input": "[REDACTED]", "ctx": {"max_length": maximum},
+        }));
+    }
+    Some(value.clone())
 }
 
 async fn initiate_canvas_lti_login(
@@ -1528,6 +1850,68 @@ async fn parse_canvas_lti_deep_linking_request(
             })
             .collect(),
     ))
+}
+
+enum CanvasOAuthHttpError {
+    Service(CanvasOAuthError),
+    Validation(Vec<Value>),
+    BodyTooLarge,
+}
+
+impl From<CanvasOAuthError> for CanvasOAuthHttpError {
+    fn from(value: CanvasOAuthError) -> Self {
+        Self::Service(value)
+    }
+}
+
+impl IntoResponse for CanvasOAuthHttpError {
+    fn into_response(self) -> Response {
+        use CanvasOAuthError as Error;
+
+        let response = match self {
+            Self::Validation(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail": errors})),
+            )
+                .into_response(),
+            Self::BodyTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "Canvas OAuth request body exceeds the size limit"})),
+            )
+                .into_response(),
+            Self::Service(Error::Security(error)) => {
+                TransactionReadHttpError(error).into_response()
+            }
+            Self::Service(
+                Error::RepositoryUnavailable
+                | Error::SecretUnavailable
+                | Error::InvalidConfiguration,
+            ) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+            Self::Service(error) => {
+                let (status, detail) = match error {
+                    Error::PlatformNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+                    Error::PilotDisabled => (StatusCode::NOT_FOUND, error.to_string()),
+                    Error::SecretNotFound => (StatusCode::NOT_FOUND, error.to_string()),
+                    Error::BaseUrlRequired
+                    | Error::OriginUntrusted
+                    | Error::ConnectionExists
+                    | Error::ConfigurationChanged
+                    | Error::ConnectionChanged => (StatusCode::CONFLICT, error.to_string()),
+                    Error::ClientIdRequired
+                    | Error::CapabilitiesRequired
+                    | Error::UnsupportedCapabilities(_) => {
+                        (StatusCode::BAD_REQUEST, error.to_string())
+                    }
+                    Error::RepositoryUnavailable
+                    | Error::SecretUnavailable
+                    | Error::InvalidConfiguration => unreachable!("handled above"),
+                    Error::Security(_) => unreachable!("handled above"),
+                };
+                (status, Json(json!({"detail": detail}))).into_response()
+            }
+        };
+        canvas_oauth_no_store(response)
+    }
 }
 
 enum CanvasLtiExperienceSessionHttpError {

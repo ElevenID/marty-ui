@@ -20,7 +20,7 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns eighteen frozen HTTP operations: the exact legacy
+The native candidate now owns 32 frozen HTTP operations: the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
 the global plus three organization-scoped OAuth discovery variants, and all
 three tenant-backed credential-issuer metadata variants. The six deterministic
@@ -61,19 +61,25 @@ format through the shared Rust crates, and preserves persisted status,
 delivery, renewal-revocation, and Canvas eligibility transitions. Its
 production repository is exercised against disposable PostgreSQL, including
 tenant isolation and renewal revocation behavior.
+The native Canvas surface now owns eleven Canvas/LTI operations: login and
+experience-login initiation, launch verification, experience launch and code
+exchange, current-session lookup and bootstrap, Deep Linking response signing,
+evidence status and synchronization, and tool JWKS publication. The paired
+Canvas OAuth lifecycle owns authorization start, callback completion, and
+durable disconnect. Their frozen contracts preserve tenant binding, signed
+launch capabilities, cache boundaries, bearer authorization, state and nonce
+handling, secret encryption, retry behavior, and checked token expiry.
 The same contract binds legacy request-ID propagation/generation and allowed
 and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
 
 MMF-owned readiness, lifecycle, and version diagnostics remain additive. The
 shared service image and entrypoint package the native binary. Beta uses a
-separate `issuance-native` sidecar and the gateway sends only the initial eighteen
-contract-owned paths to it. The first two Canvas/LTI login operations add
-server-owned state/nonce generation, exact trust-profile validation, and the
-existing PostgreSQL launch-state schema, bringing the split to twenty native
-paths; the other 111 HTTP operations and all 12 gRPC
-methods remain on the Python issuance service. Production Compose remains
-unchanged and selects only the Python issuance service.
+separate `issuance-native` sidecar and the gateway sends only the 32
+contract-owned paths to it. The other 99 HTTP operations, all 12 gRPC methods,
+the Canvas synchronization worker, and packaging and schema ownership remain
+on the Python issuance service. Production Compose remains unchanged and
+selects only the Python issuance service.
 
 ## Dependency and removal order
 
@@ -88,9 +94,10 @@ unchanged and selects only the Python issuance service.
    cryptography and credential formats and preserving idempotency/race gates.
    Token exchange, nonce issuance, and credential issuance are complete in the
    beta path split.
-5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI
-   orchestration, all 12 gRPC methods, and the Canvas worker. Canvas/LTI login
-   and experience-login initiation are complete in the beta path split.
+5. Port revocation/status lifecycle, physical-document paths, the remaining
+   Canvas integration surface, all 12 gRPC methods, and the Canvas worker. The
+   eleven frozen Canvas/LTI paths and three Canvas OAuth lifecycle paths listed
+   above are complete in the beta path split.
 6. Replay the frozen positive, negative, concurrency, database, protocol, and
    migration contracts against both implementations; resolve every divergence.
 7. Atomically move image/SBOM/provenance ownership, delete the Python issuance

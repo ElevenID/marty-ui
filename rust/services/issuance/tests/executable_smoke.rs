@@ -26,6 +26,9 @@ async fn executable_serves_health_readiness_and_version() {
             || matches!(
                 name.as_str(),
                 "ISSUANCE_SERVICE_PORT"
+                    | "INTEGRATION_SECRET_MASTER_KEY"
+                    | "INTEGRATION_SECRET_MASTER_KEY_ENV"
+                    | "INTEGRATION_SECRET_MASTER_KEY_FILE"
                     | "MARTY_RELEASE_VERSION"
                     | "MARTY_UI_SHA"
                     | "ISSUER_BASE_URL"
@@ -42,6 +45,10 @@ async fn executable_serves_health_readiness_and_version() {
             .env(
                 "TOKEN_HMAC_KEY",
                 format!("executable-smoke-{}", uuid::Uuid::new_v4()),
+            )
+            .env(
+                "INTEGRATION_SECRET_MASTER_KEY",
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             )
             .env("MARTY_RELEASE_VERSION", "9.8.7")
             .env("MARTY_UI_SHA", "smoke-revision")

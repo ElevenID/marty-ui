@@ -18,6 +18,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
+    pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub signing_keys_internal_url: url::Url,
@@ -36,6 +37,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_lti_tool_signing_organization_id: String,
     pub canvas_lti_tool_issuer_did: String,
     pub canvas_lti_deep_linking_issuer: Option<String>,
+    pub canvas_oauth_completion_redirect_url: String,
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
@@ -56,6 +58,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
+            .field(
+                "integration_secret_master_key_configured",
+                &self.integration_secret_master_key.is_some(),
+            )
             .field("token_hmac_key_configured", &self.token_hmac_key.is_some())
             .field(
                 "issuance_api_key_configured",
@@ -104,6 +110,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_lti_deep_linking_issuer",
                 &self.canvas_lti_deep_linking_issuer,
+            )
+            .field(
+                "canvas_oauth_completion_redirect_url",
+                &self.canvas_oauth_completion_redirect_url,
             )
             .field(
                 "canvas_self_managed_origin_count",
@@ -178,6 +188,12 @@ impl IssuanceServiceConfig {
                 "TOKEN_HMAC_KEY or TOKEN_HMAC_KEY_FILE is required",
             ));
         }
+        if config.integration_secret_master_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "INTEGRATION_SECRET_MASTER_KEY or INTEGRATION_SECRET_MASTER_KEY_FILE is required",
+            ));
+        }
         Ok(config)
     }
 
@@ -234,6 +250,13 @@ impl IssuanceServiceConfig {
             validate_internal_url(&settings.dependencies.revocation_profile_service_url)?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
+        let integration_secret_key_name = values
+            .get("INTEGRATION_SECRET_MASTER_KEY_ENV")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("INTEGRATION_SECRET_MASTER_KEY");
+        let integration_secret_master_key = secret_value(&values, integration_secret_key_name)?;
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
         let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?;
@@ -274,6 +297,19 @@ impl IssuanceServiceConfig {
             .get("CANVAS_LTI_DEEP_LINKING_ISSUER")
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        let canvas_oauth_completion_redirect_url = values
+            .get("CANVAS_OAUTH_COMPLETION_REDIRECT_URL")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || {
+                    validate_canvas_oauth_completion_url(&format!(
+                        "{canvas_lti_experience_base_url}/console/integrations/canvas"
+                    ))
+                },
+                validate_canvas_oauth_completion_url,
+            )?;
         let canvas_self_managed_origins =
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
         let canvas_private_origin_allowlist =
@@ -290,6 +326,7 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
+            integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
             signing_keys_internal_url,
@@ -308,6 +345,7 @@ impl IssuanceServiceConfig {
             canvas_lti_tool_signing_organization_id,
             canvas_lti_tool_issuer_did,
             canvas_lti_deep_linking_issuer,
+            canvas_oauth_completion_redirect_url,
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
             canvas_allow_private_base_urls,
@@ -510,6 +548,39 @@ fn validate_http_base_url(value: &str, name: &str) -> Result<String, MmfError> {
     Ok(normalized.to_owned())
 }
 
+fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
+    let parsed = url::Url::parse(value).map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL must be a trusted HTTPS URL",
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    let local_http = is_loopback_http_url(&parsed);
+    if (parsed.scheme() != "https" && !local_http)
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL must be a trusted HTTPS URL",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+pub(crate) fn is_loopback_http_url(value: &url::Url) -> bool {
+    value.scheme() == "http"
+        && match value.host() {
+            Some(url::Host::Domain(host)) => host == "localhost",
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            None => false,
+        }
+}
+
 fn validate_database_url(value: &str) -> Result<String, MmfError> {
     let normalized = value.replacen("postgresql+asyncpg://", "postgresql://", 1);
     let parsed = url::Url::parse(&normalized).map_err(|error| {
@@ -627,6 +698,11 @@ mod tests {
             config.canvas_lti_experience_base_url,
             "https://beta.elevenidllc.com"
         );
+        assert_eq!(
+            config.canvas_oauth_completion_redirect_url,
+            "https://beta.elevenidllc.com/console/integrations/canvas"
+        );
+        assert!(config.integration_secret_master_key.is_none());
         assert_eq!(
             config.canvas_lti_experience_code_ttl,
             std::time::Duration::from_secs(60)
@@ -848,6 +924,62 @@ mod tests {
             explicit.canvas_lti_experience_base_url,
             "https://experience.example"
         );
+    }
+
+    #[test]
+    fn canvas_oauth_configuration_preserves_secret_indirection_and_redaction() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            (
+                "INTEGRATION_SECRET_MASTER_KEY_ENV",
+                "ROTATED_INTEGRATION_KEY",
+            ),
+            ("ROTATED_INTEGRATION_KEY", "base64-encryption-key"),
+            (
+                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+                "https://ui.example/console/integrations/canvas?source=oauth",
+            ),
+        ]))
+        .expect("Canvas OAuth configuration");
+        assert_eq!(
+            config.integration_secret_master_key.as_deref(),
+            Some("base64-encryption-key")
+        );
+        assert_eq!(
+            config.canvas_oauth_completion_redirect_url,
+            "https://ui.example/console/integrations/canvas?source=oauth"
+        );
+        assert!(!format!("{config:?}").contains("base64-encryption-key"));
+    }
+
+    #[test]
+    fn invalid_canvas_oauth_completion_urls_fail_closed() {
+        for value in [
+            "http://ui.example/console/integrations/canvas",
+            "ftp://ui.example/console/integrations/canvas",
+            "https://user:secret@ui.example/console/integrations/canvas",
+            "https://ui.example/console/integrations/canvas#token",
+            "not-a-url",
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+                value,
+            )]))
+            .expect_err("invalid Canvas OAuth completion URL");
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
+
+        for value in [
+            "http://localhost:3000/console/integrations/canvas",
+            "http://127.0.0.1:3000/console/integrations/canvas",
+            "http://[::1]:3000/console/integrations/canvas",
+        ] {
+            let config = IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+                value,
+            )]))
+            .expect("local development completion URL");
+            assert_eq!(config.canvas_oauth_completion_redirect_url, value);
+        }
     }
 
     #[test]
