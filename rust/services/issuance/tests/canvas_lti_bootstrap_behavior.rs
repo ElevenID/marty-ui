@@ -448,8 +448,7 @@ fn bootstrap_terminal_applications_on_other_launches_are_not_resumed() {
         Some(true),
         Some(&template()),
         &[],
-        "application-1",
-        "deadbeef",
+        seed("application-1"),
         now(),
     )
     .unwrap()
@@ -467,8 +466,7 @@ fn bootstrap_terminal_applications_on_other_launches_are_not_resumed() {
             Some(true),
             Some(&template()),
             &[terminal],
-            "application-2",
-            "feedface",
+            seed("application-2"),
             now() + chrono::Duration::minutes(1),
         )
         .unwrap();
@@ -492,8 +490,7 @@ fn bootstrap_subject_resume_requires_the_same_program_binding() {
         Some(true),
         Some(&template()),
         &[],
-        "application-1",
-        "deadbeef",
+        seed("application-1"),
         now(),
     )
     .unwrap()
@@ -509,8 +506,7 @@ fn bootstrap_subject_resume_requires_the_same_program_binding() {
         Some(true),
         Some(&template()),
         &[original],
-        "application-2",
-        "feedface",
+        seed("application-2"),
         now() + chrono::Duration::minutes(1),
     )
     .unwrap();
@@ -547,8 +543,7 @@ fn bootstrap_debug_output_redacts_private_applicant_and_session_data() {
         Some(true),
         Some(&template()),
         &[],
-        "application-safe-id",
-        "deadbeef",
+        seed("application-safe-id"),
         now(),
     )
     .unwrap();
@@ -650,8 +645,7 @@ fn bootstrap_gates_and_template_failures_preserve_order_and_exact_errors() {
         Some(false),
         Some(&template()),
         &[],
-        "application-1",
-        "deadbeef",
+        seed("application-1"),
         now(),
     )
     .unwrap();
