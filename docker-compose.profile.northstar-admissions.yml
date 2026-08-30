@@ -1,0 +1,51 @@
+# D-11 Northstar Admissions partner application.
+# Combine with the beta and tunnel compose files after API-only preparation has
+# produced the run-scoped secret file. This service is external to Marty even
+# though it shares the local beta network for the existing Cloudflare ingress.
+
+services:
+  northstar-admissions:
+    build:
+      context: ./demo-apps/northstar-admissions
+      dockerfile: Dockerfile
+    image: elevenid/northstar-admissions:d11-local
+    pull_policy: never
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4175"
+      MARTY_PUBLIC_GATEWAY_ORIGIN: ${MARTY_PUBLIC_GATEWAY_ORIGIN:-https://beta.elevenidllc.com}
+      NORTHSTAR_CALLBACK_URL: https://${NORTHSTAR_ADMISSIONS_PUBLIC_HOST:-admissions-test.elevenidllc.com}/webhooks/marty
+      NORTHSTAR_RUN_SECRET_FILE: /run/secrets/northstar_run
+    secrets:
+      - source: northstar_run
+        target: northstar_run
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    networks:
+      - marty-network
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --output-document=- http://127.0.0.1:4175/health | grep --quiet '\"status\":\"healthy\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  nginx-proxy:
+    environment:
+      NORTHSTAR_ADMISSIONS_PUBLIC_HOST: ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST:-admissions-test.elevenidllc.com}
+    depends_on:
+      northstar-admissions:
+        condition: service_healthy
+
+secrets:
+  northstar_run:
+    file: ${NORTHSTAR_RUN_SECRET_FILE:?NORTHSTAR_RUN_SECRET_FILE must name the protected D-11 run file}

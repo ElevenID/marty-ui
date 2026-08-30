@@ -22,6 +22,9 @@ This directory separates deployment concerns by target environment to reduce acc
 - tunnel-beta-experiments adds resettable beta-only experiment services such as
   Canvas LMS at canvas-test.elevenidllc.com and a beta-safe Canvas Credentials
   mirror receiver at canvas-sandbox.elevenidllc.com.
+- tunnel-beta-d11 extends that resettable stack with the separately branded
+  Northstar Admissions partner at admissions-test.elevenidllc.com. It requires
+  a run-scoped secret file created only through the public gateway.
 - Do not reuse one env file across both targets.
 - Do not put a separate beta/staging hostname in selfhost production `UI_ADDITIONAL_BASE_URLS`; that makes the secondary hostname use the production Keycloak issuer.
 - Keep secrets in external secret directories, not in this repo.
@@ -53,6 +56,7 @@ Useful commands:
 - `python scripts/marty-deploy.py validate`
 - `python scripts/marty-deploy.py plan selfhost-production`
 - `python scripts/marty-deploy.py plan tunnel-beta-experiments` for the beta Canvas experiments stack
+- `python scripts/marty-deploy.py plan tunnel-beta-d11` for the D-11 external admissions recording stack
 - `python scripts/marty-deploy.py plan selfhost-beta-tunnel` only when beta intentionally routes into the same self-host production stack
 - `python scripts/marty-deploy.py plan kubernetes-production`
 - `python scripts/marty-deploy.py compose-command selfhost-production config`

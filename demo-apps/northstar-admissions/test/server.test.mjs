@@ -95,6 +95,10 @@ test('public server bounds JSON bodies and sends browser security headers', asyn
   const address = server.address();
   const origin = `http://127.0.0.1:${address.port}`;
   try {
+    const health = await fetch(`${origin}/health`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { status: 'healthy', service: 'northstar-admissions' });
+
     const state = await fetch(`${origin}/api/demo-state`);
     assert.equal(state.status, 200);
     assert.match(state.headers.get('content-security-policy'), /frame-ancestors 'none'/);

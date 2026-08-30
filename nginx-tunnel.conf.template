@@ -8,6 +8,7 @@
 #   GATEWAY_UPSTREAM - The backend gateway upstream reachable from Docker
 #   CANVAS_REAL_PUBLIC_HOST - Public hostname for real Canvas route
 #   CANVAS_SANDBOX_PUBLIC_HOST - Public hostname for Canvas sandbox route
+#   NORTHSTAR_ADMISSIONS_PUBLIC_HOST - Public hostname for the D-11 partner app
 
 # Use variable to force DNS resolution at runtime (IPv4 only)
 resolver 127.0.0.11 valid=30s ipv6=off;
@@ -479,5 +480,37 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
+    }
+}
+
+# ==========================================================================
+# D-11 external partner application - ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST}
+# ==========================================================================
+# Requires a Cloudflare tunnel public hostname entry:
+#   ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST} -> http://tunnel-nginx-proxy:80
+# The upstream is a separately branded application. It is not a Marty UI or
+# gateway route and receives only Marty's outbound webhook plus browser traffic.
+# ==========================================================================
+server {
+    listen 80;
+    server_name ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST};
+
+    client_max_body_size 64k;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        set $northstar_upstream northstar-admissions:4175;
+        proxy_pass http://$northstar_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
     }
 }

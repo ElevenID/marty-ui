@@ -221,6 +221,9 @@ export function startServer(config = process.env) {
   const app = createNorthstarApp(loadRunConfig(config));
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://northstar.local');
+    if (request.method === 'GET' && url.pathname === '/health') {
+      return json(response, 200, { status: 'healthy', service: 'northstar-admissions' });
+    }
     if (request.method === 'GET' && url.pathname === '/api/demo-state') return json(response, 200, app.safeState());
     if (request.method === 'POST' && url.pathname === '/api/applications/refresh') {
       const result = await app.refreshApplication();

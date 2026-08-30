@@ -23,3 +23,16 @@ bind the persisted delivery record through `/v1/webhooks/{id}/deliveries`.
 Run unit tests with `npm test`. The public deployment is expected at
 `https://admissions-test.elevenidllc.com`, with `/webhooks/marty` routed to this
 service through the existing beta tunnel.
+
+Deploy it only after preparation creates the run-scoped secret file. The
+dedicated `docker-compose.profile.northstar-admissions.yml` overlay mounts that
+file as a read-only Compose secret, binds the app to the beta network, and makes
+the tunnel proxy wait for `/health`. Set `NORTHSTAR_RUN_SECRET_FILE` to the
+protected host path and combine the overlay with the normal beta/tunnel compose
+files. Use the `tunnel-beta-d11` stack descriptor for the governed topology.
+
+The Cloudflare tunnel must have a public-hostname entry for
+`admissions-test.elevenidllc.com` pointing at
+`http://tunnel-nginx-proxy:80`. DNS/tunnel provisioning remains an operator
+step; the repository nginx route fails closed if the Northstar container is not
+healthy.
