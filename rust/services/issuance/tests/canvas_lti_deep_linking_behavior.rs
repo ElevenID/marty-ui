@@ -36,6 +36,10 @@ fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 29, 16, 30, 0).unwrap()
 }
 
+fn generated_nonce() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
 fn evidence_requirements() -> Vec<Value> {
     vec![
         json!({
@@ -137,13 +141,14 @@ fn binding() -> CanvasLtiDeepLinkingBinding {
 
 #[test]
 fn plan_preserves_python_content_item_and_lti_claim_contract() {
+    let nonce = generated_nonce();
     let plan = plan_deep_linking_response(
         &context(),
         &platform(),
         &binding(),
         Some("elevenid-tool-client"),
         "https://issuer.example.test/",
-        "00112233445566778899aabbccddeeff",
+        &nonce,
         now(),
     )
     .unwrap();
@@ -194,7 +199,7 @@ fn plan_preserves_python_content_item_and_lti_claim_contract() {
     assert!(plan_debug.contains("platform-1"));
     assert!(plan_debug.contains("[REDACTED]"));
     assert!(!plan_debug.contains("opaque-canvas-state"));
-    assert!(!plan_debug.contains("00112233445566778899aabbccddeeff"));
+    assert!(!plan_debug.contains(&nonce));
 
     let mut private_scope = plan.persistence_scope.clone();
     private_scope.session_id = "private-session-id".to_owned();
@@ -215,6 +220,7 @@ fn plan_preserves_python_content_item_and_lti_claim_contract() {
 
 #[test]
 fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
+    let nonce = generated_nonce();
     let mut fallback_context = context();
     fallback_context.verified_launch["issuer"] = Value::Null;
     fallback_context.verified_launch["deployment_id"] = json!("");
@@ -224,7 +230,7 @@ fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
         &binding(),
         None,
         "https://issuer.example.test",
-        "00112233445566778899aabbccddeeff",
+        &nonce,
         now(),
     )
     .unwrap();
@@ -247,7 +253,7 @@ fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
             &binding(),
             None,
             "https://issuer.example.test",
-            "00112233445566778899aabbccddeeff",
+            &nonce,
             now(),
         )
         .unwrap_err(),
@@ -263,7 +269,7 @@ fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
             &binding(),
             None,
             "https://issuer.example.test",
-            "00112233445566778899aabbccddeeff",
+            &nonce,
             now(),
         )
         .unwrap_err(),
@@ -279,7 +285,7 @@ fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
             &binding(),
             None,
             "https://issuer.example.test",
-            "00112233445566778899aabbccddeeff",
+            &nonce,
             now(),
         )
         .unwrap_err(),
@@ -293,7 +299,7 @@ fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
             &binding(),
             None,
             "https://issuer.example.test",
-            "00112233445566778899AABBCCDDEEFF",
+            &format!("{nonce}0"),
             now(),
         )
         .unwrap_err(),
@@ -303,6 +309,7 @@ fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
 
 #[test]
 fn plan_emits_one_generic_item_without_ags_and_ordered_items_for_each_ags_requirement() {
+    let nonce = generated_nonce();
     let mut without_ags = binding();
     without_ags.evidence_requirements = vec![without_ags.evidence_requirements[1].clone()];
     let plan = plan_deep_linking_response(
@@ -311,7 +318,7 @@ fn plan_emits_one_generic_item_without_ags_and_ordered_items_for_each_ags_requir
         &without_ags,
         None,
         "https://issuer.example.test",
-        "00112233445566778899aabbccddeeff",
+        &nonce,
         now(),
     )
     .unwrap();
@@ -332,7 +339,7 @@ fn plan_emits_one_generic_item_without_ags_and_ordered_items_for_each_ags_requir
         &multiple_ags,
         None,
         "https://issuer.example.test",
-        "00112233445566778899aabbccddeeff",
+        &nonce,
         now(),
     )
     .unwrap();
@@ -369,7 +376,7 @@ fn plan_rejects_capability_accept_type_return_url_and_evidence_drift() {
             &binding(),
             None,
             "https://issuer.example.test",
-            "nonce",
+            &generated_nonce(),
             now(),
         )
         .unwrap_err(),
@@ -385,7 +392,7 @@ fn plan_rejects_capability_accept_type_return_url_and_evidence_drift() {
             &binding(),
             None,
             "https://issuer.example.test",
-            "nonce",
+            &generated_nonce(),
             now(),
         )
         .unwrap_err(),
@@ -401,7 +408,7 @@ fn plan_rejects_capability_accept_type_return_url_and_evidence_drift() {
             &binding,
             None,
             "https://issuer.example.test",
-            "nonce",
+            &generated_nonce(),
             now(),
         ),
         Err(CanvasLtiDeepLinkingError::InvalidEvidenceRequirements(_))
@@ -528,7 +535,7 @@ struct FixedNonce;
 
 impl CanvasLtiDeepLinkingNonceGenerator for FixedNonce {
     fn generate(&self) -> String {
-        "00112233445566778899aabbccddeeff".to_owned()
+        generated_nonce()
     }
 }
 
@@ -536,7 +543,7 @@ struct InvalidNonce;
 
 impl CanvasLtiDeepLinkingNonceGenerator for InvalidNonce {
     fn generate(&self) -> String {
-        "caller-controlled-nonce".to_owned()
+        format!("{}0", generated_nonce())
     }
 }
 
