@@ -884,6 +884,67 @@ async fn bootstrap_http_authenticates_before_parsing_the_json_body() {
 }
 
 #[tokio::test]
+async fn bootstrap_http_rejects_non_json_content_types_with_fastapi_compatible_422s() {
+    let response = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository {
+            record: Mutex::new(Some(bootstrap_context().launch_state)),
+        }),
+        Arc::new(BootstrapRepository::default()),
+        true,
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+            .header(header::AUTHORIZATION, "Bearer bootstrap-session-token")
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await,
+        json!({
+            "detail": [{
+                "type": "model_attributes_type",
+                "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": "{}",
+            }]
+        })
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_http_rejects_bodies_over_64_kib_without_processing_them() {
+    let response = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository {
+            record: Mutex::new(Some(bootstrap_context().launch_state)),
+        }),
+        Arc::new(BootstrapRepository::default()),
+        true,
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+            .header(header::AUTHORIZATION, "Bearer bootstrap-session-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("x".repeat(64 * 1024 + 1)))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await,
+        json!({"detail": "Canvas LTI bootstrap body exceeds the size limit"})
+    );
+}
+
+#[tokio::test]
 async fn bootstrap_http_rejects_schema_drift_with_fastapi_compatible_422s() {
     let cases = [
         json!([]),
