@@ -805,6 +805,11 @@ async fn bootstrap_service_validates_template_before_listing_applications() {
     }
 }
 
+fn assert_private_no_store(response: &axum::response::Response) {
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+}
+
 #[tokio::test]
 async fn bootstrap_http_replays_the_frozen_request_and_browser_safe_response() {
     let session_repository = Arc::new(SessionRepository {
@@ -830,6 +835,7 @@ async fn bootstrap_http_replays_the_frozen_request_and_browser_safe_response() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_private_no_store(&response);
     let body = response_json(response).await;
     assert_eq!(body["application_id"], "application-1");
     assert_eq!(body["application_status"], "approved");
@@ -870,6 +876,7 @@ async fn bootstrap_http_authenticates_before_parsing_the_json_body() {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert_private_no_store(&response);
     assert_eq!(
         response_json(response).await,
         json!({"detail": "Canvas LTI experience session bearer token is required"})
@@ -902,6 +909,7 @@ async fn bootstrap_http_rejects_schema_drift_with_fastapi_compatible_422s() {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_private_no_store(&response);
         assert!(response_json(response).await["detail"].is_array());
     }
 }
@@ -924,6 +932,7 @@ async fn bootstrap_http_maps_domain_failures_without_exposing_repository_details
     .await
     .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_private_no_store(&missing);
     assert_eq!(
         response_json(missing).await,
         json!({"detail": "Canvas LTI experience session not found"})
@@ -949,6 +958,7 @@ async fn bootstrap_http_maps_domain_failures_without_exposing_repository_details
     .await
     .unwrap();
     assert_eq!(disabled.status(), StatusCode::CONFLICT);
+    assert_private_no_store(&disabled);
     assert_eq!(
         response_json(disabled).await,
         json!({"detail": "Canvas LTI is disabled for this deployment profile"})

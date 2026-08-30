@@ -629,7 +629,7 @@ async fn bootstrap_canvas_lti_experience_application(
         .ok_or(CanvasLtiBootstrapServiceError::RepositoryUnavailable)?
         .bootstrap(&token, &request)
         .await?;
-    Ok(Json(response).into_response())
+    Ok(private_no_store(Json(response).into_response()))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1252,7 +1252,7 @@ impl From<CanvasLtiBootstrapServiceError> for CanvasLtiBootstrapHttpError {
 
 impl IntoResponse for CanvasLtiBootstrapHttpError {
     fn into_response(self) -> Response {
-        match self {
+        let response = match self {
             Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
             Self::Service(CanvasLtiBootstrapServiceError::SessionNotFound)
             | Self::Service(CanvasLtiBootstrapServiceError::Plan(
@@ -1290,7 +1290,8 @@ impl IntoResponse for CanvasLtiBootstrapHttpError {
                 Json(json!({"detail": "Canvas LTI bootstrap body exceeds the size limit"})),
             )
                 .into_response(),
-        }
+        };
+        private_no_store(response)
     }
 }
 
