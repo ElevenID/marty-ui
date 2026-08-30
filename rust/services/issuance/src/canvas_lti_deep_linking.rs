@@ -145,6 +145,10 @@ pub enum CanvasLtiDeepLinkingError {
     ReturnUrlUntrusted,
     #[error("Canvas binding evidence requirements are invalid: {0}")]
     InvalidEvidenceRequirements(String),
+    #[error("Canvas Deep Linking signing claims are invalid")]
+    SigningClaimsInvalid,
+    #[error("Canvas Deep Linking nonce generation failed")]
+    NonceGenerationFailed,
     #[error("Canvas LTI tool signing is unavailable: {0}")]
     SigningUnavailable(String),
     #[error("Canvas Deep Linking is temporarily unavailable")]
@@ -292,13 +296,14 @@ impl CanvasLtiDeepLinkingService {
             return Err(CanvasLtiDeepLinkingError::BindingMismatch);
         }
         let now = self.clock.now();
+        let nonce = self.nonce_generator.generate();
         let mut plan = plan_deep_linking_response(
             &context,
             &platform,
             &binding,
             self.issuer_override.as_deref(),
             &self.tool_base_url,
-            &self.nonce_generator.generate(),
+            &nonce,
             now,
         )?;
         let return_url = plan.response.deep_link_return_url.clone();
@@ -310,7 +315,6 @@ impl CanvasLtiDeepLinkingService {
         plan.response
             .deep_link_return_url
             .clone_from(&trusted_return_url);
-        plan.response.form_post = form_post(&trusted_return_url, "");
         let jwt = self
             .signer
             .sign_jwt(&plan.jwt_payload)
@@ -406,34 +410,25 @@ pub fn plan_deep_linking_response(
             })
             .collect()
     };
-    let raw_issuer = context
-        .verified_launch
-        .get("issuer")
-        .filter(|value| python_truthy(value));
-    let issuer = issuer_override
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| Value::String(value.to_owned()))
-        .or_else(|| platform.lti_client_id.clone().map(Value::String))
-        .unwrap_or(Value::Null);
-    let audience = raw_issuer
-        .cloned()
-        .or_else(|| platform.lti_issuer.clone().map(Value::String))
-        .unwrap_or(Value::Null);
-    let deployment_id = context
-        .verified_launch
-        .get("deployment_id")
-        .filter(|value| python_truthy(value))
-        .cloned()
-        .or_else(|| platform.lti_deployment_id.clone().map(Value::String))
-        .unwrap_or(Value::Null);
+    if !valid_deep_linking_nonce(nonce) {
+        return Err(CanvasLtiDeepLinkingError::NonceGenerationFailed);
+    }
+    let issuer = required_configured_claim(issuer_override, platform.lti_client_id.as_deref())?;
+    let audience = required_launch_claim(
+        context.verified_launch.get("issuer"),
+        platform.lti_issuer.as_deref(),
+    )?;
+    let deployment_id = required_launch_claim(
+        context.verified_launch.get("deployment_id"),
+        platform.lti_deployment_id.as_deref(),
+    )?;
     let mut payload = Map::from_iter([
-        ("iss".to_owned(), issuer),
-        ("aud".to_owned(), audience),
+        ("iss".to_owned(), Value::String(issuer)),
+        ("aud".to_owned(), Value::String(audience)),
         ("iat".to_owned(), json!(now.timestamp())),
         ("exp".to_owned(), json!(now.timestamp() + 300)),
         ("nonce".to_owned(), Value::String(nonce.to_owned())),
-        (DEPLOYMENT_ID_CLAIM.to_owned(), deployment_id),
+        (DEPLOYMENT_ID_CLAIM.to_owned(), Value::String(deployment_id)),
         (
             MESSAGE_TYPE_CLAIM.to_owned(),
             Value::String("LtiDeepLinkingResponse".to_owned()),
@@ -678,6 +673,45 @@ fn first_truthy_value<'a>(
     first
         .filter(|value| python_truthy(value))
         .or_else(|| second.filter(|value| python_truthy(value)))
+}
+
+fn required_configured_claim(
+    primary: Option<&str>,
+    fallback: Option<&str>,
+) -> Result<String, CanvasLtiDeepLinkingError> {
+    primary
+        .into_iter()
+        .chain(fallback)
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or(CanvasLtiDeepLinkingError::SigningClaimsInvalid)
+}
+
+fn required_launch_claim(
+    primary: Option<&Value>,
+    fallback: Option<&str>,
+) -> Result<String, CanvasLtiDeepLinkingError> {
+    if let Some(primary) = primary.filter(|value| python_truthy(value)) {
+        return primary
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or(CanvasLtiDeepLinkingError::SigningClaimsInvalid);
+    }
+    fallback
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or(CanvasLtiDeepLinkingError::SigningClaimsInvalid)
+}
+
+fn valid_deep_linking_nonce(nonce: &str) -> bool {
+    nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn python_string_list(value: Option<&Value>) -> Vec<String> {

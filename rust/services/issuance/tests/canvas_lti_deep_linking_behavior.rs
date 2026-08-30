@@ -214,6 +214,144 @@ fn plan_preserves_python_content_item_and_lti_claim_contract() {
 }
 
 #[test]
+fn plan_requires_string_signing_claims_and_uuid_compatible_nonce() {
+    let mut fallback_context = context();
+    fallback_context.verified_launch["issuer"] = Value::Null;
+    fallback_context.verified_launch["deployment_id"] = json!("");
+    let plan = plan_deep_linking_response(
+        &fallback_context,
+        &platform(),
+        &binding(),
+        None,
+        "https://issuer.example.test",
+        "00112233445566778899aabbccddeeff",
+        now(),
+    )
+    .unwrap();
+    assert_eq!(plan.jwt_payload["iss"], "canvas-client-1");
+    assert_eq!(
+        plan.jwt_payload["aud"],
+        "https://platform-issuer.example.test"
+    );
+    assert_eq!(
+        plan.jwt_payload["https://purl.imsglobal.org/spec/lti/claim/deployment_id"],
+        "platform-deployment-1"
+    );
+
+    let mut no_client = platform();
+    no_client.lti_client_id = None;
+    assert_eq!(
+        plan_deep_linking_response(
+            &context(),
+            &no_client,
+            &binding(),
+            None,
+            "https://issuer.example.test",
+            "00112233445566778899aabbccddeeff",
+            now(),
+        )
+        .unwrap_err(),
+        CanvasLtiDeepLinkingError::SigningClaimsInvalid
+    );
+
+    let mut non_string_audience = context();
+    non_string_audience.verified_launch["issuer"] = json!({"unexpected": "issuer"});
+    assert_eq!(
+        plan_deep_linking_response(
+            &non_string_audience,
+            &platform(),
+            &binding(),
+            None,
+            "https://issuer.example.test",
+            "00112233445566778899aabbccddeeff",
+            now(),
+        )
+        .unwrap_err(),
+        CanvasLtiDeepLinkingError::SigningClaimsInvalid
+    );
+
+    let mut blank_deployment = context();
+    blank_deployment.verified_launch["deployment_id"] = json!("   ");
+    assert_eq!(
+        plan_deep_linking_response(
+            &blank_deployment,
+            &platform(),
+            &binding(),
+            None,
+            "https://issuer.example.test",
+            "00112233445566778899aabbccddeeff",
+            now(),
+        )
+        .unwrap_err(),
+        CanvasLtiDeepLinkingError::SigningClaimsInvalid
+    );
+
+    assert_eq!(
+        plan_deep_linking_response(
+            &context(),
+            &platform(),
+            &binding(),
+            None,
+            "https://issuer.example.test",
+            "00112233445566778899AABBCCDDEEFF",
+            now(),
+        )
+        .unwrap_err(),
+        CanvasLtiDeepLinkingError::NonceGenerationFailed
+    );
+}
+
+#[test]
+fn plan_emits_one_generic_item_without_ags_and_ordered_items_for_each_ags_requirement() {
+    let mut without_ags = binding();
+    without_ags.evidence_requirements = vec![without_ags.evidence_requirements[1].clone()];
+    let plan = plan_deep_linking_response(
+        &context(),
+        &platform(),
+        &without_ags,
+        None,
+        "https://issuer.example.test",
+        "00112233445566778899aabbccddeeff",
+        now(),
+    )
+    .unwrap();
+    assert_eq!(plan.response.content_items.len(), 1);
+    assert!(plan.response.content_items[0].get("lineItem").is_none());
+    assert!(plan.response.content_items[0]["custom"]
+        .get("canvas_requirement_id")
+        .is_none());
+
+    let mut multiple_ags = binding();
+    let mut second = multiple_ags.evidence_requirements[0].clone();
+    second["requirement_id"] = json!("assignment-2");
+    second["scope"]["resource_id"] = json!("resource-2");
+    multiple_ags.evidence_requirements.insert(1, second);
+    let plan = plan_deep_linking_response(
+        &context(),
+        &platform(),
+        &multiple_ags,
+        None,
+        "https://issuer.example.test",
+        "00112233445566778899aabbccddeeff",
+        now(),
+    )
+    .unwrap();
+    assert_eq!(plan.response.content_items.len(), 2);
+    assert_eq!(
+        plan.response.content_items[0]["custom"]["canvas_requirement_id"],
+        "assignment-1"
+    );
+    assert_eq!(
+        plan.response.content_items[1]["custom"]["canvas_requirement_id"],
+        "assignment-2"
+    );
+    assert_eq!(
+        plan.response.content_items[1]["lineItem"]["resourceId"],
+        "resource-2"
+    );
+}
+
+#[test]
 fn plan_rejects_capability_accept_type_return_url_and_evidence_drift() {
     let mut session_context = context();
     session_context.lti_capabilities = json!({"deep_linking": false});
@@ -394,11 +532,29 @@ impl CanvasLtiDeepLinkingNonceGenerator for FixedNonce {
     }
 }
 
+struct InvalidNonce;
+
+impl CanvasLtiDeepLinkingNonceGenerator for InvalidNonce {
+    fn generate(&self) -> String {
+        "caller-controlled-nonce".to_owned()
+    }
+}
+
 fn service(
     session: CanvasLtiStoredLaunchState,
     repository: Arc<Repository>,
     validator: Arc<Validator>,
     signer: Arc<dyn CanvasLtiToolJwtSigner>,
+) -> CanvasLtiDeepLinkingService {
+    service_with_nonce(session, repository, validator, signer, Arc::new(FixedNonce))
+}
+
+fn service_with_nonce(
+    session: CanvasLtiStoredLaunchState,
+    repository: Arc<Repository>,
+    validator: Arc<Validator>,
+    signer: Arc<dyn CanvasLtiToolJwtSigner>,
+    nonce_generator: Arc<dyn CanvasLtiDeepLinkingNonceGenerator>,
 ) -> CanvasLtiDeepLinkingService {
     CanvasLtiDeepLinkingService::new(
         CanvasLtiExperienceSessionService::new(Arc::new(SessionRepository {
@@ -408,7 +564,7 @@ fn service(
         validator,
         signer,
         Arc::new(FixedClock),
-        Arc::new(FixedNonce),
+        nonce_generator,
         true,
         BTreeSet::from(["org-1".to_owned()]),
         None,
@@ -555,6 +711,52 @@ async fn service_preserves_dependency_order_and_fails_closed_for_role_and_bindin
 }
 
 #[tokio::test]
+async fn service_rejects_invalid_claims_and_nonce_before_signing() {
+    let mut invalid_claims_session = stored_session();
+    invalid_claims_session.metadata["verified_launch"]["issuer"] = json!({"unexpected": "issuer"});
+    let signer = Arc::new(Signer(Mutex::new(Vec::new())));
+    let result = service(
+        invalid_claims_session,
+        Arc::new(Repository {
+            feature_enabled: Some(true),
+            platform: Some(platform()),
+            binding: Some(binding()),
+            persisted: Mutex::new(Vec::new()),
+        }),
+        Arc::new(Validator(Mutex::new(Vec::new()))),
+        signer.clone(),
+    )
+    .create_response("token")
+    .await;
+    assert_eq!(
+        result.unwrap_err(),
+        CanvasLtiDeepLinkingError::SigningClaimsInvalid
+    );
+    assert!(signer.0.lock().unwrap().is_empty());
+
+    let signer = Arc::new(Signer(Mutex::new(Vec::new())));
+    let result = service_with_nonce(
+        stored_session(),
+        Arc::new(Repository {
+            feature_enabled: Some(true),
+            platform: Some(platform()),
+            binding: Some(binding()),
+            persisted: Mutex::new(Vec::new()),
+        }),
+        Arc::new(Validator(Mutex::new(Vec::new()))),
+        signer.clone(),
+        Arc::new(InvalidNonce),
+    )
+    .create_response("token")
+    .await;
+    assert_eq!(
+        result.unwrap_err(),
+        CanvasLtiDeepLinkingError::NonceGenerationFailed
+    );
+    assert!(signer.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn http_route_requires_bearer_before_body_and_forbids_caller_owned_fields() {
     let make_app = || {
         service_app(service(
@@ -619,6 +821,102 @@ async fn http_route_requires_bearer_before_body_and_forbids_caller_owned_fields(
 }
 
 #[tokio::test]
+async fn http_route_rejects_empty_untyped_malformed_non_object_and_oversized_bodies() {
+    let make_app = || {
+        service_app(service(
+            stored_session(),
+            Arc::new(Repository {
+                feature_enabled: Some(true),
+                platform: Some(platform()),
+                binding: Some(binding()),
+                persisted: Mutex::new(Vec::new()),
+            }),
+            Arc::new(Validator(Mutex::new(Vec::new()))),
+            Arc::new(Signer(Mutex::new(Vec::new()))),
+        ))
+    };
+    let path = "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response";
+    let authorized = || (header::AUTHORIZATION, "Bearer private-session-token");
+
+    let response = make_app()
+        .oneshot(
+            Request::post(path)
+                .header(authorized().0, authorized().1)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await["detail"][0]["type"],
+        "missing"
+    );
+
+    let response = make_app()
+        .oneshot(
+            Request::post(path)
+                .header(authorized().0, authorized().1)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_json(response).await["detail"][0]["type"],
+        "model_attributes_type"
+    );
+
+    let response = make_app()
+        .oneshot(
+            Request::post(path)
+                .header(authorized().0, authorized().1)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_json(response).await["detail"][0]["type"],
+        "json_invalid"
+    );
+
+    let response = make_app()
+        .oneshot(
+            Request::post(path)
+                .header(authorized().0, authorized().1)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("[]"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_json(response).await["detail"][0]["type"],
+        "model_attributes_type"
+    );
+
+    let response = make_app()
+        .oneshot(
+            Request::post(path)
+                .header(authorized().0, authorized().1)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(vec![b' '; 64 * 1024 + 1]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_private_no_store(&response);
+}
+
+#[tokio::test]
 async fn http_route_sanitizes_signing_failures_and_prevents_caching() {
     let response = service_app(service(
         stored_session(),
@@ -651,4 +949,34 @@ async fn http_route_sanitizes_signing_failures_and_prevents_caching() {
         json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})
     );
     assert!(!body.to_string().contains("private-signing-outage-detail"));
+
+    let response = service_app(service_with_nonce(
+        stored_session(),
+        Arc::new(Repository {
+            feature_enabled: Some(true),
+            platform: Some(platform()),
+            binding: Some(binding()),
+            persisted: Mutex::new(Vec::new()),
+        }),
+        Arc::new(Validator(Mutex::new(Vec::new()))),
+        Arc::new(Signer(Mutex::new(Vec::new()))),
+        Arc::new(InvalidNonce),
+    ))
+    .oneshot(
+        Request::post(
+            "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+        )
+        .header(header::AUTHORIZATION, "Bearer private-session-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await,
+        json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})
+    );
 }

@@ -1487,9 +1487,10 @@ impl IntoResponse for CanvasLtiDeepLinkingHttpError {
                 | Error::ReturnUrlMissing
                 | Error::ReturnUrlUntrusted
                 | Error::InvalidEvidenceRequirements(_)
+                | Error::SigningClaimsInvalid
                 | Error::ConfigurationDrift),
             ) => (StatusCode::CONFLICT, Json(json!({"detail": error.to_string()}))).into_response(),
-            Self::Service(Error::SigningUnavailable(_)) => {
+            Self::Service(Error::NonceGenerationFailed | Error::SigningUnavailable(_)) => {
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
