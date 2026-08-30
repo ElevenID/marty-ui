@@ -42,15 +42,26 @@ function resolveUiCandidateDist(root, configured = process.env.MARTY_UI_CANDIDAT
 function candidateUiFileForRequest(candidate, pathname, resourceType) {
   if (!candidate || ['/v1/', '/api/', '/auth/', '/realms/', '/resources/']
     .some((prefix) => pathname.startsWith(prefix))) return null;
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
   const relative = resourceType === 'document' && (pathname === '/console' || pathname.startsWith('/console/'))
     ? path.join('console', 'index.html')
-    : decodeURIComponent(pathname).replace(/^[/\\]+/, '');
+    : decodedPath.replace(/^[/\\]+/, '');
   const resolved = path.resolve(candidate.absolute, relative || 'index.html');
   const relation = path.relative(candidate.absolute, resolved);
-  if (!relation || (!relation.startsWith('..') && !path.isAbsolute(relation))) {
-    return fs.existsSync(resolved) && fs.statSync(resolved).isFile() ? resolved : null;
+  if (relation && (relation.startsWith('..') || path.isAbsolute(relation))) return null;
+  try {
+    const real = fs.realpathSync(resolved);
+    const realRelation = path.relative(candidate.absolute, real);
+    if (realRelation && (realRelation.startsWith('..') || path.isAbsolute(realRelation))) return null;
+    return fs.statSync(real).isFile() ? real : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function contentTypeFor(candidatePath) {

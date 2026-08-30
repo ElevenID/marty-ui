@@ -43,5 +43,6 @@ test('serves only candidate UI files and never intercepts APIs or escaped paths'
   assert.equal(candidateUiFileForRequest(candidate, '/realms/elevenid/protocol/openid-connect/auth', 'document'), null);
   assert.equal(candidateUiFileForRequest(candidate, '/resources/login/theme.css', 'stylesheet'), null);
   assert.equal(candidateUiFileForRequest(candidate, '/../secret', 'script'), null);
+  assert.equal(candidateUiFileForRequest(candidate, '/assets/%not-encoded', 'script'), null);
   assert.equal(contentTypeFor('font.woff2'), 'font/woff2');
 });
