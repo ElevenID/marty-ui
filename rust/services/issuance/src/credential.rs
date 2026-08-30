@@ -47,13 +47,23 @@ const JWT_VC_PAYLOAD_FORMATS: &[&str] = &[
 ];
 const MDOC_PAYLOAD_FORMATS: &[&str] = &["mso_mdoc", "mdoc"];
 const DATA_INTEGRITY_PAYLOAD_FORMATS: &[&str] = &["json_ld", "ldp_vc", "w3c_vcdm_v2_di"];
+const REDACTED_CREDENTIAL_DIAGNOSTIC: &str = "[REDACTED]";
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct CredentialRequest {
     pub proofs: Option<Map<String, Value>>,
     pub credential_configuration_id: Option<String>,
     pub credential_identifier: Option<String>,
     pub(crate) legacy_format: Option<String>,
+}
+
+impl std::fmt::Debug for CredentialRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialRequest")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -96,10 +106,19 @@ impl<'de> Deserialize<'de> for CredentialRequest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct CredentialResponse {
     pub credentials: Vec<Value>,
     pub notification_id: String,
+}
+
+impl std::fmt::Debug for CredentialResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialResponse")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
 }
 
 /// Transport-neutral result metadata for callers that must project a newly
@@ -107,11 +126,20 @@ pub struct CredentialResponse {
 /// stream. Replayed or concurrently recovered credentials intentionally have
 /// no `issued_credential`, matching the legacy adapter's one-event-per-commit
 /// behavior.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CredentialIssuanceOutcome {
     pub response: CredentialResponse,
     pub issued_credential: Option<IssuedCredential>,
     pub disposition: CredentialIssuanceDisposition,
+}
+
+impl std::fmt::Debug for CredentialIssuanceOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialIssuanceOutcome")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,7 +177,7 @@ impl TryFrom<&str> for CredentialTransactionStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CredentialTransaction {
     pub id: String,
     pub organization_id: String,
@@ -185,7 +213,16 @@ pub struct CredentialTransaction {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl std::fmt::Debug for CredentialTransaction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialTransaction")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CredentialAuthorizationSession {
     pub id: String,
     pub organization_id: String,
@@ -194,13 +231,31 @@ pub struct CredentialAuthorizationSession {
     pub dpop_jkt: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl std::fmt::Debug for CredentialAuthorizationSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialAuthorizationSession")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct ExistingCredential {
     pub id: String,
     pub credential: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl std::fmt::Debug for ExistingCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExistingCredential")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct IssuedCredential {
     pub id: String,
     pub transaction_id: String,
@@ -216,6 +271,15 @@ pub struct IssuedCredential {
     pub credential_hash: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for IssuedCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssuedCredential")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -245,10 +309,19 @@ impl std::fmt::Debug for IssuerContext {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct VerifiedCredentialProof {
     pub holder_did: String,
     pub holder_jwk: Option<Value>,
+}
+
+impl std::fmt::Debug for VerifiedCredentialProof {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VerifiedCredentialProof")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -259,7 +332,7 @@ pub enum CredentialBuilderKind {
     Mdoc,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CredentialBuildRequest {
     pub organization_id: String,
     pub kind: CredentialBuilderKind,
@@ -279,16 +352,43 @@ pub struct CredentialBuildRequest {
     pub status_list_entries: Vec<Value>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl std::fmt::Debug for CredentialBuildRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialBuildRequest")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct BuiltCredential {
     pub credential_id: String,
     pub credential: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+impl std::fmt::Debug for BuiltCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BuiltCredential")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
+}
+
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct AllocatedCredentialStatus {
     pub revocation_profile_id: Option<String>,
     pub entries: Vec<Value>,
+}
+
+impl std::fmt::Debug for AllocatedCredentialStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AllocatedCredentialStatus")
+            .field("contents", &REDACTED_CREDENTIAL_DIAGNOSTIC)
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -1245,12 +1345,15 @@ pub enum CredentialIssuanceError {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Map, Value};
 
     use super::{
         clean_claims, credential_configuration_id_for_format, format_policy,
-        reserved_credential_id, validate_audience, validate_selector, CredentialRequest,
-        CredentialTransaction, CredentialTransactionStatus,
+        reserved_credential_id, validate_audience, validate_selector, AllocatedCredentialStatus,
+        BuiltCredential, CredentialAuthorizationSession, CredentialBuildRequest,
+        CredentialBuilderKind, CredentialIssuanceDisposition, CredentialIssuanceOutcome,
+        CredentialRequest, CredentialResponse, CredentialTransaction, CredentialTransactionStatus,
+        ExistingCredential, IssuedCredential, IssuerContext, VerifiedCredentialProof,
     };
 
     fn transaction() -> CredentialTransaction {
@@ -1292,6 +1395,457 @@ mod tests {
             created_at: chrono::Utc::now(),
             expires_at: chrono::Utc::now() + chrono::Duration::days(7),
         }
+    }
+
+    #[test]
+    fn credential_pipeline_debug_output_is_stable_and_fully_redacted() {
+        fn canary_object(key: &str, value: &str) -> Value {
+            Value::Object(Map::from_iter([(
+                key.to_owned(),
+                Value::String(value.to_owned()),
+            )]))
+        }
+
+        fn assert_redacted<T: std::fmt::Debug>(value: &T, canaries: &[&str]) -> String {
+            let compact = format!("{value:?}");
+            let pretty = format!("{value:#?}");
+            assert!(pretty.contains("[REDACTED]"));
+            for canary in canaries {
+                assert!(
+                    !compact.contains(canary),
+                    "compact credential diagnostic exposed canary: {canary}"
+                );
+                assert!(
+                    !pretty.contains(canary),
+                    "pretty credential diagnostic exposed canary: {canary}"
+                );
+            }
+            compact
+        }
+
+        const PROOF_CANARIES: &[&str] = &[
+            "proof-holder-did-canary",
+            "proof-jwk-kty-canary",
+            "proof-jwk-crv-canary",
+            "proof-jwk-x-canary",
+            "proof-jwk-y-canary",
+            "proof-jwk-d-canary",
+            "proof-jwk-p-canary",
+            "proof-jwk-q-canary",
+            "proof-jwk-dp-canary",
+            "proof-jwk-dq-canary",
+            "proof-jwk-qi-canary",
+            "proof-jwk-oth-canary",
+            "proof-jwk-k-canary",
+        ];
+        let proof = VerifiedCredentialProof {
+            holder_did: PROOF_CANARIES[0].to_owned(),
+            holder_jwk: Some(json!({
+                "kty": PROOF_CANARIES[1],
+                "crv": PROOF_CANARIES[2],
+                "x": PROOF_CANARIES[3],
+                "y": PROOF_CANARIES[4],
+                "d": PROOF_CANARIES[5],
+                "p": PROOF_CANARIES[6],
+                "q": PROOF_CANARIES[7],
+                "dp": PROOF_CANARIES[8],
+                "dq": PROOF_CANARIES[9],
+                "qi": PROOF_CANARIES[10],
+                "oth": [{"r": PROOF_CANARIES[11]}],
+                "k": PROOF_CANARIES[12],
+            })),
+        };
+
+        const REQUEST_CANARIES: &[&str] = &[
+            "request-organization-canary",
+            "request-response-format-canary",
+            "request-remote-format-canary",
+            "request-credential-id-canary",
+            "request-credential-type-canary",
+            "request-achievement-id-canary",
+            "request-subject-did-canary",
+            "request-holder-jwk-kty-canary",
+            "request-holder-jwk-crv-canary",
+            "request-holder-jwk-x-canary",
+            "request-holder-jwk-y-canary",
+            "request-holder-jwk-d-canary",
+            "request-holder-jwk-p-canary",
+            "request-holder-jwk-q-canary",
+            "request-holder-jwk-dp-canary",
+            "request-holder-jwk-dq-canary",
+            "request-holder-jwk-qi-canary",
+            "request-holder-jwk-oth-canary",
+            "request-holder-jwk-k-canary",
+            "request-claim-name-canary",
+            "request-claim-value-canary",
+            "request-subject-name-canary",
+            "request-subject-value-canary",
+            "request-document-name-canary",
+            "request-document-value-canary",
+            "request-disclosure-name-canary",
+            "request-status-scalar-canary",
+            "request-issuer-profile-canary",
+            "request-issuer-did-canary",
+            "request-signing-service-canary",
+            "request-algorithm-canary",
+            "request-verification-method-canary",
+            "request-issuer-jwk-kty-canary",
+            "request-issuer-jwk-d-canary",
+            "request-certificate-leaf-canary",
+            "request-certificate-intermediate-canary",
+            "request-raw-context-name-canary",
+            "request-raw-context-value-canary",
+            "request-status-name-canary",
+            "request-status-value-canary",
+            "request-issuer-jwk-crv-canary",
+            "request-issuer-jwk-x-canary",
+            "request-issuer-jwk-y-canary",
+            "request-issuer-jwk-p-canary",
+            "request-issuer-jwk-q-canary",
+            "request-issuer-jwk-dp-canary",
+            "request-issuer-jwk-dq-canary",
+            "request-issuer-jwk-qi-canary",
+            "request-issuer-jwk-oth-canary",
+            "request-issuer-jwk-k-canary",
+        ];
+        let request = CredentialBuildRequest {
+            organization_id: REQUEST_CANARIES[0].to_owned(),
+            kind: CredentialBuilderKind::SdJwt,
+            response_format: REQUEST_CANARIES[1].to_owned(),
+            remote_credential_format: REQUEST_CANARIES[2].to_owned(),
+            credential_id: REQUEST_CANARIES[3].to_owned(),
+            credential_type: REQUEST_CANARIES[4].to_owned(),
+            achievement_id: Some(REQUEST_CANARIES[5].to_owned()),
+            subject_did: Some(REQUEST_CANARIES[6].to_owned()),
+            holder_jwk: Some(json!({
+                "kty": REQUEST_CANARIES[7],
+                "crv": REQUEST_CANARIES[8],
+                "x": REQUEST_CANARIES[9],
+                "y": REQUEST_CANARIES[10],
+                "d": REQUEST_CANARIES[11],
+                "p": REQUEST_CANARIES[12],
+                "q": REQUEST_CANARIES[13],
+                "dp": REQUEST_CANARIES[14],
+                "dq": REQUEST_CANARIES[15],
+                "qi": REQUEST_CANARIES[16],
+                "oth": [{"r": REQUEST_CANARIES[17]}],
+                "k": REQUEST_CANARIES[18],
+            })),
+            claims: Map::from_iter([(
+                REQUEST_CANARIES[19].to_owned(),
+                Value::String(REQUEST_CANARIES[20].to_owned()),
+            )]),
+            credential_subject: Some(canary_object(REQUEST_CANARIES[21], REQUEST_CANARIES[22])),
+            credential_document: Some(canary_object(REQUEST_CANARIES[23], REQUEST_CANARIES[24])),
+            selective_disclosure_claims: vec![REQUEST_CANARIES[25].to_owned()],
+            validity_seconds: 9_876_543_210,
+            issuer: IssuerContext {
+                issuer_profile_id: REQUEST_CANARIES[27].to_owned(),
+                issuer_did: REQUEST_CANARIES[28].to_owned(),
+                signing_service_id: REQUEST_CANARIES[29].to_owned(),
+                algorithm: REQUEST_CANARIES[30].to_owned(),
+                verification_method_id: Some(REQUEST_CANARIES[31].to_owned()),
+                public_jwk: Some(json!({
+                    "kty": REQUEST_CANARIES[32],
+                    "d": REQUEST_CANARIES[33],
+                    "crv": REQUEST_CANARIES[40],
+                    "x": REQUEST_CANARIES[41],
+                    "y": REQUEST_CANARIES[42],
+                    "p": REQUEST_CANARIES[43],
+                    "q": REQUEST_CANARIES[44],
+                    "dp": REQUEST_CANARIES[45],
+                    "dq": REQUEST_CANARIES[46],
+                    "qi": REQUEST_CANARIES[47],
+                    "oth": [{"r": REQUEST_CANARIES[48]}],
+                    "k": REQUEST_CANARIES[49],
+                })),
+                certificate_chain: vec![
+                    REQUEST_CANARIES[34].to_owned(),
+                    REQUEST_CANARIES[35].to_owned(),
+                ],
+                raw_context: canary_object(REQUEST_CANARIES[36], REQUEST_CANARIES[37]),
+            },
+            status_list_entries: vec![
+                canary_object(REQUEST_CANARIES[38], REQUEST_CANARIES[39]),
+                json!(REQUEST_CANARIES[26]),
+            ],
+        };
+
+        const BUILT_CANARIES: &[&str] = &[
+            "built-credential-id-canary",
+            "built-signed-header-canary",
+            "built-signed-payload-canary",
+            "built-signature-canary",
+            "built-disclosure-one-canary",
+            "built-disclosure-two-canary",
+        ];
+        let built = BuiltCredential {
+            credential_id: BUILT_CANARIES[0].to_owned(),
+            credential: format!(
+                "{}.{}.{}~{}~{}~",
+                BUILT_CANARIES[1],
+                BUILT_CANARIES[2],
+                BUILT_CANARIES[3],
+                BUILT_CANARIES[4],
+                BUILT_CANARIES[5]
+            ),
+        };
+
+        const TRANSPORT_CANARIES: &[&str] = &[
+            "request-proof-name-canary",
+            "request-proof-jwt-canary",
+            "request-configuration-id-canary",
+            "request-credential-identifier-canary",
+            "request-legacy-format-canary",
+            "response-credential-name-canary",
+            "response-signed-credential-canary",
+            "response-notification-id-canary",
+        ];
+        let credential_request = CredentialRequest {
+            proofs: Some(Map::from_iter([(
+                TRANSPORT_CANARIES[0].to_owned(),
+                json!([TRANSPORT_CANARIES[1]]),
+            )])),
+            credential_configuration_id: Some(TRANSPORT_CANARIES[2].to_owned()),
+            credential_identifier: Some(TRANSPORT_CANARIES[3].to_owned()),
+            legacy_format: Some(TRANSPORT_CANARIES[4].to_owned()),
+        };
+        let response = CredentialResponse {
+            credentials: vec![canary_object(TRANSPORT_CANARIES[5], TRANSPORT_CANARIES[6])],
+            notification_id: TRANSPORT_CANARIES[7].to_owned(),
+        };
+
+        const TRANSACTION_CANARIES: &[&str] = &[
+            "transaction-id-canary",
+            "transaction-organization-canary",
+            "transaction-template-canary",
+            "transaction-revocation-profile-canary",
+            "transaction-renewal-source-canary",
+            "transaction-applicant-canary",
+            "transaction-application-canary",
+            "transaction-subject-did-canary",
+            "transaction-idempotency-key-canary",
+            "transaction-idempotency-request-canary",
+            "transaction-pre-authorized-code-canary",
+            "transaction-nonce-canary",
+            "transaction-claim-name-canary",
+            "transaction-claim-value-canary",
+            "transaction-disclosure-canary",
+            "transaction-predicate-canary",
+            "transaction-wallet-config-canary",
+            "transaction-issuer-profile-canary",
+            "transaction-issuer-did-canary",
+            "transaction-signing-service-canary",
+            "transaction-reserved-credential-canary",
+            "transaction-client-canary",
+            "transaction-credential-type-canary",
+            "transaction-payload-format-canary",
+            "transaction-delivery-mode-canary",
+            "transaction-issuer-mode-canary",
+            "transaction-issuer-algorithm-canary",
+            "2031-02-03T04:05:06Z",
+            "2032-03-04T05:06:07Z",
+        ];
+        let mut diagnostic_transaction = transaction();
+        diagnostic_transaction.id = TRANSACTION_CANARIES[0].to_owned();
+        diagnostic_transaction.organization_id = TRANSACTION_CANARIES[1].to_owned();
+        diagnostic_transaction.credential_template_id = TRANSACTION_CANARIES[2].to_owned();
+        diagnostic_transaction.revocation_profile_id = Some(TRANSACTION_CANARIES[3].to_owned());
+        diagnostic_transaction.renewal_of_credential_id = Some(TRANSACTION_CANARIES[4].to_owned());
+        diagnostic_transaction.applicant_id = Some(TRANSACTION_CANARIES[5].to_owned());
+        diagnostic_transaction.application_id = Some(TRANSACTION_CANARIES[6].to_owned());
+        diagnostic_transaction.subject_did = Some(TRANSACTION_CANARIES[7].to_owned());
+        diagnostic_transaction.idempotency_key_hash = Some(TRANSACTION_CANARIES[8].to_owned());
+        diagnostic_transaction.idempotency_request_hash = Some(TRANSACTION_CANARIES[9].to_owned());
+        diagnostic_transaction.pre_authorized_code = TRANSACTION_CANARIES[10].to_owned();
+        diagnostic_transaction.nonce = Some(TRANSACTION_CANARIES[11].to_owned());
+        diagnostic_transaction.claims = Map::from_iter([(
+            TRANSACTION_CANARIES[12].to_owned(),
+            Value::String(TRANSACTION_CANARIES[13].to_owned()),
+        )]);
+        diagnostic_transaction.selective_disclosure_claims =
+            vec![TRANSACTION_CANARIES[14].to_owned()];
+        diagnostic_transaction.zk_predicate_claims = vec![TRANSACTION_CANARIES[15].to_owned()];
+        diagnostic_transaction.wallet_configs = vec![json!(TRANSACTION_CANARIES[16])];
+        diagnostic_transaction.issuer_profile_id = Some(TRANSACTION_CANARIES[17].to_owned());
+        diagnostic_transaction.issuer_did = Some(TRANSACTION_CANARIES[18].to_owned());
+        diagnostic_transaction.issuer_algorithm = Some(TRANSACTION_CANARIES[26].to_owned());
+        diagnostic_transaction.signing_service_id = Some(TRANSACTION_CANARIES[19].to_owned());
+        diagnostic_transaction.reserved_credential_id = Some(TRANSACTION_CANARIES[20].to_owned());
+        diagnostic_transaction.oid4vci_client_id = Some(TRANSACTION_CANARIES[21].to_owned());
+        diagnostic_transaction.credential_type = Some(TRANSACTION_CANARIES[22].to_owned());
+        diagnostic_transaction.credential_payload_format = TRANSACTION_CANARIES[23].to_owned();
+        diagnostic_transaction.delivery_mode = TRANSACTION_CANARIES[24].to_owned();
+        diagnostic_transaction.issuer_mode = TRANSACTION_CANARIES[25].to_owned();
+        diagnostic_transaction.created_at =
+            chrono::DateTime::parse_from_rfc3339(TRANSACTION_CANARIES[27])
+                .expect("transaction created-at canary")
+                .with_timezone(&chrono::Utc);
+        diagnostic_transaction.expires_at =
+            chrono::DateTime::parse_from_rfc3339(TRANSACTION_CANARIES[28])
+                .expect("transaction expiry canary")
+                .with_timezone(&chrono::Utc);
+
+        const PERSISTENCE_CANARIES: &[&str] = &[
+            "authorization-id-canary",
+            "authorization-organization-canary",
+            "authorization-issuer-state-canary",
+            "authorization-configuration-canary",
+            "authorization-dpop-canary",
+            "existing-credential-id-canary",
+            "existing-signed-credential-canary",
+            "issued-credential-id-canary",
+            "issued-transaction-id-canary",
+            "issued-organization-canary",
+            "issued-template-canary",
+            "issued-applicant-canary",
+            "issued-subject-did-canary",
+            "issued-issuer-did-canary",
+            "issued-revocation-profile-canary",
+            "issued-renewal-source-canary",
+            "issued-status-entry-canary",
+            "issued-signed-credential-canary",
+            "issued-credential-hash-canary",
+            "allocated-revocation-profile-canary",
+            "allocated-entry-canary",
+            "2033-04-05T06:07:08Z",
+            "2034-05-06T07:08:09Z",
+        ];
+        let authorization = CredentialAuthorizationSession {
+            id: PERSISTENCE_CANARIES[0].to_owned(),
+            organization_id: PERSISTENCE_CANARIES[1].to_owned(),
+            issuer_state: Some(PERSISTENCE_CANARIES[2].to_owned()),
+            credential_configuration_ids: vec![PERSISTENCE_CANARIES[3].to_owned()],
+            dpop_jkt: Some(PERSISTENCE_CANARIES[4].to_owned()),
+        };
+        let existing = ExistingCredential {
+            id: PERSISTENCE_CANARIES[5].to_owned(),
+            credential: PERSISTENCE_CANARIES[6].to_owned(),
+        };
+        let issued_at = chrono::DateTime::parse_from_rfc3339(PERSISTENCE_CANARIES[21])
+            .expect("issued-at canary")
+            .with_timezone(&chrono::Utc);
+        let expires_at = chrono::DateTime::parse_from_rfc3339(PERSISTENCE_CANARIES[22])
+            .expect("issued expiry canary")
+            .with_timezone(&chrono::Utc);
+        let issued = IssuedCredential {
+            id: PERSISTENCE_CANARIES[7].to_owned(),
+            transaction_id: PERSISTENCE_CANARIES[8].to_owned(),
+            organization_id: PERSISTENCE_CANARIES[9].to_owned(),
+            credential_template_id: PERSISTENCE_CANARIES[10].to_owned(),
+            applicant_id: Some(PERSISTENCE_CANARIES[11].to_owned()),
+            subject_did: Some(PERSISTENCE_CANARIES[12].to_owned()),
+            issuer_did: PERSISTENCE_CANARIES[13].to_owned(),
+            revocation_profile_id: Some(PERSISTENCE_CANARIES[14].to_owned()),
+            renewed_from_credential_id: Some(PERSISTENCE_CANARIES[15].to_owned()),
+            status_list_entries: vec![json!(PERSISTENCE_CANARIES[16])],
+            credential: PERSISTENCE_CANARIES[17].to_owned(),
+            credential_hash: PERSISTENCE_CANARIES[18].to_owned(),
+            issued_at,
+            expires_at,
+        };
+        let allocated = AllocatedCredentialStatus {
+            revocation_profile_id: Some(PERSISTENCE_CANARIES[19].to_owned()),
+            entries: vec![json!(PERSISTENCE_CANARIES[20])],
+        };
+        const OUTCOME_CANARIES: &[&str] = &[
+            "outcome-response-credential-name-canary",
+            "outcome-response-credential-value-canary",
+            "outcome-response-notification-canary",
+            "outcome-issued-id-canary",
+            "outcome-issued-transaction-canary",
+            "outcome-issued-organization-canary",
+            "outcome-issued-template-canary",
+            "outcome-issued-applicant-canary",
+            "outcome-issued-subject-canary",
+            "outcome-issued-issuer-canary",
+            "outcome-issued-revocation-profile-canary",
+            "outcome-issued-renewal-source-canary",
+            "outcome-issued-status-name-canary",
+            "outcome-issued-status-value-canary",
+            "outcome-issued-credential-canary",
+            "outcome-issued-hash-canary",
+            "2035-06-07T08:09:10Z",
+            "2036-07-08T09:10:11Z",
+        ];
+        let outcome = CredentialIssuanceOutcome {
+            response: CredentialResponse {
+                credentials: vec![canary_object(OUTCOME_CANARIES[0], OUTCOME_CANARIES[1])],
+                notification_id: OUTCOME_CANARIES[2].to_owned(),
+            },
+            issued_credential: Some(IssuedCredential {
+                id: OUTCOME_CANARIES[3].to_owned(),
+                transaction_id: OUTCOME_CANARIES[4].to_owned(),
+                organization_id: OUTCOME_CANARIES[5].to_owned(),
+                credential_template_id: OUTCOME_CANARIES[6].to_owned(),
+                applicant_id: Some(OUTCOME_CANARIES[7].to_owned()),
+                subject_did: Some(OUTCOME_CANARIES[8].to_owned()),
+                issuer_did: OUTCOME_CANARIES[9].to_owned(),
+                revocation_profile_id: Some(OUTCOME_CANARIES[10].to_owned()),
+                renewed_from_credential_id: Some(OUTCOME_CANARIES[11].to_owned()),
+                status_list_entries: vec![canary_object(
+                    OUTCOME_CANARIES[12],
+                    OUTCOME_CANARIES[13],
+                )],
+                credential: OUTCOME_CANARIES[14].to_owned(),
+                credential_hash: OUTCOME_CANARIES[15].to_owned(),
+                issued_at: chrono::DateTime::parse_from_rfc3339(OUTCOME_CANARIES[16])
+                    .expect("outcome issued-at canary")
+                    .with_timezone(&chrono::Utc),
+                expires_at: chrono::DateTime::parse_from_rfc3339(OUTCOME_CANARIES[17])
+                    .expect("outcome expiry canary")
+                    .with_timezone(&chrono::Utc),
+            }),
+            disposition: CredentialIssuanceDisposition::ConcurrentRecovery,
+        };
+
+        assert_eq!(
+            assert_redacted(&proof, PROOF_CANARIES),
+            "VerifiedCredentialProof { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&request, REQUEST_CANARIES),
+            "CredentialBuildRequest { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&built, BUILT_CANARIES),
+            "BuiltCredential { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&credential_request, &TRANSPORT_CANARIES[..5]),
+            "CredentialRequest { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&response, &TRANSPORT_CANARIES[5..]),
+            "CredentialResponse { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&diagnostic_transaction, TRANSACTION_CANARIES),
+            "CredentialTransaction { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&authorization, &PERSISTENCE_CANARIES[..5]),
+            "CredentialAuthorizationSession { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&existing, &PERSISTENCE_CANARIES[5..7]),
+            "ExistingCredential { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(
+                &issued,
+                &[&PERSISTENCE_CANARIES[7..19], &PERSISTENCE_CANARIES[21..23],].concat(),
+            ),
+            "IssuedCredential { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&allocated, &PERSISTENCE_CANARIES[19..21]),
+            "AllocatedCredentialStatus { contents: \"[REDACTED]\" }"
+        );
+        assert_eq!(
+            assert_redacted(&outcome, OUTCOME_CANARIES),
+            "CredentialIssuanceOutcome { contents: \"[REDACTED]\" }"
+        );
     }
 
     #[test]
