@@ -138,6 +138,8 @@ pub struct CredentialTransaction {
     pub applicant_id: Option<String>,
     pub application_id: Option<String>,
     pub subject_did: Option<String>,
+    pub idempotency_key_hash: Option<String>,
+    pub idempotency_request_hash: Option<String>,
     pub status: CredentialTransactionStatus,
     pub pre_authorized_code: String,
     pub nonce: Option<String>,
@@ -157,6 +159,9 @@ pub struct CredentialTransaction {
     pub issuer_algorithm: Option<String>,
     pub signing_service_id: Option<String>,
     pub reserved_credential_id: Option<String>,
+    pub oid4vci_client_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1147,6 +1152,8 @@ mod tests {
             applicant_id: None,
             application_id: None,
             subject_did: None,
+            idempotency_key_hash: None,
+            idempotency_request_hash: None,
             status: CredentialTransactionStatus::Authorized,
             pre_authorized_code: "pre-auth".to_owned(),
             nonce: Some("proof-nonce".to_owned()),
@@ -1170,6 +1177,9 @@ mod tests {
             issuer_algorithm: None,
             signing_service_id: None,
             reserved_credential_id: None,
+            oid4vci_client_id: None,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(7),
         }
     }
 

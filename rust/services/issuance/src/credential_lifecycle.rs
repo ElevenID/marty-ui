@@ -888,6 +888,8 @@ mod tests {
             applicant_id: None,
             application_id: None,
             subject_did: None,
+            idempotency_key_hash: None,
+            idempotency_request_hash: None,
             status: CredentialTransactionStatus::Signing,
             pre_authorized_code: "pre-auth".to_owned(),
             nonce: None,
@@ -907,6 +909,9 @@ mod tests {
             issuer_algorithm: Some("ES256".to_owned()),
             signing_service_id: Some("service".to_owned()),
             reserved_credential_id: None,
+            oid4vci_client_id: None,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(7),
         }
     }
 

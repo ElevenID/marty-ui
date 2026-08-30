@@ -902,6 +902,8 @@ mod tests {
             applicant_id: None,
             application_id: Some("application-1".to_owned()),
             subject_did: None,
+            idempotency_key_hash: None,
+            idempotency_request_hash: None,
             status: CredentialTransactionStatus::Authorized,
             pre_authorized_code: "pre-auth".to_owned(),
             nonce: Some("nonce".to_owned()),
@@ -921,6 +923,9 @@ mod tests {
             issuer_algorithm: Some("ES256".to_owned()),
             signing_service_id: Some("kms-service-1".to_owned()),
             reserved_credential_id: None,
+            oid4vci_client_id: None,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(7),
         }
     }
 

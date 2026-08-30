@@ -25,6 +25,7 @@ const CANVAS_OAUTH: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
+const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -47,6 +48,7 @@ struct Coverage {
     canvas_lti_behavior_contract: Upstream,
     canvas_oauth_behavior_contract: Upstream,
     credential_lifecycle_behavior_contract: Upstream,
+    initiation_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -636,6 +638,17 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid credential lifecycle provenance",
     )?;
     require(
+        coverage.initiation_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.initiation_behavior_contract.path == "contracts/issuance-initiation.json"
+            && coverage.initiation_behavior_contract.commit.len() == 40
+            && coverage
+                .initiation_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid initiation provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -717,6 +730,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         actual_credential_lifecycle == coverage.credential_lifecycle_behavior_contract.sha256,
         "credential lifecycle hash does not match provenance",
+    )?;
+    let canonical_initiation = canonical_lf(INITIATION);
+    let actual_initiation = format!("{:x}", Sha256::digest(&canonical_initiation));
+    require(
+        actual_initiation == coverage.initiation_behavior_contract.sha256,
+        "initiation hash does not match provenance",
     )?;
 
     let routes = surface["http"]["routes"]
@@ -1206,7 +1225,7 @@ mod tests {
 
     use super::{
         canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, COVERAGE,
-        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING,
+        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, INITIATION,
     };
 
     #[test]
@@ -1229,6 +1248,10 @@ mod tests {
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_LIFECYCLE))),
             coverage.credential_lifecycle_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(INITIATION))),
+            coverage.initiation_behavior_contract.sha256
         );
     }
 

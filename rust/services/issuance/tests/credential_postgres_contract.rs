@@ -5,7 +5,7 @@ use marty_issuance_service::canvas_issuance_guard::{
     CanvasGuardConfig, PostgresCanvasIssuanceGuard,
 };
 use marty_issuance_service::credential::{
-    CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
+    CredentialIssuanceError, CredentialLifecycle, CredentialRepository, CredentialTransaction,
     CredentialTransactionStatus, IssuedCredential, IssuerContext,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
@@ -14,6 +14,9 @@ use marty_issuance_service::credential_management::{
 };
 use marty_issuance_service::credential_management_postgres::PostgresCredentialManagementRepository;
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
+use marty_issuance_service::initiation::{
+    IdempotencyBinding, InitiationRepository, InitiationRepositoryError,
+};
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
@@ -452,6 +455,7 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     );
 
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
+    assert_initiation_idempotency_race(&repository).await;
     drop_contract_schema(&pool).await;
 }
 
@@ -575,6 +579,86 @@ async fn assert_authorization_only_race(
     );
 }
 
+async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepository) {
+    let now = Utc::now();
+    let key_hash = "a".repeat(64);
+    let request_hash = "b".repeat(64);
+    let transaction = CredentialTransaction {
+        id: Uuid::new_v4().to_string(),
+        organization_id: "org-initiation-race".to_owned(),
+        credential_template_id: "template-initiation".to_owned(),
+        revocation_profile_id: Some("profile-initiation".to_owned()),
+        renewal_of_credential_id: None,
+        applicant_id: Some("applicant-initiation".to_owned()),
+        application_id: Some("application-initiation".to_owned()),
+        subject_did: Some("did:key:initiation-holder".to_owned()),
+        idempotency_key_hash: Some(key_hash.clone()),
+        idempotency_request_hash: Some(request_hash.clone()),
+        status: CredentialTransactionStatus::Pending,
+        pre_authorized_code: format!("pre-auth-{}", Uuid::new_v4()),
+        nonce: None,
+        claims: serde_json::from_value(json!({"degree": "BSc"})).unwrap(),
+        credential_type: Some("OpenBadgeCredential".to_owned()),
+        selective_disclosure_claims: vec!["degree".to_owned()],
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+        wallet_configs: vec![json!({"wallet_id": "default"})],
+        validity_days: 365,
+        renewable: true,
+        renewal_window_days: 30,
+        delivery_mode: "wallet_only".to_owned(),
+        issuer_profile_id: Some("issuer-profile-initiation".to_owned()),
+        issuer_mode: "org_managed".to_owned(),
+        issuer_did: Some("did:web:issuer.example".to_owned()),
+        issuer_algorithm: Some("ES256".to_owned()),
+        signing_service_id: Some("kms-initiation".to_owned()),
+        reserved_credential_id: None,
+        oid4vci_client_id: Some("wallet-client-initiation".to_owned()),
+        created_at: now,
+        expires_at: now + Duration::days(7),
+    };
+    let mut retry = transaction.clone();
+    retry.id = Uuid::new_v4().to_string();
+    retry.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
+    let (first, second) = tokio::join!(
+        repository.reserve_idempotently(&transaction),
+        repository.reserve_idempotently(&retry)
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_ne!(first.created, second.created);
+    assert_eq!(first.transaction.id, second.transaction.id);
+    assert_eq!(first.transaction.created_at, second.transaction.created_at);
+    assert_eq!(first.transaction.expires_at, second.transaction.expires_at);
+    assert_eq!(
+        repository
+            .recover_idempotently(
+                &transaction.organization_id,
+                &IdempotencyBinding {
+                    key_hash: key_hash.clone(),
+                    request_hash: request_hash.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        first.transaction.id
+    );
+    assert_eq!(
+        repository
+            .recover_idempotently(
+                &transaction.organization_id,
+                &IdempotencyBinding {
+                    key_hash,
+                    request_hash: "c".repeat(64),
+                },
+            )
+            .await,
+        Err(InitiationRepositoryError::IdempotencyConflict)
+    );
+}
+
 async fn create_contract_schema(pool: &sqlx::PgPool) {
     sqlx::query("CREATE SCHEMA IF NOT EXISTS issuance_service")
         .execute(pool)
@@ -590,7 +674,8 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL DEFAULT '', revocation_profile_id TEXT,
             renewal_of_credential_id TEXT, applicant_id TEXT, application_id TEXT,
-            subject_did TEXT, status TEXT NOT NULL, pre_auth_code TEXT NOT NULL UNIQUE,
+            subject_did TEXT, idempotency_key_hash TEXT, idempotency_request_hash TEXT,
+            status TEXT NOT NULL, pre_auth_code TEXT NOT NULL UNIQUE,
             access_token TEXT, c_nonce TEXT, claims JSONB NOT NULL DEFAULT '{}'::jsonb,
             credential_type TEXT, selective_disclosure_claims JSONB DEFAULT '[]'::jsonb,
             zk_predicate_claims JSONB DEFAULT '[]'::jsonb,
@@ -601,9 +686,11 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             delivery_mode TEXT NOT NULL DEFAULT 'wallet_only',
             issuer_profile_id TEXT, issuer_mode TEXT NOT NULL DEFAULT 'org_managed',
             issuer_did_override TEXT, issuer_algorithm TEXT, signing_service_id TEXT,
-            reserved_credential_id TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            reserved_credential_id TEXT, oid4vci_client_id TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
             expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + interval '15 minutes',
-            issued_at TIMESTAMPTZ)",
+            issued_at TIMESTAMPTZ,
+            UNIQUE (organization_id, idempotency_key_hash))",
         "CREATE TABLE issuance_service.issued_credentials (
             id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL UNIQUE,
             organization_id TEXT NOT NULL, credential_template_id TEXT NOT NULL,

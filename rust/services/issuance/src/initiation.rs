@@ -1,7 +1,10 @@
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::credential::CredentialTransaction;
 
 const IDEMPOTENCY_KEY_PREFIX: &str = "marty:issuance-idempotency-key:v1:";
 const IDEMPOTENCY_REQUEST_PREFIX: &str = "marty:issuance-initiate-request:v1:";
@@ -99,6 +102,36 @@ impl InitiationRequest {
 pub struct IdempotencyBinding {
     pub key_hash: String,
     pub request_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InitiationReservation {
+    pub transaction: CredentialTransaction,
+    pub created: bool,
+}
+
+#[async_trait]
+pub trait InitiationRepository: Send + Sync {
+    async fn recover_idempotently(
+        &self,
+        organization_id: &str,
+        binding: &IdempotencyBinding,
+    ) -> Result<Option<CredentialTransaction>, InitiationRepositoryError>;
+
+    async fn reserve_idempotently(
+        &self,
+        transaction: &CredentialTransaction,
+    ) -> Result<InitiationReservation, InitiationRepositoryError>;
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum InitiationRepositoryError {
+    #[error("idempotency key was already used for a different issuance request")]
+    IdempotencyConflict,
+    #[error("issuance transaction contains an incomplete idempotency binding")]
+    IncompleteIdempotencyBinding,
+    #[error("issuance initiation repository is unavailable")]
+    Unavailable,
 }
 
 pub fn idempotency_binding(

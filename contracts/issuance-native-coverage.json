@@ -66,6 +66,12 @@
     "commit": "335c8566af4c873a30f960635db2624723008ae3",
     "sha256": "e09562e441542aaac6fad77b9c7b003b5cdbeded248ec1e0cfdebbc335efcb3d"
   },
+  "initiation_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-initiation.json",
+    "commit": "4b6ab986f65a9300c1755fde0c8d377eab89057f",
+    "sha256": "4895c90c2b0185edb6de60cab94e89c9d3416505a4dde1b0ea94b191602ab262"
+  },
   "native_http": [
     {
       "method": "GET",
