@@ -13,6 +13,7 @@ use serde_json::{json, Map, Value};
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
+    pub grpc_enabled: bool,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -66,6 +67,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .debug_struct("IssuanceServiceConfig")
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
+            .field("grpc_enabled", &self.grpc_enabled)
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
@@ -210,6 +212,7 @@ struct ServerSettings {
     host: IpAddr,
     port: u16,
     grpc_port: u16,
+    grpc_enabled: bool,
     cors_allowed_origins: Vec<String>,
 }
 
@@ -273,12 +276,6 @@ impl IssuanceServiceConfig {
                 "INTEGRATION_SECRET_MASTER_KEY or INTEGRATION_SECRET_MASTER_KEY_FILE is required",
             ));
         }
-        if config.internal_service_token.is_none() {
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "GRPC_SERVICE_TOKEN or GRPC_SERVICE_TOKEN_FILE is required",
-            ));
-        }
         validate_production_grpc_service_token(
             config.internal_service_token.as_deref(),
             &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_owned()),
@@ -297,6 +294,7 @@ impl IssuanceServiceConfig {
                     "host": "0.0.0.0",
                     "port": 8005,
                     "grpc_port": 9005,
+                    "grpc_enabled": true,
                     "cors_allowed_origins": ["http://localhost:3000"]
                 },
                 "build": {
@@ -488,6 +486,7 @@ impl IssuanceServiceConfig {
         Ok(Self {
             http_addr,
             grpc_addr,
+            grpc_enabled: settings.server.grpc_enabled,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
@@ -560,6 +559,12 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             .with_detail("cause", error.to_string())
         })?;
         server.insert("grpc_port".to_owned(), json!(parsed));
+    }
+    if values.contains_key("ISSUANCE_GRPC_ENABLED") {
+        server.insert(
+            "grpc_enabled".to_owned(),
+            json!(environment_flag(values, "ISSUANCE_GRPC_ENABLED")),
+        );
     }
     if let Some(origins) = values.get("CORS_ALLOWED_ORIGINS") {
         server.insert(
@@ -1041,6 +1046,7 @@ mod tests {
             .expect("defaults");
         assert_eq!(config.http_addr.to_string(), "0.0.0.0:8005");
         assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9005");
+        assert!(config.grpc_enabled);
         assert_eq!(config.release_version, "0.1.0");
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.issuer_base_url, "https://beta.elevenidllc.com");
@@ -1122,11 +1128,13 @@ mod tests {
         let config = IssuanceServiceConfig::from_values(values(&[
             ("ISSUANCE_SERVICE_PORT", "8006"),
             ("ISSUANCE_GRPC_PORT", "9006"),
+            ("ISSUANCE_GRPC_ENABLED", "false"),
             ("MARTY_RELEASE_VERSION", "1.2.3"),
             ("MARTY_UI_SHA", "abc123"),
             ("MARTY_ISSUANCE__SERVER__HOST", "127.0.0.1"),
             ("MARTY_ISSUANCE__SERVER__PORT", "8010"),
             ("MARTY_ISSUANCE__SERVER__GRPC_PORT", "9010"),
+            ("MARTY_ISSUANCE__SERVER__GRPC_ENABLED", "true"),
             ("ISSUER_BASE_URL", "https://legacy.example/"),
             ("ISSUER_DISPLAY_NAME", "Legacy Issuer"),
             (
@@ -1182,6 +1190,7 @@ mod tests {
         .expect("configuration");
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8010");
         assert_eq!(config.grpc_addr.to_string(), "127.0.0.1:9010");
+        assert!(config.grpc_enabled);
         assert_eq!(config.release_version, "1.2.3");
         assert_eq!(config.build_revision, "abc123");
         assert_eq!(config.issuer_base_url, "https://issuer.example");
@@ -1261,6 +1270,22 @@ mod tests {
             let error = IssuanceServiceConfig::from_values(values(&[(name, "not-a-port")]))
                 .expect_err("invalid port");
             assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn legacy_grpc_listener_switch_preserves_python_boolean_semantics() {
+        for disabled in ["false", "0", "no", "unexpected"] {
+            let config =
+                IssuanceServiceConfig::from_values(values(&[("ISSUANCE_GRPC_ENABLED", disabled)]))
+                    .expect("disabled gRPC listener");
+            assert!(!config.grpc_enabled, "{disabled}");
+        }
+        for enabled in ["true", "1", "yes", "TRUE"] {
+            let config =
+                IssuanceServiceConfig::from_values(values(&[("ISSUANCE_GRPC_ENABLED", enabled)]))
+                    .expect("enabled gRPC listener");
+            assert!(config.grpc_enabled, "{enabled}");
         }
     }
 

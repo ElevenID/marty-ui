@@ -1157,6 +1157,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "DATABASE_URL",
                 "GRPC_SERVICE_TOKEN",
                 "INTEGRATION_SECRET_MASTER_KEY_ENV",
+                "ISSUANCE_GRPC_ENABLED",
                 "ISSUANCE_GRPC_PORT",
                 "ISSUANCE_SERVICE_PORT",
                 "ISSUANCE_API_KEY",

@@ -22,14 +22,13 @@ impl Drop for ChildGuard {
     }
 }
 
-#[tokio::test]
-async fn executable_serves_health_readiness_and_version() {
+fn reserve_port() -> (TcpListener, u16) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve port");
-    let port = listener.local_addr().expect("address").port();
-    drop(listener);
-    let grpc_listener = TcpListener::bind("127.0.0.1:0").expect("reserve gRPC port");
-    let grpc_port = grpc_listener.local_addr().expect("gRPC address").port();
-    drop(grpc_listener);
+    let port = listener.local_addr().expect("reserved address").port();
+    (listener, port)
+}
+
+fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_marty-issuance-service"));
     for (name, _) in std::env::vars().filter(|(name, _)| {
         name.starts_with("MARTY_ISSUANCE__")
@@ -37,6 +36,7 @@ async fn executable_serves_health_readiness_and_version() {
                 name.as_str(),
                 "ISSUANCE_SERVICE_PORT"
                     | "ISSUANCE_GRPC_PORT"
+                    | "ISSUANCE_GRPC_ENABLED"
                     | "GRPC_SERVICE_TOKEN"
                     | "GRPC_SERVICE_TOKEN_FILE"
                     | "INTEGRATION_SECRET_MASTER_KEY"
@@ -51,45 +51,63 @@ async fn executable_serves_health_readiness_and_version() {
     }) {
         command.env_remove(name);
     }
+    command
+        .env("ENVIRONMENT", "development")
+        .env("MARTY_ISSUANCE__SERVER__HOST", "127.0.0.1")
+        .env("MARTY_ISSUANCE__SERVER__PORT", http_port.to_string())
+        .env("MARTY_ISSUANCE__SERVER__GRPC_PORT", grpc_port.to_string())
+        .env(
+            "TOKEN_HMAC_KEY",
+            format!("executable-smoke-{}", uuid::Uuid::new_v4()),
+        )
+        .env(
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        )
+        .env("MARTY_RELEASE_VERSION", "9.8.7")
+        .env("MARTY_UI_SHA", "smoke-revision")
+        .env("ISSUER_BASE_URL", "https://issuer.example")
+        .env("ISSUER_DISPLAY_NAME", "Example Issuer")
+        .env("CORS_ALLOWED_ORIGINS", "https://wallet.example");
+    command
+}
+
+async fn wait_for_health(port: u16) -> Option<Value> {
+    let client = reqwest::Client::new();
+    for _ in 0..50 {
+        if let Ok(response) = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                return response.json::<Value>().await.ok();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    None
+}
+
+#[tokio::test]
+async fn executable_serves_health_readiness_and_version() {
+    let (listener, port) = reserve_port();
+    drop(listener);
+    let (grpc_listener, grpc_port) = reserve_port();
+    drop(grpc_listener);
+    let mut command = smoke_command(port, grpc_port);
     let _child = ChildGuard(
         command
-            .env("MARTY_ISSUANCE__SERVER__HOST", "127.0.0.1")
-            .env("MARTY_ISSUANCE__SERVER__PORT", port.to_string())
-            .env("MARTY_ISSUANCE__SERVER__GRPC_PORT", grpc_port.to_string())
             .env(
                 "GRPC_SERVICE_TOKEN",
                 "executable-smoke-service-token-at-least-32-bytes",
             )
-            .env(
-                "TOKEN_HMAC_KEY",
-                format!("executable-smoke-{}", uuid::Uuid::new_v4()),
-            )
-            .env(
-                "INTEGRATION_SECRET_MASTER_KEY",
-                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-            )
-            .env("MARTY_RELEASE_VERSION", "9.8.7")
-            .env("MARTY_UI_SHA", "smoke-revision")
-            .env("ISSUER_BASE_URL", "https://issuer.example")
-            .env("ISSUER_DISPLAY_NAME", "Example Issuer")
-            .env("CORS_ALLOWED_ORIGINS", "https://wallet.example")
             .spawn()
             .expect("start issuance candidate"),
     );
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{port}");
-    let health = async {
-        for _ in 0..50 {
-            if let Ok(response) = client.get(format!("{base}/health")).send().await {
-                if response.status().is_success() {
-                    return response.json::<Value>().await.ok();
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        None
-    }
-    .await;
+    let health = wait_for_health(port).await;
     let ready = client
         .get(format!("{base}/ready"))
         .send()
@@ -195,4 +213,24 @@ async fn executable_serves_health_readiness_and_version() {
         "https://issuer.example"
     );
     assert_eq!(issuer_metadata["display"][0]["name"], "Example Issuer");
+}
+
+#[tokio::test]
+async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
+    let (http_listener, http_port) = reserve_port();
+    drop(http_listener);
+    let (grpc_reservation, grpc_port) = reserve_port();
+    let mut command = smoke_command(http_port, grpc_port);
+    let _child = ChildGuard(
+        command
+            .env("ISSUANCE_GRPC_ENABLED", "false")
+            .spawn()
+            .expect("start HTTP-only issuance candidate"),
+    );
+
+    assert_eq!(
+        wait_for_health(http_port).await,
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+    drop(grpc_reservation);
 }

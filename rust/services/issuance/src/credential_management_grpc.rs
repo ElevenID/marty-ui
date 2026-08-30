@@ -170,10 +170,11 @@ impl CredentialManagementGrpcService {
     }
 
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
-        let expected = self
-            .service_token
-            .as_deref()
-            .ok_or_else(|| Status::internal("gRPC service token is not configured"))?;
+        let Some(expected) = self.service_token.as_deref() else {
+            // Production configuration rejects a missing token. Preserve the
+            // Python adapter's open local/test server when no token is set.
+            return Ok(());
+        };
         let supplied = request
             .metadata()
             .get(SERVICE_TOKEN_HEADER)
@@ -1323,6 +1324,19 @@ mod tests {
         assert_eq!(event.credential_template_id, "template-a");
         assert_eq!(event.status, "suspended");
         assert!(event.timestamp.ends_with("+00:00"));
+    }
+
+    #[tokio::test]
+    async fn missing_token_preserves_the_legacy_open_development_server() {
+        let (mut service, calls) = candidate();
+        service.service_token = None;
+        let response = service
+            .health_check(Request::new(HealthCheckRequest {}))
+            .await
+            .expect("development health")
+            .into_inner();
+        assert_eq!(response.status, "serving");
+        assert!(calls.lock().expect("calls").is_empty());
     }
 
     #[tokio::test]

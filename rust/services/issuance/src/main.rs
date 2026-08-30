@@ -423,8 +423,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let http_listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_http_listener_healthy()?;
-    let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
-    runtime.mark_grpc_listener_healthy()?;
+    let grpc_enabled = config.grpc_enabled;
+    let grpc_listener = if grpc_enabled {
+        let listener = TcpListener::bind(config.grpc_addr).await?;
+        runtime.mark_grpc_listener_healthy()?;
+        Some(listener)
+    } else {
+        None
+    };
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
     let app = router_with_all_services(
         runtime.state(),
@@ -473,19 +479,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = Server::builder()
-        .add_service(health_service)
-        .add_service(grpc_server)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
+    let grpc = async move {
+        let Some(grpc_listener) = grpc_listener else {
             wait_for_shutdown(&mut grpc_shutdown).await;
-        });
+            return Ok(());
+        };
+        Server::builder()
+            .add_service(health_service)
+            .add_service(grpc_server)
+            .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
+                wait_for_shutdown(&mut grpc_shutdown).await;
+            })
+            .await
+    };
     runtime.activate()?;
-    health_reporter
-        .set_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
-        .await;
+    if grpc_enabled {
+        health_reporter
+            .set_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
+            .await;
+    }
     info!(
         http_address = %config.http_addr,
         grpc_address = %config.grpc_addr,
+        grpc_enabled,
         release_version = %config.release_version,
         build_revision = %config.build_revision,
         "native Rust issuance service active"
@@ -510,17 +526,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         () = shutdown_signal() => {
             info!("Issuance shutdown requested");
             runtime.drain()?;
-            health_reporter
-                .set_not_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
-                .await;
+            if grpc_enabled {
+                health_reporter
+                    .set_not_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
+                    .await;
+            }
             let _ = listener_shutdown_tx.send(true);
             (servers.await, true)
         }
     };
     let _ = listener_shutdown_tx.send(true);
-    health_reporter
-        .set_not_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
-        .await;
+    if grpc_enabled {
+        health_reporter
+            .set_not_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
+            .await;
+    }
     if !already_draining {
         runtime.drain()?;
     }
