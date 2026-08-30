@@ -705,6 +705,7 @@ jobs:
           FLOW_WEBHOOK_SECRET: ci-only-flow-webhook-secret-32-characters
           FLOW_APPLICATION_EVENT_HMAC_KEY: ci-only-flow-application-event-key-32-chars
           TOKEN_HMAC_KEY: ci-only-token-hmac-key-with-at-least-32-characters
+          INTEGRATION_SECRET_MASTER_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
           MARTY_DB_PASSWORD: ci-only-database-password
           CORS_ORIGINS: https://beta.example.test
           REDIS_PASSWORD: ci-only-redis-password
