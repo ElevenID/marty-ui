@@ -1043,6 +1043,7 @@ jobs:
           container="$(docker run --detach \
             --env ENVIRONMENT=test \
             --env TOKEN_HMAC_KEY=ci-only-token-hmac-key \
+            --env INTEGRATION_SECRET_MASTER_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8= \
             --env DATABASE_URL=postgresql://marty:test@127.0.0.1:5432/unused \
             --publish 127.0.0.1::8005 \
             marty-issuance:ci)"
