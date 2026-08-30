@@ -13,6 +13,10 @@ use crate::credential::{
     AllocatedCredentialStatus, CredentialIssuanceError, CredentialLifecycle, CredentialTransaction,
     IssuedCredential, IssuerContext,
 };
+use crate::credential_management::{
+    CredentialLifecycleAction, CredentialManagementPortError, CredentialStatusPublisher,
+    ManagedCredential,
+};
 
 #[derive(Clone)]
 pub struct HttpCredentialStatusAllocator {
@@ -128,13 +132,14 @@ impl HttpCredentialStatusAllocator {
         endpoint
     }
 
-    async fn revoke_credential(
+    async fn publish_lifecycle_status(
         &self,
         organization_id: &str,
         credential_id: &str,
         profile_id: &str,
         entries: &[Value],
-        reason: &str,
+        action: CredentialLifecycleAction,
+        reason: Option<&str>,
     ) -> Result<(), CredentialIssuanceError> {
         let entry = entries
             .iter()
@@ -188,7 +193,7 @@ impl HttpCredentialStatusAllocator {
             "organization_id": organization_id,
             "credential_id": credential_id,
             "index": index,
-            "status": "revoked",
+            "status": action.event_type(),
             "credential_format": credential_format,
             "reason": reason,
         }));
@@ -220,6 +225,37 @@ impl HttpCredentialStatusAllocator {
             ));
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl CredentialStatusPublisher for HttpCredentialStatusAllocator {
+    async fn publish(
+        &self,
+        credential: &ManagedCredential,
+        action: CredentialLifecycleAction,
+        reason: Option<&str>,
+    ) -> Result<(), CredentialManagementPortError> {
+        let profile_id = credential
+            .revocation_profile_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CredentialManagementPortError(
+                    "Credential has no active credential-status profile binding".to_owned(),
+                )
+            })?;
+        self.publish_lifecycle_status(
+            &credential.organization_id,
+            &credential.id,
+            profile_id,
+            &credential.status_list_entries,
+            action,
+            reason,
+        )
+        .await
+        .map_err(|error| CredentialManagementPortError(error.to_string()))
     }
 }
 
@@ -401,7 +437,14 @@ impl PostgresCredentialLifecycle {
         })?;
         const REASON: &str = "Superseded by renewed credential";
         self.status
-            .revoke_credential(&source_organization, source_id, profile_id, entries, REASON)
+            .publish_lifecycle_status(
+                &source_organization,
+                source_id,
+                profile_id,
+                entries,
+                CredentialLifecycleAction::Revoke,
+                Some(REASON),
+            )
             .await?;
 
         let mut database = self.pool.begin().await.map_err(database_error)?;
@@ -967,12 +1010,13 @@ mod tests {
         })];
 
         allocator
-            .revoke_credential(
+            .publish_lifecycle_status(
                 "org-a",
                 "credential-old",
                 "profile-a",
                 &entries,
-                "Superseded by renewed credential",
+                CredentialLifecycleAction::Revoke,
+                Some("Superseded by renewed credential"),
             )
             .await
             .expect("revocation");
@@ -993,12 +1037,13 @@ mod tests {
     async fn renewal_revocation_rejects_a_status_entry_from_another_profile() {
         let (allocator, capture, server) = allocator().await;
         let error = allocator
-            .revoke_credential(
+            .publish_lifecycle_status(
                 "org-a",
                 "credential-old",
                 "profile-a",
                 &[json!({"status_list_id":"profile-b","index":19})],
-                "Superseded by renewed credential",
+                CredentialLifecycleAction::Revoke,
+                Some("Superseded by renewed credential"),
             )
             .await
             .expect_err("profile mismatch");
@@ -1008,6 +1053,54 @@ mod tests {
             CredentialIssuanceError::LifecycleUnavailable(_)
         ));
         assert!(capture.0.lock().await.is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn management_publication_preserves_actions_and_nullable_reasons() {
+        let (allocator, capture, server) = allocator().await;
+        let credential = ManagedCredential {
+            id: "credential-a".to_owned(),
+            organization_id: "org-a".to_owned(),
+            credential_template_id: "template-a".to_owned(),
+            issuer_did: "did:web:issuer.example".to_owned(),
+            status: crate::credential_management::ManagedCredentialStatus::Active,
+            status_updated_at: Utc::now(),
+            revoked: false,
+            revoked_at: None,
+            revocation_reason: None,
+            revocation_profile_id: Some("profile-a".to_owned()),
+            status_list_entries: vec![json!({
+                "status_list_id": "profile-a",
+                "index": 19,
+                "type": "BitstringStatusListEntry",
+                "status_purpose": "revocation"
+            })],
+        };
+
+        for (action, expected_status, reason) in [
+            (
+                CredentialLifecycleAction::Revoke,
+                "revoked",
+                Some("retired"),
+            ),
+            (CredentialLifecycleAction::Suspend, "suspended", None),
+            (
+                CredentialLifecycleAction::Reinstate,
+                "reinstated",
+                Some("restored"),
+            ),
+        ] {
+            CredentialStatusPublisher::publish(&allocator, &credential, action, reason)
+                .await
+                .expect("publication");
+            let (_, _, body) = capture.0.lock().await.take().expect("captured request");
+            assert_eq!(body["status"], expected_status);
+            assert_eq!(
+                body["reason"],
+                reason.map_or(Value::Null, |value| json!(value))
+            );
+        }
         server.abort();
     }
 }
