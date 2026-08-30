@@ -46,6 +46,7 @@ pub mod ephemeral_postgres;
 pub mod http;
 pub mod initiation;
 pub mod initiation_dependencies;
+pub mod initiation_http;
 pub mod initiation_response;
 pub mod integration_secret;
 pub mod management_security;
