@@ -870,7 +870,7 @@ fn default_request_format(payload_format: &str) -> String {
     .to_owned()
 }
 
-fn credential_configuration_id_for_format(base: &str, variant: &str) -> String {
+pub(crate) fn credential_configuration_id_for_format(base: &str, variant: &str) -> String {
     let normalized = normalize_format(variant);
     if MDOC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
         format!("{base}#mdoc")
