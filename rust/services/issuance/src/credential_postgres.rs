@@ -14,10 +14,14 @@ use crate::{
         CredentialAuthorizationSession, CredentialIssuanceError, CredentialRepository,
         CredentialTransaction, CredentialTransactionStatus, ExistingCredential, IssuedCredential,
     },
+    credential_lifecycle::delivery_record_id,
     initiation::{
         IdempotencyBinding, InitiationRepository, InitiationRepositoryError, InitiationReservation,
     },
-    initiation_didcomm::{InitiationDidcommClaim, InitiationDidcommRepository},
+    initiation_didcomm::{
+        InitiationDidcommClaim, InitiationDidcommRepository, PendingInitiationDidcommDelivery,
+        StagedInitiationDidcommDelivery,
+    },
     token_postgres::hash_access_token,
 };
 
@@ -309,45 +313,8 @@ impl CredentialRepository for PostgresCredentialRepository {
         transaction: &CredentialTransaction,
         credential: &IssuedCredential,
     ) -> Result<(), CredentialIssuanceError> {
-        validate_finalization_input(transaction, credential)?;
         let mut database = self.pool.begin().await.map_err(repository_error)?;
-        let authoritative = sqlx::query(
-            "SELECT organization_id, credential_template_id, application_id, status,
-                    reserved_credential_id
-             FROM issuance_service.issuance_transactions WHERE id = $1 FOR UPDATE",
-        )
-        .bind(&transaction.id)
-        .fetch_optional(&mut *database)
-        .await
-        .map_err(repository_error)?
-        .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
-        validate_authoritative_finalization(&authoritative, credential)?;
-        if credential_exists(&mut database, &transaction.id).await? {
-            return Err(CredentialIssuanceError::RepositoryUnavailable);
-        }
-        let canvas = prepare_canvas_projection(
-            &mut database,
-            get::<Option<String>>(&authoritative, "application_id")?.as_deref(),
-            &credential.organization_id,
-            &credential.id,
-        )
-        .await?;
-        insert_credential(&mut database, credential).await?;
-        apply_canvas_projection(&mut database, canvas.as_ref(), credential).await?;
-        let finalized = sqlx::query(
-            "UPDATE issuance_service.issuance_transactions
-             SET status = 'issued', c_nonce = NULL, issued_at = $3
-             WHERE id = $1 AND status = 'signing' AND reserved_credential_id = $2",
-        )
-        .bind(&transaction.id)
-        .bind(&credential.id)
-        .bind(credential.issued_at)
-        .execute(&mut *database)
-        .await
-        .map_err(repository_error)?;
-        if finalized.rows_affected() != 1 {
-            return Err(CredentialIssuanceError::RepositoryUnavailable);
-        }
+        finalize_credential(&mut database, transaction, credential).await?;
         database.commit().await.map_err(repository_error)
     }
 
@@ -370,6 +337,84 @@ impl CredentialRepository for PostgresCredentialRepository {
 
 #[async_trait]
 impl InitiationDidcommRepository for PostgresCredentialRepository {
+    async fn pending_delivery(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError> {
+        let Some(transaction) = self.transaction_by_id(transaction_id).await? else {
+            return Ok(None);
+        };
+        if transaction.organization_id != organization_id
+            || transaction.status != CredentialTransactionStatus::Issued
+        {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            "SELECT credential.id, credential.transaction_id, credential.organization_id,
+                    credential.credential_template_id, credential.applicant_id,
+                    credential.subject_did, credential.issuer_did,
+                    credential.revocation_profile_id, credential.renewed_from_credential_id,
+                    credential.status_list_entries, credential.credential_jwt,
+                    credential.credential_hash, credential.issued_at, credential.expires_at,
+                    delivery.status AS delivery_status, delivery.metadata
+             FROM issuance_service.issued_credentials AS credential
+             JOIN issuance_service.credential_delivery_records AS delivery
+               ON delivery.credential_id = credential.id
+              AND delivery.transaction_id = credential.transaction_id
+              AND delivery.organization_id = credential.organization_id
+             WHERE credential.transaction_id = $1
+               AND credential.organization_id = $2
+               AND delivery.delivery_target = 'didcomm_v2'
+               AND delivery.status IN ('pending', 'failed', 'transported')",
+        )
+        .bind(transaction_id)
+        .bind(organization_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let metadata = get::<Value>(&row, "metadata")?;
+        let metadata_text = |name: &str| {
+            metadata
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or(CredentialIssuanceError::RepositoryUnavailable)
+        };
+        let delivery_status = get::<String>(&row, "delivery_status")?;
+        Ok(Some(PendingInitiationDidcommDelivery {
+            transaction,
+            credential: IssuedCredential {
+                id: get(&row, "id")?,
+                transaction_id: get(&row, "transaction_id")?,
+                organization_id: get(&row, "organization_id")?,
+                credential_template_id: get(&row, "credential_template_id")?,
+                applicant_id: get(&row, "applicant_id")?,
+                subject_did: get(&row, "subject_did")?,
+                issuer_did: get(&row, "issuer_did")?,
+                revocation_profile_id: get(&row, "revocation_profile_id")?,
+                renewed_from_credential_id: get(&row, "renewed_from_credential_id")?,
+                status_list_entries: json_vec(&row, "status_list_entries")?,
+                credential: get(&row, "credential_jwt")?,
+                credential_hash: get(&row, "credential_hash")?,
+                issued_at: get(&row, "issued_at")?,
+                expires_at: get(&row, "expires_at")?,
+            },
+            delivery: StagedInitiationDidcommDelivery {
+                holder_did: metadata_text("holder_did")?,
+                service_endpoint: metadata_text("service_endpoint")?,
+                message_id: metadata_text("didcomm_message_id")?,
+                encrypted_message: metadata_text("encrypted_message")?,
+            },
+            transported: delivery_status == "transported",
+        }))
+    }
+
     async fn transaction_for_delivery(
         &self,
         organization_id: &str,
@@ -448,6 +493,64 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         credential: &IssuedCredential,
     ) -> Result<(), CredentialIssuanceError> {
         CredentialRepository::finalize(self, transaction, credential).await
+    }
+
+    async fn stage_delivery(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        delivery: &StagedInitiationDidcommDelivery,
+    ) -> Result<(), CredentialIssuanceError> {
+        let mut database = self.pool.begin().await.map_err(repository_error)?;
+        finalize_credential(&mut database, transaction, credential).await?;
+        sqlx::query(
+            "INSERT INTO issuance_service.credential_delivery_records
+                 (id, credential_id, transaction_id, organization_id, delivery_target,
+                  delivery_mode, status, canvas_account_id, last_error, metadata,
+                  created_at, updated_at)
+             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, 'pending', NULL, NULL, $6,
+                     clock_timestamp(), clock_timestamp())",
+        )
+        .bind(delivery_record_id(&credential.id, "didcomm_v2", None))
+        .bind(&credential.id)
+        .bind(&transaction.id)
+        .bind(&transaction.organization_id)
+        .bind(&transaction.delivery_mode)
+        .bind(json!({
+            "protocol": "didcomm_v2",
+            "holder_did": delivery.holder_did,
+            "service_endpoint": delivery.service_endpoint,
+            "didcomm_message_id": delivery.message_id,
+            "encrypted_message": delivery.encrypted_message,
+        }))
+        .execute(&mut *database)
+        .await
+        .map_err(repository_error)?;
+        database.commit().await.map_err(repository_error)
+    }
+
+    async fn mark_transport_delivered(
+        &self,
+        transaction_id: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        update_didcomm_delivery_status(&self.pool, transaction_id, message_id, "transported", None)
+            .await
+    }
+
+    async fn mark_transport_failed(
+        &self,
+        transaction_id: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        update_didcomm_delivery_status(
+            &self.pool,
+            transaction_id,
+            message_id,
+            "failed",
+            Some("didcomm_delivery_failed"),
+        )
+        .await
     }
 }
 
@@ -681,6 +784,52 @@ fn validate_finalization_input(
     Ok(())
 }
 
+async fn finalize_credential(
+    database: &mut Transaction<'_, Postgres>,
+    transaction: &CredentialTransaction,
+    credential: &IssuedCredential,
+) -> Result<(), CredentialIssuanceError> {
+    validate_finalization_input(transaction, credential)?;
+    let authoritative = sqlx::query(
+        "SELECT organization_id, credential_template_id, application_id, status,
+                reserved_credential_id
+         FROM issuance_service.issuance_transactions WHERE id = $1 FOR UPDATE",
+    )
+    .bind(&transaction.id)
+    .fetch_optional(&mut **database)
+    .await
+    .map_err(repository_error)?
+    .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+    validate_authoritative_finalization(&authoritative, credential)?;
+    if credential_exists(database, &transaction.id).await? {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    let canvas = prepare_canvas_projection(
+        database,
+        get::<Option<String>>(&authoritative, "application_id")?.as_deref(),
+        &credential.organization_id,
+        &credential.id,
+    )
+    .await?;
+    insert_credential(database, credential).await?;
+    apply_canvas_projection(database, canvas.as_ref(), credential).await?;
+    let finalized = sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET status = 'issued', c_nonce = NULL, issued_at = $3
+         WHERE id = $1 AND status = 'signing' AND reserved_credential_id = $2",
+    )
+    .bind(&transaction.id)
+    .bind(&credential.id)
+    .bind(credential.issued_at)
+    .execute(&mut **database)
+    .await
+    .map_err(repository_error)?;
+    if finalized.rows_affected() != 1 {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(())
+}
+
 fn validate_authoritative_finalization(
     row: &PgRow,
     credential: &IssuedCredential,
@@ -739,6 +888,34 @@ async fn insert_credential(
     .execute(&mut **database)
     .await
     .map_err(repository_error)?;
+    Ok(())
+}
+
+async fn update_didcomm_delivery_status(
+    pool: &PgPool,
+    transaction_id: &str,
+    message_id: &str,
+    status: &str,
+    last_error: Option<&str>,
+) -> Result<(), CredentialIssuanceError> {
+    let updated = sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET status = $3, last_error = $4, updated_at = clock_timestamp()
+         WHERE transaction_id = $1
+           AND delivery_target = 'didcomm_v2'
+           AND metadata ->> 'didcomm_message_id' = $2
+           AND status IN ('pending', 'failed')",
+    )
+    .bind(transaction_id)
+    .bind(message_id)
+    .bind(status)
+    .bind(last_error)
+    .execute(pool)
+    .await
+    .map_err(repository_error)?;
+    if updated.rows_affected() != 1 {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
     Ok(())
 }
 

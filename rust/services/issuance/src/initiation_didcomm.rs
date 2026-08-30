@@ -78,8 +78,30 @@ pub struct InitiationDidcommClaim {
     pub previous_status: CredentialTransactionStatus,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StagedInitiationDidcommDelivery {
+    pub holder_did: String,
+    pub service_endpoint: String,
+    pub message_id: String,
+    pub encrypted_message: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingInitiationDidcommDelivery {
+    pub transaction: CredentialTransaction,
+    pub credential: IssuedCredential,
+    pub delivery: StagedInitiationDidcommDelivery,
+    pub transported: bool,
+}
+
 #[async_trait]
 pub trait InitiationDidcommRepository: Send + Sync {
+    async fn pending_delivery(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+    ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError>;
+
     async fn transaction_for_delivery(
         &self,
         organization_id: &str,
@@ -101,6 +123,25 @@ pub trait InitiationDidcommRepository: Send + Sync {
         &self,
         transaction: &CredentialTransaction,
         credential: &IssuedCredential,
+    ) -> Result<(), CredentialIssuanceError>;
+
+    async fn stage_delivery(
+        &self,
+        transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        delivery: &StagedInitiationDidcommDelivery,
+    ) -> Result<(), CredentialIssuanceError>;
+
+    async fn mark_transport_delivered(
+        &self,
+        transaction_id: &str,
+        message_id: &str,
+    ) -> Result<(), CredentialIssuanceError>;
+
+    async fn mark_transport_failed(
+        &self,
+        transaction_id: &str,
+        message_id: &str,
     ) -> Result<(), CredentialIssuanceError>;
 }
 
@@ -706,6 +747,24 @@ impl NativeInitiationDidcommDelivery {
         transaction: &CredentialTransaction,
         holder_did: &str,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
+        if let Some(pending) = self
+            .ports
+            .repository
+            .pending_delivery(&transaction.organization_id, &transaction.id)
+            .await
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?
+        {
+            if pending.delivery.holder_did != holder_did {
+                return Err(NativeInitiationDidcommDeliveryError::InvalidRequest);
+            }
+            let endpoint = self
+                .ports
+                .endpoints
+                .validate(&pending.delivery.service_endpoint)
+                .await
+                .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            return self.deliver_staged(pending, endpoint).await;
+        }
         if !matches!(
             transaction.status,
             CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
@@ -822,28 +881,16 @@ impl NativeInitiationDidcommDelivery {
                     .await
             }
         };
-        if self.ports.transport.deliver(&endpoint, encrypted).await
-            != DidcommTransportOutcome::Delivered
-        {
-            self.ports
-                .repository
-                .release_retryably(&claim)
-                .await
-                .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
-            return Ok(NativeInitiationDidcommDeliveryReceipt {
-                transaction_id: claim.transaction.id,
-                credential_id,
-                holder_did: holder_did.to_owned(),
-                service_endpoint: endpoint.as_str().to_owned(),
-                didcomm_message_id: packed.message_id,
-                status: NativeDidcommDeliveryStatus::DeliveryFailed,
-                error: Some("didcomm_delivery_failed".to_owned()),
-            });
-        }
+        let delivery = StagedInitiationDidcommDelivery {
+            holder_did: holder_did.to_owned(),
+            service_endpoint: endpoint.as_str().to_owned(),
+            message_id: packed.message_id,
+            encrypted_message: encrypted,
+        };
         if self
             .ports
             .repository
-            .finalize_delivered(&claim.transaction, &issued)
+            .stage_delivery(&claim.transaction, &issued, &delivery)
             .await
             .is_err()
         {
@@ -854,22 +901,68 @@ impl NativeInitiationDidcommDelivery {
                 )
                 .await;
         }
+        self.deliver_staged(
+            PendingInitiationDidcommDelivery {
+                transaction: claim.transaction,
+                credential: issued,
+                delivery,
+                transported: false,
+            },
+            endpoint,
+        )
+        .await
+    }
+
+    async fn deliver_staged(
+        &self,
+        pending: PendingInitiationDidcommDelivery,
+        endpoint: ValidatedDidcommEndpoint,
+    ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
+        if !pending.transported {
+            if self
+                .ports
+                .transport
+                .deliver(&endpoint, pending.delivery.encrypted_message.clone())
+                .await
+                != DidcommTransportOutcome::Delivered
+            {
+                self.ports
+                    .repository
+                    .mark_transport_failed(&pending.transaction.id, &pending.delivery.message_id)
+                    .await
+                    .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+                return Ok(NativeInitiationDidcommDeliveryReceipt {
+                    transaction_id: pending.transaction.id,
+                    credential_id: pending.credential.id,
+                    holder_did: pending.delivery.holder_did,
+                    service_endpoint: pending.delivery.service_endpoint,
+                    didcomm_message_id: pending.delivery.message_id,
+                    status: NativeDidcommDeliveryStatus::DeliveryFailed,
+                    error: Some("didcomm_delivery_failed".to_owned()),
+                });
+            }
+            self.ports
+                .repository
+                .mark_transport_delivered(&pending.transaction.id, &pending.delivery.message_id)
+                .await
+                .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+        }
         self.ports
             .lifecycle
             .after_didcomm_issued(
-                &claim.transaction,
-                &issued,
-                endpoint.as_str(),
-                &packed.message_id,
+                &pending.transaction,
+                &pending.credential,
+                &pending.delivery.service_endpoint,
+                &pending.delivery.message_id,
             )
             .await
             .map_err(|_| NativeInitiationDidcommDeliveryError::PostIssuanceUnavailable)?;
         Ok(NativeInitiationDidcommDeliveryReceipt {
-            transaction_id: claim.transaction.id,
-            credential_id,
-            holder_did: holder_did.to_owned(),
-            service_endpoint: endpoint.as_str().to_owned(),
-            didcomm_message_id: packed.message_id,
+            transaction_id: pending.transaction.id,
+            credential_id: pending.credential.id,
+            holder_did: pending.delivery.holder_did,
+            service_endpoint: pending.delivery.service_endpoint,
+            didcomm_message_id: pending.delivery.message_id,
             status: NativeDidcommDeliveryStatus::Delivered,
             error: None,
         })
@@ -1237,6 +1330,7 @@ mod tests {
         order: Order,
         releases: AtomicUsize,
         finalizations: AtomicUsize,
+        pending: Mutex<Option<PendingInitiationDidcommDelivery>>,
     }
 
     impl HarnessRepository {
@@ -1245,12 +1339,25 @@ mod tests {
                 order,
                 releases: AtomicUsize::new(0),
                 finalizations: AtomicUsize::new(0),
+                pending: Mutex::new(None),
             }
         }
     }
 
     #[async_trait]
     impl InitiationDidcommRepository for HarnessRepository {
+        async fn pending_delivery(
+            &self,
+            organization_id: &str,
+            transaction_id: &str,
+        ) -> Result<Option<PendingInitiationDidcommDelivery>, CredentialIssuanceError> {
+            Ok(self.pending.lock().unwrap().as_ref().and_then(|pending| {
+                (pending.transaction.organization_id == organization_id
+                    && pending.transaction.id == transaction_id)
+                    .then(|| pending.clone())
+            }))
+        }
+
         async fn transaction_for_delivery(
             &self,
             organization_id: &str,
@@ -1309,6 +1416,59 @@ mod tests {
                 Some(credential.id.as_str())
             );
             self.finalizations.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn stage_delivery(
+            &self,
+            transaction: &CredentialTransaction,
+            credential: &IssuedCredential,
+            delivery: &StagedInitiationDidcommDelivery,
+        ) -> Result<(), CredentialIssuanceError> {
+            self.finalize_delivered(transaction, credential).await?;
+            let mut finalized = transaction.clone();
+            finalized.status = CredentialTransactionStatus::Issued;
+            *self.pending.lock().unwrap() = Some(PendingInitiationDidcommDelivery {
+                transaction: finalized,
+                credential: credential.clone(),
+                delivery: delivery.clone(),
+                transported: false,
+            });
+            Ok(())
+        }
+
+        async fn mark_transport_delivered(
+            &self,
+            transaction_id: &str,
+            message_id: &str,
+        ) -> Result<(), CredentialIssuanceError> {
+            record(&self.order, "mark-transported");
+            let mut pending = self.pending.lock().unwrap();
+            let pending = pending
+                .as_mut()
+                .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+            if pending.transaction.id != transaction_id || pending.delivery.message_id != message_id
+            {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
+            pending.transported = true;
+            Ok(())
+        }
+
+        async fn mark_transport_failed(
+            &self,
+            transaction_id: &str,
+            message_id: &str,
+        ) -> Result<(), CredentialIssuanceError> {
+            record(&self.order, "mark-transport-failed");
+            let pending = self.pending.lock().unwrap();
+            let pending = pending
+                .as_ref()
+                .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+            if pending.transaction.id != transaction_id || pending.delivery.message_id != message_id
+            {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             Ok(())
         }
     }
@@ -1592,8 +1752,9 @@ mod tests {
                 "build",
                 "pack",
                 "encrypt",
-                "transport",
                 "finalize",
+                "transport",
+                "mark-transported",
                 "after-didcomm",
             ]
         );
@@ -1671,7 +1832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transport_failure_is_retryable_and_returns_a_sanitized_receipt() {
+    async fn transport_failure_preserves_staged_delivery_and_returns_a_sanitized_receipt() {
         let (delivery, repository, order) = delivery_harness(HarnessOptions {
             endpoint_fail: false,
             builder_fail: false,
@@ -1692,11 +1853,25 @@ mod tests {
         assert_eq!(receipt.didcomm_message_id, "message-1");
         assert_eq!(receipt.status, NativeDidcommDeliveryStatus::DeliveryFailed);
         assert_eq!(receipt.error.as_deref(), Some("didcomm_delivery_failed"));
-        assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
-        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
-        let order = order.lock().unwrap();
-        assert!(order.contains(&"transport"));
-        assert_eq!(order.last(), Some(&"release"));
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+        {
+            let recorded = order.lock().unwrap();
+            assert!(recorded.contains(&"transport"));
+            assert_eq!(recorded.last(), Some(&"mark-transport-failed"));
+        }
+
+        order.lock().unwrap().clear();
+        let retry = delivery
+            .deliver_native(&transaction(), "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(retry.status, NativeDidcommDeliveryStatus::DeliveryFailed);
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["validate-endpoint", "transport", "mark-transport-failed"]
+        );
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1716,6 +1891,20 @@ mod tests {
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
         assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
         assert_eq!(order.lock().unwrap().last(), Some(&"after-didcomm"));
+
+        order.lock().unwrap().clear();
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::PostIssuanceUnavailable)
+        );
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["validate-endpoint", "after-didcomm"],
+            "a durable transport marker must prevent a second external send while projection retries"
+        );
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

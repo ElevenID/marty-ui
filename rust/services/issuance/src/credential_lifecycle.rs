@@ -536,9 +536,18 @@ impl PostgresCredentialLifecycle {
         sqlx::query(
             "INSERT INTO issuance_service.issuance_events
                  (id, transaction_id, application_id, event_type, metadata, created_at)
-             VALUES ($1, $2, $3, 'credential_issued', $4, clock_timestamp())",
+             VALUES ($1, $2, $3, 'credential_issued', $4, clock_timestamp())
+             ON CONFLICT (id) DO UPDATE SET
+                 transaction_id = EXCLUDED.transaction_id,
+                 application_id = EXCLUDED.application_id,
+                 event_type = EXCLUDED.event_type,
+                 metadata = EXCLUDED.metadata",
         )
-        .bind(Uuid::new_v4().to_string())
+        .bind(delivery_record_id(
+            &credential.id,
+            "credential_issued",
+            Some("didcomm_v2"),
+        ))
         .bind(&transaction.id)
         .bind(&transaction.application_id)
         .bind(json!({
@@ -551,6 +560,9 @@ impl PostgresCredentialLifecycle {
         .await
         .map_err(database_error)?;
 
+        if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
+            self.record_canvas_delivery(transaction, credential).await?;
+        }
         let delivery_id = delivery_record_id(&credential.id, "didcomm_v2", None);
         self.upsert_delivery(
             &delivery_id,
@@ -567,9 +579,6 @@ impl PostgresCredentialLifecycle {
             }),
         )
         .await?;
-        if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
-            self.record_canvas_delivery(transaction, credential).await?;
-        }
         Ok(())
     }
 
@@ -873,7 +882,11 @@ fn canvas_delivery_metadata(canvas: Option<&Map<String, Value>>) -> Value {
     Value::Object(metadata)
 }
 
-fn delivery_record_id(credential_id: &str, target: &str, scope_id: Option<&str>) -> String {
+pub(crate) fn delivery_record_id(
+    credential_id: &str,
+    target: &str,
+    scope_id: Option<&str>,
+) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         format!("{credential_id}:{target}:{}", scope_id.unwrap_or("-")).as_bytes(),
