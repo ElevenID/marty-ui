@@ -9,14 +9,22 @@ use axum::{
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use std::sync::Arc;
 
 use crate::{
-    canvas_management::{CanvasLtiInstallationRequest, CanvasPlatformRequest},
+    canvas_catalog::{
+        discover_canvas_scope, CanvasCatalogOAuth, CanvasCatalogProvider,
+        CanvasCatalogProviderError, CanvasScopeDiscoveryResponse,
+    },
+    canvas_management::{
+        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasScopeDiscoveryRequest,
+    },
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
         CanvasLtiRegistrationResponse, CanvasPlatformManagementError,
         CanvasPlatformManagementService, CanvasPlatformProbeResult,
     },
+    canvas_oauth::CanvasOAuthError,
     transaction_reads::TransactionReadError,
 };
 
@@ -30,15 +38,62 @@ const SAFE_CONNECTION_CONFIG_KEYS: &[&str] = &[
     "lti_config_token_status",
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CanvasPlatformManagementHttpService {
     management: CanvasPlatformManagementService,
+    catalog: Option<CanvasCatalogRuntime>,
+}
+
+#[derive(Clone)]
+struct CanvasCatalogRuntime {
+    oauth: Arc<dyn CanvasCatalogOAuth>,
+    provider: Arc<dyn CanvasCatalogProvider>,
+    local_admin_token: Option<String>,
+}
+
+impl std::fmt::Debug for CanvasPlatformManagementHttpService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasPlatformManagementHttpService")
+            .field("management", &self.management)
+            .field("catalog_configured", &self.catalog.is_some())
+            .finish()
+    }
 }
 
 impl CanvasPlatformManagementHttpService {
     #[must_use]
     pub fn new(management: CanvasPlatformManagementService) -> Self {
-        Self { management }
+        Self {
+            management,
+            catalog: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_catalog(
+        management: CanvasPlatformManagementService,
+        oauth: Arc<dyn CanvasCatalogOAuth>,
+        provider: Arc<dyn CanvasCatalogProvider>,
+    ) -> Self {
+        Self::with_catalog_options(management, oauth, provider, None)
+    }
+
+    #[must_use]
+    pub fn with_catalog_options(
+        management: CanvasPlatformManagementService,
+        oauth: Arc<dyn CanvasCatalogOAuth>,
+        provider: Arc<dyn CanvasCatalogProvider>,
+        local_admin_token: Option<String>,
+    ) -> Self {
+        Self {
+            management,
+            catalog: Some(CanvasCatalogRuntime {
+                oauth,
+                provider,
+                local_admin_token,
+            }),
+        }
     }
 
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), CanvasManagementHttpError> {
@@ -210,6 +265,77 @@ impl CanvasPlatformManagementHttpService {
             .map(CanvasPlatformJwksRefreshResponse::from)
             .map_err(Into::into)
     }
+
+    pub async fn discover_scope(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+        request: CanvasScopeDiscoveryRequest,
+    ) -> Result<CanvasScopeDiscoveryResponse, CanvasManagementHttpError> {
+        let platform = self
+            .management
+            .get(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await?;
+        let runtime =
+            self.catalog
+                .as_ref()
+                .ok_or(CanvasManagementHttpError::DiscoveryUnavailable {
+                    retry_after_seconds: None,
+                })?;
+        let token = runtime
+            .oauth
+            .access_token(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map_err(map_discovery_oauth_error)?
+            .or_else(|| runtime.local_admin_token.clone())
+            .ok_or(CanvasManagementHttpError::DiscoveryOAuthRequired)?;
+        let canvas_base_url = platform
+            .canvas_base_url
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(CanvasManagementHttpError::DiscoveryBaseUrlRequired)?;
+        match discover_canvas_scope(
+            runtime.provider.clone(),
+            platform.id,
+            platform.organization_id,
+            canvas_base_url,
+            &token,
+            request,
+        )
+        .await
+        {
+            Ok(response) => Ok(response),
+            Err(CanvasCatalogProviderError::ReauthorizationRequired) => {
+                runtime
+                    .oauth
+                    .mark_rejected_access_token(
+                        platform_id,
+                        &token,
+                        header(headers, "X-API-Key"),
+                        header(headers, "X-Organization-ID"),
+                    )
+                    .await
+                    .map_err(map_discovery_oauth_error)?;
+                Err(CanvasManagementHttpError::DiscoveryReauthorizationRequired)
+            }
+            Err(CanvasCatalogProviderError::TemporarilyUnavailable {
+                retry_after_seconds,
+            }) => Err(CanvasManagementHttpError::DiscoveryUnavailable {
+                retry_after_seconds,
+            }),
+            Err(CanvasCatalogProviderError::BadGateway(detail)) => {
+                Err(CanvasManagementHttpError::DiscoveryBadGateway(detail))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -314,6 +440,12 @@ pub enum CanvasManagementHttpError {
     Service(CanvasPlatformManagementError),
     Validation(Vec<Value>),
     BodyTooLarge,
+    DiscoveryOAuthRequired,
+    DiscoveryReauthorizationRequired,
+    DiscoveryBaseUrlRequired,
+    DiscoveryPilotDisabled,
+    DiscoveryUnavailable { retry_after_seconds: Option<u64> },
+    DiscoveryBadGateway(String),
 }
 
 impl From<CanvasPlatformManagementError> for CanvasManagementHttpError {
@@ -333,10 +465,83 @@ impl IntoResponse for CanvasManagementHttpError {
             Self::BodyTooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 Json(json!({"detail": "Canvas management request body exceeds the size limit"})),
+                )
+                .into_response(),
+            Self::DiscoveryOAuthRequired => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "Canvas scope discovery requires an organization OAuth connection; environment tokens are local compatibility fallbacks"})),
             )
                 .into_response(),
+            Self::DiscoveryReauthorizationRequired => (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"detail": "Canvas OAuth connection requires reauthorization"})),
+            )
+                .into_response(),
+            Self::DiscoveryBaseUrlRequired => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "Canvas platform requires canvas_base_url for admin discovery"})),
+            )
+                .into_response(),
+            Self::DiscoveryPilotDisabled => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Portable Canvas integration is not enabled for this organization"})),
+            )
+                .into_response(),
+            Self::DiscoveryUnavailable {
+                retry_after_seconds,
+            } => {
+                let mut response = (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"detail": "Canvas discovery is temporarily unavailable"})),
+                )
+                    .into_response();
+                if let Some(seconds) = retry_after_seconds {
+                    if let Ok(value) = seconds.to_string().parse() {
+                        response.headers_mut().insert("retry-after", value);
+                    }
+                }
+                response
+            }
+            Self::DiscoveryBadGateway(detail) => {
+                (StatusCode::BAD_GATEWAY, Json(json!({"detail": detail}))).into_response()
+            }
             Self::Service(error) => service_failure(error),
         }
+    }
+}
+
+fn map_discovery_oauth_error(error: CanvasOAuthError) -> CanvasManagementHttpError {
+    match error {
+        CanvasOAuthError::PlatformNotFound => {
+            CanvasManagementHttpError::Service(CanvasPlatformManagementError::PlatformNotFound)
+        }
+        CanvasOAuthError::PilotDisabled => CanvasManagementHttpError::DiscoveryPilotDisabled,
+        CanvasOAuthError::BaseUrlRequired => CanvasManagementHttpError::DiscoveryBaseUrlRequired,
+        CanvasOAuthError::RefreshRateLimited {
+            retry_after_seconds,
+        } => CanvasManagementHttpError::DiscoveryUnavailable {
+            retry_after_seconds: Some(retry_after_seconds),
+        },
+        CanvasOAuthError::RepositoryUnavailable
+        | CanvasOAuthError::SecretUnavailable
+        | CanvasOAuthError::InvalidConfiguration => {
+            CanvasManagementHttpError::DiscoveryUnavailable {
+                retry_after_seconds: None,
+            }
+        }
+        CanvasOAuthError::Security(error) => {
+            CanvasManagementHttpError::Service(CanvasPlatformManagementError::Security(error))
+        }
+        CanvasOAuthError::OriginUntrusted
+        | CanvasOAuthError::ConnectionExists
+        | CanvasOAuthError::SecretNotFound
+        | CanvasOAuthError::ClientIdRequired
+        | CanvasOAuthError::CapabilitiesRequired
+        | CanvasOAuthError::UnsupportedCapabilities(_)
+        | CanvasOAuthError::ConfigurationChanged
+        | CanvasOAuthError::ConnectionChanged => CanvasManagementHttpError::DiscoveryUnavailable {
+            retry_after_seconds: None,
+        },
     }
 }
 
@@ -365,6 +570,50 @@ pub async fn parse_lti_installation_request(
             "type": "model_attributes_type",
             "loc": ["body"],
             "msg": "Input should be a valid Canvas LTI installation request",
+            "input": null,
+        })])
+    })
+}
+
+pub async fn parse_scope_discovery_request(
+    request: axum::extract::Request,
+) -> Result<CanvasScopeDiscoveryRequest, CanvasManagementHttpError> {
+    let mut value = parse_management_json(request).await?;
+    validate_scope_discovery_value(&mut value, "body", true)?;
+    serde_json::from_value(value).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid Canvas scope discovery request",
+            "input": null,
+        })])
+    })
+}
+
+pub fn parse_scope_discovery_query(
+    query: Option<&str>,
+) -> Result<CanvasScopeDiscoveryRequest, CanvasManagementHttpError> {
+    let mut object = Map::new();
+    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        if matches!(
+            name.as_ref(),
+            "course_id"
+                | "include_courses"
+                | "include_assignments"
+                | "include_quizzes"
+                | "include_modules"
+                | "limit"
+        ) {
+            object.insert(name.into_owned(), Value::String(value.into_owned()));
+        }
+    }
+    let mut value = Value::Object(object);
+    validate_scope_discovery_value(&mut value, "query", false)?;
+    serde_json::from_value(value).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["query"],
+            "msg": "Input should be a valid Canvas scope discovery query",
             "input": null,
         })])
     })
@@ -524,6 +773,104 @@ fn validate_lti_installation_value(value: &mut Value) -> Result<(), CanvasManage
     }
 }
 
+fn validate_scope_discovery_value(
+    value: &mut Value,
+    location: &'static str,
+    forbid_extra: bool,
+) -> Result<(), CanvasManagementHttpError> {
+    let invalid_input = value.clone();
+    let Some(object) = value.as_object_mut() else {
+        return Err(CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": [location],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": invalid_input,
+        })]));
+    };
+    let mut errors = Vec::new();
+    validate_optional_string(object, "course_id", MAX_MANAGEMENT_BODY_BYTES, &mut errors);
+    for name in [
+        "include_courses",
+        "include_assignments",
+        "include_quizzes",
+        "include_modules",
+    ] {
+        if let Some(input) = object.get(name).cloned() {
+            if let Some(normalized) = pydantic_bool(&input) {
+                object.insert(name.to_owned(), Value::Bool(normalized));
+            } else {
+                let structured = input.is_array() || input.is_object() || input.is_null();
+                errors.push(json!({
+                    "type": if structured { "bool_type" } else { "bool_parsing" },
+                    "loc": [location, name],
+                    "msg": if structured {
+                        "Input should be a valid boolean"
+                    } else {
+                        "Input should be a valid boolean, unable to interpret input"
+                    },
+                    "input": input,
+                }));
+            }
+        }
+    }
+    if let Some(input) = object.get("limit").cloned() {
+        match pydantic_integer(&input) {
+            Some(limit) if limit < 1 => errors.push(json!({
+                "type": "greater_than_equal",
+                "loc": [location, "limit"],
+                "msg": "Input should be greater than or equal to 1",
+                "input": input,
+                "ctx": {"ge": 1},
+            })),
+            Some(limit) if limit > 100 => errors.push(json!({
+                "type": "less_than_equal",
+                "loc": [location, "limit"],
+                "msg": "Input should be less than or equal to 100",
+                "input": input,
+                "ctx": {"le": 100},
+            })),
+            Some(limit) => {
+                object.insert("limit".to_owned(), Value::Number(limit.into()));
+            }
+            None => errors.push(json!({
+                "type": if input.is_array() || input.is_object() || input.is_null() || input.is_boolean() {
+                    "int_type"
+                } else {
+                    "int_parsing"
+                },
+                "loc": [location, "limit"],
+                "msg": "Input should be a valid integer, unable to parse string as an integer",
+                "input": input,
+            })),
+        }
+    }
+    if forbid_extra {
+        for (name, input) in object.iter().filter(|(name, _)| {
+            !matches!(
+                name.as_str(),
+                "course_id"
+                    | "include_courses"
+                    | "include_assignments"
+                    | "include_quizzes"
+                    | "include_modules"
+                    | "limit"
+            )
+        }) {
+            errors.push(json!({
+                "type": "extra_forbidden",
+                "loc": [location, name],
+                "msg": "Extra inputs are not permitted",
+                "input": input,
+            }));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanvasManagementHttpError::Validation(errors))
+    }
+}
+
 fn pydantic_bool(value: &Value) -> Option<bool> {
     match value {
         Value::Bool(value) => Some(*value),
@@ -534,6 +881,22 @@ fn pydantic_bool(value: &Value) -> Option<bool> {
             "0" | "off" | "f" | "false" | "n" | "no" => Some(false),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+fn pydantic_integer(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(value) => value.as_i64().or_else(|| {
+            value.as_f64().and_then(|value| {
+                (value.is_finite()
+                    && value.fract() == 0.0
+                    && value >= i64::MIN as f64
+                    && value <= i64::MAX as f64)
+                    .then_some(value as i64)
+            })
+        }),
+        Value::String(value) => value.parse().ok(),
         _ => None,
     }
 }

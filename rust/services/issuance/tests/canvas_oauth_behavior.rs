@@ -8,7 +8,7 @@ use axum::{
     body::Body,
     http::{header, Request, StatusCode},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use marty_issuance_service::{
     canvas_oauth::{
         CanvasOAuthAuthorization, CanvasOAuthCallbackRequest, CanvasOAuthCallbackResponse,
@@ -38,7 +38,10 @@ struct RepositoryState {
     platforms: HashMap<String, CanvasOAuthPlatform>,
     authorizations: HashMap<String, CanvasOAuthAuthorization>,
     connections: HashMap<(String, String), CanvasOAuthConnection>,
+    refresh_leases: HashMap<(String, String), String>,
     patches: Vec<CanvasOAuthPlatformPatch>,
+    validation_errors: Vec<Option<String>>,
+    force_validation_conflict: bool,
     management_reads: usize,
     publish_allowed: bool,
     retry_at: Option<DateTime<Utc>>,
@@ -164,11 +167,104 @@ impl CanvasOAuthRepository for MemoryRepository {
 
     async fn mark_reauthorization_required(
         &self,
+        organization_id: &str,
+        platform_id: &str,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<bool, CanvasOAuthError> {
+        let mut state = self.state.lock().expect("repository state");
+        let key = (organization_id.to_owned(), platform_id.to_owned());
+        let Some(connection) = state.connections.get_mut(&key) else {
+            return Ok(false);
+        };
+        if connection.updated_at != expected_updated_at {
+            return Ok(false);
+        }
+        connection.status = "reauthorization_required".to_owned();
+        connection.updated_at = Utc::now();
+        Ok(true)
+    }
+
+    async fn acquire_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        _lease_seconds: i64,
+    ) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError> {
+        let mut state = self.state.lock().expect("repository state");
+        let key = (organization_id.to_owned(), platform_id.to_owned());
+        if state.refresh_leases.contains_key(&key) {
+            return Ok(None);
+        }
+        let connection = state
+            .connections
+            .get(&key)
+            .filter(|connection| connection.status == "connected")
+            .cloned();
+        if connection.is_some() {
+            state.refresh_leases.insert(key, lease_owner.to_owned());
+        }
+        Ok(connection)
+    }
+
+    async fn complete_refresh(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        access_token_secret_ref: &str,
+        refresh_token_secret_ref: Option<&str>,
+        token_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<DateTime<Utc>>, CanvasOAuthError> {
+        let mut state = self.state.lock().expect("repository state");
+        let key = (organization_id.to_owned(), platform_id.to_owned());
+        if state.refresh_leases.get(&key).map(String::as_str) != Some(lease_owner) {
+            return Ok(None);
+        }
+        state.refresh_leases.remove(&key);
+        let Some(connection) = state.connections.get_mut(&key) else {
+            return Ok(None);
+        };
+        connection.access_token_secret_ref = Some(access_token_secret_ref.to_owned());
+        if let Some(reference) = refresh_token_secret_ref {
+            connection.refresh_token_secret_ref = Some(reference.to_owned());
+        }
+        connection.token_expires_at = token_expires_at;
+        connection.updated_at = Utc::now();
+        Ok(Some(connection.updated_at))
+    }
+
+    async fn release_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        reauthorization_required: bool,
+    ) -> Result<bool, CanvasOAuthError> {
+        let mut state = self.state.lock().expect("repository state");
+        let key = (organization_id.to_owned(), platform_id.to_owned());
+        if state.refresh_leases.get(&key).map(String::as_str) != Some(lease_owner) {
+            return Ok(false);
+        }
+        state.refresh_leases.remove(&key);
+        if reauthorization_required {
+            if let Some(connection) = state.connections.get_mut(&key) {
+                connection.status = "reauthorization_required".to_owned();
+            }
+        }
+        Ok(true)
+    }
+
+    async fn patch_validation_error(
+        &self,
         _organization_id: &str,
         _platform_id: &str,
-        _expected_updated_at: DateTime<Utc>,
+        _expected_config_version: i64,
+        error_code: Option<&str>,
     ) -> Result<bool, CanvasOAuthError> {
-        Ok(true)
+        let mut state = self.state.lock().expect("repository state");
+        state.validation_errors.push(error_code.map(str::to_owned));
+        Ok(!state.force_validation_conflict)
     }
 
     async fn begin_revocation(
@@ -312,9 +408,12 @@ struct MemoryProvider {
 #[derive(Default)]
 struct ProviderState {
     exchanges: Vec<(String, String, String)>,
+    refreshes: Vec<(String, String, String)>,
     revocations: Vec<(String, String)>,
     fail_revoke_with_retry_after: Option<u64>,
     exchange_bundle: Option<CanvasOAuthTokenBundle>,
+    refresh_bundle: Option<CanvasOAuthTokenBundle>,
+    refresh_error: Option<CanvasOAuthProviderError>,
 }
 
 #[async_trait]
@@ -339,6 +438,32 @@ impl CanvasOAuthProvider for MemoryProvider {
             .unwrap_or(CanvasOAuthTokenBundle {
                 access_token: "access-token-value".to_owned(),
                 refresh_token: Some("refresh-token-value".to_owned()),
+                expires_in_seconds: Some(3_600),
+            }))
+    }
+
+    async fn refresh(
+        &self,
+        canvas_base_url: &str,
+        _client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
+    ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError> {
+        let mut state = self.state.lock().expect("provider state");
+        state.refreshes.push((
+            canvas_base_url.to_owned(),
+            client_secret.to_owned(),
+            refresh_token.to_owned(),
+        ));
+        if let Some(error) = state.refresh_error.clone() {
+            return Err(error);
+        }
+        Ok(state
+            .refresh_bundle
+            .clone()
+            .unwrap_or(CanvasOAuthTokenBundle {
+                access_token: "refreshed-access-token".to_owned(),
+                refresh_token: None,
                 expires_in_seconds: Some(3_600),
             }))
     }
@@ -440,6 +565,199 @@ fn start_request() -> CanvasOAuthStartRequest {
             "course_progress.read".to_owned(),
         ],
     }
+}
+
+fn install_connected_token_fixture(
+    repository: &MemoryRepository,
+    vault: &MemoryVault,
+    expires_at: Option<DateTime<Utc>>,
+) {
+    repository
+        .state
+        .lock()
+        .expect("repository state")
+        .connections
+        .insert(
+            ("org-1".to_owned(), "platform-1".to_owned()),
+            CanvasOAuthConnection {
+                id: "connection-1".to_owned(),
+                organization_id: "org-1".to_owned(),
+                platform_id: "platform-1".to_owned(),
+                canvas_base_url: "https://canvas.example.edu".to_owned(),
+                platform_config_version: 1,
+                client_id: "canvas-client".to_owned(),
+                client_secret_ref: "org_secret://org-1/client-secret-1".to_owned(),
+                capabilities: vec!["catalog".to_owned()],
+                scopes: vec!["url:GET|/api/v1/courses".to_owned()],
+                access_token_secret_ref: Some("org_secret://org-1/access-1".to_owned()),
+                refresh_token_secret_ref: Some("org_secret://org-1/refresh-1".to_owned()),
+                token_expires_at: expires_at,
+                status: "connected".to_owned(),
+                revoke_retry_count: 0,
+                updated_at: Utc::now(),
+            },
+        );
+    let mut state = vault.state.lock().expect("vault state");
+    state.values.insert(
+        ("org-1".to_owned(), "access-1".to_owned()),
+        "current-access-token".to_owned(),
+    );
+    state.values.insert(
+        ("org-1".to_owned(), "refresh-1".to_owned()),
+        "current-refresh-token".to_owned(),
+    );
+}
+
+#[tokio::test]
+async fn access_token_reuses_a_non_expiring_organization_secret() {
+    let (service, repository, vault, provider) = fixture();
+    install_connected_token_fixture(&repository, &vault, None);
+
+    assert_eq!(
+        service
+            .access_token("platform-1", Some("management-key"), Some("org-1"))
+            .await,
+        Ok(Some("current-access-token".to_owned()))
+    );
+    assert!(provider
+        .state
+        .lock()
+        .expect("provider state")
+        .refreshes
+        .is_empty());
+}
+
+#[tokio::test]
+async fn access_token_refreshes_under_a_lease_and_rotates_both_secrets() {
+    let (service, repository, vault, provider) = fixture();
+    install_connected_token_fixture(&repository, &vault, Some(Utc::now() - Duration::seconds(1)));
+    provider
+        .state
+        .lock()
+        .expect("provider state")
+        .refresh_bundle = Some(CanvasOAuthTokenBundle {
+        access_token: "new-access-token".to_owned(),
+        refresh_token: Some("new-refresh-token".to_owned()),
+        expires_in_seconds: Some(3_600),
+    });
+
+    assert_eq!(
+        service
+            .access_token("platform-1", Some("management-key"), Some("org-1"))
+            .await,
+        Ok(Some("new-access-token".to_owned()))
+    );
+    let provider_state = provider.state.lock().expect("provider state");
+    assert_eq!(
+        provider_state.refreshes,
+        vec![(
+            "https://canvas.example.edu".to_owned(),
+            "client-secret-value".to_owned(),
+            "current-refresh-token".to_owned(),
+        )]
+    );
+    drop(provider_state);
+    let connection = repository
+        .state
+        .lock()
+        .expect("repository state")
+        .connections
+        .get(&("org-1".to_owned(), "platform-1".to_owned()))
+        .cloned()
+        .expect("connection");
+    assert_ne!(
+        connection.access_token_secret_ref.as_deref(),
+        Some("org_secret://org-1/access-1")
+    );
+    assert_ne!(
+        connection.refresh_token_secret_ref.as_deref(),
+        Some("org_secret://org-1/refresh-1")
+    );
+    let vault_state = vault.state.lock().expect("vault state");
+    assert!(vault_state.deleted.contains(&"access-1".to_owned()));
+    assert!(vault_state.deleted.contains(&"refresh-1".to_owned()));
+}
+
+#[tokio::test]
+async fn rejected_refresh_grant_requires_reauthorization_without_serving_an_expired_token() {
+    let (service, repository, vault, provider) = fixture();
+    install_connected_token_fixture(&repository, &vault, Some(Utc::now() - Duration::seconds(1)));
+    provider.state.lock().expect("provider state").refresh_error =
+        Some(CanvasOAuthProviderError::RefreshRejected);
+
+    assert_eq!(
+        service
+            .access_token("platform-1", Some("management-key"), Some("org-1"))
+            .await,
+        Ok(None)
+    );
+    let state = repository.state.lock().expect("repository state");
+    assert_eq!(
+        state
+            .connections
+            .get(&("org-1".to_owned(), "platform-1".to_owned()))
+            .expect("connection")
+            .status,
+        "reauthorization_required"
+    );
+    assert_eq!(
+        state.validation_errors.last(),
+        Some(&Some("oauth_reauthorization_required".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn rate_limited_refresh_releases_the_lease_and_preserves_retry_after() {
+    let (service, repository, vault, provider) = fixture();
+    install_connected_token_fixture(&repository, &vault, Some(Utc::now() - Duration::seconds(1)));
+    provider.state.lock().expect("provider state").refresh_error =
+        Some(CanvasOAuthProviderError::Failed {
+            retry_after_seconds: Some(17),
+        });
+
+    assert_eq!(
+        service
+            .access_token("platform-1", Some("management-key"), Some("org-1"))
+            .await,
+        Err(CanvasOAuthError::RefreshRateLimited {
+            retry_after_seconds: 17,
+        })
+    );
+    let state = repository.state.lock().expect("repository state");
+    assert!(state.refresh_leases.is_empty());
+    assert_eq!(
+        state.validation_errors.last(),
+        Some(&Some("oauth_refresh_failed".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn refreshed_token_is_not_served_after_concurrent_platform_configuration_change() {
+    let (service, repository, vault, _provider) = fixture();
+    install_connected_token_fixture(&repository, &vault, Some(Utc::now() - Duration::seconds(1)));
+    repository
+        .state
+        .lock()
+        .expect("repository state")
+        .force_validation_conflict = true;
+
+    assert_eq!(
+        service
+            .access_token("platform-1", Some("management-key"), Some("org-1"))
+            .await,
+        Ok(None)
+    );
+    assert_eq!(
+        repository
+            .state
+            .lock()
+            .expect("repository state")
+            .connections
+            .get(&("org-1".to_owned(), "platform-1".to_owned()))
+            .expect("connection")
+            .status,
+        "reauthorization_required"
+    );
 }
 
 fn state_from_authorization_url(value: &str) -> String {

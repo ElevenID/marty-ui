@@ -13,6 +13,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
+    canvas_catalog::{CanvasCatalogOAuth, CanvasCatalogProvider, CanvasCatalogProviderError},
     canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient},
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
@@ -20,6 +21,7 @@ use marty_issuance_service::{
         CanvasManagementRepositoryError, CanvasPlatformManagementRepository,
         CanvasPlatformManagementService,
     },
+    canvas_oauth::CanvasOAuthError,
     http::router_with_canvas_management,
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
@@ -96,6 +98,86 @@ impl CanvasLtiProbeClient for FailedProbe {
 }
 
 struct DriftProbe;
+
+#[derive(Default)]
+struct FixedCatalogOAuth {
+    token: Mutex<Option<String>>,
+    calls: Mutex<Vec<OAuthCall>>,
+    rejected_tokens: Mutex<Vec<String>>,
+}
+
+type OAuthCall = (String, Option<String>, Option<String>);
+
+#[async_trait]
+impl CanvasCatalogOAuth for FixedCatalogOAuth {
+    async fn access_token(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<Option<String>, CanvasOAuthError> {
+        self.calls.lock().expect("OAuth calls").push((
+            platform_id.to_owned(),
+            api_key.map(str::to_owned),
+            trusted_organization_id.map(str::to_owned),
+        ));
+        Ok(self.token.lock().expect("OAuth token").clone())
+    }
+
+    async fn mark_rejected_access_token(
+        &self,
+        _platform_id: &str,
+        rejected_access_token: &str,
+        _api_key: Option<&str>,
+        _trusted_organization_id: Option<&str>,
+    ) -> Result<bool, CanvasOAuthError> {
+        self.rejected_tokens
+            .lock()
+            .expect("rejected tokens")
+            .push(rejected_access_token.to_owned());
+        Ok(true)
+    }
+}
+
+#[derive(Default)]
+struct FixedCatalogProvider {
+    calls: Mutex<Vec<(String, String, u16)>>,
+    error: Mutex<Option<CanvasCatalogProviderError>>,
+}
+
+#[async_trait]
+impl CanvasCatalogProvider for FixedCatalogProvider {
+    async fn collection(
+        &self,
+        _canvas_base_url: &str,
+        access_token: &str,
+        path: &str,
+        limit: u16,
+    ) -> Result<Vec<serde_json::Map<String, Value>>, CanvasCatalogProviderError> {
+        self.calls.lock().expect("catalog calls").push((
+            access_token.to_owned(),
+            path.to_owned(),
+            limit,
+        ));
+        if let Some(error) = self.error.lock().expect("catalog error").clone() {
+            return Err(error);
+        }
+        let items = if path == "courses" {
+            vec![json!({"id": "course-1", "name": "Biology", "workflow_state": "available"})]
+        } else if path.ends_with("/assignments") {
+            vec![
+                json!({"id": "assignment-1", "name": "Essay", "points_possible": 20}),
+                json!({"id": "assignment-2", "name": "Quiz", "quiz_id": "quiz-1"}),
+            ]
+        } else {
+            vec![json!({"id": "module-1", "name": "Module One"})]
+        };
+        Ok(items
+            .into_iter()
+            .map(|item| item.as_object().cloned().expect("catalog object"))
+            .collect())
+    }
+}
 
 #[async_trait]
 impl CanvasLtiProbeClient for DriftProbe {
@@ -353,6 +435,65 @@ fn app_with_probe(
         TransportPolicy::new(Vec::new()),
         service,
     )
+}
+
+fn app_with_catalog(
+    repository: Arc<MemoryRepository>,
+    oauth: Arc<dyn CanvasCatalogOAuth>,
+    provider: Arc<dyn CanvasCatalogProvider>,
+) -> axum::Router {
+    app_with_catalog_options(repository, oauth, provider, None)
+}
+
+fn app_with_catalog_options(
+    repository: Arc<MemoryRepository>,
+    oauth: Arc<dyn CanvasCatalogOAuth>,
+    provider: Arc<dyn CanvasCatalogProvider>,
+    local_admin_token: Option<String>,
+) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let management = CanvasPlatformManagementService::with_probe_client(
+        repository,
+        Some("management-key"),
+        CanvasOriginPolicy::default(),
+        "https://issuer.example.edu",
+        CanvasLtiJwksRefreshConfig {
+            timeout: Duration::from_secs(10),
+            ttl: Duration::from_secs(3_600),
+            self_managed_origins: Vec::new(),
+            allow_private_networks: false,
+            allow_http_localhost: false,
+        },
+        Arc::new(SuccessfulProbe),
+    );
+    router_with_canvas_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        CanvasPlatformManagementHttpService::with_catalog_options(
+            management,
+            oauth,
+            provider,
+            local_admin_token,
+        ),
+    )
+}
+
+async fn seed_platform(app: &axum::Router, repository: &MemoryRepository) -> String {
+    let response = app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Catalog Canvas", "client-1"),
+        ))
+        .await
+        .expect("create platform");
+    assert_eq!(response.status(), StatusCode::OK);
+    repository.platforms.lock().expect("platforms")[0]
+        .id
+        .clone()
 }
 
 fn management_request(builder: axum::http::request::Builder, body: Value) -> Request<Body> {
@@ -1120,6 +1261,212 @@ async fn management_probe_failures_preserve_route_specific_errors() {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(response_json(response).await, json!({"detail": detail}));
     }
+}
+
+#[tokio::test]
+async fn scope_discovery_and_catalog_share_one_authenticated_mapping_kernel() {
+    let repository = Arc::new(MemoryRepository::default());
+    let oauth = Arc::new(FixedCatalogOAuth::default());
+    *oauth.token.lock().expect("OAuth token") = Some("organization-token".to_owned());
+    let provider = Arc::new(FixedCatalogProvider::default());
+    let app = app_with_catalog(repository.clone(), oauth.clone(), provider.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+
+    let post = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery"
+            )),
+            json!({
+                "course_id": " course/1 ",
+                "include_courses": "yes",
+                "include_assignments": true,
+                "include_quizzes": 1,
+                "include_modules": "on",
+                "limit": "12"
+            }),
+        ))
+        .await
+        .expect("scope discovery");
+    assert_eq!(post.status(), StatusCode::OK);
+    let post_body = response_json(post).await;
+    assert_eq!(post_body["platform_id"], platform_id);
+    assert_eq!(post_body["organization_id"], "org-1");
+    assert_eq!(post_body["course_id"], "course/1");
+    assert_eq!(post_body["courses"][0]["published"], true);
+    assert_eq!(post_body["assignments"][0]["id"], "assignment-1");
+    assert_eq!(post_body["quizzes"][0]["id"], "assignment-2");
+    assert_eq!(post_body["modules"][0]["id"], "module-1");
+    assert!(post_body["fetched_at"].as_str().is_some());
+
+    let get = app
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/catalog?course_id=course%2F1&include_courses=false&include_assignments=yes&include_quizzes=0&include_modules=off&limit=7"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("catalog");
+    assert_eq!(get.status(), StatusCode::OK);
+    let get_body = response_json(get).await;
+    assert!(get_body["courses"].as_array().expect("courses").is_empty());
+    assert_eq!(get_body["assignments"][0]["id"], "assignment-1");
+    assert!(get_body["quizzes"].as_array().expect("quizzes").is_empty());
+    assert!(get_body["modules"].as_array().expect("modules").is_empty());
+    assert_eq!(oauth.calls.lock().expect("OAuth calls").len(), 2);
+    assert!(provider
+        .calls
+        .lock()
+        .expect("catalog calls")
+        .iter()
+        .all(|(token, _, _)| token == "organization-token"));
+}
+
+#[tokio::test]
+async fn discovery_authenticates_before_body_and_preserves_validation_and_oauth_errors() {
+    let repository = Arc::new(MemoryRepository::default());
+    let oauth = Arc::new(FixedCatalogOAuth::default());
+    let provider = Arc::new(FixedCatalogProvider::default());
+    let app = app_with_catalog(repository.clone(), oauth.clone(), provider);
+    let platform_id = seed_platform(&app, &repository).await;
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery"
+            ))
+            .header("content-type", "application/json")
+            .header("x-organization-id", "org-1")
+            .body(Body::from("{"))
+            .expect("request"),
+        )
+        .await
+        .expect("unauthorized response");
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let invalid = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery"
+            )),
+            json!({"limit": 101, "provider_url": "https://attacker.example"}),
+        ))
+        .await
+        .expect("validation response");
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let validation = response_json(invalid).await;
+    assert_eq!(validation["detail"][0]["type"], "less_than_equal");
+    assert_eq!(validation["detail"][1]["type"], "extra_forbidden");
+
+    let missing_oauth = app
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery"
+            )),
+            json!({}),
+        ))
+        .await
+        .expect("missing OAuth response");
+    assert_eq!(missing_oauth.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(missing_oauth).await,
+        json!({"detail": "Canvas scope discovery requires an organization OAuth connection; environment tokens are local compatibility fallbacks"})
+    );
+}
+
+#[tokio::test]
+async fn discovery_preserves_the_explicit_local_admin_token_compatibility_path() {
+    let repository = Arc::new(MemoryRepository::default());
+    let oauth = Arc::new(FixedCatalogOAuth::default());
+    let provider = Arc::new(FixedCatalogProvider::default());
+    let app = app_with_catalog_options(
+        repository.clone(),
+        oauth,
+        provider.clone(),
+        Some("local-simulator-token".to_owned()),
+    );
+    let platform_id = seed_platform(&app, &repository).await;
+
+    let response = app
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery"
+            )),
+            json!({"include_assignments": false, "include_quizzes": false, "include_modules": false}),
+        ))
+        .await
+        .expect("local fallback response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        provider.calls.lock().expect("catalog calls")[0].0,
+        "local-simulator-token"
+    );
+}
+
+#[tokio::test]
+async fn discovery_marks_rejected_tokens_and_propagates_bounded_retry_after() {
+    let repository = Arc::new(MemoryRepository::default());
+    let oauth = Arc::new(FixedCatalogOAuth::default());
+    *oauth.token.lock().expect("OAuth token") = Some("rejected-token".to_owned());
+    let provider = Arc::new(FixedCatalogProvider::default());
+    *provider.error.lock().expect("catalog error") =
+        Some(CanvasCatalogProviderError::ReauthorizationRequired);
+    let app = app_with_catalog(repository.clone(), oauth.clone(), provider.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+
+    let rejected = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery"
+            )),
+            json!({}),
+        ))
+        .await
+        .expect("rejected response");
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response_json(rejected).await,
+        json!({"detail": "Canvas OAuth connection requires reauthorization"})
+    );
+    assert_eq!(
+        oauth
+            .rejected_tokens
+            .lock()
+            .expect("rejected tokens")
+            .as_slice(),
+        ["rejected-token"]
+    );
+
+    *provider.error.lock().expect("catalog error") =
+        Some(CanvasCatalogProviderError::TemporarilyUnavailable {
+            retry_after_seconds: Some(23),
+        });
+    let unavailable = app
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/catalog"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("unavailable response");
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(unavailable.headers()["retry-after"], "23");
+    assert_eq!(
+        response_json(unavailable).await,
+        json!({"detail": "Canvas discovery is temporarily unavailable"})
+    );
 }
 
 #[tokio::test]

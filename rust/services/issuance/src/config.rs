@@ -56,6 +56,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
+    pub canvas_local_admin_token: Option<String>,
     pub dependency_timeout: Duration,
     pub token_rate_limit: usize,
     pub token_rate_window: Duration,
@@ -188,6 +189,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_allow_http_localhost_base_urls",
                 &self.canvas_allow_http_localhost_base_urls,
+            )
+            .field(
+                "canvas_local_admin_token_configured",
+                &self.canvas_local_admin_token.is_some(),
             )
             .field("dependency_timeout", &self.dependency_timeout)
             .field("token_rate_limit", &self.token_rate_limit)
@@ -483,6 +488,22 @@ impl IssuanceServiceConfig {
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS");
+        let environment = values
+            .get("ENVIRONMENT")
+            .or_else(|| values.get("APP_ENV"))
+            .map_or("development", String::as_str)
+            .trim()
+            .to_ascii_lowercase();
+        let canvas_local_admin_token =
+            if environment_flag(&values, "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK")
+                && !matches!(environment.as_str(), "production" | "prod")
+            {
+                secret_value(&values, "CANVAS_ADMIN_API_TOKEN")?
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+            } else {
+                None
+            };
         Ok(Self {
             http_addr,
             grpc_addr,
@@ -531,6 +552,7 @@ impl IssuanceServiceConfig {
             canvas_private_origin_allowlist,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
+            canvas_local_admin_token,
             dependency_timeout: Duration::from_secs(10),
             token_rate_limit: settings.rate_limit.requests,
             token_rate_window: Duration::from_secs(settings.rate_limit.window_seconds),
@@ -1121,6 +1143,7 @@ mod tests {
         assert!(config.canvas_private_origin_allowlist.is_empty());
         assert!(!config.canvas_allow_private_base_urls);
         assert!(!config.canvas_allow_http_localhost_base_urls);
+        assert!(config.canvas_local_admin_token.is_none());
     }
 
     #[test]
@@ -1547,6 +1570,38 @@ mod tests {
             "https://ui.example/console/integrations/canvas?source=oauth"
         );
         assert!(!format!("{config:?}").contains("base64-encryption-key"));
+    }
+
+    #[test]
+    fn local_canvas_admin_token_fallback_is_explicit_redacted_and_never_production() {
+        let local = IssuanceServiceConfig::from_values(values(&[
+            ("ENVIRONMENT", "development"),
+            ("CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK", "true"),
+            ("CANVAS_ADMIN_API_TOKEN", " local-simulator-token "),
+        ]))
+        .expect("local Canvas fallback");
+        assert_eq!(
+            local.canvas_local_admin_token.as_deref(),
+            Some("local-simulator-token")
+        );
+        let diagnostic = format!("{local:?}");
+        assert!(diagnostic.contains("canvas_local_admin_token_configured: true"));
+        assert!(!diagnostic.contains("local-simulator-token"));
+
+        let production = IssuanceServiceConfig::from_values(values(&[
+            ("ENVIRONMENT", "production"),
+            ("CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK", "true"),
+            ("CANVAS_ADMIN_API_TOKEN", "must-not-load"),
+        ]))
+        .expect("production ignores local fallback");
+        assert!(production.canvas_local_admin_token.is_none());
+
+        let disabled = IssuanceServiceConfig::from_values(values(&[
+            ("ENVIRONMENT", "development"),
+            ("CANVAS_ADMIN_API_TOKEN", "must-not-load"),
+        ]))
+        .expect("disabled local fallback");
+        assert!(disabled.canvas_local_admin_token.is_none());
     }
 
     #[test]

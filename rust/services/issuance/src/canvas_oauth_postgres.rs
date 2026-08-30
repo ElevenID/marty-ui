@@ -385,6 +385,123 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    async fn acquire_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        lease_seconds: i64,
+    ) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError> {
+        sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET refresh_lease_owner = $3,
+                 refresh_lease_expires_at = clock_timestamp() + make_interval(secs => $4),
+                 updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND status = 'connected' AND reauthorization_required = false
+               AND (refresh_lease_owner IS NULL OR refresh_lease_expires_at IS NULL
+                    OR refresh_lease_expires_at <= clock_timestamp()
+                    OR refresh_lease_owner = $3)
+             RETURNING id, organization_id, platform_id, canvas_base_url,
+                       platform_config_version, client_id, client_secret_ref,
+                       capabilities, scopes, access_token_secret_ref,
+                       refresh_token_secret_ref, token_expires_at, status,
+                       revoke_retry_count, updated_at",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(lease_seconds.max(30))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repository_error)?
+        .map(connection_from_row)
+        .transpose()
+    }
+
+    async fn complete_refresh(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        access_token_secret_ref: &str,
+        refresh_token_secret_ref: Option<&str>,
+        token_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<DateTime<Utc>>, CanvasOAuthError> {
+        sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET access_token_secret_ref = $4,
+                 refresh_token_secret_ref = COALESCE($5, refresh_token_secret_ref),
+                 token_expires_at = $6, status = 'connected',
+                 reauthorization_required = false,
+                 refresh_lease_owner = NULL, refresh_lease_expires_at = NULL,
+                 last_refreshed_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND refresh_lease_owner = $3
+               AND refresh_lease_expires_at > clock_timestamp()
+             RETURNING updated_at",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(access_token_secret_ref)
+        .bind(refresh_token_secret_ref)
+        .bind(token_expires_at)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repository_error)?
+        .map(|row| row.try_get("updated_at").map_err(repository_error))
+        .transpose()
+    }
+
+    async fn release_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        reauthorization_required: bool,
+    ) -> Result<bool, CanvasOAuthError> {
+        let result = sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET refresh_lease_owner = NULL, refresh_lease_expires_at = NULL,
+                 status = CASE WHEN $4 THEN 'reauthorization_required' ELSE status END,
+                 reauthorization_required = CASE WHEN $4 THEN true ELSE reauthorization_required END,
+                 updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND refresh_lease_owner = $3",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(reauthorization_required)
+        .execute(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn patch_validation_error(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        expected_config_version: i64,
+        error_code: Option<&str>,
+    ) -> Result<bool, CanvasOAuthError> {
+        let result = sqlx::query(
+            "UPDATE issuance_service.canvas_platforms
+             SET last_connection_error = $4, updated_at = clock_timestamp()
+             WHERE id = $1 AND organization_id = $2 AND config_version = $3",
+        )
+        .bind(platform_id)
+        .bind(organization_id)
+        .bind(i32::try_from(expected_config_version).map_err(|_| repository_failure())?)
+        .bind(error_code)
+        .execute(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn begin_revocation(
         &self,
         organization_id: &str,

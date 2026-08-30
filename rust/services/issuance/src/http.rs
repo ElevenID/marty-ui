@@ -40,10 +40,11 @@ use crate::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
-    canvas_management::CanvasPlatformRequest,
+    canvas_management::{CanvasPlatformRequest, CanvasScopeDiscoveryRequest},
     canvas_management_http::{
         organization_id_from_query, parse_lti_installation_request, parse_platform_request,
-        CanvasManagementHttpError, CanvasPlatformManagementHttpService, CanvasPlatformResponse,
+        parse_scope_discovery_query, parse_scope_discovery_request, CanvasManagementHttpError,
+        CanvasPlatformManagementHttpService, CanvasPlatformResponse,
     },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
@@ -833,6 +834,14 @@ fn router_with_optional_services(
                 post(refresh_canvas_platform_jwks),
             )
             .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+                post(discover_canvas_scope),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/catalog",
+                get(get_canvas_catalog),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1052,6 +1061,37 @@ async fn refresh_canvas_platform_jwks(
 ) -> Result<Response, CanvasManagementHttpError> {
     canvas_management(&state)?
         .refresh_jwks(&headers, &platform_id)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn discover_canvas_scope(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasScopeDiscoveryRequest = parse_scope_discovery_request(request).await?;
+    service
+        .discover_scope(&headers, &platform_id, request)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn get_canvas_catalog(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let query = request.uri().query().map(str::to_owned);
+    let request = parse_scope_discovery_query(query.as_deref())?;
+    service
+        .discover_scope(&headers, &platform_id, request)
         .await
         .map(|response| Json(response).into_response())
 }
@@ -2390,6 +2430,21 @@ impl IntoResponse for CanvasOAuthHttpError {
                 | Error::SecretUnavailable
                 | Error::InvalidConfiguration,
             ) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+            Self::Service(Error::RefreshRateLimited {
+                retry_after_seconds,
+            }) => {
+                let mut response = (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"detail": "Canvas OAuth refresh was rate limited"})),
+                )
+                    .into_response();
+                if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+                    response
+                        .headers_mut()
+                        .insert(http_header::RETRY_AFTER, value);
+                }
+                response
+            }
             Self::Service(error) => {
                 let (status, detail) = match error {
                     Error::PlatformNotFound => (StatusCode::NOT_FOUND, error.to_string()),
@@ -2407,7 +2462,8 @@ impl IntoResponse for CanvasOAuthHttpError {
                     }
                     Error::RepositoryUnavailable
                     | Error::SecretUnavailable
-                    | Error::InvalidConfiguration => unreachable!("handled above"),
+                    | Error::InvalidConfiguration
+                    | Error::RefreshRateLimited { .. } => unreachable!("handled above"),
                     Error::Security(_) => unreachable!("handled above"),
                 };
                 (status, Json(json!({"detail": detail}))).into_response()

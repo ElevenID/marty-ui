@@ -11,6 +11,7 @@ use marty_issuance_service::{
         CanvasAwardCandidateMaterializerConfig, CanvasAwardCandidateMaterializerService,
         UuidCanvasEvidenceFactIdGenerator,
     },
+    canvas_catalog::HttpCanvasCatalogProvider,
     canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
@@ -168,10 +169,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             pool.clone(),
             integration_secret_cipher,
         )),
-        Arc::new(HttpCanvasOAuthProvider::new(
+        Arc::new(HttpCanvasOAuthProvider::new_with_policy(
             std::time::Duration::from_secs(15),
             config.canvas_private_origin_allowlist.clone(),
             config.canvas_allow_private_base_urls,
+            config.canvas_allow_http_localhost_base_urls,
         )),
         config.issuance_api_key.as_deref(),
         CanvasOAuthServiceConfig {
@@ -190,8 +192,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         allow_private_networks: config.canvas_allow_private_base_urls,
         allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
     };
-    let canvas_management =
-        CanvasPlatformManagementHttpService::new(CanvasPlatformManagementService::new(
+    let canvas_management = CanvasPlatformManagementHttpService::with_catalog_options(
+        CanvasPlatformManagementService::new(
             Arc::new(PostgresCanvasManagementRepository::new(pool.clone())),
             config.issuance_api_key.as_deref(),
             CanvasOriginPolicy {
@@ -201,7 +203,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
             &config.issuer_base_url,
             canvas_lti_jwks_refresh_config.clone(),
-        ));
+        ),
+        Arc::new(canvas_oauth.clone()),
+        Arc::new(HttpCanvasCatalogProvider::new(
+            std::time::Duration::from_secs(10),
+            config.canvas_private_origin_allowlist.clone(),
+            config.canvas_allow_private_base_urls,
+            config.canvas_allow_http_localhost_base_urls,
+        )),
+        config.canvas_local_admin_token.clone(),
+    );
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,

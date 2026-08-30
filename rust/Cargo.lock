@@ -4585,6 +4585,7 @@ dependencies = [
  "mmf-runtime",
  "mmf-security",
  "p256 0.13.2",
+ "percent-encoding",
  "prost",
  "protoc-bin-vendored",
  "rand 0.8.7",
