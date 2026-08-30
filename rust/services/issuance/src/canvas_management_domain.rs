@@ -353,8 +353,7 @@ impl CanvasPlatformRecord {
     }
 
     /// Persist only metadata that has already passed the shared origin and
-    /// trust-profile probe. Enabling reflects the caller's stored intent; each
-    /// binding still requires its own validation and activation.
+    /// trust-profile probe. A probe by itself never changes enabled state.
     pub fn apply_lti_metadata_probe(
         &mut self,
         probe: CanvasLtiPlatformProbe,
@@ -376,12 +375,17 @@ impl CanvasPlatformRecord {
         self.lti_jwks_expires_at = Some(expires_at);
         self.lti_openid_configuration = Some(probe.raw_openid_configuration);
         self.last_connection_error = None;
+        self.updated_at = now;
+        Ok(())
+    }
+
+    /// Installation may honor stored enable intent after metadata succeeds;
+    /// award issuance still requires separately validated active bindings.
+    pub fn complete_lti_installation_after_probe(&mut self) {
         if self.enabled_intent() {
             self.enabled = true;
             self.registration_status = "installed".to_owned();
         }
-        self.updated_at = now;
-        Ok(())
     }
 
     pub fn record_lti_probe_failure(&mut self, error: String, now: DateTime<Utc>) {

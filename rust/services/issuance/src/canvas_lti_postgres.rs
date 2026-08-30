@@ -1011,7 +1011,7 @@ impl CanvasLtiJwksRefresher for PostgresCanvasLtiJwksRefresher {
             self.probe_client.as_ref(),
         )
         .await
-        .map_err(CanvasLtiLaunchPlanError::JwksRefresh)?;
+        .map_err(|error| CanvasLtiLaunchPlanError::JwksRefresh(error.to_string()))?;
         let normalized_origin = probe.canvas_base_url.clone();
         let ttl_seconds = self.config.ttl.as_secs();
         if ttl_seconds == 0 || ttl_seconds > i64::MAX as u64 {

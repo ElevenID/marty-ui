@@ -378,6 +378,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
             now + chrono::Duration::seconds(6),
         )
         .unwrap();
+    installation.complete_lti_installation_after_probe();
     installation.issue_lti_config_token("b".repeat(64), now + chrono::Duration::seconds(7));
     let installed = repository
         .save_lti_installation(&installation, 1, installation_updated_at, changed)
@@ -422,13 +423,78 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .unwrap()
         .is_none());
 
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings
+         SET enabled = true, validated_config_version = 2,
+             readiness_checks = '[{\"status\":\"ready\"}]'::jsonb,
+             readiness_validated_at = clock_timestamp(),
+             activated_at = clock_timestamp()
+         WHERE id = 'binding-installation'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut refreshed = installed.clone();
+    refreshed
+        .apply_lti_metadata_probe(
+            CanvasLtiPlatformProbe {
+                canvas_base_url: "https://canvas.example.edu".to_owned(),
+                issuer: "https://canvas.instructure.com".to_owned(),
+                authorization_endpoint: Some(
+                    "https://sso.canvaslms.com/api/lti/authorize_redirect".to_owned(),
+                ),
+                token_endpoint: Some("https://canvas.example.edu/login/oauth2/token".to_owned()),
+                jwks_uri: "https://sso.canvaslms.com/api/lti/security/jwks".to_owned(),
+                registration_endpoint: None,
+                raw_openid_configuration: json!({"issuer": "https://canvas.instructure.com"}),
+                jwks_json: json!({"keys": [{"kid": "refreshed-key"}]}),
+            },
+            std::time::Duration::from_secs(7_200),
+            now + chrono::Duration::seconds(8),
+        )
+        .unwrap();
+    let refreshed = repository
+        .save_lti_probe_metadata(&refreshed, installed.config_version, installed.updated_at)
+        .await
+        .unwrap()
+        .expect("probe metadata CAS");
+    assert_eq!(
+        refreshed.lti_jwks_json,
+        Some(json!({"keys": [{"kid": "refreshed-key"}]}))
+    );
+    assert!(refreshed.enabled);
+    assert_eq!(refreshed.registration_status, "installed");
+    assert_eq!(
+        refreshed.active_lti_config_token_hash(),
+        installed.active_lti_config_token_hash()
+    );
+    let binding = sqlx::query(
+        "SELECT enabled, validated_config_version FROM issuance_service.canvas_program_bindings
+         WHERE id = 'binding-installation'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(binding.try_get::<bool, _>("enabled").unwrap());
+    assert_eq!(
+        binding
+            .try_get::<Option<i32>, _>("validated_config_version")
+            .unwrap(),
+        Some(2)
+    );
+    assert!(repository
+        .save_lti_probe_metadata(&refreshed, installed.config_version, installed.updated_at)
+        .await
+        .unwrap()
+        .is_none());
+
     let conflicting = CanvasPlatformRecord::new_draft(
         "org-management".to_owned(),
         platform_request("Conflict", false),
         CanvasOriginPolicy::default()
             .resolve("https://canvas.example.edu")
             .unwrap(),
-        now + chrono::Duration::seconds(8),
+        now + chrono::Duration::seconds(9),
     )
     .unwrap();
     repository.create_platform(&conflicting).await.unwrap();
@@ -449,7 +515,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
                 "org-management",
                 &conflicting.id,
                 conflicting.config_version + 1,
-                now + chrono::Duration::seconds(9),
+                now + chrono::Duration::seconds(10),
             )
             .await,
         Err(CanvasManagementRepositoryError::ConfigurationChanged)
@@ -471,7 +537,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
                 "org-management",
                 &conflicting.id,
                 conflicting.config_version,
-                now + chrono::Duration::seconds(10),
+                now + chrono::Duration::seconds(11),
             )
             .await,
         Err(CanvasManagementRepositoryError::OAuthConnectionChanged)

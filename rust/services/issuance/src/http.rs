@@ -825,6 +825,14 @@ fn router_with_optional_services(
                 put(update_canvas_lti_installation),
             )
             .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
+                post(probe_canvas_platform_sandbox),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
+                post(refresh_canvas_platform_jwks),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1022,6 +1030,28 @@ async fn update_canvas_lti_installation(
     let installation = parse_lti_installation_request(request).await?;
     service
         .update_lti_installation(&headers, &platform_id, installation)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn probe_canvas_platform_sandbox(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .sandbox_probe(&headers, &platform_id)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn refresh_canvas_platform_jwks(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .refresh_jwks(&headers, &platform_id)
         .await
         .map(|response| Json(response).into_response())
 }

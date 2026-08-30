@@ -1,5 +1,8 @@
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -36,6 +39,21 @@ struct MemoryRepository {
 
 struct SuccessfulProbe;
 
+fn successful_probe(canvas_base_url: &str, kid: &str) -> CanvasLtiPlatformProbe {
+    CanvasLtiPlatformProbe {
+        canvas_base_url: canvas_base_url.to_owned(),
+        issuer: "https://canvas.instructure.com".to_owned(),
+        authorization_endpoint: Some(
+            "https://sso.canvaslms.com/api/lti/authorize_redirect".to_owned(),
+        ),
+        token_endpoint: Some(format!("{canvas_base_url}/login/oauth2/token")),
+        jwks_uri: "https://sso.canvaslms.com/api/lti/security/jwks".to_owned(),
+        registration_endpoint: None,
+        raw_openid_configuration: json!({"issuer": "https://canvas.instructure.com"}),
+        jwks_json: json!({"keys": [{"kid": kid}]}),
+    }
+}
+
 #[async_trait]
 impl CanvasLtiProbeClient for SuccessfulProbe {
     async fn probe(
@@ -43,18 +61,24 @@ impl CanvasLtiProbeClient for SuccessfulProbe {
         canvas_base_url: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
-        Ok(CanvasLtiPlatformProbe {
-            canvas_base_url: canvas_base_url.to_owned(),
-            issuer: "https://canvas.instructure.com".to_owned(),
-            authorization_endpoint: Some(
-                "https://sso.canvaslms.com/api/lti/authorize_redirect".to_owned(),
-            ),
-            token_endpoint: Some(format!("{canvas_base_url}/login/oauth2/token")),
-            jwks_uri: "https://sso.canvaslms.com/api/lti/security/jwks".to_owned(),
-            registration_endpoint: None,
-            raw_openid_configuration: json!({"issuer": "https://canvas.instructure.com"}),
-            jwks_json: json!({"keys": [{"kid": "canvas-key"}]}),
-        })
+        Ok(successful_probe(canvas_base_url, "canvas-key"))
+    }
+}
+
+struct CountingProbe(Arc<AtomicUsize>);
+
+#[async_trait]
+impl CanvasLtiProbeClient for CountingProbe {
+    async fn probe(
+        &self,
+        canvas_base_url: &str,
+        _config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String> {
+        let count = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(successful_probe(
+            canvas_base_url,
+            &format!("canvas-key-{count}"),
+        ))
     }
 }
 
@@ -68,6 +92,21 @@ impl CanvasLtiProbeClient for FailedProbe {
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         Err("provider metadata unavailable".to_owned())
+    }
+}
+
+struct DriftProbe;
+
+#[async_trait]
+impl CanvasLtiProbeClient for DriftProbe {
+    async fn probe(
+        &self,
+        canvas_base_url: &str,
+        _config: &CanvasLtiJwksRefreshConfig,
+    ) -> Result<CanvasLtiPlatformProbe, String> {
+        let mut probe = successful_probe(canvas_base_url, "drift-key");
+        probe.jwks_uri = "https://attacker.example/jwks".to_owned();
+        Ok(probe)
     }
 }
 
@@ -246,6 +285,37 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
             return Ok(None);
         };
         *existing = platform.clone();
+        Ok(Some(existing.clone()))
+    }
+
+    async fn save_lti_probe_metadata(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        if *self.force_conflict.lock().expect("conflict") {
+            return Ok(None);
+        }
+        let mut platforms = self.platforms.lock().expect("platforms");
+        let Some(existing) = platforms.iter_mut().find(|candidate| {
+            candidate.organization_id == platform.organization_id
+                && candidate.id == platform.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == expected_config_version
+                && candidate.updated_at == expected_updated_at
+        }) else {
+            return Ok(None);
+        };
+        existing.canvas_base_url = platform.canvas_base_url.clone();
+        existing.lti_issuer = platform.lti_issuer.clone();
+        existing.lti_jwks_url = platform.lti_jwks_url.clone();
+        existing.lti_jwks_json = platform.lti_jwks_json.clone();
+        existing.lti_jwks_fetched_at = platform.lti_jwks_fetched_at;
+        existing.lti_jwks_expires_at = platform.lti_jwks_expires_at;
+        existing.lti_openid_configuration = platform.lti_openid_configuration.clone();
+        existing.last_connection_error = platform.last_connection_error.clone();
+        existing.updated_at = platform.updated_at;
         Ok(Some(existing.clone()))
     }
 }
@@ -933,5 +1003,204 @@ async fn lti_installation_persists_probe_failure_and_rejects_conflicting_token_a
     assert_eq!(
         response_json(conflicting).await,
         json!({"detail": "Rotate and revoke are mutually exclusive"})
+    );
+}
+
+#[tokio::test]
+async fn sandbox_probe_and_jwks_refresh_share_trust_without_enabling_the_platform() {
+    let repository = Arc::new(MemoryRepository::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = app_with_probe(repository.clone(), Arc::new(CountingProbe(calls.clone())));
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Probe", "client-1"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+
+    let sandbox = app
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(sandbox.status(), StatusCode::OK);
+    let sandbox = response_json(sandbox).await;
+    assert_eq!(sandbox["probe"]["lti_trust_profile"], "hosted_global");
+    assert_eq!(
+        sandbox["probe"]["jwks_json"]["keys"][0]["kid"],
+        "canvas-key-1"
+    );
+    assert_eq!(sandbox["platform"]["registration_status"], "draft");
+    assert_eq!(sandbox["platform"]["enabled"], false);
+
+    let refreshed = app
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(refreshed.status(), StatusCode::OK);
+    let refreshed = response_json(refreshed).await;
+    assert_eq!(refreshed["refreshed"], true);
+    assert_eq!(
+        refreshed["probe"]["jwks_json"]["keys"][0]["kid"],
+        "canvas-key-2"
+    );
+    assert_eq!(refreshed["platform"]["registration_status"], "draft");
+    assert_eq!(refreshed["platform"]["enabled"], false);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let persisted = repository.platforms.lock().expect("platforms")[0].clone();
+    assert_eq!(
+        persisted.lti_jwks_json,
+        Some(json!({"keys": [{"kid": "canvas-key-2"}]}))
+    );
+    assert!(!persisted.enabled);
+}
+
+#[tokio::test]
+async fn management_probe_failures_preserve_route_specific_errors() {
+    let repository = Arc::new(MemoryRepository::default());
+    let healthy = app(repository.clone());
+    let created = healthy
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Probe errors", "client-1"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+    let failed = app_with_probe(repository, Arc::new(FailedProbe));
+
+    for (suffix, detail) in [
+        (
+            "sandbox-probe",
+            "Canvas sandbox probe failed: provider metadata unavailable",
+        ),
+        (
+            "jwks-refresh",
+            "Canvas JWKS refresh failed: provider metadata unavailable",
+        ),
+    ] {
+        let response = failed
+            .clone()
+            .oneshot(
+                Request::post(format!(
+                    "/v1/integrations/canvas/platforms/{platform_id}/{suffix}"
+                ))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_json(response).await, json!({"detail": detail}));
+    }
+}
+
+#[tokio::test]
+async fn endpoint_drift_is_an_exact_conflict_and_never_persists_installation_changes() {
+    let repository = Arc::new(MemoryRepository::default());
+    let healthy = app(repository.clone());
+    let created = healthy
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Endpoint drift", "old-client"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+    let registration = healthy
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/registration-config"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(registration.status(), StatusCode::OK);
+    let before = repository.platforms.lock().expect("platforms")[0].clone();
+
+    let drift = app_with_probe(repository.clone(), Arc::new(DriftProbe));
+    let installation = drift
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation"
+            )),
+            json!({
+                "lti_client_id": "new-client",
+                "lti_deployment_id": "new-deployment"
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(installation.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(installation).await,
+        json!({"detail": "Canvas metadata probe returned endpoints outside the persisted trust profile"})
+    );
+    let after = repository.platforms.lock().expect("platforms")[0].clone();
+    assert_eq!(after.lti_client_id, before.lti_client_id);
+    assert_eq!(after.lti_deployment_id, before.lti_deployment_id);
+    assert_eq!(after.config_version, before.config_version);
+    assert_eq!(
+        after.active_lti_config_token_hash(),
+        before.active_lti_config_token_hash()
+    );
+    assert!(repository
+        .installation_invalidations
+        .lock()
+        .expect("installation invalidations")
+        .is_empty());
+
+    let sandbox = drift
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(sandbox.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(sandbox).await,
+        json!({"detail": "Canvas metadata probe returned endpoints outside the persisted trust profile"})
     );
 }

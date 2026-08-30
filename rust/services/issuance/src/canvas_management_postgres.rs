@@ -216,6 +216,26 @@ const PERSIST_LTI_INSTALLATION: &str = "UPDATE issuance_service.canvas_platforms
      last_connection_error, config_version, archived_at, enabled, created_at,
      updated_at";
 
+const PERSIST_LTI_PROBE_METADATA: &str = "UPDATE issuance_service.canvas_platforms
+ SET canvas_base_url = $5,
+     lti_issuer = $6,
+     lti_jwks_url = $7,
+     lti_jwks_json = $8,
+     lti_jwks_fetched_at = $9,
+     lti_jwks_expires_at = $10,
+     lti_openid_configuration = $11,
+     last_connection_error = $12,
+     updated_at = $13
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND archived_at IS NULL
+ RETURNING id, organization_id, canvas_account_id, display_name,
+     canvas_base_url, lti_client_id, lti_deployment_id, lti_trust_profile,
+     lti_issuer, lti_jwks_url, lti_jwks_json, lti_jwks_fetched_at,
+     lti_jwks_expires_at, lti_openid_configuration, registration_status,
+     connection_config, capability_snapshot, last_validated_at,
+     last_connection_error, config_version, archived_at, enabled, created_at,
+     updated_at";
+
 const ARCHIVE_PLATFORM_BINDINGS: &str = "UPDATE issuance_service.canvas_program_bindings
  SET enabled = false, archived_at = $3, updated_at = $3
  WHERE organization_id = $1 AND platform_id = $2 AND archived_at IS NULL";
@@ -515,6 +535,33 @@ impl PostgresCanvasManagementRepository {
         transaction.commit().await.map_err(repository_error)?;
         platform_from_row(row).map(Some)
     }
+
+    pub async fn save_lti_probe_metadata(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        sqlx::query(PERSIST_LTI_PROBE_METADATA)
+            .bind(&platform.organization_id)
+            .bind(&platform.id)
+            .bind(version_i32(expected_config_version)?)
+            .bind(expected_updated_at)
+            .bind(&platform.canvas_base_url)
+            .bind(&platform.lti_issuer)
+            .bind(&platform.lti_jwks_url)
+            .bind(&platform.lti_jwks_json)
+            .bind(platform.lti_jwks_fetched_at)
+            .bind(platform.lti_jwks_expires_at)
+            .bind(&platform.lti_openid_configuration)
+            .bind(&platform.last_connection_error)
+            .bind(platform.updated_at)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(platform_from_row)
+            .transpose()
+    }
 }
 
 #[async_trait::async_trait]
@@ -622,6 +669,21 @@ impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
             expected_config_version,
             expected_updated_at,
             invalidate_bindings,
+        )
+        .await
+    }
+
+    async fn save_lti_probe_metadata(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::save_lti_probe_metadata(
+            self,
+            platform,
+            expected_config_version,
+            expected_updated_at,
         )
         .await
     }

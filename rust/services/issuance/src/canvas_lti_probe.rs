@@ -10,6 +10,9 @@ use marty_oid4vci::lti::{
     canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
     CanvasLtiPlatformProbe,
 };
+use serde::Serialize;
+use serde_json::Value;
+use thiserror::Error;
 
 #[derive(Clone)]
 pub struct CanvasLtiJwksRefreshConfig {
@@ -66,6 +69,44 @@ impl CanvasLtiProbeClient for MartyCanvasLtiProbeClient {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasLtiProbeResponse {
+    pub canvas_base_url: String,
+    pub lti_trust_profile: String,
+    pub issuer: String,
+    pub authorization_endpoint: Option<String>,
+    pub token_endpoint: Option<String>,
+    pub jwks_uri: String,
+    pub registration_endpoint: Option<String>,
+    pub raw_openid_configuration: Value,
+    pub jwks_json: Value,
+}
+
+impl CanvasLtiProbeResponse {
+    #[must_use]
+    pub fn from_probe(probe: &CanvasLtiPlatformProbe, trust_profile: &str) -> Self {
+        Self {
+            canvas_base_url: probe.canvas_base_url.clone(),
+            lti_trust_profile: trust_profile.to_owned(),
+            issuer: probe.issuer.clone(),
+            authorization_endpoint: probe.authorization_endpoint.clone(),
+            token_endpoint: probe.token_endpoint.clone(),
+            jwks_uri: probe.jwks_uri.clone(),
+            registration_endpoint: probe.registration_endpoint.clone(),
+            raw_openid_configuration: probe.raw_openid_configuration.clone(),
+            jwks_json: probe.jwks_json.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum CanvasLtiMetadataProbeError {
+    #[error("{0}")]
+    Provider(String),
+    #[error("Canvas metadata probe returned endpoints outside the persisted trust profile")]
+    EndpointMismatch,
+}
+
 /// Probe one Canvas origin and reject metadata outside its persisted trust
 /// profile. The caller owns persistence and any lifecycle transition.
 pub async fn probe_canvas_lti_metadata(
@@ -73,30 +114,30 @@ pub async fn probe_canvas_lti_metadata(
     trust_profile: &str,
     config: &CanvasLtiJwksRefreshConfig,
     client: &dyn CanvasLtiProbeClient,
-) -> Result<CanvasLtiPlatformProbe, String> {
+) -> Result<CanvasLtiPlatformProbe, CanvasLtiMetadataProbeError> {
     let normalized_origin = normalize_canvas_base_url(
         canvas_base_url,
         config.allow_private_networks,
         config.allow_http_localhost,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| CanvasLtiMetadataProbeError::Provider(error.to_string()))?;
     let expected = canvas_lti_trust_profile(
         &normalized_origin,
         trust_profile,
         &config.self_managed_origins,
     )
-    .map_err(|_| "Canvas metadata probe did not use the persisted LTI trust profile".to_owned())?;
-    let probe = client.probe(&normalized_origin, config).await?;
+    .map_err(|error| CanvasLtiMetadataProbeError::Provider(error.to_string()))?;
+    let probe = client
+        .probe(&normalized_origin, config)
+        .await
+        .map_err(CanvasLtiMetadataProbeError::Provider)?;
     if probe.canvas_base_url != normalized_origin
         || probe.issuer != expected.issuer
         || probe.authorization_endpoint.as_deref() != Some(expected.authorization_endpoint.as_str())
         || probe.token_endpoint.as_deref() != Some(expected.token_endpoint.as_str())
         || probe.jwks_uri != expected.jwks_uri
     {
-        return Err(
-            "Canvas metadata probe returned endpoints outside the persisted trust profile"
-                .to_owned(),
-        );
+        return Err(CanvasLtiMetadataProbeError::EndpointMismatch);
     }
     Ok(probe)
 }
@@ -155,10 +196,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(
+        assert!(matches!(
             invalid_profile,
-            "Canvas metadata probe did not use the persisted LTI trust profile"
-        );
+            CanvasLtiMetadataProbeError::Provider(_)
+        ));
 
         let endpoint_drift = probe_canvas_lti_metadata(
             "https://canvas.example.edu",
@@ -170,7 +211,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             endpoint_drift,
-            "Canvas metadata probe returned endpoints outside the persisted trust profile"
+            CanvasLtiMetadataProbeError::EndpointMismatch
         );
     }
 

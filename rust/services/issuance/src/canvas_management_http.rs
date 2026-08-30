@@ -15,7 +15,7 @@ use crate::{
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
         CanvasLtiRegistrationResponse, CanvasPlatformManagementError,
-        CanvasPlatformManagementService,
+        CanvasPlatformManagementService, CanvasPlatformProbeResult,
     },
     transaction_reads::TransactionReadError,
 };
@@ -177,6 +177,70 @@ impl CanvasPlatformManagementHttpService {
             )
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn sandbox_probe(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+    ) -> Result<CanvasPlatformSandboxProbeResponse, CanvasManagementHttpError> {
+        self.management
+            .sandbox_probe(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(CanvasPlatformSandboxProbeResponse::from)
+            .map_err(Into::into)
+    }
+
+    pub async fn refresh_jwks(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+    ) -> Result<CanvasPlatformJwksRefreshResponse, CanvasManagementHttpError> {
+        self.management
+            .refresh_jwks(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(CanvasPlatformJwksRefreshResponse::from)
+            .map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasPlatformSandboxProbeResponse {
+    pub platform: CanvasPlatformResponse,
+    pub probe: crate::canvas_lti_probe::CanvasLtiProbeResponse,
+}
+
+impl From<CanvasPlatformProbeResult> for CanvasPlatformSandboxProbeResponse {
+    fn from(result: CanvasPlatformProbeResult) -> Self {
+        Self {
+            platform: CanvasPlatformResponse::from(result.platform),
+            probe: result.probe,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasPlatformJwksRefreshResponse {
+    pub platform: CanvasPlatformResponse,
+    pub refreshed: bool,
+    pub probe: crate::canvas_lti_probe::CanvasLtiProbeResponse,
+}
+
+impl From<CanvasPlatformProbeResult> for CanvasPlatformJwksRefreshResponse {
+    fn from(result: CanvasPlatformProbeResult) -> Self {
+        Self {
+            platform: CanvasPlatformResponse::from(result.platform),
+            refreshed: true,
+            probe: result.probe,
+        }
     }
 }
 
@@ -619,6 +683,27 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
         CanvasPlatformManagementError::LtiMetadataProbeFailed(error) => (
             StatusCode::CONFLICT,
             format!("Canvas LTI metadata probe failed: {error}"),
+        ),
+        CanvasPlatformManagementError::LtiMetadataEndpointMismatch => (
+            StatusCode::CONFLICT,
+            "Canvas metadata probe returned endpoints outside the persisted trust profile"
+                .to_owned(),
+        ),
+        CanvasPlatformManagementError::SandboxProbeBaseUrlRequired => (
+            StatusCode::BAD_REQUEST,
+            "Canvas platform requires canvas_base_url before probing".to_owned(),
+        ),
+        CanvasPlatformManagementError::SandboxProbeFailed(error) => (
+            StatusCode::BAD_REQUEST,
+            format!("Canvas sandbox probe failed: {error}"),
+        ),
+        CanvasPlatformManagementError::JwksRefreshBaseUrlRequired => (
+            StatusCode::BAD_REQUEST,
+            "Canvas platform requires canvas_base_url before refreshing JWKS".to_owned(),
+        ),
+        CanvasPlatformManagementError::JwksRefreshFailed(error) => (
+            StatusCode::BAD_REQUEST,
+            format!("Canvas JWKS refresh failed: {error}"),
         ),
         CanvasPlatformManagementError::ConfigurationChanged => (
             StatusCode::CONFLICT,

@@ -14,8 +14,8 @@ use thiserror::Error;
 
 use crate::{
     canvas_lti_probe::{
-        probe_canvas_lti_metadata, CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient,
-        MartyCanvasLtiProbeClient,
+        probe_canvas_lti_metadata, CanvasLtiJwksRefreshConfig, CanvasLtiMetadataProbeError,
+        CanvasLtiProbeClient, CanvasLtiProbeResponse, MartyCanvasLtiProbeClient,
     },
     canvas_management::{
         CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasRequestValidationError,
@@ -55,6 +55,16 @@ pub enum CanvasPlatformManagementError {
     ConflictingTokenMutation,
     #[error("Canvas LTI metadata probe failed: {0}")]
     LtiMetadataProbeFailed(String),
+    #[error("Canvas metadata probe returned endpoints outside the persisted trust profile")]
+    LtiMetadataEndpointMismatch,
+    #[error("Canvas platform requires canvas_base_url before probing")]
+    SandboxProbeBaseUrlRequired,
+    #[error("Canvas sandbox probe failed: {0}")]
+    SandboxProbeFailed(String),
+    #[error("Canvas platform requires canvas_base_url before refreshing JWKS")]
+    JwksRefreshBaseUrlRequired,
+    #[error("Canvas JWKS refresh failed: {0}")]
+    JwksRefreshFailed(String),
     #[error("Canvas platform configuration changed; retry the request")]
     ConfigurationChanged,
     #[error("Canvas platform configuration changed; retry platform archival")]
@@ -125,6 +135,13 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_updated_at: DateTime<Utc>,
         invalidate_bindings: bool,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
+    async fn save_lti_probe_metadata(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -132,6 +149,12 @@ pub struct CanvasLtiRegistrationResponse {
     pub platform_id: String,
     pub developer_key_configuration: Value,
     pub installation: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasPlatformProbeResult {
+    pub platform: CanvasPlatformRecord,
+    pub probe: CanvasLtiProbeResponse,
 }
 
 #[derive(Clone)]
@@ -391,7 +414,7 @@ impl CanvasPlatformManagementService {
                     self.lti_probe_config.ttl,
                     Utc::now(),
                 )?,
-                Err(error) => {
+                Err(CanvasLtiMetadataProbeError::Provider(error)) => {
                     platform.record_lti_probe_failure(error.clone(), Utc::now());
                     self.repository
                         .save_lti_installation(
@@ -405,8 +428,12 @@ impl CanvasPlatformManagementService {
                         .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
                     return Err(CanvasPlatformManagementError::LtiMetadataProbeFailed(error));
                 }
+                Err(CanvasLtiMetadataProbeError::EndpointMismatch) => {
+                    return Err(CanvasPlatformManagementError::LtiMetadataEndpointMismatch);
+                }
             }
         }
+        platform.complete_lti_installation_after_probe();
 
         let mut token = None;
         if request.revoke_config_token {
@@ -431,6 +458,84 @@ impl CanvasPlatformManagementService {
             .map_err(map_repository_error)?
             .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
         Ok(self.registration_response(&platform, token.as_deref()))
+    }
+
+    pub async fn sandbox_probe(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasPlatformProbeResult, CanvasPlatformManagementError> {
+        self.probe_and_persist(
+            platform_id,
+            api_key,
+            trusted_organization_id,
+            CanvasProbeOperation::Sandbox,
+        )
+        .await
+    }
+
+    pub async fn refresh_jwks(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasPlatformProbeResult, CanvasPlatformManagementError> {
+        self.probe_and_persist(
+            platform_id,
+            api_key,
+            trusted_organization_id,
+            CanvasProbeOperation::JwksRefresh,
+        )
+        .await
+    }
+
+    async fn probe_and_persist(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+        operation: CanvasProbeOperation,
+    ) -> Result<CanvasPlatformProbeResult, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let mut platform = self
+            .repository
+            .active_platform(organization_id, platform_id)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::PlatformNotFound)?;
+        let expected_config_version = platform.config_version;
+        let expected_updated_at = platform.updated_at;
+        let canvas_base_url = platform
+            .canvas_base_url
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| operation.base_url_error())?;
+        let probe = probe_canvas_lti_metadata(
+            &canvas_base_url,
+            &platform.lti_trust_profile,
+            &self.lti_probe_config,
+            self.lti_probe_client.as_ref(),
+        )
+        .await
+        .map_err(|error| match error {
+            CanvasLtiMetadataProbeError::Provider(error) => operation.probe_error(error),
+            CanvasLtiMetadataProbeError::EndpointMismatch => {
+                CanvasPlatformManagementError::LtiMetadataEndpointMismatch
+            }
+        })?;
+        let response = CanvasLtiProbeResponse::from_probe(&probe, &platform.lti_trust_profile);
+        platform.apply_lti_metadata_probe(probe, self.lti_probe_config.ttl, Utc::now())?;
+        let platform = self
+            .repository
+            .save_lti_probe_metadata(&platform, expected_config_version, expected_updated_at)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(CanvasPlatformProbeResult {
+            platform,
+            probe: response,
+        })
     }
 
     fn registration_response(
@@ -548,6 +653,28 @@ impl CanvasPlatformManagementService {
         self.security
             .require_organization(Some(trusted), claimed, true)?;
         Ok(trusted)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CanvasProbeOperation {
+    Sandbox,
+    JwksRefresh,
+}
+
+impl CanvasProbeOperation {
+    const fn base_url_error(self) -> CanvasPlatformManagementError {
+        match self {
+            Self::Sandbox => CanvasPlatformManagementError::SandboxProbeBaseUrlRequired,
+            Self::JwksRefresh => CanvasPlatformManagementError::JwksRefreshBaseUrlRequired,
+        }
+    }
+
+    fn probe_error(self, error: String) -> CanvasPlatformManagementError {
+        match self {
+            Self::Sandbox => CanvasPlatformManagementError::SandboxProbeFailed(error),
+            Self::JwksRefresh => CanvasPlatformManagementError::JwksRefreshFailed(error),
+        }
     }
 }
 
@@ -790,6 +917,34 @@ mod tests {
                 return Ok(None);
             };
             *existing = platform.clone();
+            Ok(Some(existing.clone()))
+        }
+
+        async fn save_lti_probe_metadata(
+            &self,
+            platform: &CanvasPlatformRecord,
+            expected_config_version: i64,
+            expected_updated_at: DateTime<Utc>,
+        ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+            let mut platforms = self.platforms.lock().await;
+            let Some(existing) = platforms.iter_mut().find(|candidate| {
+                candidate.organization_id == platform.organization_id
+                    && candidate.id == platform.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == expected_config_version
+                    && candidate.updated_at == expected_updated_at
+            }) else {
+                return Ok(None);
+            };
+            existing.canvas_base_url = platform.canvas_base_url.clone();
+            existing.lti_issuer = platform.lti_issuer.clone();
+            existing.lti_jwks_url = platform.lti_jwks_url.clone();
+            existing.lti_jwks_json = platform.lti_jwks_json.clone();
+            existing.lti_jwks_fetched_at = platform.lti_jwks_fetched_at;
+            existing.lti_jwks_expires_at = platform.lti_jwks_expires_at;
+            existing.lti_openid_configuration = platform.lti_openid_configuration.clone();
+            existing.last_connection_error = platform.last_connection_error.clone();
+            existing.updated_at = platform.updated_at;
             Ok(Some(existing.clone()))
         }
     }
