@@ -1,5 +1,6 @@
-use std::fmt;
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
+use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -7,8 +8,10 @@ use thiserror::Error;
 
 use crate::canvas_lti_experience::{
     browser_safe_canvas_context, first_text, lti_subject, signed_canvas_identifier,
-    CanvasLtiExperienceSessionContext,
+    CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError,
+    CanvasLtiExperienceSessionService,
 };
+use crate::canvas_lti_launch::CanvasLtiClock;
 
 const PROTECTED_CALLER_FIELDS: [&str; 3] = ["canvas_subject", "canvas_course_id", "canvas_user_id"];
 const REDACTED: &str = "[REDACTED]";
@@ -27,6 +30,12 @@ impl fmt::Debug for CanvasLtiBootstrapRequest {
             .field("applicant_data", &REDACTED)
             .finish()
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasLtiBootstrapApplicationSeed {
+    pub id: String,
+    pub anonymous_identifier_suffix: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -133,36 +142,280 @@ pub enum CanvasLtiBootstrapPlanError {
     InvalidSession,
 }
 
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum CanvasLtiBootstrapRepositoryError {
+    #[error("Canvas LTI bootstrap repository is unavailable")]
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[error("Canvas LTI sync enqueue is unavailable")]
+pub struct CanvasLtiBootstrapSyncError;
+
+#[async_trait]
+pub trait CanvasLtiBootstrapRepository: Send + Sync {
+    async fn bound_feature_enabled(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+        flag: &str,
+    ) -> Result<Option<bool>, CanvasLtiBootstrapRepositoryError>;
+
+    async fn get_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<CanvasLtiBootstrapTemplate>, CanvasLtiBootstrapRepositoryError>;
+
+    async fn list_applications(
+        &self,
+        organization_id: &str,
+        template_id: &str,
+    ) -> Result<Vec<CanvasLtiBootstrapApplication>, CanvasLtiBootstrapRepositoryError>;
+
+    async fn persist_plan(
+        &self,
+        context: &CanvasLtiExperienceSessionContext,
+        plan: &CanvasLtiBootstrapPlan,
+    ) -> Result<(), CanvasLtiBootstrapRepositoryError>;
+
+    async fn get_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Option<CanvasLtiBootstrapApplication>, CanvasLtiBootstrapRepositoryError>;
+}
+
+#[async_trait]
+pub trait CanvasLtiAwardCandidateMaterializer: Send + Sync {
+    async fn materialize(
+        &self,
+        context: &CanvasLtiExperienceSessionContext,
+        application: &CanvasLtiBootstrapApplication,
+    ) -> Result<(), CanvasLtiBootstrapRepositoryError>;
+}
+
+#[async_trait]
+pub trait CanvasLtiBootstrapSyncEnqueuer: Send + Sync {
+    async fn enqueue(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<(), CanvasLtiBootstrapSyncError>;
+}
+
+pub trait CanvasLtiBootstrapApplicationGenerator: Send + Sync {
+    fn generate(&self, anonymous_identifier_required: bool) -> CanvasLtiBootstrapApplicationSeed;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SecureCanvasLtiBootstrapApplicationGenerator;
+
+impl CanvasLtiBootstrapApplicationGenerator for SecureCanvasLtiBootstrapApplicationGenerator {
+    fn generate(&self, anonymous_identifier_required: bool) -> CanvasLtiBootstrapApplicationSeed {
+        CanvasLtiBootstrapApplicationSeed {
+            id: uuid::Uuid::new_v4().to_string(),
+            anonymous_identifier_suffix: if anonymous_identifier_required {
+                uuid::Uuid::new_v4()
+                    .simple()
+                    .to_string()
+                    .chars()
+                    .take(8)
+                    .collect()
+            } else {
+                String::new()
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum CanvasLtiBootstrapServiceError {
+    #[error("Canvas LTI experience session not found")]
+    SessionNotFound,
+    #[error(transparent)]
+    Plan(#[from] CanvasLtiBootstrapPlanError),
+    #[error("Canvas LTI bootstrap is temporarily unavailable")]
+    RepositoryUnavailable,
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiBootstrapService {
+    session_service: CanvasLtiExperienceSessionService,
+    repository: Arc<dyn CanvasLtiBootstrapRepository>,
+    candidate_materializer: Arc<dyn CanvasLtiAwardCandidateMaterializer>,
+    sync_enqueuer: Arc<dyn CanvasLtiBootstrapSyncEnqueuer>,
+    application_generator: Arc<dyn CanvasLtiBootstrapApplicationGenerator>,
+    clock: Arc<dyn CanvasLtiClock>,
+    portable_enabled: bool,
+    pilot_organizations: BTreeSet<String>,
+}
+
+impl std::fmt::Debug for CanvasLtiBootstrapService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiBootstrapService")
+            .field("portable_enabled", &self.portable_enabled)
+            .field("pilot_organizations", &self.pilot_organizations)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiBootstrapService {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        session_service: CanvasLtiExperienceSessionService,
+        repository: Arc<dyn CanvasLtiBootstrapRepository>,
+        candidate_materializer: Arc<dyn CanvasLtiAwardCandidateMaterializer>,
+        sync_enqueuer: Arc<dyn CanvasLtiBootstrapSyncEnqueuer>,
+        application_generator: Arc<dyn CanvasLtiBootstrapApplicationGenerator>,
+        clock: Arc<dyn CanvasLtiClock>,
+        portable_enabled: bool,
+        pilot_organizations: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            session_service,
+            repository,
+            candidate_materializer,
+            sync_enqueuer,
+            application_generator,
+            clock,
+            portable_enabled,
+            pilot_organizations,
+        }
+    }
+
+    pub async fn bootstrap(
+        &self,
+        session_token: &str,
+        request: &CanvasLtiBootstrapRequest,
+    ) -> Result<CanvasLtiBootstrapResponse, CanvasLtiBootstrapServiceError> {
+        let context = self
+            .session_service
+            .load(session_token)
+            .await
+            .map_err(session_error)?;
+        let bound_feature_enabled =
+            if let Some(binding_id) = context.canvas_program_binding_id.as_deref() {
+                self.repository
+                    .bound_feature_enabled(
+                        &context.launch_state.organization_id,
+                        binding_id,
+                        "enable_canvas_lti",
+                    )
+                    .await
+                    .map_err(repository_error)?
+            } else {
+                None
+            };
+        if bound_feature_enabled == Some(false) {
+            return Err(CanvasLtiBootstrapPlanError::FeatureDisabled.into());
+        }
+        let pilot_enabled = self.portable_enabled
+            && !context.launch_state.organization_id.trim().is_empty()
+            && self
+                .pilot_organizations
+                .contains(context.launch_state.organization_id.trim());
+        if !pilot_enabled {
+            return Err(CanvasLtiBootstrapPlanError::PilotDisabled.into());
+        }
+        let template_id = context
+            .application_template_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or(CanvasLtiBootstrapPlanError::MissingApplicationTemplate)?;
+        let template = self
+            .repository
+            .get_template(template_id)
+            .await
+            .map_err(repository_error)?;
+        let template = validate_canvas_lti_bootstrap_template(&context, template.as_ref())?;
+        let existing = self
+            .repository
+            .list_applications(&context.launch_state.organization_id, template_id)
+            .await
+            .map_err(repository_error)?;
+        let plan = plan_canvas_lti_experience_bootstrap(
+            &context,
+            request,
+            true,
+            bound_feature_enabled,
+            Some(template),
+            &existing,
+            |anonymous_identifier_required| {
+                self.application_generator
+                    .generate(anonymous_identifier_required)
+            },
+            self.clock.now(),
+        )?;
+        self.repository
+            .persist_plan(&context, &plan)
+            .await
+            .map_err(repository_error)?;
+        if plan.materialize_award_candidate {
+            self.candidate_materializer
+                .materialize(&context, &plan.application)
+                .await
+                .map_err(repository_error)?;
+        }
+        let application = self
+            .repository
+            .get_application(&plan.application.id)
+            .await
+            .map_err(repository_error)?
+            .unwrap_or(plan.application);
+        if plan.enqueue_canvas_sync {
+            if let Err(cause) = self
+                .sync_enqueuer
+                .enqueue(&application.organization_id, &application.id)
+                .await
+            {
+                tracing::warn!(%cause, application_id = %application.id, "Canvas bootstrap sync enqueue deferred");
+            }
+        }
+        Ok(canvas_lti_bootstrap_response(
+            &context,
+            &application,
+            plan.created,
+        ))
+    }
+}
+
+fn session_error(cause: CanvasLtiExperienceSessionError) -> CanvasLtiBootstrapServiceError {
+    match cause {
+        CanvasLtiExperienceSessionError::NotFound => {
+            CanvasLtiBootstrapServiceError::SessionNotFound
+        }
+        CanvasLtiExperienceSessionError::RepositoryUnavailable => {
+            CanvasLtiBootstrapServiceError::RepositoryUnavailable
+        }
+    }
+}
+
+fn repository_error(_cause: CanvasLtiBootstrapRepositoryError) -> CanvasLtiBootstrapServiceError {
+    CanvasLtiBootstrapServiceError::RepositoryUnavailable
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn plan_canvas_lti_experience_bootstrap(
+pub fn plan_canvas_lti_experience_bootstrap<F>(
     context: &CanvasLtiExperienceSessionContext,
     request: &CanvasLtiBootstrapRequest,
     portable_pilot_enabled: bool,
     bound_feature_enabled: Option<bool>,
     template: Option<&CanvasLtiBootstrapTemplate>,
     existing_applications: &[CanvasLtiBootstrapApplication],
-    new_application_id: &str,
-    anonymous_identifier_suffix: &str,
+    new_application: F,
     now: DateTime<Utc>,
-) -> Result<CanvasLtiBootstrapPlan, CanvasLtiBootstrapPlanError> {
+) -> Result<CanvasLtiBootstrapPlan, CanvasLtiBootstrapPlanError>
+where
+    F: FnOnce(bool) -> CanvasLtiBootstrapApplicationSeed,
+{
     if context.canvas_program_binding_id.is_some() && bound_feature_enabled == Some(false) {
         return Err(CanvasLtiBootstrapPlanError::FeatureDisabled);
     }
     if !portable_pilot_enabled {
         return Err(CanvasLtiBootstrapPlanError::PilotDisabled);
     }
-    let application_template_id = context
-        .application_template_id
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .ok_or(CanvasLtiBootstrapPlanError::MissingApplicationTemplate)?;
-    let template = template.ok_or(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound)?;
-    if template.id != application_template_id {
-        return Err(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound);
-    }
-    if template.organization_id != context.launch_state.organization_id {
-        return Err(CanvasLtiBootstrapPlanError::CrossOrganizationTemplate);
-    }
+    let template = validate_canvas_lti_bootstrap_template(context, template)?;
 
     let mut applications = existing_applications.to_vec();
     applications.sort_by_key(|application| std::cmp::Reverse(application.created_at));
@@ -184,20 +437,14 @@ pub fn plan_canvas_lti_experience_bootstrap(
         resume_subject_application(application, context, now)
     } else {
         application_action = CanvasLtiBootstrapApplicationAction::Create;
-        let application = create_application(
-            context,
-            request,
-            template,
-            new_application_id,
-            anonymous_identifier_suffix,
-            now,
-        );
+        let seed = new_application(subject.is_none());
+        let application = create_application(context, request, template, &seed, now);
         event_metadata = Some(bootstrap_event_metadata(context, &application, subject));
         application
     };
     let created = application_action == CanvasLtiBootstrapApplicationAction::Create;
     let session_metadata = attach_application_to_session(context, &application.id, created, now)?;
-    let response = bootstrap_response(context, &application, created);
+    let response = canvas_lti_bootstrap_response(context, &application, created);
     Ok(CanvasLtiBootstrapPlan {
         application,
         application_action,
@@ -210,21 +457,39 @@ pub fn plan_canvas_lti_experience_bootstrap(
     })
 }
 
+fn validate_canvas_lti_bootstrap_template<'a>(
+    context: &CanvasLtiExperienceSessionContext,
+    template: Option<&'a CanvasLtiBootstrapTemplate>,
+) -> Result<&'a CanvasLtiBootstrapTemplate, CanvasLtiBootstrapPlanError> {
+    let application_template_id = context
+        .application_template_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or(CanvasLtiBootstrapPlanError::MissingApplicationTemplate)?;
+    let template = template.ok_or(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound)?;
+    if template.id != application_template_id {
+        return Err(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound);
+    }
+    if template.organization_id != context.launch_state.organization_id {
+        return Err(CanvasLtiBootstrapPlanError::CrossOrganizationTemplate);
+    }
+    Ok(template)
+}
+
 fn create_application(
     context: &CanvasLtiExperienceSessionContext,
     request: &CanvasLtiBootstrapRequest,
     template: &CanvasLtiBootstrapTemplate,
-    new_application_id: &str,
-    anonymous_identifier_suffix: &str,
+    seed: &CanvasLtiBootstrapApplicationSeed,
     now: DateTime<Utc>,
 ) -> CanvasLtiBootstrapApplication {
     let subject = lti_subject(&context.verified_launch);
     let applicant_identifier = subject.as_ref().map_or_else(
-        || format!("canvas_lti_{anonymous_identifier_suffix}"),
+        || format!("canvas_lti_{}", seed.anonymous_identifier_suffix),
         |subject| format!("canvas_lti:{subject}"),
     );
     CanvasLtiBootstrapApplication {
-        id: new_application_id.to_owned(),
+        id: seed.id.clone(),
         organization_id: template.organization_id.clone(),
         application_template_id: template.id.clone(),
         applicant_identifier,
@@ -600,7 +865,7 @@ fn bootstrap_event_metadata(
     ]))
 }
 
-fn bootstrap_response(
+pub fn canvas_lti_bootstrap_response(
     context: &CanvasLtiExperienceSessionContext,
     application: &CanvasLtiBootstrapApplication,
     created: bool,
