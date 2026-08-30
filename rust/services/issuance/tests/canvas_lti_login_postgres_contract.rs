@@ -3,10 +3,15 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
+    canvas_lti_bootstrap::{
+        plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplicationAction,
+        CanvasLtiBootstrapApplicationSeed, CanvasLtiBootstrapRepository, CanvasLtiBootstrapRequest,
+    },
     canvas_lti_experience::{
-        sha256_hex, CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
-        CanvasLtiExperienceExchangeRepository, CanvasLtiExperienceSessionGenerator,
-        CanvasLtiExperienceSessionSeed, CanvasLtiExperienceSessionService,
+        canvas_lti_experience_session_context, sha256_hex, CanvasLtiExperienceExchangeError,
+        CanvasLtiExperienceExchangePersistence, CanvasLtiExperienceExchangeRepository,
+        CanvasLtiExperienceSessionGenerator, CanvasLtiExperienceSessionSeed,
+        CanvasLtiExperienceSessionService,
     },
     canvas_lti_launch::{
         CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiCapabilitySnapshotRequest,
@@ -100,6 +105,18 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         .await
         .unwrap();
     sqlx::query("DROP TABLE IF EXISTS issuance_service.canvas_lti_launch_states")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE IF EXISTS issuance_service.issuance_events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE IF EXISTS issuance_service.applications")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE IF EXISTS issuance_service.application_templates")
         .execute(&pool)
         .await
         .unwrap();
@@ -216,6 +233,69 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         "CREATE UNIQUE INDEX ux_canvas_learner_identity_numeric_link
          ON issuance_service.canvas_learner_identities(platform_id, deployment_id, canvas_user_id)
          WHERE status = 'linked' AND canvas_user_id IS NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.application_templates (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            name text NOT NULL,
+            description text NULL,
+            credential_template_id text NULL,
+            form_fields json NOT NULL DEFAULT '[]'::json,
+            evidence_requirements json NOT NULL DEFAULT '[]'::json,
+            claim_collection_rules json NOT NULL DEFAULT '[]'::json,
+            required_checks json NOT NULL DEFAULT '[]'::json,
+            approval_strategy text NOT NULL DEFAULT 'MANUAL',
+            approval_policy_set_id text NULL,
+            application_validity_days integer NOT NULL DEFAULT 30,
+            ui_config json NOT NULL DEFAULT '{}'::json,
+            notification_config json NOT NULL DEFAULT '{}'::json,
+            status text NOT NULL DEFAULT 'DRAFT',
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.applications (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            application_template_id text NOT NULL REFERENCES issuance_service.application_templates(id),
+            applicant_identifier text NOT NULL,
+            form_data json NOT NULL DEFAULT '{}'::json,
+            submitted_evidence json NOT NULL DEFAULT '[]'::json,
+            integration_context json NOT NULL DEFAULT '{}'::json,
+            status text NOT NULL DEFAULT 'pending',
+            review_notes text NULL,
+            reviewer_id text NULL,
+            rejection_reason text NULL,
+            derived_claims json NOT NULL DEFAULT '{}'::json,
+            issuance_transaction_id text NULL,
+            credential_id text NULL,
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            submitted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            reviewed_at timestamptz NULL,
+            expires_at timestamptz NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.issuance_events (
+            id text PRIMARY KEY,
+            transaction_id text NULL,
+            application_id text NULL REFERENCES issuance_service.applications(id),
+            event_type text NOT NULL,
+            metadata json NOT NULL DEFAULT '{}'::json,
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+        )",
     )
     .execute(&pool)
     .await
@@ -859,6 +939,336 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             "names_roles": false,
         })
     );
+
+    sqlx::query(
+        "INSERT INTO issuance_service.application_templates (
+            id, organization_id, name, credential_template_id
+        ) VALUES ('application-template-bootstrap', 'org-123', 'Bootstrap',
+            'credential-template-bootstrap')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings (
+            id, organization_id, platform_id, application_template_id,
+            credential_template_id, delivery_mode, feature_flags, enabled
+        ) VALUES ('binding-bootstrap', 'org-123', 'platform-123',
+            'application-template-bootstrap', 'credential-template-bootstrap',
+            'wallet_and_direct', '{\"enable_canvas_lti\":true}'::jsonb, true)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings (
+            id, organization_id, platform_id, application_template_id,
+            credential_template_id, delivery_mode, feature_flags, enabled
+        ) VALUES
+            ('binding-evidence-only', 'org-123', 'platform-123',
+             'application-template-bootstrap', 'credential-template-bootstrap',
+             'wallet_and_direct', '{\"enable_canvas_evidence\":true}'::jsonb, true),
+            ('binding-extension-only', 'org-123', 'platform-123',
+             'application-template-bootstrap', 'credential-template-bootstrap',
+             'wallet_and_direct', '{\"extension_flag\":true}'::jsonb, true)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let bootstrap_token = format!("bootstrap-token-{}", Uuid::new_v4());
+    let bootstrap_digest = sha256_hex(&bootstrap_token);
+    let bootstrap_session_id = Uuid::new_v4().to_string();
+    let bootstrap_metadata = json!({
+        "kind": "canvas_lti_experience_session",
+        "launch_state": "launch-bootstrap",
+        "verified_launch": {
+            "subject": "learner-bootstrap",
+            "deployment_id": "deployment-123",
+            "learner_identity": {"email": "trusted@example.test"},
+            "raw_claims": {
+                "https://purl.imsglobal.org/spec/lti/claim/custom": {
+                    "canvas_course_id": "course-101"
+                }
+            },
+            "context": {"id": "course-context", "title": "Portable Trust 101"}
+        },
+        "mip_primitives": {"context": {
+            "canvas_platform_id": "platform-123",
+            "canvas_program_binding_id": "binding-bootstrap",
+            "application_template_id": "application-template-bootstrap",
+            "credential_template_id": "credential-template-bootstrap",
+            "delivery_mode": "wallet_and_direct",
+            "feature_flags": {"enable_canvas_lti": true}
+        }}
+    });
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_lti_launch_states (
+            id, platform_id, organization_id, canvas_account_id, state, nonce,
+            redirect_uri, status, metadata, created_at, expires_at, consumed_at
+        ) VALUES ($1, 'platform-123', 'org-123', 'account-123', $2, $3,
+            'https://ui.example.test/canvas/lti/experience', 'session', $4,
+            clock_timestamp(), clock_timestamp() + interval '1 hour', clock_timestamp())",
+    )
+    .bind(&bootstrap_session_id)
+    .bind(&bootstrap_digest)
+    .bind(Uuid::new_v4().to_string())
+    .bind(&bootstrap_metadata)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        handoff_repository
+            .bound_feature_enabled("org-123", "binding-bootstrap", "enable_canvas_lti")
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        handoff_repository
+            .bound_feature_enabled("org-123", "binding-evidence-only", "enable_canvas_lti")
+            .await
+            .unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        handoff_repository
+            .bound_feature_enabled("org-123", "binding-extension-only", "enable_canvas_lti")
+            .await
+            .unwrap(),
+        Some(true)
+    );
+    let template = handoff_repository
+        .get_template("application-template-bootstrap")
+        .await
+        .unwrap()
+        .unwrap();
+    let context = canvas_lti_experience_session_context(
+        handoff_repository
+            .get_launch_state(&bootstrap_digest)
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let planned_at = DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap();
+    let bootstrap_request = CanvasLtiBootstrapRequest {
+        applicant_identifier: Some("caller@example.test".to_owned()),
+        applicant_data: json!({
+            "email": "caller@example.test",
+            "canvas_subject": "attacker-subject"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    };
+    let first_plan = plan_canvas_lti_experience_bootstrap(
+        &context,
+        &bootstrap_request,
+        true,
+        Some(true),
+        Some(&template),
+        &[],
+        |_| CanvasLtiBootstrapApplicationSeed {
+            id: Uuid::new_v4().to_string(),
+            anonymous_identifier_suffix: "first000".to_owned(),
+        },
+        planned_at,
+    )
+    .unwrap();
+    let second_plan = plan_canvas_lti_experience_bootstrap(
+        &context,
+        &bootstrap_request,
+        true,
+        Some(true),
+        Some(&template),
+        &[],
+        |_| CanvasLtiBootstrapApplicationSeed {
+            id: Uuid::new_v4().to_string(),
+            anonymous_identifier_suffix: "second00".to_owned(),
+        },
+        planned_at,
+    )
+    .unwrap();
+    assert_ne!(first_plan.application.id, second_plan.application.id);
+    let first_repository = handoff_repository.clone();
+    let second_repository = handoff_repository.clone();
+    let (first_persisted, second_persisted) = tokio::join!(
+        first_repository.persist_plan(&context, &first_plan),
+        second_repository.persist_plan(&context, &second_plan),
+    );
+    let first_persisted = first_persisted.unwrap();
+    let second_persisted = second_persisted.unwrap();
+    assert_eq!(
+        usize::from(first_persisted.created) + usize::from(second_persisted.created),
+        1
+    );
+    assert_eq!(
+        first_persisted.application.id,
+        second_persisted.application.id
+    );
+    let losing_plan_id = if first_persisted.application.id == first_plan.application.id {
+        &second_plan.application.id
+    } else {
+        &first_plan.application.id
+    };
+    let losing_application_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.applications WHERE id = $1")
+            .bind(losing_plan_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(losing_application_count, 0);
+    let bootstrap_application_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.applications
+         WHERE organization_id = 'org-123'
+           AND application_template_id = 'application-template-bootstrap'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(bootstrap_application_count, 1);
+    let bootstrap_event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.issuance_events
+         WHERE event_type = 'canvas_lti_application_bootstrapped'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(bootstrap_event_count, 1);
+    let stored_bootstrap = handoff_repository
+        .get_launch_state(&bootstrap_digest)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_bootstrap.metadata["verified_launch"]["application_id"],
+        first_persisted.application.id
+    );
+    let stored_application = handoff_repository
+        .get_application(&first_persisted.application.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_application.applicant_identifier,
+        "canvas_lti:learner-bootstrap"
+    );
+    assert_eq!(
+        stored_application.form_data["email"],
+        "trusted@example.test"
+    );
+    assert_ne!(
+        stored_application.form_data["canvas_subject"],
+        "attacker-subject"
+    );
+    let expiry_days: f64 = sqlx::query_scalar(
+        "SELECT extract(epoch FROM expires_at - created_at)::double precision / 86400
+         FROM issuance_service.applications WHERE id = $1",
+    )
+    .bind(&stored_application.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!((29.999..=30.001).contains(&expiry_days));
+
+    let application_xmin_before: i64 = sqlx::query_scalar(
+        "SELECT xmin::text::bigint FROM issuance_service.applications WHERE id = $1",
+    )
+    .bind(&stored_application.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let exact_replay_plan = plan_canvas_lti_experience_bootstrap(
+        &context,
+        &CanvasLtiBootstrapRequest::default(),
+        true,
+        Some(true),
+        Some(&template),
+        std::slice::from_ref(&stored_application),
+        |_| panic!("exact replay must not generate an application"),
+        planned_at,
+    )
+    .unwrap();
+    assert_eq!(
+        exact_replay_plan.application_action,
+        CanvasLtiBootstrapApplicationAction::Replay
+    );
+    let exact_replay = handoff_repository
+        .persist_plan(&context, &exact_replay_plan)
+        .await
+        .unwrap();
+    assert!(!exact_replay.created);
+    assert_eq!(exact_replay.application.id, stored_application.id);
+    let application_xmin_after: i64 = sqlx::query_scalar(
+        "SELECT xmin::text::bigint FROM issuance_service.applications WHERE id = $1",
+    )
+    .bind(&stored_application.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(application_xmin_after, application_xmin_before);
+
+    let expired_session_id = Uuid::new_v4().to_string();
+    let expired_token = format!("expired-bootstrap-token-{}", Uuid::new_v4());
+    let expired_digest = sha256_hex(&expired_token);
+    let mut expired_metadata = bootstrap_metadata.clone();
+    expired_metadata["verified_launch"]["subject"] = json!("learner-expired");
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_lti_launch_states (
+            id, platform_id, organization_id, canvas_account_id, state, nonce,
+            redirect_uri, status, metadata, created_at, expires_at, consumed_at
+        ) VALUES ($1, 'platform-123', 'org-123', 'account-123', $2, $3,
+            'https://ui.example.test/canvas/lti/experience', 'session', $4,
+            clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour',
+            clock_timestamp() - interval '2 hours')",
+    )
+    .bind(&expired_session_id)
+    .bind(&expired_digest)
+    .bind(Uuid::new_v4().to_string())
+    .bind(&expired_metadata)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut expired_context = context.clone();
+    expired_context.launch_state.id = expired_session_id;
+    expired_context.launch_state.state = expired_digest;
+    expired_context.launch_state.metadata = expired_metadata;
+    expired_context.state = "launch-expired".to_owned();
+    expired_context.verified_launch["subject"] = json!("learner-expired");
+    let expired_plan = plan_canvas_lti_experience_bootstrap(
+        &expired_context,
+        &CanvasLtiBootstrapRequest::default(),
+        true,
+        Some(true),
+        Some(&template),
+        &[stored_application],
+        |_| CanvasLtiBootstrapApplicationSeed {
+            id: Uuid::new_v4().to_string(),
+            anonymous_identifier_suffix: "expired0".to_owned(),
+        },
+        planned_at,
+    )
+    .unwrap();
+    assert!(expired_plan.created);
+    assert!(handoff_repository
+        .persist_plan(&expired_context, &expired_plan)
+        .await
+        .is_err());
+    let expired_application_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.applications WHERE id = $1")
+            .bind(&expired_plan.application.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(expired_application_count, 0);
+    let post_rollback_event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.issuance_events
+         WHERE event_type = 'canvas_lti_application_bootstrapped'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(post_rollback_event_count, 1);
     let spent = handoff_repository
         .get_launch_state(&code_state)
         .await
@@ -926,6 +1336,18 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     .unwrap();
     assert_eq!(rolled_back, 0);
 
+    sqlx::query("DROP TABLE issuance_service.issuance_events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.applications")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.application_templates")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DROP TABLE issuance_service.canvas_lti_launch_states")
         .execute(&pool)
         .await
