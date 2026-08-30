@@ -376,7 +376,7 @@ impl DidcommTransportPort for CountingTransport {
 }
 
 #[tokio::test]
-async fn finalization_failure_cannot_emit_or_reissue_a_didcomm_credential() {
+async fn legacy_repository_without_transport_claims_fails_closed_before_post() {
     let repository = Arc::new(FailingOnceRepository::new());
     let transport_calls = Arc::new(AtomicUsize::new(0));
     let delivery = NativeInitiationDidcommDelivery::new(
@@ -417,12 +417,15 @@ async fn finalization_failure_cannot_emit_or_reissue_a_didcomm_credential() {
             "did:example:holder",
         )
         .await;
-    assert!(second.is_ok(), "a safe retry should complete: {second:?}");
+    assert_eq!(
+        second,
+        Err(NativeInitiationDidcommDeliveryError::RetryStateUnavailable)
+    );
     let calls_after_retry = transport_calls.load(Ordering::SeqCst);
 
     assert_eq!(
         (calls_after_failed_finalization, calls_after_retry),
-        (0, 1),
-        "database finalization must precede the first external delivery, and a retry must emit exactly once"
+        (0, 0),
+        "database finalization and a durable claim must both precede external delivery"
     );
 }

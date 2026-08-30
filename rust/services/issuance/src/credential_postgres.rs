@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{DateTime, Utc};
 use mmf_security::constant_time_secret_eq;
 use rand::RngCore;
 use serde_json::{json, Map, Value};
@@ -11,8 +12,9 @@ use uuid::Uuid;
 
 use crate::{
     credential::{
-        CredentialAuthorizationSession, CredentialIssuanceError, CredentialRepository,
-        CredentialTransaction, CredentialTransactionStatus, ExistingCredential, IssuedCredential,
+        reserved_credential_id, CredentialAuthorizationSession, CredentialIssuanceError,
+        CredentialRepository, CredentialTransaction, CredentialTransactionStatus,
+        ExistingCredential, IssuedCredential,
     },
     credential_lifecycle::delivery_record_id,
     initiation::{
@@ -20,8 +22,9 @@ use crate::{
     },
     initiation_didcomm::{
         DeliveredInitiationDidcommDelivery, InitiationDidcommClaim, InitiationDidcommDeliveryState,
-        InitiationDidcommRepository, PendingInitiationDidcommDelivery,
-        StagedInitiationDidcommDelivery,
+        InitiationDidcommRepository, InitiationDidcommTransportClaim,
+        InitiationDidcommTransportClaimOutcome, PendingInitiationDidcommDelivery,
+        StagedInitiationDidcommDelivery, DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS,
     },
     token_postgres::hash_access_token,
 };
@@ -457,6 +460,200 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             .await
     }
 
+    async fn claim_transport(
+        &self,
+        organization_id: &str,
+        transaction_id: &str,
+        holder_did: &str,
+    ) -> Result<InitiationDidcommTransportClaimOutcome, CredentialIssuanceError> {
+        let mut database = self.pool.begin().await.map_err(repository_error)?;
+        let mut delivery_rows = sqlx::query(
+            "SELECT id, credential_id, transaction_id, organization_id, status, metadata,
+                    clock_timestamp() AS database_now
+             FROM issuance_service.credential_delivery_records
+             WHERE transaction_id = $1
+               AND organization_id = $2
+               AND delivery_target = 'didcomm_v2'
+             FOR UPDATE",
+        )
+        .bind(transaction_id)
+        .bind(organization_id)
+        .fetch_all(&mut *database)
+        .await
+        .map_err(repository_error)?;
+        if delivery_rows.is_empty() {
+            database.commit().await.map_err(repository_error)?;
+            return Ok(InitiationDidcommTransportClaimOutcome::Absent);
+        }
+        if delivery_rows.len() != 1 {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        let delivery_row = delivery_rows
+            .pop()
+            .ok_or(CredentialIssuanceError::RepositoryUnavailable)?;
+        let delivery_id = get::<String>(&delivery_row, "id")?;
+        let credential_id = get::<String>(&delivery_row, "credential_id")?;
+        let bound_transaction_id = get::<String>(&delivery_row, "transaction_id")?;
+        let bound_organization_id = get::<String>(&delivery_row, "organization_id")?;
+        let delivery_status = get::<String>(&delivery_row, "status")?;
+        let metadata = get::<Value>(&delivery_row, "metadata")?;
+        let database_now = get::<DateTime<Utc>>(&delivery_row, "database_now")?;
+
+        let holder = metadata_required_text(&metadata, "holder_did")?;
+        let service_endpoint = metadata_required_text(&metadata, "service_endpoint")?;
+        let message_id = metadata_required_text(&metadata, "didcomm_message_id")?;
+        if bound_transaction_id != transaction_id
+            || bound_organization_id != organization_id
+            || holder != holder_did
+        {
+            database.commit().await.map_err(repository_error)?;
+            return Ok(InitiationDidcommTransportClaimOutcome::BindingMismatch);
+        }
+
+        let transaction = sqlx::query(TRANSACTION_BY_ID_AND_ORGANIZATION)
+            .bind(transaction_id)
+            .bind(organization_id)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(repository_error)?
+            .map(transaction_row)
+            .transpose()?;
+        let credential_row = sqlx::query(
+            "SELECT id, transaction_id, organization_id, credential_template_id, applicant_id,
+                    subject_did, issuer_did, revocation_profile_id,
+                    renewed_from_credential_id, status_list_entries, credential_jwt,
+                    credential_hash, issued_at, expires_at
+             FROM issuance_service.issued_credentials
+             WHERE id = $1 AND transaction_id = $2 AND organization_id = $3",
+        )
+        .bind(&credential_id)
+        .bind(transaction_id)
+        .bind(organization_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(repository_error)?;
+        let (Some(transaction), Some(credential_row)) = (transaction, credential_row) else {
+            database.commit().await.map_err(repository_error)?;
+            return Ok(InitiationDidcommTransportClaimOutcome::BindingMismatch);
+        };
+        let credential = issued_credential_row(&credential_row)?;
+        if transaction.status != CredentialTransactionStatus::Issued
+            || credential.id != credential_id
+            || delivery_id != delivery_record_id(&credential.id, "didcomm_v2", None)
+            || credential.id != reserved_credential_id(&transaction)
+            || credential.transaction_id != transaction.id
+            || credential.organization_id != transaction.organization_id
+        {
+            database.commit().await.map_err(repository_error)?;
+            return Ok(InitiationDidcommTransportClaimOutcome::BindingMismatch);
+        }
+
+        if delivery_status == "delivered" {
+            database.commit().await.map_err(repository_error)?;
+            return Ok(InitiationDidcommTransportClaimOutcome::Delivered(
+                DeliveredInitiationDidcommDelivery {
+                    transaction_id: transaction.id,
+                    organization_id: transaction.organization_id,
+                    credential_id,
+                    holder_did: holder,
+                    service_endpoint,
+                    message_id,
+                },
+            ));
+        }
+
+        let encrypted_message = metadata_required_text(&metadata, "encrypted_message")?;
+        let pending = PendingInitiationDidcommDelivery {
+            transaction,
+            credential,
+            delivery: StagedInitiationDidcommDelivery {
+                holder_did: holder,
+                service_endpoint,
+                message_id,
+                encrypted_message,
+            },
+            transported: delivery_status == "transported",
+        };
+        match delivery_status.as_str() {
+            "transported" => {
+                database.commit().await.map_err(repository_error)?;
+                Ok(InitiationDidcommTransportClaimOutcome::Transported(
+                    Box::new(pending),
+                ))
+            }
+            "delivery_unknown" => {
+                database.commit().await.map_err(repository_error)?;
+                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+            }
+            "transporting" => {
+                let attempt_id = metadata
+                    .get("didcomm_transport_attempt_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| Uuid::parse_str(value).is_ok());
+                let deadline = metadata
+                    .get("didcomm_transport_lease_expires_at")
+                    .and_then(Value::as_str)
+                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.with_timezone(&Utc));
+                if attempt_id.is_some() && deadline.is_some_and(|value| value > database_now) {
+                    database.commit().await.map_err(repository_error)?;
+                    return Ok(InitiationDidcommTransportClaimOutcome::Busy);
+                }
+                mark_locked_didcomm_outcome_unknown(&mut database, &delivery_id).await?;
+                database.commit().await.map_err(repository_error)?;
+                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+            }
+            "pending" | "failed" => {
+                let attempt_id = Uuid::new_v4().to_string();
+                let claimed = sqlx::query(
+                    "UPDATE issuance_service.credential_delivery_records
+                     SET status = 'transporting', last_error = NULL,
+                         metadata = (metadata
+                             - 'didcomm_transport_attempt_id'
+                             - 'didcomm_transport_lease_expires_at')
+                             || jsonb_build_object(
+                                 'didcomm_transport_attempt_id', $10::text,
+                                 'didcomm_transport_lease_expires_at',
+                                 clock_timestamp() + $11::integer * INTERVAL '1 second'),
+                         updated_at = clock_timestamp()
+                     WHERE id = $1
+                       AND credential_id = $2
+                       AND transaction_id = $3
+                       AND organization_id = $4
+                       AND delivery_target = 'didcomm_v2'
+                       AND status = $5
+                       AND metadata ->> 'holder_did' = $6
+                       AND metadata ->> 'service_endpoint' = $7
+                       AND metadata ->> 'didcomm_message_id' = $8
+                       AND metadata ->> 'encrypted_message' = $9",
+                )
+                .bind(&delivery_id)
+                .bind(&pending.credential.id)
+                .bind(&pending.transaction.id)
+                .bind(&pending.transaction.organization_id)
+                .bind(&delivery_status)
+                .bind(&pending.delivery.holder_did)
+                .bind(&pending.delivery.service_endpoint)
+                .bind(&pending.delivery.message_id)
+                .bind(&pending.delivery.encrypted_message)
+                .bind(&attempt_id)
+                .bind(DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS)
+                .execute(&mut *database)
+                .await
+                .map_err(repository_error)?;
+                if claimed.rows_affected() != 1 {
+                    return Err(CredentialIssuanceError::RepositoryUnavailable);
+                }
+                database.commit().await.map_err(repository_error)?;
+                Ok(InitiationDidcommTransportClaimOutcome::Claimed(
+                    InitiationDidcommTransportClaim::new(pending, delivery_id, attempt_id),
+                ))
+            }
+            _ => Err(CredentialIssuanceError::RepositoryUnavailable),
+        }
+    }
+
     async fn transaction_for_delivery(
         &self,
         organization_id: &str,
@@ -571,26 +768,46 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         database.commit().await.map_err(repository_error)
     }
 
+    async fn mark_transport_succeeded(
+        &self,
+        claim: &InitiationDidcommTransportClaim,
+    ) -> Result<(), CredentialIssuanceError> {
+        finish_didcomm_transport_claim(&self.pool, claim, "transported", None).await
+    }
+
     async fn mark_transport_delivered(
         &self,
-        transaction_id: &str,
-        message_id: &str,
+        _transaction_id: &str,
+        _message_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
-        update_didcomm_delivery_status(&self.pool, transaction_id, message_id, "transported", None)
-            .await
+        Err(CredentialIssuanceError::RepositoryUnavailable)
     }
 
     async fn mark_transport_failed(
         &self,
-        transaction_id: &str,
-        message_id: &str,
+        _transaction_id: &str,
+        _message_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
-        update_didcomm_delivery_status(
+        Err(CredentialIssuanceError::RepositoryUnavailable)
+    }
+
+    async fn mark_transport_unattempted(
+        &self,
+        claim: &InitiationDidcommTransportClaim,
+    ) -> Result<(), CredentialIssuanceError> {
+        finish_didcomm_transport_claim(&self.pool, claim, "failed", Some("didcomm_delivery_failed"))
+            .await
+    }
+
+    async fn mark_transport_outcome_unknown(
+        &self,
+        claim: &InitiationDidcommTransportClaim,
+    ) -> Result<(), CredentialIssuanceError> {
+        finish_didcomm_transport_claim(
             &self.pool,
-            transaction_id,
-            message_id,
-            "failed",
-            Some("didcomm_delivery_failed"),
+            claim,
+            "delivery_unknown",
+            Some("didcomm_delivery_outcome_unknown"),
         )
         .await
     }
@@ -933,25 +1150,98 @@ async fn insert_credential(
     Ok(())
 }
 
-async fn update_didcomm_delivery_status(
-    pool: &PgPool,
-    transaction_id: &str,
-    message_id: &str,
-    status: &str,
-    last_error: Option<&str>,
+fn metadata_required_text(metadata: &Value, name: &str) -> Result<String, CredentialIssuanceError> {
+    metadata
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or(CredentialIssuanceError::RepositoryUnavailable)
+}
+
+fn issued_credential_row(row: &PgRow) -> Result<IssuedCredential, CredentialIssuanceError> {
+    Ok(IssuedCredential {
+        id: get(row, "id")?,
+        transaction_id: get(row, "transaction_id")?,
+        organization_id: get(row, "organization_id")?,
+        credential_template_id: get(row, "credential_template_id")?,
+        applicant_id: get(row, "applicant_id")?,
+        subject_did: get(row, "subject_did")?,
+        issuer_did: get(row, "issuer_did")?,
+        revocation_profile_id: get(row, "revocation_profile_id")?,
+        renewed_from_credential_id: get(row, "renewed_from_credential_id")?,
+        status_list_entries: json_vec(row, "status_list_entries")?,
+        credential: get(row, "credential_jwt")?,
+        credential_hash: get(row, "credential_hash")?,
+        issued_at: get(row, "issued_at")?,
+        expires_at: get(row, "expires_at")?,
+    })
+}
+
+async fn mark_locked_didcomm_outcome_unknown(
+    database: &mut Transaction<'_, Postgres>,
+    delivery_id: &str,
 ) -> Result<(), CredentialIssuanceError> {
     let updated = sqlx::query(
         "UPDATE issuance_service.credential_delivery_records
-         SET status = $3, last_error = $4, updated_at = clock_timestamp()
-         WHERE transaction_id = $1
+         SET status = 'delivery_unknown',
+             last_error = 'didcomm_delivery_outcome_unknown',
+             metadata = metadata
+                 - 'didcomm_transport_attempt_id'
+                 - 'didcomm_transport_lease_expires_at',
+             updated_at = clock_timestamp()
+         WHERE id = $1
            AND delivery_target = 'didcomm_v2'
-           AND metadata ->> 'didcomm_message_id' = $2
-           AND status IN ('pending', 'failed')",
+           AND status = 'transporting'",
     )
-    .bind(transaction_id)
-    .bind(message_id)
+    .bind(delivery_id)
+    .execute(&mut **database)
+    .await
+    .map_err(repository_error)?;
+    if updated.rows_affected() != 1 {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(())
+}
+
+async fn finish_didcomm_transport_claim(
+    pool: &PgPool,
+    claim: &InitiationDidcommTransportClaim,
+    status: &str,
+    last_error: Option<&str>,
+) -> Result<(), CredentialIssuanceError> {
+    let pending = claim.pending();
+    let updated = sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET status = $1, last_error = $2,
+             metadata = metadata
+                 - 'didcomm_transport_attempt_id'
+                 - 'didcomm_transport_lease_expires_at',
+             updated_at = clock_timestamp()
+         WHERE id = $3
+           AND credential_id = $4
+           AND transaction_id = $5
+           AND organization_id = $6
+           AND delivery_target = 'didcomm_v2'
+           AND status = 'transporting'
+           AND metadata ->> 'didcomm_transport_attempt_id' = $7
+           AND metadata ->> 'holder_did' = $8
+           AND metadata ->> 'service_endpoint' = $9
+           AND metadata ->> 'didcomm_message_id' = $10
+           AND metadata ->> 'encrypted_message' = $11",
+    )
     .bind(status)
     .bind(last_error)
+    .bind(claim.delivery_id())
+    .bind(&pending.credential.id)
+    .bind(&pending.transaction.id)
+    .bind(&pending.transaction.organization_id)
+    .bind(claim.attempt_id())
+    .bind(&pending.delivery.holder_did)
+    .bind(&pending.delivery.service_endpoint)
+    .bind(&pending.delivery.message_id)
+    .bind(&pending.delivery.encrypted_message)
     .execute(pool)
     .await
     .map_err(repository_error)?;

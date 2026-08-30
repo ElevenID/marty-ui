@@ -20,7 +20,8 @@ use marty_issuance_service::initiation::{
 };
 use marty_issuance_service::initiation_dependencies::PostgresInitiationApplicationClaimsResolver;
 use marty_issuance_service::initiation_didcomm::{
-    InitiationDidcommDeliveryState, InitiationDidcommRepository, StagedInitiationDidcommDelivery,
+    InitiationDidcommDeliveryState, InitiationDidcommRepository,
+    InitiationDidcommTransportClaimOutcome, StagedInitiationDidcommDelivery,
 };
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
@@ -592,23 +593,345 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
     assert_eq!(compatibility_pending.credential, issued);
     assert_eq!(compatibility_pending.delivery, staged);
 
-    repository
-        .mark_transport_failed("tx-didcomm-contract", "didcomm-message-contract")
+    assert!(
+        lifecycle
+            .after_didcomm_issued(
+                &claim.transaction,
+                &issued,
+                "https://holder.example/didcomm",
+                "didcomm-message-contract",
+            )
+            .await
+            .is_err(),
+        "projection may only transition a durably transported delivery"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE transaction_id = 'tx-didcomm-contract'"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
+    );
+    assert!(matches!(
+        repository
+            .claim_transport("org-other", "tx-didcomm-contract", "did:key:holder")
+            .await
+            .unwrap(),
+        InitiationDidcommTransportClaimOutcome::Absent
+    ));
+    assert!(matches!(
+        repository
+            .claim_transport("org-a", "tx-didcomm-contract", "did:key:other-holder")
+            .await
+            .unwrap(),
+        InitiationDidcommTransportClaimOutcome::BindingMismatch
+    ));
+
+    sqlx::query(
+        "INSERT INTO issuance_service.credential_delivery_records
+             (id, credential_id, transaction_id, organization_id, delivery_target,
+              delivery_mode, status, metadata, created_at, updated_at)
+         SELECT 'duplicate-didcomm-claim-sentinel', credential_id, transaction_id,
+                organization_id, delivery_target, delivery_mode, status, metadata,
+                clock_timestamp(), clock_timestamp()
+         FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        repository
+            .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+            .await,
+        Err(CredentialIssuanceError::RepositoryUnavailable)
+    ));
+    sqlx::query(
+        "DELETE FROM issuance_service.credential_delivery_records
+         WHERE id = 'duplicate-didcomm-claim-sentinel'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO issuance_service.credential_delivery_records
+             (id, credential_id, transaction_id, organization_id, delivery_target,
+              delivery_mode, status, metadata, created_at, updated_at)
+         VALUES ('canvas-didcomm-claim-sentinel', $1, 'tx-didcomm-contract', 'org-a',
+                 'canvas_credentials', 'wallet_plus_canvas_mirror', 'pending',
+                 '{\"canvas_sentinel\":true}'::jsonb,
+                 clock_timestamp(), clock_timestamp())",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let second_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(pool.connect_options().as_ref().clone())
         .await
         .unwrap();
-    let failed_state = repository
-        .delivery_state("org-a", "tx-didcomm-contract")
-        .await
-        .unwrap()
-        .expect("a failed transport remains retryable");
-    let InitiationDidcommDeliveryState::Pending(failed_delivery) = failed_state else {
-        panic!("a failed transport must remain pending");
+    let second_instance =
+        PostgresCredentialRepository::new(second_pool.clone(), b"contract-token-key");
+    let (pending_claim_a, pending_claim_b) = tokio::join!(
+        repository.claim_transport("org-a", "tx-didcomm-contract", "did:key:holder"),
+        second_instance.claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+    );
+    let pending_claim = match (pending_claim_a.unwrap(), pending_claim_b.unwrap()) {
+        (
+            InitiationDidcommTransportClaimOutcome::Claimed(claim),
+            InitiationDidcommTransportClaimOutcome::Busy,
+        )
+        | (
+            InitiationDidcommTransportClaimOutcome::Busy,
+            InitiationDidcommTransportClaimOutcome::Claimed(claim),
+        ) => claim,
+        states => panic!("one pending worker must claim and one must observe busy: {states:?}"),
     };
-    assert_eq!(failed_delivery.delivery, staged);
-    assert!(!failed_delivery.transported);
+    let claimed_row = sqlx::query(
+        "SELECT id, status, metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        claimed_row.try_get::<String, _>("status").unwrap(),
+        "transporting"
+    );
+    let claimed_metadata = claimed_row
+        .try_get::<serde_json::Value, _>("metadata")
+        .unwrap();
+    let original_attempt_id = claimed_metadata["didcomm_transport_attempt_id"]
+        .as_str()
+        .expect("claim attempt token")
+        .to_owned();
+    assert!(Uuid::parse_str(&original_attempt_id).is_ok());
+    assert!(claimed_metadata["didcomm_transport_lease_expires_at"]
+        .as_str()
+        .is_some_and(|deadline| !deadline.is_empty()));
+    assert_eq!(claimed_metadata["didcomm_message_id"], staged.message_id);
+    assert_eq!(
+        claimed_metadata["encrypted_message"],
+        staged.encrypted_message
+    );
+    let original_delivery_id = claimed_row.try_get::<String, _>("id").unwrap();
 
+    let wrong_attempt_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = jsonb_set(metadata, '{didcomm_transport_attempt_id}', to_jsonb($2::text))
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .bind(&wrong_attempt_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .mark_transport_succeeded(&pending_claim)
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = jsonb_set(metadata, '{didcomm_transport_attempt_id}', to_jsonb($2::text))
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .bind(&original_attempt_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let moved_delivery_id = "moved-didcomm-claim-sentinel";
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET id = $2
+         WHERE id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(&original_delivery_id)
+    .bind(moved_delivery_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .mark_transport_succeeded(&pending_claim)
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET id = $2
+         WHERE id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(moved_delivery_id)
+    .bind(&original_delivery_id)
+    .execute(pool)
+    .await
+    .unwrap();
     repository
-        .mark_transport_delivered("tx-didcomm-contract", "didcomm-message-contract")
+        .mark_transport_unattempted(&pending_claim)
+        .await
+        .unwrap();
+    let failed_row = sqlx::query(
+        "SELECT status, metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(failed_row.try_get::<String, _>("status").unwrap(), "failed");
+    let failed_metadata = failed_row
+        .try_get::<serde_json::Value, _>("metadata")
+        .unwrap();
+    assert!(failed_metadata
+        .get("didcomm_transport_attempt_id")
+        .is_none());
+    assert!(failed_metadata
+        .get("didcomm_transport_lease_expires_at")
+        .is_none());
+
+    let (failed_claim_a, failed_claim_b) = tokio::join!(
+        repository.claim_transport("org-a", "tx-didcomm-contract", "did:key:holder"),
+        second_instance.claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+    );
+    let failed_claim = match (failed_claim_a.unwrap(), failed_claim_b.unwrap()) {
+        (
+            InitiationDidcommTransportClaimOutcome::Claimed(claim),
+            InitiationDidcommTransportClaimOutcome::Busy,
+        )
+        | (
+            InitiationDidcommTransportClaimOutcome::Busy,
+            InitiationDidcommTransportClaimOutcome::Claimed(claim),
+        ) => claim,
+        states => {
+            panic!("one failed-retry worker must claim and one must observe busy: {states:?}")
+        }
+    };
+    repository
+        .mark_transport_outcome_unknown(&failed_claim)
+        .await
+        .unwrap();
+    assert!(matches!(
+        repository
+            .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+            .await
+            .unwrap(),
+        InitiationDidcommTransportClaimOutcome::OutcomeUnknown
+    ));
+
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET status = 'failed', last_error = 'didcomm_delivery_failed',
+             metadata = metadata
+                 - 'didcomm_transport_attempt_id'
+                 - 'didcomm_transport_lease_expires_at'
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let expiry_claim = repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .unwrap();
+    assert!(matches!(
+        expiry_claim,
+        InitiationDidcommTransportClaimOutcome::Claimed(_)
+    ));
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = jsonb_set(
+             metadata,
+             '{didcomm_transport_lease_expires_at}',
+             to_jsonb(clock_timestamp() - INTERVAL '1 second'))
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        repository
+            .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+            .await
+            .unwrap(),
+        InitiationDidcommTransportClaimOutcome::OutcomeUnknown
+    ));
+    let expired_row = sqlx::query(
+        "SELECT status, metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        expired_row.try_get::<String, _>("status").unwrap(),
+        "delivery_unknown"
+    );
+    let expired_metadata = expired_row
+        .try_get::<serde_json::Value, _>("metadata")
+        .unwrap();
+    assert!(expired_metadata
+        .get("didcomm_transport_attempt_id")
+        .is_none());
+    assert!(expired_metadata
+        .get("didcomm_transport_lease_expires_at")
+        .is_none());
+
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET status = 'transporting', last_error = NULL,
+             metadata = (metadata || jsonb_build_object(
+                 'didcomm_transport_attempt_id', $2::text,
+                 'didcomm_transport_lease_expires_at', 'malformed-deadline'))
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .bind(Uuid::new_v4().to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(matches!(
+        repository
+            .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+            .await
+            .unwrap(),
+        InitiationDidcommTransportClaimOutcome::OutcomeUnknown
+    ));
+
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET status = 'failed', last_error = 'didcomm_delivery_failed',
+             metadata = metadata
+                 - 'didcomm_transport_attempt_id'
+                 - 'didcomm_transport_lease_expires_at'
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let success_claim = repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .unwrap();
+    let InitiationDidcommTransportClaimOutcome::Claimed(success_claim) = success_claim else {
+        panic!("the reconciled failed state must be claimable")
+    };
+    repository
+        .mark_transport_succeeded(&success_claim)
         .await
         .unwrap();
     let transported_state = repository
@@ -644,6 +967,14 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
     assert_eq!(delivered.holder_did, staged.holder_did);
     assert_eq!(delivered.service_endpoint, staged.service_endpoint);
     assert_eq!(delivered.message_id, staged.message_id);
+    let terminal_claim = repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .unwrap();
+    let InitiationDidcommTransportClaimOutcome::Delivered(terminal) = terminal_claim else {
+        panic!("a completed delivery must replay its terminal receipt")
+    };
+    assert_eq!(terminal, delivered);
     assert!(repository
         .pending_delivery("org-a", "tx-didcomm-contract")
         .await
@@ -700,7 +1031,7 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
     let delivery = sqlx::query(
         "SELECT delivery_target, status, metadata
          FROM issuance_service.credential_delivery_records
-         WHERE credential_id = $1",
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
     )
     .bind(credential_id)
     .fetch_one(pool)
@@ -730,7 +1061,7 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         sqlx::query(
             "UPDATE issuance_service.credential_delivery_records
              SET metadata = $2 - $3
-             WHERE credential_id = $1",
+             WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
         )
         .bind(credential_id)
         .bind(metadata.clone())
@@ -753,13 +1084,33 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
     sqlx::query(
         "UPDATE issuance_service.credential_delivery_records
          SET metadata = $2
-         WHERE credential_id = $1",
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
     )
     .bind(credential_id)
     .bind(metadata)
     .execute(pool)
     .await
     .unwrap();
+    let canvas_sentinel = sqlx::query(
+        "SELECT status, metadata
+         FROM issuance_service.credential_delivery_records
+         WHERE id = 'canvas-didcomm-claim-sentinel'
+           AND delivery_target = 'canvas_credentials'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        canvas_sentinel.try_get::<String, _>("status").unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        canvas_sentinel
+            .try_get::<serde_json::Value, _>("metadata")
+            .unwrap(),
+        json!({"canvas_sentinel": true})
+    );
+    second_pool.close().await;
 }
 
 async fn assert_initiation_dependency_reads(pool: &sqlx::PgPool, key: &[u8]) {

@@ -533,6 +533,33 @@ impl PostgresCredentialLifecycle {
         service_endpoint: &str,
         message_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
+        let delivery_id = delivery_record_id(&credential.id, "didcomm_v2", None);
+        let transported = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM issuance_service.credential_delivery_records
+                 WHERE id = $1
+                   AND credential_id = $2
+                   AND transaction_id = $3
+                   AND organization_id = $4
+                   AND delivery_target = 'didcomm_v2'
+                   AND status = 'transported'
+                   AND metadata ->> 'service_endpoint' = $5
+                   AND metadata ->> 'didcomm_message_id' = $6
+             )",
+        )
+        .bind(&delivery_id)
+        .bind(&credential.id)
+        .bind(&transaction.id)
+        .bind(&credential.organization_id)
+        .bind(service_endpoint)
+        .bind(message_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(database_error)?;
+        if !transported {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         sqlx::query(
             "INSERT INTO issuance_service.issuance_events
                  (id, transaction_id, application_id, event_type, metadata, created_at)
@@ -563,7 +590,6 @@ impl PostgresCredentialLifecycle {
         if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
             self.record_canvas_delivery(transaction, credential).await?;
         }
-        let delivery_id = delivery_record_id(&credential.id, "didcomm_v2", None);
         self.upsert_delivery(
             &delivery_id,
             transaction,
@@ -594,7 +620,7 @@ impl PostgresCredentialLifecycle {
         last_error: Option<&str>,
         metadata: Value,
     ) -> Result<(), CredentialIssuanceError> {
-        sqlx::query(
+        let updated = sqlx::query(
             "INSERT INTO issuance_service.credential_delivery_records
                  (id, credential_id, transaction_id, organization_id, delivery_target,
                   delivery_mode, status, canvas_account_id, last_error, metadata,
@@ -610,7 +636,7 @@ impl PostgresCredentialLifecycle {
                  status = EXCLUDED.status,
                  canvas_account_id = EXCLUDED.canvas_account_id,
                  last_error = EXCLUDED.last_error,
-                  metadata = CASE
+                 metadata = CASE
                       WHEN EXCLUDED.delivery_target = 'didcomm_v2'
                       THEN EXCLUDED.metadata || jsonb_build_object(
                           'holder_did',
@@ -618,7 +644,9 @@ impl PostgresCredentialLifecycle {
                       )
                       ELSE EXCLUDED.metadata
                   END,
-                 updated_at = clock_timestamp()",
+                 updated_at = clock_timestamp()
+             WHERE EXCLUDED.delivery_target <> 'didcomm_v2'
+                OR issuance_service.credential_delivery_records.status = 'transported'",
         )
         .bind(id)
         .bind(&credential.id)
@@ -633,6 +661,9 @@ impl PostgresCredentialLifecycle {
         .execute(&self.pool)
         .await
         .map_err(database_error)?;
+        if updated.rows_affected() != 1 {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         Ok(())
     }
 

@@ -10,6 +10,17 @@
   ],
   "internal_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null,"provider_delivery_receipt":"must-not-leak"},
   "expected_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null},
+  "transport_claim": {
+    "single_active_attempt": true,
+    "lease_seconds": 60,
+    "expired_or_malformed_lease": "delivery_unknown",
+    "automatic_resend_from_delivery_unknown": false,
+    "completion_fenced_by_attempt_id": true,
+    "http_failures": [
+      {"error":"concurrent_delivery","status":409,"detail":"Issuance transaction is not available for DIDComm delivery"},
+      {"error":"delivery_outcome_unknown","status":409,"detail":"DIDComm delivery outcome requires reconciliation"}
+    ]
+  },
   "invalid_responses": [
     {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","status":"delivered"},
     ["not","an","object"]

@@ -163,6 +163,10 @@ impl InitiationDidcommHttpError {
                 StatusCode::CONFLICT,
                 "Issuance transaction is not available for DIDComm delivery",
             ),
+            Self::Delivery(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown) => (
+                StatusCode::CONFLICT,
+                "DIDComm delivery outcome requires reconciliation",
+            ),
             Self::Delivery(NativeInitiationDidcommDeliveryError::TransportFailed) => {
                 (StatusCode::BAD_GATEWAY, "DIDComm delivery failed")
             }
@@ -201,6 +205,10 @@ mod tests {
             ),
             (
                 NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
+                StatusCode::CONFLICT,
+            ),
+            (
+                NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown,
                 StatusCode::CONFLICT,
             ),
             (
