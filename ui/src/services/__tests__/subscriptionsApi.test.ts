@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
-import { createSubscription, listSubscriptions } from '../subscriptionsApi'
+import { createSubscription, listSubscriptions, updateSubscription } from '../subscriptionsApi'
 
 describe('subscriptionsApi', () => {
   it('uses the public gateway contract with organization binding and idempotency', async () => {
@@ -33,5 +33,27 @@ describe('subscriptionsApi', () => {
     })
     expect(String(idempotencyKey)).toContain('v1-subscriptions')
     expect(await listSubscriptions('org-1')).toEqual([{ id: 'subscription-1' }])
+  })
+
+  it('maps subscription updates to the Rust wire contract', async () => {
+    let body: Record<string, unknown> | undefined
+    server.use(
+      http.patch('http://localhost:8000/v1/subscriptions/subscription-1', async ({ request }) => {
+        body = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ id: 'subscription-1', ...body })
+      }),
+    )
+
+    await updateSubscription('org-1', 'subscription-1', {
+      eventTypes: ['application.*'],
+      deliveryTargetId: 'webhook-1',
+      retryPolicy: { max_attempts: 4 },
+    })
+
+    expect(body).toMatchObject({
+      event_types: ['application.*'],
+      delivery_target_id: 'webhook-1',
+      retry_policy: { max_attempts: 4 },
+    })
   })
 })

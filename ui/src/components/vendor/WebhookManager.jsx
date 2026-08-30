@@ -49,9 +49,9 @@ import { useAuth } from '../../hooks/useAuth';
 import { useNotifications } from '../../hooks/useNotifications';
 import {
   listWebhooks,
-  createWebhook,
-  updateWebhook,
-  deleteWebhook,
+  createWebhookConfiguration as createWebhook,
+  updateWebhookConfiguration as updateWebhook,
+  deleteWebhookConfiguration as deleteWebhook,
   testWebhook,
   getAvailableEventTypes,
   getErrorMessage,
@@ -279,7 +279,9 @@ export default function WebhookManager() {
       setUrl(webhook.url);
       setDescription(webhook.description || '');
       const supportedEventTypes = new Set(eventTypes.map((event) => event.id));
-      setSelectedEvents((webhook.event_types || []).filter((event) => supportedEventTypes.has(event)));
+      setSelectedEvents((webhook.event_types || []).filter(
+        (event) => event === '*' || supportedEventTypes.has(event),
+      ));
     } else {
       setEditingWebhook(null);
       setUrl('');
@@ -296,11 +298,13 @@ export default function WebhookManager() {
   };
 
   const handleEventToggle = (eventId) => {
-    setSelectedEvents((prev) => (
-      prev.includes(eventId)
+    setSelectedEvents((prev) => {
+      if (eventId === '*') return prev.includes('*') ? [] : ['*'];
+      if (prev.includes('*')) return [eventId];
+      return prev.includes(eventId)
         ? prev.filter((id) => id !== eventId)
-        : [...prev, eventId]
-    ));
+        : [...prev, eventId];
+    });
   };
 
   const handleSave = async () => {
@@ -553,6 +557,28 @@ export default function WebhookManager() {
               
               {/* Grouped Events */}
               <FormGroup>
+                <Box sx={{ mb: 2, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
+                  <FormControlLabel
+                    control={(
+                      <Checkbox
+                        checked={selectedEvents.includes('*')}
+                        onChange={() => handleEventToggle('*')}
+                        color="primary"
+                      />
+                    )}
+                    label={(
+                      <Box>
+                        <Typography variant="body2" fontWeight="bold">
+                          All Events
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Subscribe to all current and future supported events.
+                        </Typography>
+                      </Box>
+                    )}
+                  />
+                </Box>
+
                 {/* Credential Events */}
                 <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
                   {t('webhookManager.eventCategories.credential')}

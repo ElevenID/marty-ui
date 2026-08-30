@@ -389,6 +389,63 @@ async fn subscriptions_are_tenant_bound_and_enqueue_each_logical_delivery_once()
 }
 
 #[tokio::test]
+async fn webhook_wildcards_are_validated_and_preserve_delivery_semantics() {
+    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+    let repository: Arc<dyn NotificationRepository> =
+        Arc::new(InMemoryNotificationRepository::default());
+    let app = app(repository.clone());
+    let mut webhook_request = fixture["valid_webhook"].clone();
+    webhook_request["event_types"] = json!(["*"]);
+    let webhook = app
+        .clone()
+        .oneshot(request("POST", "/v1/webhooks", webhook_request))
+        .await
+        .unwrap();
+    assert_eq!(webhook.status(), StatusCode::OK);
+    let webhook = json_body(webhook).await;
+
+    let mut subscription_request = fixture["valid_subscription"].clone();
+    subscription_request["delivery_target_id"] = webhook["id"].clone();
+    subscription_request["event_types"] = json!(["application.*"]);
+    let subscription = app
+        .clone()
+        .oneshot(request("POST", "/v1/subscriptions", subscription_request))
+        .await
+        .unwrap();
+    assert_eq!(subscription.status(), StatusCode::OK);
+    let subscription = json_body(subscription).await;
+    assert_eq!(subscription["delivery_target_id"], webhook["id"]);
+    assert_eq!(subscription["delivery"]["target_id"], webhook["id"]);
+
+    let event: marty_notification::service::EventIngestRequest =
+        serde_json::from_value(fixture["valid_internal_event"].clone()).unwrap();
+    let service = marty_notification::service::NotificationService::new(repository);
+    assert_eq!(service.ingest_event(event).await.unwrap()["deliveries"], 1);
+
+    let invalid_update = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!(
+                "/v1/subscriptions/{}?organization_id=org-a",
+                subscription["id"].as_str().unwrap()
+            ),
+            json!({"event_types": ["unsupported.*"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let mut invalid_webhook = fixture["valid_webhook"].clone();
+    invalid_webhook["event_types"] = json!(["unsupported.*"]);
+    let invalid_webhook = app
+        .oneshot(request("POST", "/v1/webhooks", invalid_webhook))
+        .await
+        .unwrap();
+    assert_eq!(invalid_webhook.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn internal_auth_is_checked_before_malformed_body() {
     let _guard = ENVIRONMENT.lock().await;
     env::set_var(

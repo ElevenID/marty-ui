@@ -7,6 +7,12 @@
 import { get, post, patch, del, getErrorMessage } from './api';
 import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, requireOrganizationId, withQuery } from './queryUtils';
+import {
+  createSubscription,
+  deleteSubscription,
+  listSubscriptions,
+  updateSubscription,
+} from './subscriptionsApi';
 
 const BASE_PATH = '/v1/webhooks';
 
@@ -34,6 +40,15 @@ function defaultWebhookName(url, description) {
   } catch {
     return 'External webhook';
   }
+}
+
+function subscriptionTargetsWebhook(subscription, webhookId) {
+  return subscription?.delivery_target_id === webhookId
+    || subscription?.delivery?.target_id === webhookId;
+}
+
+function pairedSubscriptionName(webhook) {
+  return `${webhook.name || defaultWebhookName(webhook.url, webhook.description)} deliveries`;
 }
 
 /**
@@ -72,6 +87,33 @@ export async function createWebhook(organizationId, { name, url, eventTypes, des
 }
 
 /**
+ * Create the endpoint and its delivery subscription as one UI operation.
+ * If subscription creation fails, compensate by removing the inert endpoint.
+ */
+export async function createWebhookConfiguration(organizationId, webhookData) {
+  const webhook = await createWebhook(organizationId, webhookData);
+  try {
+    const subscription = await createSubscription(organizationId, {
+      name: pairedSubscriptionName(webhook),
+      description: webhookData.description || '',
+      eventTypes: webhookData.eventTypes,
+      deliveryTargetId: webhook.id,
+    });
+    return { ...webhook, subscription_id: subscription.id };
+  } catch (error) {
+    try {
+      await deleteWebhook(organizationId, webhook.id);
+    } catch (cleanupError) {
+      throw new Error(
+        `${getErrorMessage(error)} The inactive webhook endpoint also requires manual cleanup: ${getErrorMessage(cleanupError)}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * Get a single webhook
  * @param {string} webhookId - Webhook ID
  * @returns {Promise<Object>} - Webhook object
@@ -100,6 +142,51 @@ export async function updateWebhook(organizationId, webhookId, { name, url, even
   return normalizeWebhookResponse(await patch(scopedWebhookPath(organizationId, webhookId), body));
 }
 
+/** Keep the endpoint filter and its single delivery subscription in sync. */
+export async function updateWebhookConfiguration(organizationId, webhookId, updates) {
+  const [previousWebhook, allSubscriptions] = await Promise.all([
+    getWebhook(organizationId, webhookId),
+    listSubscriptions(organizationId),
+  ]);
+  const subscriptions = allSubscriptions
+    .filter((subscription) => subscriptionTargetsWebhook(subscription, webhookId));
+  if (subscriptions.length > 1) {
+    throw new Error('This webhook has multiple advanced subscriptions and must be edited through subscription management.');
+  }
+  const webhook = await updateWebhook(organizationId, webhookId, updates);
+  const subscriptionUpdates = {
+    name: pairedSubscriptionName(webhook),
+    description: updates.description ?? webhook.description ?? '',
+    eventTypes: updates.eventTypes ?? webhook.event_types,
+    enabled: updates.enabled ?? webhook.enabled,
+  };
+  try {
+    const subscription = subscriptions[0]
+      ? await updateSubscription(organizationId, subscriptions[0].id, subscriptionUpdates)
+      : await createSubscription(organizationId, {
+        ...subscriptionUpdates,
+        deliveryTargetId: webhookId,
+      });
+    return { ...webhook, subscription_id: subscription.id };
+  } catch (error) {
+    try {
+      await updateWebhook(organizationId, webhookId, {
+        name: previousWebhook.name,
+        url: previousWebhook.url,
+        eventTypes: previousWebhook.event_types,
+        description: previousWebhook.description,
+        enabled: previousWebhook.enabled,
+      });
+    } catch (rollbackError) {
+      throw new Error(
+        `${getErrorMessage(error)} The endpoint update also requires manual rollback: ${getErrorMessage(rollbackError)}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
 /**
  * Delete a webhook endpoint
  * @param {string} webhookId - Webhook ID
@@ -107,6 +194,20 @@ export async function updateWebhook(organizationId, webhookId, { name, url, even
  */
 export async function deleteWebhook(organizationId, webhookId) {
   return del(scopedWebhookPath(organizationId, webhookId));
+}
+
+/** Remove the endpoint and any subscriptions that exclusively target it. */
+export async function deleteWebhookConfiguration(organizationId, webhookId) {
+  const subscriptions = (await listSubscriptions(organizationId))
+    .filter((subscription) => subscriptionTargetsWebhook(subscription, webhookId));
+  const result = await deleteWebhook(organizationId, webhookId);
+  const cleanup = await Promise.allSettled(
+    subscriptions.map((subscription) => deleteSubscription(organizationId, subscription.id)),
+  );
+  if (cleanup.some((item) => item.status === 'rejected')) {
+    throw new Error('The webhook was deleted, but one or more orphaned subscriptions require manual cleanup.');
+  }
+  return result;
 }
 
 /**
@@ -175,9 +276,12 @@ export { getErrorMessage };
 export default {
   listWebhooks,
   createWebhook,
+  createWebhookConfiguration,
   getWebhook,
   updateWebhook,
+  updateWebhookConfiguration,
   deleteWebhook,
+  deleteWebhookConfiguration,
   testWebhook,
   getWebhookDeliveryAttempts,
   regenerateWebhookSecret,

@@ -192,6 +192,7 @@ pub struct SubscriptionResponse {
     pub description: Option<String>,
     pub event_types: Vec<String>,
     pub delivery: Value,
+    pub delivery_target_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "filter")]
     pub filter_config: Option<Map<String, Value>>,
     pub enabled: bool,
@@ -208,7 +209,11 @@ impl From<&Subscription> for SubscriptionResponse {
             name: value.name.clone(),
             description: value.description.clone(),
             event_types: value.event_types.clone(),
-            delivery: serde_json::json!({"channel": "WEBHOOK"}),
+            delivery: serde_json::json!({
+                "channel": "WEBHOOK",
+                "target_id": value.delivery_target_id,
+            }),
+            delivery_target_id: value.delivery_target_id.clone(),
             filter_config: (!value.filter_config.is_empty()).then(|| value.filter_config.clone()),
             enabled: value.enabled,
             retry_policy: value.retry_policy.clone(),
@@ -430,6 +435,9 @@ impl NotificationService {
     ) -> Result<WebhookResponse, ServiceError> {
         require_text(&request.organization_id, "organization_id", 255)?;
         require_text(&request.name, "name", 255)?;
+        if !request.event_types.is_empty() {
+            validate_event_types(&request.event_types)?;
+        }
         resolve_webhook_destination(&request.url)
             .await
             .map_err(|error| ServiceError::Invalid(error.to_string()))?;
@@ -503,6 +511,9 @@ impl NotificationService {
             webhook.description = Some(description);
         }
         if let Some(event_types) = request.event_types {
+            if !event_types.is_empty() {
+                validate_event_types(&event_types)?;
+            }
             webhook.event_types = event_types;
         }
         let mut rotated_secret = None;
@@ -886,16 +897,26 @@ fn notification_type(channels: &[ChannelType]) -> NotificationType {
     }
 }
 
-fn validate_event_types(event_types: &[String]) -> Result<(), ServiceError> {
+pub(crate) fn validate_event_types(event_types: &[String]) -> Result<(), ServiceError> {
     if event_types.is_empty() {
         return Err(ServiceError::Invalid(
             "event_types must contain at least one event".into(),
         ));
     }
     let allowed = STANDARD_EVENT_TYPES.into_iter().collect::<HashSet<_>>();
+    let allowed_categories = STANDARD_EVENT_TYPES
+        .into_iter()
+        .filter_map(|event_type| event_type.split_once('.').map(|(category, _)| category))
+        .collect::<HashSet<_>>();
     let unknown = event_types
         .iter()
-        .filter(|value| !allowed.contains(value.as_str()))
+        .filter(|value| {
+            value.as_str() != "*"
+                && !allowed.contains(value.as_str())
+                && value
+                    .strip_suffix(".*")
+                    .is_none_or(|category| !allowed_categories.contains(category))
+        })
         .cloned()
         .collect::<Vec<_>>();
     if unknown.is_empty() {

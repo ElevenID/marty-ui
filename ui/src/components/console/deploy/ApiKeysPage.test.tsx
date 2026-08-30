@@ -34,7 +34,7 @@ vi.mock('../../../services/apiKeysApi', () => ({
 
 vi.mock('../../../services/webhooksApi', () => ({
   listWebhooks: (...args: unknown[]) => mockListWebhooks(...args),
-  createWebhook: (...args: unknown[]) => mockCreateWebhook(...args),
+  createWebhookConfiguration: (...args: unknown[]) => mockCreateWebhook(...args),
   getAvailableEventTypes: (...args: unknown[]) => mockGetAvailableEventTypes(...args),
 }))
 

@@ -616,11 +616,7 @@ async fn update_subscription(
         item.description = Some(description);
     }
     if let Some(event_types) = request.event_types {
-        if event_types.is_empty() {
-            return Err(ServiceError::Invalid(
-                "event_types must contain at least one event".into(),
-            ));
-        }
+        crate::service::validate_event_types(&event_types)?;
         item.event_types = event_types;
     }
     if request

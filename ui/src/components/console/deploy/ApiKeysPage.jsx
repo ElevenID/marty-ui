@@ -51,7 +51,11 @@ import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createApiKey, listApiKeys, revokeApiKey } from '../../../services/apiKeysApi';
-import { createWebhook, getAvailableEventTypes, listWebhooks } from '../../../services/webhooksApi';
+import {
+  createWebhookConfiguration as createWebhook,
+  getAvailableEventTypes,
+  listWebhooks,
+} from '../../../services/webhooksApi';
 import {
   ASYNC_GATEWAY_EVENT_PRESET,
   flattenWebhookEventCatalog,

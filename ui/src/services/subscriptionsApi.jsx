@@ -41,7 +41,15 @@ export async function createSubscription(organizationId, {
 }
 
 export async function updateSubscription(organizationId, subscriptionId, updates) {
-  return patch(scopedPath(organizationId, subscriptionId), updates);
+  const body = {};
+  if (updates.name !== undefined) body.name = updates.name;
+  if (updates.description !== undefined) body.description = updates.description;
+  if (updates.eventTypes !== undefined) body.event_types = updates.eventTypes;
+  if (updates.deliveryTargetId !== undefined) body.delivery_target_id = updates.deliveryTargetId;
+  if (updates.filter !== undefined) body.filter = updates.filter;
+  if (updates.retryPolicy !== undefined) body.retry_policy = updates.retryPolicy;
+  if (updates.enabled !== undefined) body.enabled = updates.enabled;
+  return patch(scopedPath(organizationId, subscriptionId), body);
 }
 
 export async function deleteSubscription(organizationId, subscriptionId) {

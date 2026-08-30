@@ -33,10 +33,10 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 vi.mock('../../../services/webhooksApi', () => ({
   listWebhooks: (...args: unknown[]) => mockListWebhooks(...args),
   getAvailableEventTypes: (...args: unknown[]) => mockGetAvailableEventTypes(...args),
-  createWebhook: (...args: unknown[]) => mockCreateWebhook(...args),
-  deleteWebhook: (...args: unknown[]) => mockDeleteWebhook(...args),
+  createWebhookConfiguration: (...args: unknown[]) => mockCreateWebhook(...args),
+  deleteWebhookConfiguration: (...args: unknown[]) => mockDeleteWebhook(...args),
   testWebhook: (...args: unknown[]) => mockTestWebhook(...args),
-  updateWebhook: (...args: unknown[]) => mockUpdateWebhook(...args),
+  updateWebhookConfiguration: (...args: unknown[]) => mockUpdateWebhook(...args),
 }))
 
 describe('WebhooksPage', () => {

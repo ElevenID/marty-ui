@@ -4,6 +4,7 @@ import { server } from '@test/mocks/server'
 
 import {
   createWebhook,
+  createWebhookConfiguration,
   deleteWebhook,
   getAvailableEventTypes,
   getWebhookDeliveryAttempts,
@@ -87,5 +88,56 @@ describe('webhooksApi', () => {
       { name: 'Application', events: [{ type: 'application.approved', description: 'application approved' }] },
       { name: 'Credential', events: [{ type: 'credential.issued', description: 'credential issued' }] },
     ])
+  })
+
+  it('creates a usable endpoint and delivery subscription as one UI operation', async () => {
+    let subscriptionBody: Record<string, unknown> | undefined
+    server.use(
+      http.post('http://localhost:8000/v1/webhooks', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ id: 'webhook-1', ...body })
+      }),
+      http.post('http://localhost:8000/v1/subscriptions', async ({ request }) => {
+        subscriptionBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ id: 'subscription-1', ...subscriptionBody })
+      }),
+    )
+
+    const result = await createWebhookConfiguration('org-123', {
+      name: 'Admissions callback',
+      url: 'https://partner.example/events',
+      description: 'Approval outcomes',
+      eventTypes: ['application.*'],
+    })
+
+    expect(result.subscription_id).toBe('subscription-1')
+    expect(subscriptionBody).toMatchObject({
+      organization_id: 'org-123',
+      delivery_target_id: 'webhook-1',
+      event_types: ['application.*'],
+    })
+  })
+
+  it('removes an inert endpoint when subscription creation fails', async () => {
+    let deleted = false
+    server.use(
+      http.post('http://localhost:8000/v1/webhooks', () => (
+        HttpResponse.json({ id: 'webhook-orphan', name: 'Callback', url: 'https://partner.example/events' })
+      )),
+      http.post('http://localhost:8000/v1/subscriptions', () => (
+        HttpResponse.json({ detail: 'subscription unavailable' }, { status: 503 })
+      )),
+      http.delete('http://localhost:8000/v1/webhooks/webhook-orphan', () => {
+        deleted = true
+        return HttpResponse.json({ success: true })
+      }),
+    )
+
+    await expect(createWebhookConfiguration('org-123', {
+      name: 'Callback',
+      url: 'https://partner.example/events',
+      eventTypes: ['application.approved'],
+    })).rejects.toThrow()
+    expect(deleted).toBe(true)
   })
 })

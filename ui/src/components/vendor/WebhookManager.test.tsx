@@ -25,9 +25,9 @@ vi.mock('../../hooks/useNotifications', () => ({
 
 vi.mock('../../services/webhooksApi', () => ({
   listWebhooks: (...args: unknown[]) => mockListWebhooks(...args),
-  createWebhook: (...args: unknown[]) => mockCreateWebhook(...args),
-  updateWebhook: vi.fn(),
-  deleteWebhook: vi.fn(),
+  createWebhookConfiguration: (...args: unknown[]) => mockCreateWebhook(...args),
+  updateWebhookConfiguration: vi.fn(),
+  deleteWebhookConfiguration: vi.fn(),
   testWebhook: vi.fn(),
   getAvailableEventTypes: (...args: unknown[]) => mockGetAvailableEventTypes(...args),
   getErrorMessage: (error: Error) => error.message,
@@ -64,7 +64,7 @@ describe('WebhookManager', () => {
     expect(screen.getAllByText('credential offered').length).toBeGreaterThan(0)
     expect(screen.getAllByText('applicant approved').length).toBeGreaterThan(0)
     expect(screen.getAllByText('device key expiring').length).toBeGreaterThan(0)
-    expect(screen.queryByText('All Events')).not.toBeInTheDocument()
+    expect(screen.getByText('All Events')).toBeInTheDocument()
     expect(screen.queryByText(/credential suspended/i)).not.toBeInTheDocument()
 
     await user.type(screen.getByLabelText(/webhook url/i), 'https://partner.example.com/events')
@@ -74,6 +74,21 @@ describe('WebhookManager', () => {
     await waitFor(() => {
       expect(mockCreateWebhook).toHaveBeenCalledWith('org-123', expect.objectContaining({
         eventTypes: ['credential.offered'],
+      }))
+    })
+  })
+
+  it('preserves the all-current-and-future-events subscription', async () => {
+    const { user } = renderWithoutRouter(<WebhookManager />)
+
+    await user.click(await screen.findByRole('button', { name: /add your first webhook/i }))
+    await user.type(screen.getByLabelText(/webhook url/i), 'https://partner.example.com/events')
+    await user.click(screen.getByRole('checkbox', { name: /all events/i }))
+    await user.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() => {
+      expect(mockCreateWebhook).toHaveBeenCalledWith('org-123', expect.objectContaining({
+        eventTypes: ['*'],
       }))
     })
   })
