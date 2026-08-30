@@ -580,6 +580,8 @@ async fn evidence_sync_http_enqueues_exact_session_scope_then_returns_fresh_no_s
         .await
         .unwrap();
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(conflict.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(conflict.headers()[header::PRAGMA], "no-cache");
     assert_eq!(
         response_json(conflict).await,
         json!({"detail": {
@@ -599,8 +601,26 @@ async fn evidence_sync_http_enqueues_exact_session_scope_then_returns_fresh_no_s
         .await
         .unwrap();
     assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+    assert_eq!(not_found.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(not_found.headers()[header::PRAGMA], "no-cache");
     assert_eq!(
         response_json(not_found).await,
         json!({"detail": "Canvas application context was not found"})
     );
+
+    let (service, _) = sync_service(Err(
+        CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable,
+    ));
+    let unavailable = sync_service_app(service)
+        .oneshot(
+            Request::post(path)
+                .header(header::AUTHORIZATION, "Bearer private-session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(unavailable.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(unavailable.headers()[header::PRAGMA], "no-cache");
 }

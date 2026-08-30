@@ -838,15 +838,9 @@ async fn sync_canvas_lti_evidence(
         .ok_or(CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable)?
         .sync(token)
         .await?;
-    let mut response = (StatusCode::ACCEPTED, Json(status)).into_response();
-    response.headers_mut().insert(
-        http_header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
-    response
-        .headers_mut()
-        .insert(http_header::PRAGMA, HeaderValue::from_static("no-cache"));
-    Ok(response)
+    Ok(private_no_store(
+        (StatusCode::ACCEPTED, Json(status)).into_response(),
+    ))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1579,7 +1573,7 @@ impl From<CanvasLtiEvidenceSyncEnqueueError> for CanvasLtiEvidenceSyncHttpError 
 
 impl IntoResponse for CanvasLtiEvidenceSyncHttpError {
     fn into_response(self) -> Response {
-        match self {
+        let response = match self {
             Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
             Self::Service(CanvasLtiEvidenceSyncError::Evidence(error)) => {
                 CanvasLtiEvidenceHttpError::Service(error).into_response()
@@ -1606,7 +1600,8 @@ impl IntoResponse for CanvasLtiEvidenceSyncHttpError {
             Self::Service(CanvasLtiEvidenceSyncError::Enqueue(
                 CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable,
             )) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
-        }
+        };
+        private_no_store(response)
     }
 }
 
