@@ -24,7 +24,7 @@
     "storybook": "storybook dev -p 6006",
     "storybook:build": "cross-env DISABLE_PRERENDER=1 storybook build",
     "test:visual": "playwright test tests/visual",
-    "check:demo-manifests": "node scripts/generate-demo-manifest-module.mjs --check",
+    "check:demo-manifests": "node --test scripts/generated-text.test.mjs && node scripts/generate-demo-manifest-module.mjs --check",
     "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs"
   },
   "dependencies": {

@@ -104,9 +104,10 @@ export async function createWebhookConfiguration(organizationId, webhookData) {
     try {
       await deleteWebhook(organizationId, webhook.id);
     } catch (cleanupError) {
-      throw new Error(
+      throw new AggregateError(
+        [error, cleanupError],
         `${getErrorMessage(error)} The inactive webhook endpoint also requires manual cleanup: ${getErrorMessage(cleanupError)}`,
-        { cause: error },
+        { cause: cleanupError },
       );
     }
     throw error;
@@ -178,9 +179,10 @@ export async function updateWebhookConfiguration(organizationId, webhookId, upda
         enabled: previousWebhook.enabled,
       });
     } catch (rollbackError) {
-      throw new Error(
+      throw new AggregateError(
+        [error, rollbackError],
         `${getErrorMessage(error)} The endpoint update also requires manual rollback: ${getErrorMessage(rollbackError)}`,
-        { cause: error },
+        { cause: rollbackError },
       );
     }
     throw error;

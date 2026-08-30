@@ -10,6 +10,7 @@ import {
   getWebhookDeliveryAttempts,
   regenerateWebhookSecret,
   updateWebhook,
+  updateWebhookConfiguration,
 } from '../webhooksApi'
 
 describe('webhooksApi', () => {
@@ -139,5 +140,91 @@ describe('webhooksApi', () => {
       eventTypes: ['application.approved'],
     })).rejects.toThrow()
     expect(deleted).toBe(true)
+  })
+
+  it('preserves both the subscription and cleanup failures when compensation fails', async () => {
+    server.use(
+      http.post('http://localhost:8000/v1/webhooks', () => (
+        HttpResponse.json({ id: 'webhook-orphan', name: 'Callback', url: 'https://partner.example/events' })
+      )),
+      http.post('http://localhost:8000/v1/subscriptions', () => (
+        HttpResponse.json({ detail: 'subscription unavailable' }, { status: 503 })
+      )),
+      http.delete('http://localhost:8000/v1/webhooks/webhook-orphan', () => (
+        HttpResponse.json({ detail: 'cleanup unavailable' }, { status: 503 })
+      )),
+    )
+
+    let failure: unknown
+    try {
+      await createWebhookConfiguration('org-123', {
+        name: 'Callback',
+        url: 'https://partner.example/events',
+        eventTypes: ['application.approved'],
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError)
+    const aggregate = failure as AggregateError
+    expect(aggregate.errors).toHaveLength(2)
+    expect(aggregate.cause).toBe(aggregate.errors[1])
+    expect(aggregate.message).toContain('manual cleanup')
+  })
+
+  it('preserves both the subscription and rollback failures when an update cannot compensate', async () => {
+    let endpointUpdates = 0
+    server.use(
+      http.get('http://localhost:8000/v1/webhooks/webhook-1', () => (
+        HttpResponse.json({
+          id: 'webhook-1',
+          name: 'Original',
+          url: 'https://partner.example/original',
+          event_types: ['application.approved'],
+          enabled: true,
+        })
+      )),
+      http.get('http://localhost:8000/v1/subscriptions', () => (
+        HttpResponse.json({ subscriptions: [{
+          id: 'subscription-1',
+          delivery_target_id: 'webhook-1',
+        }] })
+      )),
+      http.patch('http://localhost:8000/v1/webhooks/webhook-1', async ({ request }) => {
+        endpointUpdates += 1
+        if (endpointUpdates > 1) {
+          return HttpResponse.json({ detail: 'rollback unavailable' }, { status: 503 })
+        }
+        return HttpResponse.json({
+          id: 'webhook-1',
+          name: 'Updated',
+          url: 'https://partner.example/updated',
+          event_types: ['credential.issued'],
+          enabled: true,
+          ...await request.json() as Record<string, unknown>,
+        })
+      }),
+      http.patch('http://localhost:8000/v1/subscriptions/subscription-1', () => (
+        HttpResponse.json({ detail: 'subscription unavailable' }, { status: 503 })
+      )),
+    )
+
+    let failure: unknown
+    try {
+      await updateWebhookConfiguration('org-123', 'webhook-1', {
+        url: 'https://partner.example/updated',
+        eventTypes: ['credential.issued'],
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(endpointUpdates).toBe(2)
+    expect(failure).toBeInstanceOf(AggregateError)
+    const aggregate = failure as AggregateError
+    expect(aggregate.errors).toHaveLength(2)
+    expect(aggregate.cause).toBe(aggregate.errors[1])
+    expect(aggregate.message).toContain('manual rollback')
   })
 })
