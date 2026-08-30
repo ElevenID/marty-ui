@@ -2,9 +2,8 @@ use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     canvas_management::CanvasPlatformRequest,
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
-    canvas_management_postgres::{
-        CanvasManagementRepositoryError, PostgresCanvasManagementRepository,
-    },
+    canvas_management_postgres::PostgresCanvasManagementRepository,
+    canvas_management_service::CanvasManagementRepositoryError,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, Row};

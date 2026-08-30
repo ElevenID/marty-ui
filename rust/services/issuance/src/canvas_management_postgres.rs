@@ -2,10 +2,14 @@
 
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgRow, PgPool, Row};
-use thiserror::Error;
 use tracing::error;
 
-use crate::canvas_management_domain::CanvasPlatformRecord;
+use crate::{
+    canvas_management_domain::CanvasPlatformRecord,
+    canvas_management_service::{
+        CanvasManagementRepositoryError, CanvasPlatformManagementRepository,
+    },
+};
 
 #[cfg(test)]
 const PLATFORM_COLUMNS: &str = "id, organization_id, canvas_account_id,
@@ -119,14 +123,6 @@ const INVALIDATE_PLATFORM_BINDINGS: &str = "UPDATE issuance_service.canvas_progr
      activated_at = NULL,
      updated_at = $3
  WHERE organization_id = $1 AND platform_id = $2 AND archived_at IS NULL";
-
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
-pub enum CanvasManagementRepositoryError {
-    #[error("Canvas management repository is unavailable")]
-    Unavailable,
-    #[error("Canvas platform already exists")]
-    Duplicate,
-}
 
 #[derive(Clone)]
 pub struct PostgresCanvasManagementRepository {
@@ -259,6 +255,47 @@ impl PostgresCanvasManagementRepository {
         }
         transaction.commit().await.map_err(repository_error)?;
         platform_from_row(row).map(Some)
+    }
+}
+
+#[async_trait::async_trait]
+impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
+    async fn create_platform(
+        &self,
+        platform: &CanvasPlatformRecord,
+    ) -> Result<(), CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::create_platform(self, platform).await
+    }
+
+    async fn active_platform(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::active_platform(self, organization_id, platform_id)
+            .await
+    }
+
+    async fn list_active_platforms(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::list_active_platforms(self, organization_id).await
+    }
+
+    async fn save_platform_configuration(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        configuration_changed: bool,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::save_platform_configuration(
+            self,
+            platform,
+            expected_config_version,
+            configuration_changed,
+        )
+        .await
     }
 }
 
