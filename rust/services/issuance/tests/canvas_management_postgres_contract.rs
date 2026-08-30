@@ -169,16 +169,120 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .is_none());
     sqlx::query(
         "UPDATE issuance_service.canvas_platforms
-         SET archived_at = clock_timestamp(), enabled = false,
-             registration_status = 'archived'
+         SET connection_config = connection_config
+             || '{\"lti_config_token_hash\":\"digest\",\"oauth_pending_authorization_id\":\"authorization-1\"}'::jsonb
          WHERE id = $1",
     )
-    .bind(&platform.id)
+    .bind(&updated.id)
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_oauth_connections
+             (id, organization_id, platform_id, status, reauthorization_required,
+              revoke_retry_count, updated_at)
+         VALUES ('oauth-management', 'org-management', $1, 'connected', false, 0,
+                 clock_timestamp())",
+    )
+    .bind(&updated.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let archival_snapshot = repository
+        .platform_for_archival("org-management", &updated.id)
+        .await
+        .unwrap()
+        .expect("archival snapshot");
+    let archived = repository
+        .archive_platform(
+            "org-management",
+            &updated.id,
+            archival_snapshot.config_version,
+            now + chrono::Duration::seconds(2),
+        )
+        .await
+        .unwrap()
+        .expect("archived platform");
+    assert_eq!(archived.config_version, 3);
+    assert_eq!(archived.registration_status, "archived");
+    assert!(!archived.enabled);
+    assert_eq!(
+        archived.connection_config["oauth_status"],
+        json!("revocation_pending")
+    );
+    assert_eq!(
+        archived.connection_config["lti_config_token_status"],
+        json!("revoked")
+    );
+    assert!(!archived
+        .connection_config
+        .contains_key("lti_config_token_hash"));
+    assert!(!archived
+        .connection_config
+        .contains_key("oauth_pending_authorization_id"));
+
+    let queued = sqlx::query(
+        "SELECT status, revoke_retry_count, revoke_retry_at,
+                revoke_last_error_code, refresh_lease_owner
+         FROM issuance_service.canvas_oauth_connections
+         WHERE id = 'oauth-management'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        queued.try_get::<String, _>("status").unwrap(),
+        "revocation_pending"
+    );
+    assert_eq!(queued.try_get::<i32, _>("revoke_retry_count").unwrap(), 1);
+    assert!(queued
+        .try_get::<Option<chrono::DateTime<Utc>>, _>("revoke_retry_at")
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        queued
+            .try_get::<Option<String>, _>("revoke_last_error_code")
+            .unwrap()
+            .as_deref(),
+        Some("canvas_platform_archived")
+    );
+    assert!(queued
+        .try_get::<Option<String>, _>("refresh_lease_owner")
+        .unwrap()
+        .is_none());
+
+    let binding = sqlx::query(
+        "SELECT enabled, archived_at FROM issuance_service.canvas_program_bindings
+         WHERE id = 'binding-management'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!binding.try_get::<bool, _>("enabled").unwrap());
+    assert!(binding
+        .try_get::<Option<chrono::DateTime<Utc>>, _>("archived_at")
+        .unwrap()
+        .is_some());
+
+    let retry_snapshot = repository
+        .platform_for_archival("org-management", &updated.id)
+        .await
+        .unwrap()
+        .expect("archived snapshot");
+    let retried = repository
+        .archive_platform(
+            "org-management",
+            &updated.id,
+            retry_snapshot.config_version,
+            now + chrono::Duration::seconds(3),
+        )
+        .await
+        .unwrap()
+        .expect("idempotent archive");
+    assert_eq!(retried.config_version, 3);
     assert!(repository
-        .active_platform("org-management", &platform.id)
+        .active_platform("org-management", &updated.id)
         .await
         .unwrap()
         .is_none());
@@ -187,6 +291,85 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .await
         .unwrap()
         .is_empty());
+    assert!(repository
+        .platform_for_archival("org-foreign", &updated.id)
+        .await
+        .unwrap()
+        .is_none());
+
+    let conflicting = CanvasPlatformRecord::new_draft(
+        "org-management".to_owned(),
+        platform_request("Conflict", false),
+        CanvasOriginPolicy::default()
+            .resolve("https://canvas.example.edu")
+            .unwrap(),
+        now + chrono::Duration::seconds(4),
+    )
+    .unwrap();
+    repository.create_platform(&conflicting).await.unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings
+             (id, organization_id, platform_id, enabled, readiness_checks,
+              archived_at, updated_at)
+         VALUES ('binding-conflict', 'org-management', $1, true, '[]'::jsonb,
+                 NULL, clock_timestamp())",
+    )
+    .bind(&conflicting.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        repository
+            .archive_platform(
+                "org-management",
+                &conflicting.id,
+                conflicting.config_version + 1,
+                now + chrono::Duration::seconds(5),
+            )
+            .await,
+        Err(CanvasManagementRepositoryError::ConfigurationChanged)
+    );
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_oauth_connections
+             (id, organization_id, platform_id, status, reauthorization_required,
+              revoke_retry_count, updated_at)
+         VALUES ('oauth-conflict', 'org-management', $1, 'disconnected', false, 0,
+                 clock_timestamp())",
+    )
+    .bind(&conflicting.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        repository
+            .archive_platform(
+                "org-management",
+                &conflicting.id,
+                conflicting.config_version,
+                now + chrono::Duration::seconds(6),
+            )
+            .await,
+        Err(CanvasManagementRepositoryError::OAuthConnectionChanged)
+    );
+    let still_active = repository
+        .active_platform("org-management", &conflicting.id)
+        .await
+        .unwrap()
+        .expect("conflicted platform remains active");
+    assert!(still_active.archived_at.is_none());
+    assert_eq!(still_active.config_version, conflicting.config_version);
+    let binding = sqlx::query(
+        "SELECT enabled, archived_at FROM issuance_service.canvas_program_bindings
+         WHERE id = 'binding-conflict'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(binding.try_get::<bool, _>("enabled").unwrap());
+    assert!(binding
+        .try_get::<Option<chrono::DateTime<Utc>>, _>("archived_at")
+        .unwrap()
+        .is_none());
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {
@@ -241,6 +424,24 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             activated_at timestamptz,
             archived_at timestamptz,
             updated_at timestamptz NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_oauth_connections (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            platform_id text NOT NULL REFERENCES issuance_service.canvas_platforms(id),
+            status varchar(40) NOT NULL,
+            reauthorization_required boolean NOT NULL DEFAULT false,
+            refresh_lease_owner text,
+            refresh_lease_expires_at timestamptz,
+            revoke_retry_count integer NOT NULL DEFAULT 0,
+            revoke_retry_at timestamptz,
+            revoke_last_error_code varchar(120),
+            updated_at timestamptz NOT NULL,
+            UNIQUE (organization_id, platform_id))",
     )
     .execute(pool)
     .await

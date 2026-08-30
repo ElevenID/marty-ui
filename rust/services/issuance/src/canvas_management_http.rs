@@ -118,6 +118,21 @@ impl CanvasPlatformManagementHttpService {
             .map(CanvasPlatformResponse::from)
             .map_err(Into::into)
     }
+
+    pub async fn delete(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+    ) -> Result<(), CanvasManagementHttpError> {
+        self.management
+            .delete(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map_err(Into::into)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -464,6 +479,14 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
         CanvasPlatformManagementError::ConfigurationChanged => (
             StatusCode::CONFLICT,
             "Canvas platform configuration changed; retry the request".to_owned(),
+        ),
+        CanvasPlatformManagementError::ArchivalConfigurationChanged => (
+            StatusCode::CONFLICT,
+            "Canvas platform configuration changed; retry platform archival".to_owned(),
+        ),
+        CanvasPlatformManagementError::OAuthConnectionChanged => (
+            StatusCode::CONFLICT,
+            "Canvas OAuth connection changed; retry platform archival".to_owned(),
         ),
         CanvasPlatformManagementError::Conflict => (
             StatusCode::CONFLICT,

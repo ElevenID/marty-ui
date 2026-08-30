@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
@@ -24,6 +25,7 @@ use tower::ServiceExt;
 struct MemoryRepository {
     platforms: Mutex<Vec<CanvasPlatformRecord>>,
     force_conflict: Mutex<bool>,
+    force_oauth_conflict: Mutex<bool>,
     create_calls: Mutex<usize>,
 }
 
@@ -79,6 +81,22 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
             .collect())
     }
 
+    async fn platform_for_archival(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        Ok(self
+            .platforms
+            .lock()
+            .expect("platforms")
+            .iter()
+            .find(|platform| {
+                platform.organization_id == organization_id && platform.id == platform_id
+            })
+            .cloned())
+    }
+
     async fn save_platform_configuration(
         &self,
         platform: &CanvasPlatformRecord,
@@ -99,6 +117,32 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         };
         *existing = platform.clone();
         Ok(Some(existing.clone()))
+    }
+
+    async fn archive_platform(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        expected_config_version: i64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        if *self.force_oauth_conflict.lock().expect("OAuth conflict") {
+            return Err(CanvasManagementRepositoryError::OAuthConnectionChanged);
+        }
+        let mut platforms = self.platforms.lock().expect("platforms");
+        let Some(platform) = platforms.iter_mut().find(|platform| {
+            platform.organization_id == organization_id && platform.id == platform_id
+        }) else {
+            return Ok(None);
+        };
+        if platform.archived_at.is_none() && platform.config_version != expected_config_version {
+            return Err(CanvasManagementRepositoryError::ConfigurationChanged);
+        }
+        platform
+            .archive(false, now)
+            .map_err(|_| CanvasManagementRepositoryError::VersionExhausted)?;
+        platform.synchronize_archived_oauth_state(false, now);
+        Ok(Some(platform.clone()))
     }
 }
 
@@ -319,4 +363,135 @@ async fn platform_routes_reject_private_fields_and_preserve_safe_update_projecti
         response_json(stale).await,
         json!({"detail": "Canvas platform configuration changed; retry the request"})
     );
+}
+
+#[tokio::test]
+async fn platform_delete_is_tenant_hidden_idempotent_and_returns_an_empty_204() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Archive me", "client-1"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+    {
+        let mut platforms = repository.platforms.lock().expect("platforms");
+        platforms[0]
+            .connection_config
+            .insert("lti_config_token_hash".to_owned(), json!("digest"));
+        platforms[0].connection_config.insert(
+            "oauth_pending_authorization_id".to_owned(),
+            json!("authorization-1"),
+        );
+    }
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/v1/integrations/canvas/platforms/{platform_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-2")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(foreign).await,
+        json!({"detail": "Canvas platform not found"})
+    );
+
+    for _ in 0..2 {
+        let deleted = app
+            .clone()
+            .oneshot(
+                Request::delete(format!("/v1/integrations/canvas/platforms/{platform_id}"))
+                    .header("x-api-key", "management-key")
+                    .header("x-organization-id", "org-1")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        let body = axum::body::to_bytes(deleted.into_body(), 1024)
+            .await
+            .expect("response body");
+        assert!(body.is_empty());
+    }
+
+    let archived = repository.platforms.lock().expect("platforms")[0].clone();
+    assert_eq!(archived.config_version, 2);
+    assert_eq!(archived.registration_status, "archived");
+    assert_eq!(archived.connection_config["oauth_status"], "disconnected");
+    assert_eq!(
+        archived.connection_config["lti_config_token_status"],
+        "revoked"
+    );
+    assert!(!archived
+        .connection_config
+        .contains_key("lti_config_token_hash"));
+    assert!(!archived
+        .connection_config
+        .contains_key("oauth_pending_authorization_id"));
+
+    let hidden = app
+        .oneshot(
+            Request::get(format!("/v1/integrations/canvas/platforms/{platform_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn platform_delete_reports_the_frozen_oauth_queue_conflict() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Queue conflict", "client-1"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+    *repository
+        .force_oauth_conflict
+        .lock()
+        .expect("OAuth conflict") = true;
+    let conflict = app
+        .oneshot(
+            Request::delete(format!("/v1/integrations/canvas/platforms/{platform_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(conflict).await,
+        json!({"detail": "Canvas OAuth connection changed; retry platform archival"})
+    );
+    assert!(repository.platforms.lock().expect("platforms")[0]
+        .archived_at
+        .is_none());
 }

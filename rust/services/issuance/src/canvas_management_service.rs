@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use crate::{
@@ -21,6 +21,12 @@ pub enum CanvasManagementRepositoryError {
     Unavailable,
     #[error("Canvas platform already exists")]
     Duplicate,
+    #[error("Canvas platform configuration changed")]
+    ConfigurationChanged,
+    #[error("Canvas OAuth connection changed")]
+    OAuthConnectionChanged,
+    #[error("Canvas platform configuration version is exhausted")]
+    VersionExhausted,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -33,6 +39,10 @@ pub enum CanvasPlatformManagementError {
     PlatformNotFound,
     #[error("Canvas platform configuration changed; retry the request")]
     ConfigurationChanged,
+    #[error("Canvas platform configuration changed; retry platform archival")]
+    ArchivalConfigurationChanged,
+    #[error("Canvas OAuth connection changed; retry platform archival")]
+    OAuthConnectionChanged,
     #[error("Canvas platform conflicts with an existing resource")]
     Conflict,
     #[error("Canvas platform repository is unavailable")]
@@ -57,11 +67,25 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         organization_id: &str,
     ) -> Result<Vec<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
 
+    async fn platform_for_archival(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
     async fn save_platform_configuration(
         &self,
         platform: &CanvasPlatformRecord,
         expected_config_version: i64,
         configuration_changed: bool,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
+    async fn archive_platform(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        expected_config_version: i64,
+        now: DateTime<Utc>,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
 }
 
@@ -177,6 +201,32 @@ impl CanvasPlatformManagementService {
             .ok_or(CanvasPlatformManagementError::ConfigurationChanged)
     }
 
+    pub async fn delete(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<(), CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let platform = self
+            .repository
+            .platform_for_archival(organization_id, platform_id)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::PlatformNotFound)?;
+        self.repository
+            .archive_platform(
+                organization_id,
+                platform_id,
+                platform.config_version,
+                Utc::now(),
+            )
+            .await
+            .map_err(map_archive_repository_error)?
+            .ok_or(CanvasPlatformManagementError::PlatformNotFound)?;
+        Ok(())
+    }
+
     fn authorize<'organization>(
         &self,
         api_key: Option<&str>,
@@ -217,9 +267,29 @@ impl CanvasPlatformManagementService {
 fn map_repository_error(error: CanvasManagementRepositoryError) -> CanvasPlatformManagementError {
     match error {
         CanvasManagementRepositoryError::Duplicate => CanvasPlatformManagementError::Conflict,
+        CanvasManagementRepositoryError::ConfigurationChanged => {
+            CanvasPlatformManagementError::ConfigurationChanged
+        }
+        CanvasManagementRepositoryError::OAuthConnectionChanged => {
+            CanvasPlatformManagementError::OAuthConnectionChanged
+        }
+        CanvasManagementRepositoryError::VersionExhausted => {
+            CanvasPlatformManagementError::Domain(CanvasManagementDomainError::VersionExhausted)
+        }
         CanvasManagementRepositoryError::Unavailable => {
             CanvasPlatformManagementError::RepositoryUnavailable
         }
+    }
+}
+
+fn map_archive_repository_error(
+    error: CanvasManagementRepositoryError,
+) -> CanvasPlatformManagementError {
+    match error {
+        CanvasManagementRepositoryError::ConfigurationChanged => {
+            CanvasPlatformManagementError::ArchivalConfigurationChanged
+        }
+        other => map_repository_error(other),
     }
 }
 
@@ -235,6 +305,7 @@ mod tests {
     struct MemoryRepository {
         platforms: Mutex<Vec<CanvasPlatformRecord>>,
         force_conflict: Mutex<bool>,
+        force_oauth_conflict: Mutex<bool>,
     }
 
     #[async_trait]
@@ -288,6 +359,22 @@ mod tests {
                 .collect())
         }
 
+        async fn platform_for_archival(
+            &self,
+            organization_id: &str,
+            platform_id: &str,
+        ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+            Ok(self
+                .platforms
+                .lock()
+                .await
+                .iter()
+                .find(|platform| {
+                    platform.organization_id == organization_id && platform.id == platform_id
+                })
+                .cloned())
+        }
+
         async fn save_platform_configuration(
             &self,
             platform: &CanvasPlatformRecord,
@@ -308,6 +395,35 @@ mod tests {
             };
             *existing = platform.clone();
             Ok(Some(existing.clone()))
+        }
+
+        async fn archive_platform(
+            &self,
+            organization_id: &str,
+            platform_id: &str,
+            expected_config_version: i64,
+            now: DateTime<Utc>,
+        ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+            if *self.force_oauth_conflict.lock().await {
+                return Err(CanvasManagementRepositoryError::OAuthConnectionChanged);
+            }
+            let mut platforms = self.platforms.lock().await;
+            let Some(platform) = platforms.iter_mut().find(|platform| {
+                platform.organization_id == organization_id && platform.id == platform_id
+            }) else {
+                return Ok(None);
+            };
+            if platform.archived_at.is_none()
+                && (*self.force_conflict.lock().await
+                    || platform.config_version != expected_config_version)
+            {
+                return Err(CanvasManagementRepositoryError::ConfigurationChanged);
+            }
+            platform
+                .archive(false, now)
+                .map_err(|_| CanvasManagementRepositoryError::VersionExhausted)?;
+            platform.synchronize_archived_oauth_state(false, now);
+            Ok(Some(platform.clone()))
         }
     }
 
@@ -433,6 +549,54 @@ mod tests {
                 )
                 .await,
             Err(CanvasPlatformManagementError::ConfigurationChanged)
+        );
+    }
+
+    #[tokio::test]
+    async fn deletion_is_tenant_hidden_idempotent_and_surfaces_queue_conflicts() {
+        let repository = Arc::new(MemoryRepository::default());
+        let service = service(repository.clone());
+        let created = service
+            .create(
+                request("Original", true),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .delete(&created.id, Some("management-secret"), Some("org-2"))
+                .await,
+            Err(CanvasPlatformManagementError::PlatformNotFound)
+        );
+        service
+            .delete(&created.id, Some("management-secret"), Some("org-1"))
+            .await
+            .unwrap();
+        service
+            .delete(&created.id, Some("management-secret"), Some("org-1"))
+            .await
+            .unwrap();
+        let archived = repository.platforms.lock().await[0].clone();
+        assert!(archived.archived_at.is_some());
+        assert_eq!(archived.config_version, 2);
+        assert_eq!(archived.connection_config["oauth_status"], "disconnected");
+
+        let second = service
+            .create(
+                request("Second", false),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        *repository.force_oauth_conflict.lock().await = true;
+        assert_eq!(
+            service
+                .delete(&second.id, Some("management-secret"), Some("org-1"))
+                .await,
+            Err(CanvasPlatformManagementError::OAuthConnectionChanged)
         );
     }
 

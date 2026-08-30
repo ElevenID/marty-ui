@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
 use crate::{
@@ -31,6 +31,64 @@ impl PostgresCanvasOAuthRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanvasOAuthRevocationQueueOutcome {
+    Absent,
+    AlreadyPending,
+    Queued,
+    Disconnected,
+}
+
+/// Move a Canvas OAuth grant into the worker-owned durable revocation queue
+/// inside the caller's transaction. Platform archival and any future atomic
+/// lifecycle transition share this one persistence implementation.
+pub(crate) async fn queue_canvas_oauth_revocation_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: &str,
+    platform_id: &str,
+    retry_at: DateTime<Utc>,
+    reason_code: &str,
+) -> Result<CanvasOAuthRevocationQueueOutcome, CanvasOAuthError> {
+    let status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM issuance_service.canvas_oauth_connections
+         WHERE organization_id = $1 AND platform_id = $2 FOR UPDATE",
+    )
+    .bind(organization_id)
+    .bind(platform_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(repository_error)?;
+    match status.as_deref() {
+        None => Ok(CanvasOAuthRevocationQueueOutcome::Absent),
+        Some("revocation_pending") => Ok(CanvasOAuthRevocationQueueOutcome::AlreadyPending),
+        Some("disconnected") => Ok(CanvasOAuthRevocationQueueOutcome::Disconnected),
+        Some(_) => {
+            let result = sqlx::query(
+                "UPDATE issuance_service.canvas_oauth_connections
+                 SET status = 'revocation_pending', reauthorization_required = false,
+                     revoke_retry_count = revoke_retry_count + 1, revoke_retry_at = $3,
+                     revoke_last_error_code = left($4, 120),
+                     refresh_lease_owner = NULL, refresh_lease_expires_at = NULL,
+                     updated_at = clock_timestamp()
+                 WHERE organization_id = $1 AND platform_id = $2
+                   AND status <> 'disconnected'",
+            )
+            .bind(organization_id)
+            .bind(platform_id)
+            .bind(retry_at)
+            .bind(reason_code)
+            .execute(&mut **transaction)
+            .await
+            .map_err(repository_error)?;
+            if result.rows_affected() == 1 {
+                Ok(CanvasOAuthRevocationQueueOutcome::Queued)
+            } else {
+                Ok(CanvasOAuthRevocationQueueOutcome::Disconnected)
+            }
+        }
     }
 }
 

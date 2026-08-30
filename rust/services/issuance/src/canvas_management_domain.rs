@@ -248,6 +248,43 @@ impl CanvasPlatformRecord {
             LTI_CONFIG_TOKEN_REVOKED_AT.to_owned(),
             json!(now.to_rfc3339()),
         );
+        self.apply_archival_oauth_state(oauth_connection_exists);
+        self.updated_at = now;
+        Ok(true)
+    }
+
+    /// Reconcile an already archived platform with the durable OAuth queue.
+    /// This closes the callback/publication race without making archival
+    /// non-idempotent or reviving any public registration state.
+    pub fn synchronize_archived_oauth_state(
+        &mut self,
+        oauth_connection_exists: bool,
+        now: DateTime<Utc>,
+    ) -> bool {
+        if self.archived_at.is_none() {
+            return false;
+        }
+        let expected_status = if oauth_connection_exists {
+            "revocation_pending"
+        } else {
+            "disconnected"
+        };
+        let changed = self
+            .connection_config
+            .get(OAUTH_STATUS)
+            .and_then(Value::as_str)
+            != Some(expected_status)
+            || self
+                .connection_config
+                .contains_key(OAUTH_PENDING_AUTHORIZATION_ID);
+        self.apply_archival_oauth_state(oauth_connection_exists);
+        if changed {
+            self.updated_at = now;
+        }
+        changed
+    }
+
+    fn apply_archival_oauth_state(&mut self, oauth_connection_exists: bool) {
         self.connection_config.insert(
             OAUTH_STATUS.to_owned(),
             json!(if oauth_connection_exists {
@@ -258,8 +295,6 @@ impl CanvasPlatformRecord {
         );
         self.connection_config
             .remove(OAUTH_PENDING_AUTHORIZATION_ID);
-        self.updated_at = now;
-        Ok(true)
     }
 
     fn enabled_intent(&self) -> bool {
@@ -475,5 +510,31 @@ mod tests {
         assert!(!platform.archive(false, now(2)).unwrap());
         assert_eq!(platform.config_version, 2);
         assert_eq!(platform.updated_at, now(1));
+    }
+
+    #[test]
+    fn archived_platform_reconciles_an_oauth_connection_published_during_the_race_window() {
+        let mut platform = CanvasPlatformRecord::new_draft(
+            "org-1".to_owned(),
+            request("https://canvas.example", true),
+            hosted("https://canvas.example"),
+            now(0),
+        )
+        .unwrap();
+        assert!(platform.archive(false, now(1)).unwrap());
+        assert_eq!(
+            platform.connection_config[OAUTH_STATUS],
+            json!("disconnected")
+        );
+
+        assert!(platform.synchronize_archived_oauth_state(true, now(2)));
+        assert_eq!(platform.config_version, 2);
+        assert_eq!(platform.updated_at, now(2));
+        assert_eq!(
+            platform.connection_config[OAUTH_STATUS],
+            json!("revocation_pending")
+        );
+        assert!(!platform.synchronize_archived_oauth_state(true, now(3)));
+        assert_eq!(platform.updated_at, now(2));
     }
 }

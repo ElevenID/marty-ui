@@ -814,7 +814,9 @@ fn router_with_optional_services(
             )
             .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
-                get(get_canvas_platform).put(update_canvas_platform),
+                get(get_canvas_platform)
+                    .put(update_canvas_platform)
+                    .delete(delete_canvas_platform),
             );
     }
     if services.canvas_lti_login.is_some() {
@@ -958,6 +960,17 @@ async fn update_canvas_platform(
         .update(&headers, &platform_id, request)
         .await
         .map(Json)
+}
+
+async fn delete_canvas_platform(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .delete(&headers, &platform_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn canvas_management(
