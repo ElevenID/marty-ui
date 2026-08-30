@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -73,7 +73,7 @@ pub struct CanvasOAuthPlatform {
     pub archived: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasOAuthAuthorization {
     pub id: String,
     pub organization_id: String,
@@ -90,7 +90,28 @@ pub struct CanvasOAuthAuthorization {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for CanvasOAuthAuthorization {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthAuthorization")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("platform_id", &self.platform_id)
+            .field("canvas_base_url", &self.canvas_base_url)
+            .field("platform_config_version", &self.platform_config_version)
+            .field("client_id", &self.client_id)
+            .field("client_secret_ref", &"[REDACTED]")
+            .field("state_hash", &"[REDACTED]")
+            .field("capability_count", &self.capabilities.len())
+            .field("scope_count", &self.scopes.len())
+            .field("redirect_uri", &self.redirect_uri)
+            .field("expires_at", &self.expires_at)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasOAuthConnection {
     pub id: String,
     pub organization_id: String,
@@ -109,7 +130,30 @@ pub struct CanvasOAuthConnection {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+impl fmt::Debug for CanvasOAuthConnection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthConnection")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("platform_id", &self.platform_id)
+            .field("canvas_base_url", &self.canvas_base_url)
+            .field("platform_config_version", &self.platform_config_version)
+            .field("client_id", &self.client_id)
+            .field("client_secret_ref", &"[REDACTED]")
+            .field("capability_count", &self.capabilities.len())
+            .field("scope_count", &self.scopes.len())
+            .field("access_token_secret_ref", &"[REDACTED]")
+            .field("refresh_token_secret_ref", &"[REDACTED]")
+            .field("token_expires_at", &self.token_expires_at)
+            .field("status", &self.status)
+            .field("revoke_retry_count", &self.revoke_retry_count)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasOAuthStartRequest {
     pub client_id: String,
@@ -117,11 +161,33 @@ pub struct CanvasOAuthStartRequest {
     pub capabilities: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+impl fmt::Debug for CanvasOAuthStartRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthStartRequest")
+            .field("client_id", &self.client_id)
+            .field("client_secret_secret_id", &"[REDACTED]")
+            .field("capabilities", &self.capabilities)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct CanvasOAuthStartResponse {
     pub authorization_url: String,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
+}
+
+impl fmt::Debug for CanvasOAuthStartResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthStartResponse")
+            .field("authorization_url", &"[REDACTED]")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -131,23 +197,57 @@ pub struct CanvasOAuthConnectionResponse {
     pub scopes: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasOAuthCallbackRequest {
     pub code: Option<String>,
     pub state: String,
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for CanvasOAuthCallbackRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthCallbackRequest")
+            .field("code", &self.code.as_ref().map(|_| "[REDACTED]"))
+            .field("state", &"[REDACTED]")
+            .field("error", &self.error.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasOAuthCallbackResponse {
     pub location: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for CanvasOAuthCallbackResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthCallbackResponse")
+            .field("location", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasOAuthTokenBundle {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_in_seconds: Option<i64>,
+}
+
+impl fmt::Debug for CanvasOAuthTokenBundle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasOAuthTokenBundle")
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("expires_in_seconds", &self.expires_in_seconds)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -286,6 +386,7 @@ pub trait CanvasOAuthRepository: Send + Sync {
         organization_id: &str,
         platform_id: &str,
         lease_owner: &str,
+        secret_ids: &[String],
     ) -> Result<bool, CanvasOAuthError>;
 }
 
@@ -293,6 +394,7 @@ pub trait CanvasOAuthRepository: Send + Sync {
 pub trait CanvasOAuthSecretVault: Send + Sync {
     async fn metadata(
         &self,
+        organization_id: &str,
         secret_id: &str,
     ) -> Result<Option<IntegrationSecretMetadata>, CanvasOAuthError>;
     async fn value(
@@ -301,7 +403,7 @@ pub trait CanvasOAuthSecretVault: Send + Sync {
         secret_id: &str,
     ) -> Result<Option<String>, CanvasOAuthError>;
     async fn save(&self, secret: NewIntegrationSecret) -> Result<(), CanvasOAuthError>;
-    async fn delete(&self, secret_id: &str) -> Result<(), CanvasOAuthError>;
+    async fn delete(&self, organization_id: &str, secret_id: &str) -> Result<(), CanvasOAuthError>;
 }
 
 #[async_trait]
@@ -390,8 +492,26 @@ impl CanvasOAuthService {
         api_key: Option<&str>,
         trusted_organization_id: Option<&str>,
     ) -> Result<CanvasOAuthStartResponse, CanvasOAuthError> {
+        let organization_id = self.authorize_management(api_key, trusted_organization_id)?;
+        self.start_authorized(platform_id, request, organization_id)
+            .await
+    }
+
+    pub(crate) fn authorize_management<'organization>(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&'organization str>,
+    ) -> Result<&'organization str, CanvasOAuthError> {
         self.security.authorize(api_key)?;
-        let organization_id = trusted_organization(trusted_organization_id)?;
+        trusted_organization(trusted_organization_id)
+    }
+
+    pub(crate) async fn start_authorized(
+        &self,
+        platform_id: &str,
+        request: CanvasOAuthStartRequest,
+        organization_id: &str,
+    ) -> Result<CanvasOAuthStartResponse, CanvasOAuthError> {
         let platform = self
             .repository
             .management_platform(organization_id, platform_id)
@@ -420,7 +540,7 @@ impl CanvasOAuthService {
         }
         let secret = self
             .vault
-            .metadata(&request.client_secret_secret_id)
+            .metadata(&platform.organization_id, &request.client_secret_secret_id)
             .await?
             .filter(|secret| {
                 secret.organization_id == platform.organization_id
@@ -644,7 +764,7 @@ impl CanvasOAuthService {
             });
         if let Some(refresh) = refresh.as_ref() {
             if let Err(error) = self.vault.save(refresh.clone()).await {
-                let _ = self.vault.delete(&access.id).await;
+                let _ = self.vault.delete(&access.organization_id, &access.id).await;
                 return Err(error);
             }
         }
@@ -761,9 +881,12 @@ impl CanvasOAuthService {
         canvas_base_url: &str,
         access_token: &str,
     ) {
-        let _ = self.vault.delete(&access.id).await;
+        let _ = self.vault.delete(&access.organization_id, &access.id).await;
         if let Some(refresh) = refresh {
-            let _ = self.vault.delete(&refresh.id).await;
+            let _ = self
+                .vault
+                .delete(&refresh.organization_id, &refresh.id)
+                .await;
         }
         self.best_effort_revoke(canvas_base_url, access_token).await;
     }
@@ -863,25 +986,27 @@ impl CanvasOAuthService {
                 scopes: leased.scopes,
             });
         }
-        if !self
-            .repository
-            .complete_revocation(&platform.organization_id, &platform.id, &lease_owner)
-            .await?
-        {
-            return Err(CanvasOAuthError::ConnectionChanged);
-        }
-        for secret_ref in [
+        let secret_ids = [
             leased.access_token_secret_ref.as_deref(),
             leased.refresh_token_secret_ref.as_deref(),
         ]
         .into_iter()
         .flatten()
+        .filter_map(|secret_ref| {
+            integration_secret_id_from_ref(&platform.organization_id, secret_ref).map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+        if !self
+            .repository
+            .complete_revocation(
+                &platform.organization_id,
+                &platform.id,
+                &lease_owner,
+                &secret_ids,
+            )
+            .await?
         {
-            if let Some(secret_id) =
-                integration_secret_id_from_ref(&platform.organization_id, secret_ref)
-            {
-                self.vault.delete(secret_id).await?;
-            }
+            return Err(CanvasOAuthError::ConnectionChanged);
         }
         self.repository
             .patch_platform(

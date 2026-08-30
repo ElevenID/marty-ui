@@ -66,6 +66,19 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
         vault.value("org-other", "client-secret-1").await.unwrap(),
         None
     );
+    assert!(vault
+        .metadata("org-other", "client-secret-1")
+        .await
+        .unwrap()
+        .is_none());
+    vault
+        .delete("org-other", "client-secret-1")
+        .await
+        .expect("foreign delete is a tenant-bound no-op");
+    assert_eq!(
+        vault.value("org-1", "client-secret-1").await.unwrap(),
+        Some("plaintext-client-secret".to_owned())
+    );
 
     let now = Utc::now();
     let authorization = CanvasOAuthAuthorization {
@@ -212,12 +225,17 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
         .expect("second lease");
     assert_eq!(leased_again.status, "revocation_pending");
     assert!(repository
-        .complete_revocation("org-1", "platform-1", "lease-2")
+        .complete_revocation("org-1", "platform-1", "lease-2", &["access-1".to_owned()],)
         .await
         .unwrap());
     assert_eq!(
         repository.connection("org-1", "platform-1").await.unwrap(),
         None
+    );
+    assert_eq!(vault.value("org-1", "access-1").await.unwrap(), None);
+    assert_eq!(
+        vault.value("org-1", "client-secret-1").await.unwrap(),
+        Some("plaintext-client-secret".to_owned())
     );
 }
 

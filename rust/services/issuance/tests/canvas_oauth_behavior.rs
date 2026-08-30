@@ -11,11 +11,11 @@ use axum::{
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_oauth::{
-        CanvasOAuthAuthorization, CanvasOAuthCallbackRequest, CanvasOAuthConnection,
-        CanvasOAuthError, CanvasOAuthPlatform, CanvasOAuthPlatformPatch, CanvasOAuthProvider,
-        CanvasOAuthProviderError, CanvasOAuthRepository, CanvasOAuthSecretVault,
-        CanvasOAuthService, CanvasOAuthServiceConfig, CanvasOAuthStartRequest,
-        CanvasOAuthTokenBundle,
+        CanvasOAuthAuthorization, CanvasOAuthCallbackRequest, CanvasOAuthCallbackResponse,
+        CanvasOAuthConnection, CanvasOAuthError, CanvasOAuthPlatform, CanvasOAuthPlatformPatch,
+        CanvasOAuthProvider, CanvasOAuthProviderError, CanvasOAuthRepository,
+        CanvasOAuthSecretVault, CanvasOAuthService, CanvasOAuthServiceConfig,
+        CanvasOAuthStartRequest, CanvasOAuthStartResponse, CanvasOAuthTokenBundle,
     },
     http::router_with_canvas_oauth,
     integration_secret::{IntegrationSecretMetadata, NewIntegrationSecret},
@@ -42,6 +42,7 @@ struct RepositoryState {
     management_reads: usize,
     publish_allowed: bool,
     retry_at: Option<DateTime<Utc>>,
+    fail_complete_once: bool,
 }
 
 #[async_trait]
@@ -208,11 +209,14 @@ impl CanvasOAuthRepository for MemoryRepository {
         organization_id: &str,
         platform_id: &str,
         _lease_owner: &str,
+        _secret_ids: &[String],
     ) -> Result<bool, CanvasOAuthError> {
-        Ok(self
-            .state
-            .lock()
-            .expect("repository state")
+        let mut state = self.state.lock().expect("repository state");
+        if state.fail_complete_once {
+            state.fail_complete_once = false;
+            return Err(CanvasOAuthError::RepositoryUnavailable);
+        }
+        Ok(state
             .connections
             .remove(&(organization_id.to_owned(), platform_id.to_owned()))
             .is_some())
@@ -236,6 +240,7 @@ struct VaultState {
 impl CanvasOAuthSecretVault for MemoryVault {
     async fn metadata(
         &self,
+        organization_id: &str,
         secret_id: &str,
     ) -> Result<Option<IntegrationSecretMetadata>, CanvasOAuthError> {
         Ok(self
@@ -244,6 +249,7 @@ impl CanvasOAuthSecretVault for MemoryVault {
             .expect("vault state")
             .metadata
             .get(secret_id)
+            .filter(|metadata| metadata.organization_id == organization_id)
             .cloned())
     }
 
@@ -281,10 +287,18 @@ impl CanvasOAuthSecretVault for MemoryVault {
         Ok(())
     }
 
-    async fn delete(&self, secret_id: &str) -> Result<(), CanvasOAuthError> {
+    async fn delete(&self, organization_id: &str, secret_id: &str) -> Result<(), CanvasOAuthError> {
         let mut state = self.state.lock().expect("vault state");
-        state.metadata.remove(secret_id);
-        state.values.retain(|(_, id), _| id != secret_id);
+        if state
+            .metadata
+            .get(secret_id)
+            .is_some_and(|metadata| metadata.organization_id == organization_id)
+        {
+            state.metadata.remove(secret_id);
+        }
+        state
+            .values
+            .remove(&(organization_id.to_owned(), secret_id.to_owned()));
         state.deleted.push(secret_id.to_owned());
         Ok(())
     }
@@ -739,6 +753,88 @@ async fn disconnect_revokes_against_pinned_connection_origin_and_durably_resched
 }
 
 #[tokio::test]
+async fn disconnect_keeps_connection_and_secrets_until_atomic_cleanup_succeeds() {
+    let (service, repository, vault, provider) = fixture();
+    repository
+        .state
+        .lock()
+        .expect("repository state")
+        .connections
+        .insert(
+            ("org-1".to_owned(), "platform-1".to_owned()),
+            CanvasOAuthConnection {
+                id: "connection-1".to_owned(),
+                organization_id: "org-1".to_owned(),
+                platform_id: "platform-1".to_owned(),
+                canvas_base_url: "https://authorized-canvas.example.edu".to_owned(),
+                platform_config_version: 1,
+                client_id: "canvas-client".to_owned(),
+                client_secret_ref: "org_secret://org-1/client-secret-1".to_owned(),
+                capabilities: vec!["catalog".to_owned()],
+                scopes: vec!["url:GET|/api/v1/courses".to_owned()],
+                access_token_secret_ref: Some("org_secret://org-1/access-1".to_owned()),
+                refresh_token_secret_ref: None,
+                token_expires_at: None,
+                status: "connected".to_owned(),
+                revoke_retry_count: 0,
+                updated_at: Utc::now(),
+            },
+        );
+    vault.state.lock().expect("vault state").values.insert(
+        ("org-1".to_owned(), "access-1".to_owned()),
+        "access-token".to_owned(),
+    );
+    repository
+        .state
+        .lock()
+        .expect("repository state")
+        .fail_complete_once = true;
+
+    assert_eq!(
+        service
+            .disconnect("platform-1", Some("management-key"), Some("org-1"))
+            .await,
+        Err(CanvasOAuthError::RepositoryUnavailable)
+    );
+    assert!(repository
+        .state
+        .lock()
+        .expect("repository state")
+        .connections
+        .contains_key(&("org-1".to_owned(), "platform-1".to_owned())));
+    assert_eq!(
+        vault
+            .state
+            .lock()
+            .expect("vault state")
+            .values
+            .get(&("org-1".to_owned(), "access-1".to_owned())),
+        Some(&"access-token".to_owned())
+    );
+
+    let completed = service
+        .disconnect("platform-1", Some("management-key"), Some("org-1"))
+        .await
+        .expect("retry completes cleanup");
+    assert_eq!(completed.status, "disconnected");
+    assert!(!repository
+        .state
+        .lock()
+        .expect("repository state")
+        .connections
+        .contains_key(&("org-1".to_owned(), "platform-1".to_owned())));
+    assert_eq!(
+        provider
+            .state
+            .lock()
+            .expect("provider state")
+            .revocations
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn management_http_preserves_auth_validation_and_tenant_hiding() {
     let path = "/v1/integrations/canvas/platforms/platform-1/oauth/authorizations";
     let valid_body = serde_json::json!({
@@ -747,6 +843,26 @@ async fn management_http_preserves_auth_validation_and_tenant_hiding() {
         "capabilities": ["catalog"]
     });
     let (service, repository, _vault, _provider) = fixture();
+    let unauthorized_invalid_body = service_app(service.clone())
+        .oneshot(
+            Request::post(path)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("X-Organization-ID", "org-1")
+                .body(Body::from("not-json"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unauthorized_invalid_body.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        unauthorized_invalid_body.headers()[header::CACHE_CONTROL],
+        "no-store"
+    );
+    assert_eq!(
+        unauthorized_invalid_body.headers()[header::PRAGMA],
+        "no-cache"
+    );
+
     let unauthorized = service_app(service.clone())
         .oneshot(
             Request::post(path)
@@ -842,6 +958,8 @@ async fn management_http_preserves_auth_validation_and_tenant_hiding() {
         .await
         .expect("response");
     assert_eq!(success.status(), StatusCode::OK);
+    assert_eq!(success.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(success.headers()[header::PRAGMA], "no-cache");
     let body = response_json(success).await;
     assert_eq!(
         body["redirect_uri"],
@@ -857,13 +975,19 @@ async fn callback_http_is_public_but_state_bound_and_never_browser_cacheable() {
     let (service, _repository, _vault, provider) = fixture();
     let invalid = service_app(service.clone())
         .oneshot(
-            Request::get("/v1/integrations/canvas/oauth/callback?state=short")
+            Request::get("/v1/integrations/canvas/oauth/callback?state=state-secret-marker")
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("response");
     assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(invalid.headers()[header::PRAGMA], "no-cache");
+    assert_eq!(invalid.headers()["referrer-policy"], "no-referrer");
+    let invalid_body = response_json(invalid).await;
+    assert_eq!(invalid_body["detail"][0]["input"], "[REDACTED]");
+    assert!(!invalid_body.to_string().contains("state-secret-marker"));
     assert!(provider
         .state
         .lock()
@@ -892,10 +1016,90 @@ async fn callback_http_is_public_but_state_bound_and_never_browser_cacheable() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
     assert_eq!(response.headers()["referrer-policy"], "no-referrer");
     let location = response.headers()[header::LOCATION]
         .to_str()
         .expect("location");
     assert!(location.contains("error_code=oauth_authorization_denied"));
     assert!(!location.contains("access_denied"));
+}
+
+#[test]
+fn oauth_debug_output_redacts_states_codes_tokens_and_secret_material() {
+    let now = Utc::now();
+    let authorization = CanvasOAuthAuthorization {
+        id: "authorization-1".to_owned(),
+        organization_id: "org-1".to_owned(),
+        platform_id: "platform-1".to_owned(),
+        canvas_base_url: "https://canvas.example.edu".to_owned(),
+        platform_config_version: 1,
+        client_id: "client-id".to_owned(),
+        client_secret_ref: "org_secret://org-1/client-secret-sensitive".to_owned(),
+        state_hash: "state-hash-sensitive".to_owned(),
+        capabilities: vec!["catalog".to_owned()],
+        scopes: vec!["scope".to_owned()],
+        redirect_uri: "https://issuer.example.edu/callback".to_owned(),
+        expires_at: now,
+        created_at: now,
+    };
+    let connection = CanvasOAuthConnection {
+        id: "connection-1".to_owned(),
+        organization_id: "org-1".to_owned(),
+        platform_id: "platform-1".to_owned(),
+        canvas_base_url: "https://canvas.example.edu".to_owned(),
+        platform_config_version: 1,
+        client_id: "client-id".to_owned(),
+        client_secret_ref: "client-secret-ref-sensitive".to_owned(),
+        capabilities: vec!["catalog".to_owned()],
+        scopes: vec!["scope".to_owned()],
+        access_token_secret_ref: Some("access-ref-sensitive".to_owned()),
+        refresh_token_secret_ref: Some("refresh-ref-sensitive".to_owned()),
+        token_expires_at: Some(now),
+        status: "connected".to_owned(),
+        revoke_retry_count: 0,
+        updated_at: now,
+    };
+    let output = format!(
+        "{authorization:?} {connection:?} {:?} {:?} {:?} {:?} {:?}",
+        CanvasOAuthStartRequest {
+            client_id: "client-id".to_owned(),
+            client_secret_secret_id: "client-secret-id-sensitive".to_owned(),
+            capabilities: vec!["catalog".to_owned()],
+        },
+        CanvasOAuthStartResponse {
+            authorization_url: "https://canvas.example/auth?state=state-sensitive".to_owned(),
+            redirect_uri: "https://issuer.example/callback".to_owned(),
+            scopes: vec!["scope".to_owned()],
+        },
+        CanvasOAuthCallbackRequest {
+            code: Some("authorization-code-sensitive".to_owned()),
+            state: "state-sensitive".to_owned(),
+            error: Some("provider-error-sensitive".to_owned()),
+        },
+        CanvasOAuthCallbackResponse {
+            location: "https://app.example/callback?secret=sensitive".to_owned(),
+        },
+        CanvasOAuthTokenBundle {
+            access_token: "access-token-sensitive".to_owned(),
+            refresh_token: Some("refresh-token-sensitive".to_owned()),
+            expires_in_seconds: Some(300),
+        },
+    );
+    for secret in [
+        "client-secret-sensitive",
+        "state-hash-sensitive",
+        "client-secret-ref-sensitive",
+        "access-ref-sensitive",
+        "refresh-ref-sensitive",
+        "client-secret-id-sensitive",
+        "state-sensitive",
+        "authorization-code-sensitive",
+        "provider-error-sensitive",
+        "access-token-sensitive",
+        "refresh-token-sensitive",
+        "secret=sensitive",
+    ] {
+        assert!(!output.contains(secret), "debug output leaked {secret}");
+    }
 }

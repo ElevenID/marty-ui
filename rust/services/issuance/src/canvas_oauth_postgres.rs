@@ -14,9 +14,17 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PostgresCanvasOAuthRepository {
     pool: PgPool,
+}
+
+impl std::fmt::Debug for PostgresCanvasOAuthRepository {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PostgresCanvasOAuthRepository")
+            .finish_non_exhaustive()
+    }
 }
 
 impl PostgresCanvasOAuthRepository {
@@ -387,7 +395,36 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
         organization_id: &str,
         platform_id: &str,
         lease_owner: &str,
+        secret_ids: &[String],
     ) -> Result<bool, CanvasOAuthError> {
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let leased: Option<i32> = sqlx::query_scalar(
+            "SELECT 1 FROM issuance_service.canvas_oauth_connections
+             WHERE organization_id = $1 AND platform_id = $2
+               AND status = 'revocation_pending' AND refresh_lease_owner = $3
+             FOR UPDATE",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        if leased.is_none() {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Ok(false);
+        }
+        for secret_id in secret_ids {
+            sqlx::query(
+                "DELETE FROM issuance_service.organization_integration_secrets
+                 WHERE id = $1 AND organization_id = $2",
+            )
+            .bind(secret_id)
+            .bind(organization_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+        }
         let result = sqlx::query(
             "DELETE FROM issuance_service.canvas_oauth_connections
              WHERE organization_id = $1 AND platform_id = $2
@@ -396,9 +433,10 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
         .bind(organization_id)
         .bind(platform_id)
         .bind(lease_owner)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
+        transaction.commit().await.map_err(repository_error)?;
         Ok(result.rows_affected() == 1)
     }
 }
@@ -407,13 +445,16 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
 impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
     async fn metadata(
         &self,
+        organization_id: &str,
         secret_id: &str,
     ) -> Result<Option<IntegrationSecretMetadata>, CanvasOAuthError> {
         sqlx::query(
             "SELECT id, organization_id, provider, purpose, enabled
-             FROM issuance_service.organization_integration_secrets WHERE id = $1",
+             FROM issuance_service.organization_integration_secrets
+             WHERE id = $1 AND organization_id = $2",
         )
         .bind(secret_id)
+        .bind(organization_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(repository_error)?
@@ -503,12 +544,16 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
         Ok(())
     }
 
-    async fn delete(&self, secret_id: &str) -> Result<(), CanvasOAuthError> {
-        sqlx::query("DELETE FROM issuance_service.organization_integration_secrets WHERE id = $1")
-            .bind(secret_id)
-            .execute(&self.pool)
-            .await
-            .map_err(repository_error)?;
+    async fn delete(&self, organization_id: &str, secret_id: &str) -> Result<(), CanvasOAuthError> {
+        sqlx::query(
+            "DELETE FROM issuance_service.organization_integration_secrets
+             WHERE id = $1 AND organization_id = $2",
+        )
+        .bind(secret_id)
+        .bind(organization_id)
+        .execute(&self.pool)
+        .await
+        .map_err(repository_error)?;
         Ok(())
     }
 }

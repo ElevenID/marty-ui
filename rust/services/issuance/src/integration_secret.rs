@@ -5,6 +5,7 @@ use aes_gcm::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rand::RngCore;
 use serde_json::Value;
+use std::fmt;
 use thiserror::Error;
 
 const NONCE_LENGTH: usize = 12;
@@ -19,7 +20,7 @@ pub struct IntegrationSecretMetadata {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct NewIntegrationSecret {
     pub id: String,
     pub organization_id: String,
@@ -28,6 +29,21 @@ pub struct NewIntegrationSecret {
     pub purpose: String,
     pub value: String,
     pub metadata: Value,
+}
+
+impl fmt::Debug for NewIntegrationSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewIntegrationSecret")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("name", &self.name)
+            .field("provider", &self.provider)
+            .field("purpose", &self.purpose)
+            .field("value", &"[REDACTED]")
+            .field("metadata", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl NewIntegrationSecret {
@@ -152,6 +168,18 @@ mod tests {
         let encrypted_empty = cipher.encrypt("").expect("encrypt empty value");
         assert_eq!(cipher.decrypt(&encrypted_empty), Ok(String::new()));
         assert!(!format!("{cipher:?}").contains(PYTHON_VECTOR_KEY));
+        let secret = super::NewIntegrationSecret {
+            id: "secret-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            name: "Secret".to_owned(),
+            provider: "canvas".to_owned(),
+            purpose: "oauth_access_token".to_owned(),
+            value: "plaintext-sensitive".to_owned(),
+            metadata: serde_json::json!({"token": "metadata-sensitive"}),
+        };
+        let debug = format!("{secret:?}");
+        assert!(!debug.contains("plaintext-sensitive"));
+        assert!(!debug.contains("metadata-sensitive"));
     }
 
     #[test]

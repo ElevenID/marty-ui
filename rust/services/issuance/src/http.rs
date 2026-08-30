@@ -732,18 +732,17 @@ async fn start_canvas_oauth_connection(
     Path(platform_id): Path<String>,
     headers: HeaderMap,
     request: Request,
-) -> Result<Json<crate::canvas_oauth::CanvasOAuthStartResponse>, CanvasOAuthHttpError> {
+) -> Result<Response, CanvasOAuthHttpError> {
+    let service = canvas_oauth(&state)?;
+    let organization_id = service.authorize_management(
+        header(&headers, "X-API-Key"),
+        header(&headers, "X-Organization-ID"),
+    )?;
     let input = parse_canvas_oauth_start(request).await?;
-    canvas_oauth(&state)?
-        .start(
-            &platform_id,
-            input,
-            header(&headers, "X-API-Key"),
-            header(&headers, "X-Organization-ID"),
-        )
-        .await
-        .map(Json)
-        .map_err(Into::into)
+    let result = service
+        .start_authorized(&platform_id, input, organization_id)
+        .await?;
+    Ok(canvas_oauth_no_store(Json(result).into_response()))
 }
 
 async fn complete_canvas_oauth_connection(
@@ -754,32 +753,33 @@ async fn complete_canvas_oauth_connection(
     let result = canvas_oauth(&state)?.callback(input).await?;
     let location = HeaderValue::from_str(&result.location)
         .map_err(|_| CanvasOAuthHttpError::Service(CanvasOAuthError::InvalidConfiguration))?;
-    let mut response = (StatusCode::SEE_OTHER, [(http_header::LOCATION, location)]).into_response();
-    response.headers_mut().insert(
-        http_header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    Ok(canvas_oauth_no_store(
+        (StatusCode::SEE_OTHER, [(http_header::LOCATION, location)]).into_response(),
+    ))
+}
+
+fn canvas_oauth_no_store(mut response: Response) -> Response {
+    response = private_no_store(response);
     response.headers_mut().insert(
         http_header::HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("no-referrer"),
     );
-    Ok(response)
+    response
 }
 
 async fn disconnect_canvas_oauth_connection(
     State(state): State<IssuanceState>,
     Path(platform_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<crate::canvas_oauth::CanvasOAuthConnectionResponse>, CanvasOAuthHttpError> {
-    canvas_oauth(&state)?
+) -> Result<Response, CanvasOAuthHttpError> {
+    let result = canvas_oauth(&state)?
         .disconnect(
             &platform_id,
             header(&headers, "X-API-Key"),
             header(&headers, "X-Organization-ID"),
         )
-        .await
-        .map(Json)
-        .map_err(Into::into)
+        .await?;
+    Ok(canvas_oauth_no_store(Json(result).into_response()))
 }
 
 fn canvas_oauth(state: &IssuanceState) -> Result<&CanvasOAuthService, CanvasOAuthHttpError> {
@@ -985,13 +985,13 @@ fn query_string(
         errors.push(json!({
             "type": "string_too_short", "loc": ["query", name],
             "msg": format!("String should have at least {minimum} characters"),
-            "input": value, "ctx": {"min_length": minimum},
+            "input": "[REDACTED]", "ctx": {"min_length": minimum},
         }));
     } else if length > maximum {
         errors.push(json!({
             "type": "string_too_long", "loc": ["query", name],
             "msg": format!("String should have at most {maximum} characters"),
-            "input": value, "ctx": {"max_length": maximum},
+            "input": "[REDACTED]", "ctx": {"max_length": maximum},
         }));
     }
     Some(value.clone())
@@ -1868,7 +1868,7 @@ impl IntoResponse for CanvasOAuthHttpError {
     fn into_response(self) -> Response {
         use CanvasOAuthError as Error;
 
-        match self {
+        let response = match self {
             Self::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({"detail": errors})),
@@ -1882,6 +1882,11 @@ impl IntoResponse for CanvasOAuthHttpError {
             Self::Service(Error::Security(error)) => {
                 TransactionReadHttpError(error).into_response()
             }
+            Self::Service(
+                Error::RepositoryUnavailable
+                | Error::SecretUnavailable
+                | Error::InvalidConfiguration,
+            ) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
             Self::Service(error) => {
                 let (status, detail) = match error {
                     Error::PlatformNotFound => (StatusCode::NOT_FOUND, error.to_string()),
@@ -1899,15 +1904,13 @@ impl IntoResponse for CanvasOAuthHttpError {
                     }
                     Error::RepositoryUnavailable
                     | Error::SecretUnavailable
-                    | Error::InvalidConfiguration => {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
-                            .into_response();
-                    }
+                    | Error::InvalidConfiguration => unreachable!("handled above"),
                     Error::Security(_) => unreachable!("handled above"),
                 };
                 (status, Json(json!({"detail": detail}))).into_response()
             }
-        }
+        };
+        canvas_oauth_no_store(response)
     }
 }
 

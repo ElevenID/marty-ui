@@ -12,11 +12,25 @@ use crate::canvas_oauth::{CanvasOAuthProvider, CanvasOAuthProviderError, CanvasO
 
 const TOKEN_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HttpCanvasOAuthProvider {
     timeout: Duration,
     private_origin_allowlist: Vec<String>,
     allow_private_networks: bool,
+}
+
+impl std::fmt::Debug for HttpCanvasOAuthProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HttpCanvasOAuthProvider")
+            .field("timeout", &self.timeout)
+            .field(
+                "private_origin_allowlist_count",
+                &self.private_origin_allowlist.len(),
+            )
+            .field("allow_private_networks", &self.allow_private_networks)
+            .finish()
+    }
 }
 
 impl HttpCanvasOAuthProvider {
@@ -267,7 +281,7 @@ fn provider_error(retry_after_seconds: Option<u64>) -> CanvasOAuthProviderError 
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    use super::is_private_ip;
+    use super::{is_private_ip, HttpCanvasOAuthProvider};
 
     #[test]
     fn dns_pin_policy_rejects_private_special_and_documentation_ranges() {
@@ -282,5 +296,15 @@ mod tests {
             assert!(is_private_ip(ip), "{ip} must fail closed");
         }
         assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn provider_debug_output_does_not_disclose_private_origins() {
+        let provider = HttpCanvasOAuthProvider::new(
+            std::time::Duration::from_secs(15),
+            vec!["https://private-origin-sensitive.example".to_owned()],
+            false,
+        );
+        assert!(!format!("{provider:?}").contains("private-origin-sensitive"));
     }
 }
