@@ -7,7 +7,7 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -122,7 +122,7 @@ impl ValidateCanvasRequest for CanvasPlatformRequest {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasEvidenceScopeInput {
     pub course_id: String,
@@ -154,7 +154,7 @@ impl ValidateCanvasRequest for CanvasEvidenceScopeInput {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasEvidencePassRuleInput {
     pub min_score_percent: Option<f64>,
@@ -173,14 +173,14 @@ impl ValidateCanvasRequest for CanvasEvidencePassRuleInput {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CanvasEvidenceSource {
     AgsResult,
     CanvasRest,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum CanvasEvidenceFactType {
     #[serde(rename = "canvas.assignment_score")]
     AssignmentScore,
@@ -192,7 +192,7 @@ pub enum CanvasEvidenceFactType {
     ModuleCompletion,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasEvidenceRequirementInput {
     pub requirement_id: Option<String>,
@@ -220,7 +220,7 @@ const fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CanvasCredentialProvider {
     BadgrApi,
@@ -228,14 +228,14 @@ pub enum CanvasCredentialProvider {
     Bridge,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CanvasAssertionScope {
     Badgeclasses,
     Issuers,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasCredentialsConfigInput {
     pub provider: Option<CanvasCredentialProvider>,
@@ -247,7 +247,7 @@ pub struct CanvasCredentialsConfigInput {
     pub credential_template_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CanvasDeliveryMode {
     #[default]
