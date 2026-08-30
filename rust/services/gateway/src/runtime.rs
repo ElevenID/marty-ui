@@ -38,7 +38,6 @@ use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use uuid::Uuid;
 
 use crate::{
     authorization::{
@@ -969,13 +968,9 @@ async fn proxy_handler(
     }
     gateway_request.body = (!body.is_empty()).then(|| body.to_vec());
     gateway_request.client_ip = peer_ip;
-    gateway_request.request_id = gateway_request
-        .header("x-request-id")
-        .and_then(|value| Uuid::parse_str(value).ok())
-        .map_or_else(
-            || gateway_request.request_id.clone(),
-            |value| value.to_string(),
-        );
+    // The public correlation ID is gateway-issued evidence. Never allow a
+    // caller-supplied identifier to become authoritative merely because it is
+    // syntactically a UUID.
     let request_id = gateway_request.request_id.clone();
     gateway_request
         .headers
@@ -4620,10 +4615,9 @@ mod tests {
             instance: &ServiceInstance,
             request: GatewayRequest,
         ) -> Result<GatewayResponse, PlatformError> {
-            if request.request_id == "11111111-1111-4111-8111-111111111111" {
+            if let Some(forwarded) = request.header("x-request-id") {
                 assert_eq!(
-                    request.header("x-request-id"),
-                    Some(request.request_id.as_str()),
+                    forwarded, request.request_id,
                     "the public gateway ID must be forwarded to the upstream service"
                 );
             }
@@ -6339,7 +6333,8 @@ mod tests {
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
             .expect("gateway request ID");
-        assert_eq!(request_id, "11111111-1111-4111-8111-111111111111");
+        assert_ne!(request_id, "11111111-1111-4111-8111-111111111111");
+        assert!(uuid::Uuid::parse_str(request_id).is_ok());
         let body: Value = serde_json::from_slice(
             &to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
                 .await
@@ -6352,7 +6347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_gateway_replaces_an_invalid_client_request_id() {
+    async fn public_gateway_replaces_every_client_request_id() {
         let response = runtime_router()
             .oneshot(
                 Request::builder()
@@ -6375,7 +6370,7 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .expect("gateway request ID");
         assert_ne!(request_id, "client-chosen");
-        assert!(Uuid::parse_str(request_id).is_ok());
+        assert!(uuid::Uuid::parse_str(request_id).is_ok());
     }
 
     #[tokio::test]
