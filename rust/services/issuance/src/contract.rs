@@ -438,7 +438,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .as_array()
                 .is_some_and(|fields| fields.len() == 12)
             && canvas_lti["launch"]["public_response_vector"]["expected"]["verified"].as_bool()
-                == Some(true),
+                == Some(true)
+            && canvas_lti["experience"]["bootstrap"]["ordered_stages"]
+                .as_array()
+                .is_some_and(|stages| stages.len() == 12)
+            && canvas_lti["experience"]["bootstrap"]["template"]["failures"]
+                .as_array()
+                .is_some_and(|failures| failures.len() == 3)
+            && canvas_lti["experience"]["bootstrap"]["new_application"]["caller_protected_fields"]
+                .as_array()
+                .is_some_and(|fields| fields.len() == 3)
+            && canvas_lti["experience"]["bootstrap"]["response"]["private_fields_forbidden"]
+                .as_array()
+                .is_some_and(|fields| fields.len() == 9),
         "unexpected Canvas LTI behavior contract",
     )?;
     require(

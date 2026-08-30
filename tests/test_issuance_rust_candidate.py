@@ -138,7 +138,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["canvas_lti_behavior_contract"]["commit"]
-        == "abd4b2fba844d537766c4020fcf159fdb19c0be5"
+        == "82945b2ad4a12aef03389d754f2eb4ed32cb1b18"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
@@ -185,6 +185,13 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "Cache-Control": "no-store",
         "Pragma": "no-cache",
     }
+    experience_bootstrap = canvas_lti["experience"]["bootstrap"]
+    assert len(experience_bootstrap["ordered_stages"]) == 12
+    assert len(experience_bootstrap["template"]["failures"]) == 3
+    assert experience_bootstrap["new_application"]["caller_identifier_forbidden_for_join"] is True
+    assert experience_bootstrap["sync_enqueue"]["canvas-sync-service-errors"] == (
+        "ignored-so-learner-can-continue"
+    )
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }
