@@ -22,6 +22,10 @@ const {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
 } = require('./beta-credential-contract');
+const {
+  installUiCandidateRoute,
+  resolveUiCandidateDist,
+} = require('./local-ui-candidate');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
@@ -90,6 +94,7 @@ async function main() {
   loadEnvFile(path.join(ROOT, '.env'));
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
+  const uiCandidate = resolveUiCandidateDist(ROOT);
 
   const browser = await chromium.launch({
     headless: HEADLESS,
@@ -104,6 +109,16 @@ async function main() {
     artifactDir,
     pageErrors: [],
     badResponses: [],
+    consoleErrors: [],
+    uiCandidate: uiCandidate ? {
+      mode: 'LOCAL_DIST_ENGINEERING_ONLY',
+      sourceRevision: uiCandidate.sourceRevision,
+      path: uiCandidate.relative,
+      qualifiesAsDeployedEvidence: false,
+    } : {
+      mode: 'DEPLOYED_BETA',
+      qualifiesAsDeployedEvidence: true,
+    },
   };
 
   try {
@@ -117,15 +132,23 @@ async function main() {
       keepContext: RECORD_VIDEO,
       contextOptions: RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
       onStep: showStep,
+      setupContext: (context) => installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN),
     });
     const { context: holderContext = null, page: holderPage = null, ...offer } = offerResult;
+    report.badResponses.push(...(offer.badResponses || []));
+    report.consoleErrors.push(...(offer.consoleErrors || []));
     const holderVideo = holderPage?.video() || null;
     const walletContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    await installUiCandidateRoute(walletContext, uiCandidate, BETA_ORIGIN);
     const walletPage = await walletContext.newPage();
+    walletPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
+    walletPage.on('console', (message) => {
+      if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
+    });
     const walletVideo = walletPage.video();
     await showStep(
       walletPage,
@@ -149,6 +172,7 @@ async function main() {
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    if (!holderContext) await installUiCandidateRoute(loginContext, uiCandidate, BETA_ORIGIN);
     // This lane drives presentation through the deterministic local wallet.
     // Keep Chromium's platform-wallet prefetch from racing the same request URI.
     await loginContext.addInitScript(() => {
@@ -160,6 +184,9 @@ async function main() {
     const loginPage = holderPage || await loginContext.newPage();
     const loginVideo = holderVideo || loginPage.video();
     loginPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
+    loginPage.on('console', (message) => {
+      if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
+    });
     loginPage.on('response', (response) => {
       if (response.url().startsWith(BETA_ORIGIN) && response.status() >= 400) {
         report.badResponses.push({
@@ -241,11 +268,13 @@ async function main() {
       'The badge presentation resolved the existing user and created a new authenticated ElevenID session.',
     );
     report.behaviorAssertions = membershipLoginBehaviorAssertions(report);
-    report.releaseReady = (
+    report.engineeringReady = (
       Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.pageErrors.length === 0
       && report.badResponses.length === 0
+      && report.consoleErrors.length === 0
     );
+    report.releaseReady = report.engineeringReady && !uiCandidate;
     report.finishedAt = new Date().toISOString();
     await loginContext.close();
     await walletContext.close();
@@ -257,7 +286,7 @@ async function main() {
     }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    if (!report.releaseReady) process.exitCode = 1;
+    if (!report.engineeringReady) process.exitCode = 1;
   } catch (error) {
     report.finishedAt = new Date().toISOString();
     report.releaseReady = false;
