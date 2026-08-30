@@ -111,6 +111,14 @@ pub struct CredentialResponse {
 pub struct CredentialIssuanceOutcome {
     pub response: CredentialResponse,
     pub issued_credential: Option<IssuedCredential>,
+    pub disposition: CredentialIssuanceDisposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialIssuanceDisposition {
+    Committed,
+    Replay,
+    ConcurrentRecovery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -595,6 +603,7 @@ impl CredentialIssuanceService {
         Ok(CredentialIssuanceOutcome {
             response,
             issued_credential: None,
+            disposition: CredentialIssuanceDisposition::Replay,
         })
     }
 
@@ -659,6 +668,7 @@ impl CredentialIssuanceService {
                 return Ok(CredentialIssuanceOutcome {
                     response,
                     issued_credential: None,
+                    disposition: CredentialIssuanceDisposition::ConcurrentRecovery,
                 });
             }
         }
@@ -700,6 +710,7 @@ impl CredentialIssuanceService {
         Ok(CredentialIssuanceOutcome {
             response,
             issued_credential: Some(issued),
+            disposition: CredentialIssuanceDisposition::Committed,
         })
     }
 }

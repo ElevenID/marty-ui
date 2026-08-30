@@ -7,8 +7,8 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     credential::{
-        CredentialIssuanceError, CredentialIssuanceService, CredentialRequest, CredentialResponse,
-        IssuedCredential,
+        CredentialIssuanceDisposition, CredentialIssuanceError, CredentialIssuanceOutcome,
+        CredentialIssuanceService, CredentialRequest, CredentialResponse, IssuedCredential,
     },
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
@@ -292,10 +292,9 @@ impl IssuanceService for CredentialManagementGrpcService {
             )
             .await
             .map_err(credential_status)?;
-        let response = credential_response(outcome.response)?;
-        if let Some(credential) = outcome.issued_credential.as_ref() {
-            self.emit_issued(credential).await;
-        }
+        let (response, credential) = committed_grpc_issuance(outcome)?;
+        let response = credential_response(response)?;
+        self.emit_issued(&credential).await;
         Ok(Response::new(response))
     }
 
@@ -321,9 +320,7 @@ impl IssuanceService for CredentialManagementGrpcService {
     ) -> Result<Response<ListTransactionsResponse>, Status> {
         self.authorize(&request)?;
         let request = request.into_inner();
-        if request.limit < 0 || request.offset < 0 || request.limit > 500 {
-            return Err(Status::invalid_argument("pagination is out of range"));
-        }
+        let (offset, take) = grpc_pagination(request.limit, request.offset)?;
         let status = optional(request.status)
             .map(|value| grpc_transaction_status(&value))
             .transpose()?;
@@ -337,14 +334,9 @@ impl IssuanceService for CredentialManagementGrpcService {
             transactions.retain(|transaction| transaction.status == status);
         }
         let total = i32::try_from(transactions.len()).unwrap_or(i32::MAX);
-        let take = if request.limit == 0 {
-            100
-        } else {
-            request.limit as usize
-        };
         let transactions = transactions
             .into_iter()
-            .skip(request.offset as usize)
+            .skip(offset)
             .take(take)
             .map(transaction_response)
             .collect();
@@ -643,6 +635,23 @@ fn credential_response(value: CredentialResponse) -> Result<IssueCredentialRespo
     })
 }
 
+fn committed_grpc_issuance(
+    outcome: CredentialIssuanceOutcome,
+) -> Result<(CredentialResponse, IssuedCredential), Status> {
+    match outcome.disposition {
+        CredentialIssuanceDisposition::Committed => outcome
+            .issued_credential
+            .map(|credential| (outcome.response, credential))
+            .ok_or_else(|| Status::internal("committed issuance metadata is missing")),
+        CredentialIssuanceDisposition::Replay => Err(Status::failed_precondition(
+            "Credential already issued - access token is single-use",
+        )),
+        CredentialIssuanceDisposition::ConcurrentRecovery => Err(Status::failed_precondition(
+            "Credential signing has already been claimed for this transaction",
+        )),
+    }
+}
+
 fn grpc_transaction_status(value: &str) -> Result<TransactionStatus, Status> {
     match value {
         "pending" => Ok(TransactionStatus::Pending),
@@ -654,6 +663,16 @@ fn grpc_transaction_status(value: &str) -> Result<TransactionStatus, Status> {
         "revoked" => Ok(TransactionStatus::Revoked),
         _ => Err(Status::invalid_argument("transaction status is invalid")),
     }
+}
+
+fn grpc_pagination(limit: i32, offset: i32) -> Result<(usize, usize), Status> {
+    if limit < 0 || offset < 0 {
+        return Err(Status::invalid_argument("pagination is out of range"));
+    }
+    Ok((
+        offset as usize,
+        if limit == 0 { 100 } else { limit as usize },
+    ))
 }
 
 fn transaction_status_name(value: TransactionStatus) -> &'static str {
@@ -947,6 +966,29 @@ mod tests {
             .metadata_mut()
             .insert(SERVICE_TOKEN_HEADER, SERVICE_TOKEN.parse().expect("token"));
         request
+    }
+
+    fn issued_credential() -> IssuedCredential {
+        let issued_at = Utc
+            .with_ymd_and_hms(2026, 8, 30, 12, 0, 0)
+            .single()
+            .expect("timestamp");
+        IssuedCredential {
+            id: "credential-issued".to_owned(),
+            transaction_id: "transaction-issued".to_owned(),
+            organization_id: "org-a".to_owned(),
+            credential_template_id: "template-a".to_owned(),
+            applicant_id: Some("applicant-a".to_owned()),
+            subject_did: Some("did:key:holder".to_owned()),
+            issuer_did: "did:web:issuer.example".to_owned(),
+            revocation_profile_id: Some("profile-a".to_owned()),
+            renewed_from_credential_id: None,
+            status_list_entries: vec![json!({"index": 1})],
+            credential: "header.payload.signature".to_owned(),
+            credential_hash: "credential-hash".to_owned(),
+            issued_at,
+            expires_at: issued_at + chrono::Duration::days(365),
+        }
     }
 
     struct GrpcInitiationRepository {
@@ -1295,28 +1337,7 @@ mod tests {
             .await
             .expect("stream")
             .into_inner();
-        let issued_at = Utc
-            .with_ymd_and_hms(2026, 8, 30, 12, 0, 0)
-            .single()
-            .expect("timestamp");
-        service
-            .emit_issued(&IssuedCredential {
-                id: "credential-issued".to_owned(),
-                transaction_id: "transaction-issued".to_owned(),
-                organization_id: "org-a".to_owned(),
-                credential_template_id: "template-a".to_owned(),
-                applicant_id: Some("applicant-a".to_owned()),
-                subject_did: Some("did:key:holder".to_owned()),
-                issuer_did: "did:web:issuer.example".to_owned(),
-                revocation_profile_id: Some("profile-a".to_owned()),
-                renewed_from_credential_id: None,
-                status_list_entries: vec![json!({"index": 1})],
-                credential: "header.payload.signature".to_owned(),
-                credential_hash: "credential-hash".to_owned(),
-                issued_at,
-                expires_at: issued_at + chrono::Duration::days(365),
-            })
-            .await;
+        service.emit_issued(&issued_credential()).await;
 
         let event = events.next().await.expect("stream item").expect("event");
         assert_eq!(event.event_type, "issued");
@@ -1429,18 +1450,31 @@ mod tests {
         let default_format = credential_request(IssueCredentialRequest::default())
             .expect("legacy gRPC default format");
         assert_eq!(default_format.legacy_format.as_deref(), Some("vc+sd-jwt"));
+
+        assert_eq!(
+            grpc_pagination(501, 2).expect("legacy unbounded limit"),
+            (2, 501)
+        );
+        assert_eq!(
+            grpc_pagination(0, 0).expect("legacy default limit"),
+            (0, 100)
+        );
+        assert_eq!(
+            grpc_pagination(-1, 0).expect_err("negative limit").code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
     fn grpc_response_projections_preserve_json_credentials_and_status_codes() {
-        let response = credential_response(CredentialResponse {
+        let response_fixture = || CredentialResponse {
             credentials: vec![json!({
                 "format": "ldp_vc",
                 "credential": {"@context": ["https://www.w3.org/ns/credentials/v2"]}
             })],
             notification_id: "notification-a".into(),
-        })
-        .expect("response projection");
+        };
+        let response = credential_response(response_fixture()).expect("response projection");
         assert_eq!(response.notification_id, "notification-a");
         assert_eq!(response.credentials[0].format, "ldp_vc");
         assert_eq!(
@@ -1459,5 +1493,33 @@ mod tests {
             transaction_status(TransactionReadError::TransactionNotFound).code(),
             tonic::Code::NotFound
         );
+
+        let (committed, credential) = committed_grpc_issuance(CredentialIssuanceOutcome {
+            response: response_fixture(),
+            issued_credential: Some(issued_credential()),
+            disposition: CredentialIssuanceDisposition::Committed,
+        })
+        .expect("newly committed issuance");
+        assert_eq!(committed.notification_id, "notification-a");
+        assert_eq!(credential.id, "credential-issued");
+        for (disposition, expected) in [
+            (
+                CredentialIssuanceDisposition::Replay,
+                "Credential already issued - access token is single-use",
+            ),
+            (
+                CredentialIssuanceDisposition::ConcurrentRecovery,
+                "Credential signing has already been claimed for this transaction",
+            ),
+        ] {
+            let error = committed_grpc_issuance(CredentialIssuanceOutcome {
+                response: response_fixture(),
+                issued_credential: None,
+                disposition,
+            })
+            .expect_err("legacy gRPC is single-use");
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+            assert_eq!(error.message(), expected);
+        }
     }
 }
