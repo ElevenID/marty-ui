@@ -220,6 +220,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "launch_canvas_lti_experience_route",
             "exchange_canvas_lti_experience_code_route",
             "get_canvas_lti_experience_session_route",
+            "bootstrap_canvas_lti_experience_application_route",
+            "get_canvas_lti_tool_jwks",
             "verify_canvas_lti_launch_route",
         }
     )
@@ -254,6 +256,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "launch_canvas_lti_experience_route",
             "exchange_canvas_lti_experience_code_route",
             "get_canvas_lti_experience_session_route",
+            "bootstrap_canvas_lti_experience_application_route",
+            "get_canvas_lti_tool_jwks",
             "verify_canvas_lti_launch_route",
         }:
             expected_case = {
@@ -262,12 +266,19 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "launch_canvas_lti_experience_route": "experience",
                 "exchange_canvas_lti_experience_code_route": "experience-exchange",
                 "get_canvas_lti_experience_session_route": "experience-session-current",
+                "bootstrap_canvas_lti_experience_application_route": "experience-bootstrap",
+                "get_canvas_lti_tool_jwks": "tool-jwks",
                 "verify_canvas_lti_launch_route": "launch",
             }[operation]
             if operation == "exchange_canvas_lti_experience_code_route":
                 expected_authentication = "public-one-time-code"
-            elif operation == "get_canvas_lti_experience_session_route":
+            elif operation in {
+                "get_canvas_lti_experience_session_route",
+                "bootstrap_canvas_lti_experience_application_route",
+            }:
                 expected_authentication = "lti-session-bearer"
+            elif operation == "get_canvas_lti_tool_jwks":
+                expected_authentication = "public"
             elif operation in {
                 "launch_canvas_lti_experience_route",
                 "verify_canvas_lti_launch_route",
@@ -277,7 +288,11 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 expected_authentication = "public-lti-login"
             expected_method = (
                 "GET"
-                if operation == "get_canvas_lti_experience_session_route"
+                if operation
+                in {
+                    "get_canvas_lti_experience_session_route",
+                    "get_canvas_lti_tool_jwks",
+                }
                 else "POST"
             )
             assert coverage_entry["method"] == expected_method
@@ -326,10 +341,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 107,
+        "http": 105,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 63,
+        "literal_environment_variables": 61,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -344,6 +359,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
         "CANVAS_LTI_JWKS_TTL_MINUTES",
         "CANVAS_LTI_STATE_TTL_MINUTES",
+        "CANVAS_LTI_TOOL_ISSUER_DID",
+        "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
         "CANVAS_PILOT_ORGANIZATION_IDS",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",

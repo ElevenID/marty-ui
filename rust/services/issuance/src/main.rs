@@ -30,6 +30,10 @@ use marty_issuance_service::{
     canvas_lti_sync_enqueue::{
         PostgresCanvasLtiBootstrapSyncEnqueuer, UuidCanvasSyncEnqueueIdGenerator,
     },
+    canvas_lti_tool_signing::{
+        HttpCanvasLtiToolIdentityResolver, HttpCanvasLtiToolSignatureProvider,
+        IssuerDidCanvasLtiToolJwtSigner,
+    },
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -200,6 +204,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
     );
+    let canvas_lti_tool_signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
+        config.canvas_lti_tool_signing_organization_id.clone(),
+        config.canvas_lti_tool_issuer_did.clone(),
+        config.signing_keys_internal_api_key.is_some(),
+        Arc::new(HttpCanvasLtiToolIdentityResolver::new(
+            config.signing_keys_internal_url.clone(),
+            config.signing_keys_internal_api_key.as_deref(),
+            config.dependency_timeout,
+        )?),
+        Arc::new(HttpCanvasLtiToolSignatureProvider::new(
+            config.signing_keys_internal_url.clone(),
+            config.signing_keys_internal_api_key.as_deref(),
+            config.dependency_timeout,
+        )?),
+    ));
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -251,6 +270,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 canvas_lti_experience_exchange,
                 canvas_lti_experience_session,
                 canvas_lti_bootstrap,
+                canvas_lti_tool_signer,
             ),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),

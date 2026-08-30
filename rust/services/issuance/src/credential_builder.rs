@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -332,20 +332,45 @@ impl CredentialBuilder for HttpCredentialBuilder {
     }
 }
 
-#[derive(Clone, Debug)]
-struct SignRequest {
-    organization_id: String,
-    issuer_did: String,
-    credential_format: String,
-    key_purpose: String,
-    payload: Vec<u8>,
-    algorithm: String,
-    verification_method_id: String,
+const REDACTED_SIGNING_VALUE: &str = "[REDACTED]";
+
+#[derive(Clone)]
+pub(crate) struct SignRequest {
+    pub(crate) organization_id: String,
+    pub(crate) issuer_did: String,
+    pub(crate) credential_format: String,
+    pub(crate) key_purpose: String,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) algorithm: String,
+    pub(crate) verification_method_id: String,
 }
 
-#[derive(Debug)]
-struct SignResponse {
-    signature_b64: String,
+impl fmt::Debug for SignRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignRequest")
+            .field("organization_id", &self.organization_id)
+            .field("issuer_did", &self.issuer_did)
+            .field("credential_format", &self.credential_format)
+            .field("key_purpose", &self.key_purpose)
+            .field("payload", &REDACTED_SIGNING_VALUE)
+            .field("algorithm", &self.algorithm)
+            .field("verification_method_id", &self.verification_method_id)
+            .finish()
+    }
+}
+
+pub(crate) struct SignResponse {
+    pub(crate) signature_b64: String,
+}
+
+impl fmt::Debug for SignResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignResponse")
+            .field("signature_b64", &REDACTED_SIGNING_VALUE)
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -354,14 +379,14 @@ trait DidSigner: Send + Sync {
 }
 
 #[derive(Clone)]
-struct HttpDidSigner {
+pub(crate) struct HttpDidSigner {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
 }
 
 impl HttpDidSigner {
-    fn new(
+    pub(crate) fn new(
         base_url: Url,
         api_key: Option<&str>,
         timeout: Duration,
@@ -387,6 +412,13 @@ impl HttpDidSigner {
         endpoint.set_query(None);
         endpoint.set_fragment(None);
         endpoint
+    }
+
+    pub(crate) async fn sign_did(
+        &self,
+        request: SignRequest,
+    ) -> Result<SignResponse, CredentialIssuanceError> {
+        self.sign(request).await
     }
 }
 
@@ -904,6 +936,32 @@ mod tests {
                 signature_b64: URL_SAFE_NO_PAD.encode(signature),
             })
         }
+    }
+
+    #[test]
+    fn signer_debug_output_redacts_payloads_and_signatures() {
+        let payload_secret = "private-signing-payload";
+        let signature_secret = "private-signature";
+        let request = SignRequest {
+            organization_id: "org-safe-id".to_owned(),
+            issuer_did: "did:web:issuer.example".to_owned(),
+            credential_format: "lti_tool_jwt".to_owned(),
+            key_purpose: "lti_tool_signing".to_owned(),
+            payload: payload_secret.as_bytes().to_vec(),
+            algorithm: "RS256".to_owned(),
+            verification_method_id: "did:web:issuer.example#safe-key".to_owned(),
+        };
+        let response = SignResponse {
+            signature_b64: signature_secret.to_owned(),
+        };
+
+        let request_debug = format!("{request:?}");
+        assert!(request_debug.contains("org-safe-id"));
+        assert!(request_debug.contains("[REDACTED]"));
+        assert!(!request_debug.contains(payload_secret));
+        let response_debug = format!("{response:?}");
+        assert!(response_debug.contains("[REDACTED]"));
+        assert!(!response_debug.contains(signature_secret));
     }
 
     fn request(kind: CredentialBuilderKind) -> CredentialBuildRequest {

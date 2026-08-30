@@ -33,6 +33,8 @@ pub struct IssuanceServiceConfig {
     pub canvas_lti_experience_base_url: String,
     pub canvas_lti_experience_code_ttl: Duration,
     pub canvas_lti_experience_session_ttl: Duration,
+    pub canvas_lti_tool_signing_organization_id: String,
+    pub canvas_lti_tool_issuer_did: String,
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
@@ -89,6 +91,14 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_lti_experience_session_ttl",
                 &self.canvas_lti_experience_session_ttl,
+            )
+            .field(
+                "canvas_lti_tool_signing_organization_id",
+                &self.canvas_lti_tool_signing_organization_id,
+            )
+            .field(
+                "canvas_lti_tool_issuer_did",
+                &self.canvas_lti_tool_issuer_did,
             )
             .field(
                 "canvas_self_managed_origin_count",
@@ -245,6 +255,16 @@ impl IssuanceServiceConfig {
             positive_seconds(&values, "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", 60)?;
         let canvas_lti_experience_session_ttl =
             positive_minutes(&values, "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES", 30)?;
+        let canvas_lti_tool_signing_organization_id = values
+            .get("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID")
+            .map_or("", String::as_str)
+            .trim()
+            .to_owned();
+        let canvas_lti_tool_issuer_did = values
+            .get("CANVAS_LTI_TOOL_ISSUER_DID")
+            .map_or("", String::as_str)
+            .trim()
+            .to_owned();
         let canvas_self_managed_origins =
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
         let canvas_private_origin_allowlist =
@@ -276,6 +296,8 @@ impl IssuanceServiceConfig {
             canvas_lti_experience_base_url,
             canvas_lti_experience_code_ttl,
             canvas_lti_experience_session_ttl,
+            canvas_lti_tool_signing_organization_id,
+            canvas_lti_tool_issuer_did,
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
             canvas_allow_private_base_urls,
@@ -603,6 +625,8 @@ mod tests {
             config.canvas_lti_experience_session_ttl,
             std::time::Duration::from_secs(1_800)
         );
+        assert!(config.canvas_lti_tool_signing_organization_id.is_empty());
+        assert!(config.canvas_lti_tool_issuer_did.is_empty());
         assert!(config.canvas_self_managed_origins.is_empty());
         assert!(config.canvas_private_origin_allowlist.is_empty());
         assert!(!config.canvas_allow_private_base_urls);
@@ -649,6 +673,11 @@ mod tests {
             ("CANVAS_LTI_EXPERIENCE_BASE_URL", "https://ui.example/"),
             ("CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", "90"),
             ("CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES", "45"),
+            ("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", " system-tools "),
+            (
+                "CANVAS_LTI_TOOL_ISSUER_DID",
+                " did:web:issuer.example:canvas ",
+            ),
             ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "true"),
             ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "yes"),
             (
@@ -705,6 +734,14 @@ mod tests {
         assert_eq!(
             config.canvas_lti_experience_session_ttl,
             std::time::Duration::from_secs(2_700)
+        );
+        assert_eq!(
+            config.canvas_lti_tool_signing_organization_id,
+            "system-tools"
+        );
+        assert_eq!(
+            config.canvas_lti_tool_issuer_did,
+            "did:web:issuer.example:canvas"
         );
         assert_eq!(
             config.canvas_self_managed_origins,

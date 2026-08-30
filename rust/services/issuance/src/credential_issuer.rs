@@ -66,33 +66,28 @@ impl HttpIssuerContextResolver {
         endpoint.set_fragment(None);
         Ok(endpoint)
     }
-}
 
-#[async_trait]
-impl IssuerContextResolver for HttpIssuerContextResolver {
-    async fn resolve(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn resolve_raw(
         &self,
-        transaction: &CredentialTransaction,
+        organization_id: &str,
+        issuer_did: &str,
+        issuer_mode: Option<&str>,
         credential_format: &str,
-        _force: bool,
-    ) -> Result<IssuerContext, CredentialIssuanceError> {
-        let issuer_did = transaction.issuer_did.as_deref().ok_or_else(|| {
-            issuer_error("The issuance transaction has no DID-mediated issuer identity")
-        })?;
-        let algorithm = transaction.issuer_algorithm.as_deref().ok_or_else(|| {
-            issuer_error("The issuance transaction has no issuer signing algorithm")
-        })?;
-        let mut request = self.client.get(self.endpoint()?).query(&[
-            ("organization_id", transaction.organization_id.as_str()),
+        key_purpose: &str,
+        algorithm: &str,
+    ) -> Result<Value, CredentialIssuanceError> {
+        let mut query = vec![
+            ("organization_id", organization_id),
             ("issuer_did", issuer_did),
-            (
-                "issuer_mode",
-                normalize_issuer_mode(&transaction.issuer_mode),
-            ),
             ("credential_format", credential_format),
-            ("key_purpose", key_purpose(credential_format)),
+            ("key_purpose", key_purpose),
             ("algorithm", algorithm),
-        ]);
+        ];
+        if let Some(issuer_mode) = issuer_mode {
+            query.push(("issuer_mode", issuer_mode));
+        }
+        let mut request = self.client.get(self.endpoint()?).query(&query);
         if let Some(api_key) = self.api_key.as_deref() {
             request = request.header("X-API-Key", api_key);
         }
@@ -118,6 +113,34 @@ impl IssuerContextResolver for HttpIssuerContextResolver {
                 "DID issuer context resolution failed (HTTP {status})"
             )));
         }
+        Ok(context)
+    }
+}
+
+#[async_trait]
+impl IssuerContextResolver for HttpIssuerContextResolver {
+    async fn resolve(
+        &self,
+        transaction: &CredentialTransaction,
+        credential_format: &str,
+        _force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        let issuer_did = transaction.issuer_did.as_deref().ok_or_else(|| {
+            issuer_error("The issuance transaction has no DID-mediated issuer identity")
+        })?;
+        let algorithm = transaction.issuer_algorithm.as_deref().ok_or_else(|| {
+            issuer_error("The issuance transaction has no issuer signing algorithm")
+        })?;
+        let context = self
+            .resolve_raw(
+                &transaction.organization_id,
+                issuer_did,
+                Some(normalize_issuer_mode(&transaction.issuer_mode)),
+                credential_format,
+                key_purpose(credential_format),
+                algorithm,
+            )
+            .await?;
         parse_issuer_context(context, issuer_did, algorithm)
     }
 }

@@ -4634,7 +4634,7 @@ mod tests {
                 assert!(body.get("universal_resolver_url").is_none());
             }
             if request.path == "/v1/integrations/canvas/lti/jwks" {
-                assert_eq!(instance.service_name, "issuance");
+                assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
                 assert_eq!(request.header("x-api-key"), None);
             }
             if request.path == "/internal/applications/app-1/evidence-summary" {

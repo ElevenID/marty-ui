@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     body::to_bytes,
@@ -33,6 +33,7 @@ use crate::{
     canvas_lti_login::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
+    canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
     credential::{CredentialIssuanceError, CredentialIssuanceService, CredentialRequest},
     proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
@@ -59,6 +60,7 @@ struct IssuanceState {
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
+    canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
 }
 
 pub struct IssuanceServices {
@@ -71,7 +73,7 @@ pub struct IssuanceServices {
     token_rate_limiter: TokenRateLimiter,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CanvasLtiServices {
     login: CanvasLtiLoginService,
     launch: CanvasLtiLaunchService,
@@ -79,6 +81,7 @@ pub struct CanvasLtiServices {
     experience_exchange: CanvasLtiExperienceExchangeService,
     experience_session: CanvasLtiExperienceSessionService,
     bootstrap: CanvasLtiBootstrapService,
+    tool_signer: Arc<dyn CanvasLtiToolJwtSigner>,
 }
 
 impl CanvasLtiServices {
@@ -90,6 +93,7 @@ impl CanvasLtiServices {
         experience_exchange: CanvasLtiExperienceExchangeService,
         experience_session: CanvasLtiExperienceSessionService,
         bootstrap: CanvasLtiBootstrapService,
+        tool_signer: Arc<dyn CanvasLtiToolJwtSigner>,
     ) -> Self {
         Self {
             login,
@@ -98,7 +102,16 @@ impl CanvasLtiServices {
             experience_exchange,
             experience_session,
             bootstrap,
+            tool_signer,
         }
+    }
+}
+
+impl std::fmt::Debug for CanvasLtiServices {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiServices")
+            .finish_non_exhaustive()
     }
 }
 
@@ -138,6 +151,7 @@ struct OptionalServices {
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
     canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
+    canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -211,6 +225,7 @@ pub fn router_with_all_services(
             canvas_lti_experience_exchange: Some(services.canvas_lti.experience_exchange),
             canvas_lti_experience_session: Some(services.canvas_lti.experience_session),
             canvas_lti_bootstrap: Some(services.canvas_lti.bootstrap),
+            canvas_lti_tool_signer: Some(services.canvas_lti.tool_signer),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -391,6 +406,23 @@ pub fn router_with_canvas_lti_bootstrap(
     )
 }
 
+pub fn router_with_canvas_lti_tool_signer(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_tool_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_tool_signer: Some(canvas_lti_tool_signer),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -494,6 +526,12 @@ fn router_with_optional_services(
             post(exchange_canvas_lti_experience_code),
         );
     }
+    if services.canvas_lti_tool_signer.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/jwks",
+            get(get_canvas_lti_tool_jwks),
+        );
+    }
     if services.canvas_lti_experience_session.is_some() {
         api = api.route(
             "/v1/integrations/canvas/lti/experience-sessions/current",
@@ -519,6 +557,7 @@ fn router_with_optional_services(
         canvas_lti_experience_exchange: services.canvas_lti_experience_exchange,
         canvas_lti_experience_session: services.canvas_lti_experience_session,
         canvas_lti_bootstrap: services.canvas_lti_bootstrap,
+        canvas_lti_tool_signer: services.canvas_lti_tool_signer,
     });
     system
         .merge(api)
@@ -597,6 +636,16 @@ fn private_no_store(mut response: Response) -> Response {
         .headers_mut()
         .insert(http_header::PRAGMA, HeaderValue::from_static("no-cache"));
     response
+}
+
+async fn get_canvas_lti_tool_jwks(
+    State(state): State<IssuanceState>,
+) -> Result<Json<Value>, CanvasLtiToolSigningHttpError> {
+    let signer = state
+        .canvas_lti_tool_signer
+        .as_ref()
+        .ok_or(CanvasLtiToolSigningError::ConfigurationIncomplete)?;
+    Ok(Json(signer.public_jwks().await?))
 }
 
 async fn get_canvas_lti_experience_session(
@@ -1146,6 +1195,25 @@ struct CredentialIssuanceHttpError(CredentialIssuanceError);
 struct CanvasLtiLoginHttpError(CanvasLtiLoginError);
 
 struct CanvasLtiLaunchHttpError(CanvasLtiLaunchServiceError);
+
+struct CanvasLtiToolSigningHttpError(CanvasLtiToolSigningError);
+
+impl From<CanvasLtiToolSigningError> for CanvasLtiToolSigningHttpError {
+    fn from(value: CanvasLtiToolSigningError) -> Self {
+        Self(value)
+    }
+}
+
+impl IntoResponse for CanvasLtiToolSigningHttpError {
+    fn into_response(self) -> Response {
+        let _cause = self.0;
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
+        )
+            .into_response()
+    }
+}
 
 enum CanvasLtiExperienceExchangeHttpError {
     Service(CanvasLtiExperienceExchangeError),
