@@ -25,6 +25,13 @@ pub struct IssuanceServiceConfig {
     pub signing_keys_internal_api_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
     pub internal_service_token: Option<String>,
+    pub organization_grpc_target: String,
+    pub credential_template_grpc_target: String,
+    pub revocation_profile_grpc_target: String,
+    pub credential_template_service_url: String,
+    pub vcdm_related_resource_urls: Vec<String>,
+    pub vcdm_related_resource_max_bytes: usize,
+    pub vcdm_related_resource_timeout: Duration,
     pub canvas_portable_enabled: bool,
     pub canvas_pilot_organizations: BTreeSet<String>,
     pub canvas_evidence_max_age: Duration,
@@ -79,6 +86,31 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "internal_service_token_configured",
                 &self.internal_service_token.is_some(),
+            )
+            .field("organization_grpc_target", &self.organization_grpc_target)
+            .field(
+                "credential_template_grpc_target",
+                &self.credential_template_grpc_target,
+            )
+            .field(
+                "revocation_profile_grpc_target",
+                &self.revocation_profile_grpc_target,
+            )
+            .field(
+                "credential_template_service_url",
+                &self.credential_template_service_url,
+            )
+            .field(
+                "vcdm_related_resource_url_count",
+                &self.vcdm_related_resource_urls.len(),
+            )
+            .field(
+                "vcdm_related_resource_max_bytes",
+                &self.vcdm_related_resource_max_bytes,
+            )
+            .field(
+                "vcdm_related_resource_timeout",
+                &self.vcdm_related_resource_timeout,
             )
             .field("canvas_portable_enabled", &self.canvas_portable_enabled)
             .field(
@@ -144,6 +176,7 @@ struct Settings {
     build: BuildSettings,
     discovery: DiscoverySettings,
     dependencies: DependencySettings,
+    initiation: InitiationSettings,
     rate_limit: RateLimitSettings,
 }
 
@@ -171,6 +204,17 @@ struct DependencySettings {
     database_url: String,
     signing_keys_internal_url: String,
     revocation_profile_service_url: String,
+}
+
+#[derive(Deserialize)]
+struct InitiationSettings {
+    organization_grpc_target: String,
+    credential_template_grpc_target: String,
+    revocation_profile_grpc_target: String,
+    credential_template_service_url: String,
+    related_resource_urls: Vec<String>,
+    related_resource_max_bytes: usize,
+    related_resource_timeout_seconds: f64,
 }
 
 #[derive(Deserialize)]
@@ -222,6 +266,15 @@ impl IssuanceServiceConfig {
                     "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys",
                     "revocation_profile_service_url": "http://revocation-profile:8013"
                 },
+                "initiation": {
+                    "organization_grpc_target": "organization:9002",
+                    "credential_template_grpc_target": "credential-template:9003",
+                    "revocation_profile_grpc_target": "revocation-profile:9013",
+                    "credential_template_service_url": "http://credential-template:8003",
+                    "related_resource_urls": [],
+                    "related_resource_max_bytes": 2000000,
+                    "related_resource_timeout_seconds": 10.0
+                },
                 "rate_limit": {
                     "requests": 30,
                     "window_seconds": 60
@@ -248,6 +301,44 @@ impl IssuanceServiceConfig {
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
         let revocation_profile_service_url =
             validate_internal_url(&settings.dependencies.revocation_profile_service_url)?;
+        let organization_grpc_target = validate_grpc_target(
+            &settings.initiation.organization_grpc_target,
+            "ORG_GRPC_TARGET",
+        )?;
+        let credential_template_grpc_target = validate_grpc_target(
+            &settings.initiation.credential_template_grpc_target,
+            "CT_GRPC_TARGET",
+        )?;
+        let revocation_profile_grpc_target = validate_grpc_target(
+            &settings.initiation.revocation_profile_grpc_target,
+            "RP_GRPC_TARGET",
+        )?;
+        let credential_template_service_url = validate_http_base_url(
+            &settings.initiation.credential_template_service_url,
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        )?;
+        if settings.initiation.related_resource_max_bytes == 0 {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "VCDM_RELATED_RESOURCE_MAX_BYTES must be a positive integer",
+            ));
+        }
+        let related_resource_timeout_seconds = settings.initiation.related_resource_timeout_seconds;
+        if !related_resource_timeout_seconds.is_finite() || related_resource_timeout_seconds <= 0.0
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS must be a positive number",
+            ));
+        }
+        let vcdm_related_resource_timeout =
+            Duration::try_from_secs_f64(related_resource_timeout_seconds).map_err(|error| {
+                MmfError::new(
+                    ErrorCode::Configuration,
+                    "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS must be within range",
+                )
+                .with_detail("cause", error.to_string())
+            })?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
         let integration_secret_key_name = values
@@ -333,6 +424,13 @@ impl IssuanceServiceConfig {
             signing_keys_internal_api_key,
             revocation_profile_service_url,
             internal_service_token,
+            organization_grpc_target,
+            credential_template_grpc_target,
+            revocation_profile_grpc_target,
+            credential_template_service_url,
+            vcdm_related_resource_urls: settings.initiation.related_resource_urls,
+            vcdm_related_resource_max_bytes: settings.initiation.related_resource_max_bytes,
+            vcdm_related_resource_timeout,
             canvas_portable_enabled,
             canvas_pilot_organizations,
             canvas_evidence_max_age,
@@ -409,6 +507,47 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             json!(revocation_profile_service_url),
         );
     }
+    let mut initiation = Map::new();
+    for (environment_name, setting_name) in [
+        ("ORG_GRPC_TARGET", "organization_grpc_target"),
+        ("CT_GRPC_TARGET", "credential_template_grpc_target"),
+        ("RP_GRPC_TARGET", "revocation_profile_grpc_target"),
+        (
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+            "credential_template_service_url",
+        ),
+    ] {
+        if let Some(value) = values.get(environment_name) {
+            initiation.insert(setting_name.to_owned(), json!(value));
+        }
+    }
+    if values.contains_key("VCDM_RELATED_RESOURCE_URLS") {
+        initiation.insert(
+            "related_resource_urls".to_owned(),
+            json!(comma_separated_values(values, "VCDM_RELATED_RESOURCE_URLS")),
+        );
+    }
+    if let Some(value) = values.get("VCDM_RELATED_RESOURCE_MAX_BYTES") {
+        initiation.insert(
+            "related_resource_max_bytes".to_owned(),
+            json!(parse_legacy_number::<usize>(
+                "VCDM_RELATED_RESOURCE_MAX_BYTES",
+                value
+            )?),
+        );
+    }
+    if let Some(value) = values.get("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS") {
+        initiation.insert(
+            "related_resource_timeout_seconds".to_owned(),
+            json!(value.parse::<f64>().map_err(|error| {
+                MmfError::new(
+                    ErrorCode::Configuration,
+                    "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS must be a number",
+                )
+                .with_detail("cause", error.to_string())
+            })?),
+        );
+    }
     let mut rate_limit = Map::new();
     if let Some(requests) = values.get("TOKEN_RATE_LIMIT") {
         rate_limit.insert(
@@ -430,6 +569,7 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
         "build": build,
         "discovery": discovery,
         "dependencies": dependencies,
+        "initiation": initiation,
         "rate_limit": rate_limit
     }))
 }
@@ -518,6 +658,47 @@ where
         )
         .with_detail("cause", error.to_string())
     })
+}
+
+pub(crate) fn normalize_grpc_target(value: &str) -> Option<String> {
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(if value.contains("://") {
+        value.to_owned()
+    } else {
+        format!("http://{value}")
+    })
+}
+
+fn validate_grpc_target(value: &str, name: &str) -> Result<String, MmfError> {
+    let normalized = normalize_grpc_target(value).ok_or_else(|| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a valid gRPC HTTP(S) target"),
+        )
+    })?;
+    let parsed = url::Url::parse(&normalized).map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a valid gRPC HTTP(S) target"),
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+    {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a credential-free gRPC HTTP(S) target"),
+        ));
+    }
+    Ok(normalized)
 }
 
 fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
@@ -680,6 +861,25 @@ mod tests {
         assert_eq!(
             config.signing_keys_internal_url.as_str(),
             "http://gateway:8000/internal/signing-keys/"
+        );
+        assert_eq!(config.organization_grpc_target, "http://organization:9002");
+        assert_eq!(
+            config.credential_template_grpc_target,
+            "http://credential-template:9003"
+        );
+        assert_eq!(
+            config.revocation_profile_grpc_target,
+            "http://revocation-profile:9013"
+        );
+        assert_eq!(
+            config.credential_template_service_url,
+            "http://credential-template:8003"
+        );
+        assert!(config.vcdm_related_resource_urls.is_empty());
+        assert_eq!(config.vcdm_related_resource_max_bytes, 2_000_000);
+        assert_eq!(
+            config.vcdm_related_resource_timeout,
+            std::time::Duration::from_secs(10)
         );
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
@@ -869,6 +1069,78 @@ mod tests {
             let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
                 .expect_err("invalid rate limit");
             assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn legacy_initiation_configuration_is_normalized_once() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("ORG_GRPC_TARGET", "organization.internal:9102"),
+            (
+                "CT_GRPC_TARGET",
+                "https://credential-template.internal:9103",
+            ),
+            ("RP_GRPC_TARGET", "http://revocation-profile.internal:9113"),
+            (
+                "CREDENTIAL_TEMPLATE_SERVICE_URL",
+                "https://templates.internal/api/",
+            ),
+            (
+                "VCDM_RELATED_RESOURCE_URLS",
+                " https://www.w3.org/ns/credentials/v2,https://example.test/context ,,",
+            ),
+            ("VCDM_RELATED_RESOURCE_MAX_BYTES", "42"),
+            ("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "0.25"),
+        ]))
+        .expect("initiation configuration");
+
+        assert_eq!(
+            config.organization_grpc_target,
+            "http://organization.internal:9102"
+        );
+        assert_eq!(
+            config.credential_template_grpc_target,
+            "https://credential-template.internal:9103"
+        );
+        assert_eq!(
+            config.revocation_profile_grpc_target,
+            "http://revocation-profile.internal:9113"
+        );
+        assert_eq!(
+            config.credential_template_service_url,
+            "https://templates.internal/api"
+        );
+        assert_eq!(
+            config.vcdm_related_resource_urls,
+            [
+                "https://www.w3.org/ns/credentials/v2",
+                "https://example.test/context"
+            ]
+        );
+        assert_eq!(config.vcdm_related_resource_max_bytes, 42);
+        assert_eq!(
+            config.vcdm_related_resource_timeout,
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn invalid_initiation_configuration_fails_closed() {
+        for (name, value) in [
+            ("ORG_GRPC_TARGET", " organization:9002"),
+            ("CT_GRPC_TARGET", "ftp://credential-template:9003"),
+            ("RP_GRPC_TARGET", "http://revocation-profile:9013/path"),
+            (
+                "CREDENTIAL_TEMPLATE_SERVICE_URL",
+                "ftp://credential-template:8003",
+            ),
+            ("VCDM_RELATED_RESOURCE_MAX_BYTES", "0"),
+            ("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "0"),
+            ("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "-1"),
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
+                .expect_err("invalid initiation configuration");
+            assert_eq!(error.code, ErrorCode::Configuration, "{name}={value}");
         }
     }
 

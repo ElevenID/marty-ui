@@ -14,6 +14,7 @@ use tonic::{
 
 use crate::{
     client_auth::RegisteredClientRepository,
+    config::normalize_grpc_target,
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
         TemplateResponse,
@@ -532,16 +533,8 @@ fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDepende
 }
 
 fn grpc_endpoint_target(target: &str) -> Result<String, InitiationDependencyError> {
-    if target.is_empty() || target.chars().any(char::is_whitespace) {
-        return Err(InitiationDependencyError::Invalid(
-            "invalid gRPC target".into(),
-        ));
-    }
-    Ok(if target.contains("://") {
-        target.to_owned()
-    } else {
-        format!("http://{target}")
-    })
+    normalize_grpc_target(target)
+        .ok_or_else(|| InitiationDependencyError::Invalid("invalid gRPC target".into()))
 }
 
 fn grpc_dependency_error(status: tonic::Status) -> InitiationDependencyError {
@@ -635,7 +628,12 @@ mod tests {
         );
         channel("organization:9002", Duration::from_secs(1)).unwrap();
 
-        for invalid in ["", " organization:9002", "organization:9002 ", "org name:9002"] {
+        for invalid in [
+            "",
+            " organization:9002",
+            "organization:9002 ",
+            "org name:9002",
+        ] {
             assert_eq!(
                 grpc_endpoint_target(invalid),
                 Err(InitiationDependencyError::Invalid(
