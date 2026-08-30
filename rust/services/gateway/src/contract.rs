@@ -935,6 +935,23 @@ mod tests {
         for (method, path, service) in [
             (HttpMethod::Post, "/v1/api-keys", "organizations"),
             (HttpMethod::Delete, "/v1/api-keys/key-1", "organizations"),
+            (
+                HttpMethod::Get,
+                "/v1/credential-templates",
+                "credential-templates",
+            ),
+            (HttpMethod::Get, "/v1/application-templates", "issuance"),
+            (HttpMethod::Post, "/v1/application-templates", "issuance"),
+            (
+                HttpMethod::Post,
+                "/v1/application-templates/template-1/validate",
+                "issuance",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/application-templates/template-1/activate",
+                "issuance",
+            ),
             (HttpMethod::Post, "/v1/me/applications", "applicant"),
             (
                 HttpMethod::Post,

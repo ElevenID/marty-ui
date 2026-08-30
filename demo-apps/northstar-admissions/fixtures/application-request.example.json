@@ -1,0 +1,24 @@
+{
+  "credential_template_name": "Marty Verified Member Badge",
+  "application_template": {
+    "name": "Northstar Graduate Admissions Application",
+    "description": "Synthetic admissions application used only for the governed D-11 demonstration.",
+    "form_fields": [
+      { "field_id": "email", "label": "Email", "field_type": "EMAIL", "required": true },
+      { "field_id": "given_name", "label": "Given name", "field_type": "TEXT", "required": true },
+      { "field_id": "family_name", "label": "Family name", "field_type": "TEXT", "required": true },
+      { "field_id": "program_name", "label": "Program", "field_type": "TEXT", "required": true }
+    ],
+    "application_validity_days": 30
+  },
+  "form_data": {
+    "email": "learner@northstar.example",
+    "given_name": "Avery",
+    "family_name": "Morgan",
+    "program_name": "Applied Data Systems"
+  },
+  "integration_context": {
+    "source": "northstar-admissions",
+    "scenario": "d11"
+  }
+}

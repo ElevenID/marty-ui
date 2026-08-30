@@ -18,6 +18,15 @@ method, public path, authentication class, and idempotency identifier). The
 server validates that inventory against the exact configured gateway before it
 starts and exposes only that safe inventory to the recorder.
 
+`NORTHSTAR_APPLICATION_REQUEST_FILE` must use the disclosed request shape in
+`fixtures/application-request.example.json`. It names an active Credential
+Template and defines a simple manual Application Template plus synthetic form
+data, but deliberately contains no environment identifier. Preparation resolves
+the exact active, tenant-bound credential template and creates, validates, and
+activates the run-scoped Application Template through the same public routes as
+the Marty UI. Missing, duplicate, cross-tenant, inactive, or invalid templates
+fail preparation; there is no repository or database fallback.
+
 The callback verifies Marty's canonical HMAC-SHA256 signature, binds event
 headers to the signed body, checks organization and application scope, requires
 the signed event correlation ID to equal the successful gateway approval
