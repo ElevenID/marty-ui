@@ -13,6 +13,10 @@ Keep the output outside the repository, or use an ignored
 `.northstar-run*.json` filename in this directory.
 The bootstrap key is revoked in a `finally` block; the protected file contains
 separate runtime, read-only negative-test, and `webhooks:read` evidence keys.
+It also retains a privacy-safe inventory of preparation requests (origin,
+method, public path, authentication class, and idempotency identifier). The
+server validates that inventory against the exact configured gateway before it
+starts and exposes only that safe inventory to the recorder.
 
 The callback verifies Marty's canonical HMAC-SHA256 signature, binds event
 headers to the signed body, checks organization and application scope, and

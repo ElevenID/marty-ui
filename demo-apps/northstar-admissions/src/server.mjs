@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createGatewayClient, normalizeGatewayOrigin } from './gateway.mjs';
+import { assertPublicGatewayUrl, createGatewayClient, normalizeGatewayOrigin } from './gateway.mjs';
 import { verifyMartyWebhook } from './webhook.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -72,6 +72,19 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
   if (!organizationId || !applicationId || !webhookId) {
     throw new Error('organizationId, applicationId, and webhookId are required');
   }
+  const preparationGatewayRequests = (config.preparationGatewayRequests || []).map((request) => {
+    const url = assertPublicGatewayUrl(gatewayOrigin, request.path);
+    if (request.origin !== gatewayOrigin || url.origin !== gatewayOrigin) {
+      throw new Error('Preparation request did not use the configured public gateway');
+    }
+    return {
+      origin: url.origin,
+      method: String(request.method || 'GET').toUpperCase(),
+      path: `${url.pathname}${url.search}`,
+      authentication: String(request.authentication || 'NONE'),
+      idempotencyKey: request.idempotencyKey || null,
+    };
+  });
   const state = {
     applicationStatus: 'SUBMITTED',
     enrollmentStatus: 'Waiting for approval',
@@ -79,6 +92,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
     webhookEvents: [],
     processedEventIds: new Set(),
     gatewayRequests: [],
+    preparationGatewayRequests,
     lastGatewayResult: null,
     deliveryEvidence: null,
     lastVerifiedEnvelope: null,
@@ -112,6 +126,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       webhookStatus: state.webhookStatus,
       webhookEvents: state.webhookEvents,
       gatewayRequests: state.gatewayRequests,
+      preparationGatewayRequests: state.preparationGatewayRequests,
       lastGatewayResult: state.lastGatewayResult,
       deliveryEvidence: state.deliveryEvidence,
       receiverTests: state.receiverTests,
@@ -318,6 +333,7 @@ export function loadRunConfig(config = process.env) {
     runtimeKeyPrefix: config.NORTHSTAR_RUNTIME_KEY_PREFIX || run.runtime_key_prefix,
     webhookSecret: config.NORTHSTAR_WEBHOOK_SECRET || run.webhook_signing_secret,
     callbackUrl: config.NORTHSTAR_CALLBACK_URL || run.callback_url,
+    preparationGatewayRequests: run.outbound_requests || [],
   };
 }
 

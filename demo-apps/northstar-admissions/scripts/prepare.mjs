@@ -100,6 +100,7 @@ try {
     webhook_signing_secret: webhook.signing_secret,
     callback_url: callbackUrl,
     outbound_origins: [...new Set(origins.map(({ origin }) => origin))],
+    outbound_requests: origins,
   }, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   await chmod(outputPath, 0o600);
 } finally {

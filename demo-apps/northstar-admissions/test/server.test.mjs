@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { createNorthstarApp, startServer } from '../src/server.mjs';
+import { createNorthstarApp, loadRunConfig, startServer } from '../src/server.mjs';
 import { expectedSignature } from '../src/webhook.mjs';
 
 const secret = '0123456789abcdef0123456789abcdef';
@@ -25,12 +28,76 @@ function webhookRequest(payload, signature = expectedSignature(secret, payload))
 }
 
 test('safe browser state excludes API keys and signing secrets', () => {
-  const app = createNorthstarApp(config, { fetchImpl: async () => new Response('{}') });
+  const app = createNorthstarApp({
+    ...config,
+    preparationGatewayRequests: [{
+      origin: 'https://beta.elevenidllc.com',
+      method: 'POST',
+      path: '/v1/webhooks',
+      authentication: 'API_KEY',
+      idempotencyKey: 'northstar-safe-idempotency-id',
+    }],
+  }, { fetchImpl: async () => new Response('{}') });
   const serialized = JSON.stringify(app.safeState());
   assert.equal(serialized.includes('runtime-secret'), false);
   assert.equal(serialized.includes('readonly-secret'), false);
   assert.equal(serialized.includes('evidence-secret'), false);
   assert.equal(serialized.includes(secret), false);
+  assert.deepEqual(app.safeState().preparationGatewayRequests, [{
+    origin: 'https://beta.elevenidllc.com',
+    method: 'POST',
+    path: '/v1/webhooks',
+    authentication: 'API_KEY',
+    idempotencyKey: 'northstar-safe-idempotency-id',
+  }]);
+});
+
+test('preparation request evidence fails closed on a direct Marty service boundary', () => {
+  assert.throws(() => createNorthstarApp({
+    ...config,
+    preparationGatewayRequests: [{
+      origin: 'http://notification:8010', method: 'POST', path: '/v1/webhooks',
+    }],
+  }), /configured public gateway/);
+  assert.throws(() => createNorthstarApp({
+    ...config,
+    preparationGatewayRequests: [{
+      origin: config.gatewayOrigin, method: 'POST', path: '/internal/events',
+    }],
+  }), /Non-public Marty route rejected/);
+});
+
+test('run-secret loading carries only sanitized preparation observations into app config', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'northstar-run-config-'));
+  const runFile = join(directory, 'run.json');
+  const observation = {
+    origin: config.gatewayOrigin,
+    method: 'POST',
+    path: '/v1/subscriptions',
+    authentication: 'API_KEY',
+    idempotencyKey: 'northstar-preparation-id',
+  };
+  writeFileSync(runFile, JSON.stringify({
+    gateway_origin: config.gatewayOrigin,
+    organization_id: config.organizationId,
+    application_id: config.applicationId,
+    webhook_id: config.webhookId,
+    runtime_api_key: config.runtimeKey,
+    read_only_api_key: config.readOnlyKey,
+    evidence_api_key: config.evidenceKey,
+    webhook_signing_secret: config.webhookSecret,
+    outbound_requests: [observation],
+  }));
+  try {
+    const loaded = loadRunConfig({ NORTHSTAR_RUN_SECRET_FILE: runFile });
+    assert.deepEqual(loaded.preparationGatewayRequests, [observation]);
+    const serialized = JSON.stringify(createNorthstarApp(loaded).safeState());
+    assert.equal(serialized.includes(config.runtimeKey), false);
+    assert.equal(serialized.includes(config.webhookSecret), false);
+    assert.match(serialized, /northstar-preparation-id/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('delivery evidence is retrieved through the public gateway and sanitized', async () => {
