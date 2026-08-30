@@ -2,6 +2,7 @@
 # Dependencies
 # =============================================================================
 node_modules/
+.node_modules-incomplete-*/
 .pnp
 .pnp.js
 .pnpm-store/
