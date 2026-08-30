@@ -4,7 +4,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_award_candidate::{
         canvas_auto_approval_ready, plan_canvas_award_candidate_materialization,
-        CanvasAwardCandidate, CanvasCandidateObservation, CanvasIdentityJoin, CanvasLinkedIdentity,
+        CanvasAwardCandidate, CanvasAwardCandidateMaterializationPlan, CanvasCandidateObservation,
+        CanvasIdentityJoin, CanvasLinkedIdentity,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::canvas_lti_experience_session_context,
@@ -125,6 +126,71 @@ fn observation(observed_at: DateTime<Utc>) -> CanvasCandidateObservation {
         verification: json!({"status": "VERIFIED", "method": "LTI_AGS_RESULT_READ"}),
         payload_hash: "candidate-score-95".to_owned(),
         observed_at,
+    }
+}
+
+#[test]
+fn candidate_debug_output_redacts_identity_evidence_and_materialization_data() {
+    let identity_secret = "private-linked-identity";
+    let canvas_user_secret = "private-canvas-user";
+    let subject_secret = "private-lti-subject";
+    let assertion_secret = "private-assertion";
+    let verification_secret = "private-verification";
+    let fact_secret = "private-materialized-fact";
+    let patch_secret = "private-application-patch";
+
+    let mut private_candidate = candidate("candidate-safe-id", now());
+    private_candidate.learner_identity_id = Some(identity_secret.to_owned());
+    private_candidate.canvas_user_id = Some(canvas_user_secret.to_owned());
+    private_candidate.lti_subject = Some(subject_secret.to_owned());
+    let candidate_debug = format!("{private_candidate:?}");
+    assert!(candidate_debug.contains("candidate-safe-id"));
+    assert!(candidate_debug.contains("[REDACTED]"));
+    for secret in [identity_secret, canvas_user_secret, subject_secret] {
+        assert!(!candidate_debug.contains(secret));
+    }
+
+    let mut private_observation = observation(now());
+    private_observation.assertion = json!({"secret": assertion_secret});
+    private_observation.verification = json!({"secret": verification_secret});
+    let observation_debug = format!("{private_observation:?}");
+    assert!(observation_debug.contains("observation-1"));
+    assert!(observation_debug.contains("[REDACTED]"));
+    assert!(!observation_debug.contains(assertion_secret));
+    assert!(!observation_debug.contains(verification_secret));
+
+    let linked_identity = CanvasLinkedIdentity {
+        id: "identity-safe-id".to_owned(),
+        lti_subject: subject_secret.to_owned(),
+        canvas_user_id: Some(canvas_user_secret.to_owned()),
+        status: "linked".to_owned(),
+    };
+    let identity_debug = format!("{linked_identity:?}");
+    assert!(identity_debug.contains("identity-safe-id"));
+    assert!(identity_debug.contains("[REDACTED]"));
+    assert!(!identity_debug.contains(subject_secret));
+    assert!(!identity_debug.contains(canvas_user_secret));
+
+    let materialization = CanvasAwardCandidateMaterializationPlan {
+        candidate_id: "candidate-safe-id".to_owned(),
+        lti_subject: Some(subject_secret.to_owned()),
+        canvas_user_id: Some(canvas_user_secret.to_owned()),
+        learner_identity_id: Some(identity_secret.to_owned()),
+        facts: vec![json!({"secret": fact_secret})],
+        application_canvas_patch: json!({"secret": patch_secret}).as_object().unwrap().clone(),
+        materialized_at: now(),
+    };
+    let materialization_debug = format!("{materialization:?}");
+    assert!(materialization_debug.contains("candidate-safe-id"));
+    assert!(materialization_debug.contains("[REDACTED]"));
+    for secret in [
+        subject_secret,
+        canvas_user_secret,
+        identity_secret,
+        fact_secret,
+        patch_secret,
+    ] {
+        assert!(!materialization_debug.contains(secret));
     }
 }
 

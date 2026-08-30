@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, fmt, time::Duration};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Map, Value};
@@ -15,7 +15,9 @@ use crate::{
     canvas_lti_launch::feature_enabled,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+const REDACTED: &str = "[REDACTED]";
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasAwardCandidate {
     pub id: String,
     pub organization_id: String,
@@ -28,7 +30,24 @@ pub struct CanvasAwardCandidate {
     pub observed_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl fmt::Debug for CanvasAwardCandidate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasAwardCandidate")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("platform_id", &self.platform_id)
+            .field("binding_id", &self.binding_id)
+            .field("learner_identity_id", &REDACTED)
+            .field("canvas_user_id", &REDACTED)
+            .field("lti_subject", &REDACTED)
+            .field("state", &self.state)
+            .field("observed_at", &self.observed_at)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasCandidateObservation {
     pub id: String,
     pub requirement_id: String,
@@ -38,12 +57,38 @@ pub struct CanvasCandidateObservation {
     pub observed_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for CanvasCandidateObservation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasCandidateObservation")
+            .field("id", &self.id)
+            .field("requirement_id", &self.requirement_id)
+            .field("assertion", &REDACTED)
+            .field("verification", &REDACTED)
+            .field("payload_hash", &self.payload_hash)
+            .field("observed_at", &self.observed_at)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CanvasLinkedIdentity {
     pub id: String,
     pub lti_subject: String,
     pub canvas_user_id: Option<String>,
     pub status: String,
+}
+
+impl fmt::Debug for CanvasLinkedIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLinkedIdentity")
+            .field("id", &self.id)
+            .field("lti_subject", &REDACTED)
+            .field("canvas_user_id", &REDACTED)
+            .field("status", &self.status)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -52,7 +97,7 @@ pub struct CanvasIdentityJoin<'a> {
     pub by_canvas_user: Option<&'a CanvasLinkedIdentity>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasAwardCandidateMaterializationPlan {
     pub candidate_id: String,
     pub lti_subject: Option<String>,
@@ -61,6 +106,21 @@ pub struct CanvasAwardCandidateMaterializationPlan {
     pub facts: Vec<Value>,
     pub application_canvas_patch: Map<String, Value>,
     pub materialized_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for CanvasAwardCandidateMaterializationPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasAwardCandidateMaterializationPlan")
+            .field("candidate_id", &self.candidate_id)
+            .field("lti_subject", &REDACTED)
+            .field("canvas_user_id", &REDACTED)
+            .field("learner_identity_id", &REDACTED)
+            .field("facts", &REDACTED)
+            .field("application_canvas_patch", &REDACTED)
+            .field("materialized_at", &self.materialized_at)
+            .finish()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
