@@ -11,6 +11,19 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicDir = join(root, 'public');
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 
+function headerValue(headers, name) {
+  if (typeof headers?.get === 'function') return headers.get(name);
+  return headers?.[name] || headers?.[name.toLowerCase()] || null;
+}
+
+function webhookRequest(payload, headers) {
+  const body = Buffer.from(JSON.stringify(payload));
+  return {
+    headers,
+    async *[Symbol.asyncIterator]() { yield body; },
+  };
+}
+
 function requireSecret(name, value, minimumLength = 16) {
   const candidate = String(value || '');
   if (candidate.length < minimumLength || /change[-_ ]?me|replace[-_ ]?me|placeholder/i.test(candidate)) {
@@ -68,6 +81,12 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
     gatewayRequests: [],
     lastGatewayResult: null,
     deliveryEvidence: null,
+    lastVerifiedEnvelope: null,
+    receiverTests: {
+      invalidSignatureAttempts: 0,
+      duplicateAttempts: 0,
+      lastResult: null,
+    },
   };
   const gateway = createGatewayClient({
     origin: gatewayOrigin,
@@ -95,6 +114,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       gatewayRequests: state.gatewayRequests,
       lastGatewayResult: state.lastGatewayResult,
       deliveryEvidence: state.deliveryEvidence,
+      receiverTests: state.receiverTests,
     };
   }
 
@@ -140,6 +160,17 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       state.webhookStatus = 'Rejected: event scope mismatch';
       return { status: 422, body: { status: 'rejected', code: 'EVENT_SCOPE_MISMATCH' } };
     }
+    state.lastVerifiedEnvelope = {
+      payload: structuredClone(payload),
+      headers: {
+        'content-type': 'application/json',
+        'x-mip-signature': headerValue(request.headers, 'x-mip-signature'),
+        'x-mip-event': headerValue(request.headers, 'x-mip-event'),
+        'x-mip-event-id': headerValue(request.headers, 'x-mip-event-id'),
+        'x-mip-timestamp': headerValue(request.headers, 'x-mip-timestamp'),
+        'x-mip-delivery-id': headerValue(request.headers, 'x-mip-delivery-id'),
+      },
+    };
     if (state.processedEventIds.has(payload.id)) {
       return { status: 200, body: { status: 'duplicate_ignored', event_id: payload.id } };
     }
@@ -179,7 +210,80 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
     };
   }
 
-  return { state, safeState, approve, receiveWebhook, refreshApplication, refreshDeliveryEvidence };
+  async function testInvalidSignature() {
+    const before = {
+      applicationStatus: state.applicationStatus,
+      enrollmentStatus: state.enrollmentStatus,
+      eventCount: state.webhookEvents.length,
+      webhookStatus: state.webhookStatus,
+    };
+    const attempt = state.receiverTests.invalidSignatureAttempts + 1;
+    const payload = {
+      id: `invalid-signature-test-${attempt}`,
+      type: 'application.approved',
+      timestamp: new Date().toISOString(),
+      organization_id: organizationId,
+      data: { application_id: applicationId, status: 'APPROVED' },
+    };
+    const result = await receiveWebhook(webhookRequest(payload, {
+      'content-type': 'application/json',
+      'x-mip-signature': `sha256=${'0'.repeat(64)}`,
+      'x-mip-event': payload.type,
+      'x-mip-event-id': payload.id,
+      'x-mip-timestamp': payload.timestamp,
+      'x-mip-delivery-id': `invalid-signature-test-${attempt}`,
+    }));
+    const admissionsUnchanged = state.applicationStatus === before.applicationStatus
+      && state.enrollmentStatus === before.enrollmentStatus
+      && state.webhookEvents.length === before.eventCount;
+    state.webhookStatus = before.webhookStatus;
+    state.receiverTests.invalidSignatureAttempts = attempt;
+    state.receiverTests.lastResult = {
+      kind: 'INVALID_SIGNATURE',
+      receiverStatus: result.status,
+      code: result.body.code,
+      admissionsUnchanged,
+    };
+    return { status: result.status === 401 && admissionsUnchanged ? 200 : 500, body: state.receiverTests.lastResult };
+  }
+
+  async function testDuplicateEvent() {
+    if (!state.lastVerifiedEnvelope) {
+      return { status: 409, body: { code: 'NO_VERIFIED_EVENT', admissionsUnchanged: true } };
+    }
+    const before = {
+      applicationStatus: state.applicationStatus,
+      enrollmentStatus: state.enrollmentStatus,
+      eventCount: state.webhookEvents.length,
+    };
+    const result = await receiveWebhook(webhookRequest(
+      structuredClone(state.lastVerifiedEnvelope.payload),
+      { ...state.lastVerifiedEnvelope.headers },
+    ));
+    const admissionsUnchanged = state.applicationStatus === before.applicationStatus
+      && state.enrollmentStatus === before.enrollmentStatus
+      && state.webhookEvents.length === before.eventCount;
+    state.receiverTests.duplicateAttempts += 1;
+    state.receiverTests.lastResult = {
+      kind: 'DUPLICATE_EVENT',
+      receiverStatus: result.status,
+      code: result.body.status,
+      eventId: result.body.event_id,
+      admissionsUnchanged,
+    };
+    return { status: result.body.status === 'duplicate_ignored' && admissionsUnchanged ? 200 : 500, body: state.receiverTests.lastResult };
+  }
+
+  return {
+    state,
+    safeState,
+    approve,
+    receiveWebhook,
+    refreshApplication,
+    refreshDeliveryEvidence,
+    testInvalidSignature,
+    testDuplicateEvent,
+  };
 }
 
 function json(response, status, body) {
@@ -219,6 +323,7 @@ export function loadRunConfig(config = process.env) {
 
 export function startServer(config = process.env) {
   const app = createNorthstarApp(loadRunConfig(config));
+  const receiverTestControlsEnabled = String(config.NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED || '').toLowerCase() === 'true';
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://northstar.local');
     if (request.method === 'GET' && url.pathname === '/health') {
@@ -241,6 +346,14 @@ export function startServer(config = process.env) {
     }
     if (request.method === 'POST' && url.pathname === '/api/delivery-evidence/refresh') {
       const result = await app.refreshDeliveryEvidence();
+      return json(response, result.status, result.body);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/test-events/invalid-signature' && receiverTestControlsEnabled) {
+      const result = await app.testInvalidSignature();
+      return json(response, result.status, result.body);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/test-events/duplicate' && receiverTestControlsEnabled) {
+      const result = await app.testDuplicateEvent();
       return json(response, result.status, result.body);
     }
     const asset = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);

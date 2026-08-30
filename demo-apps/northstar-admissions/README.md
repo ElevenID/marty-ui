@@ -36,3 +36,11 @@ The Cloudflare tunnel must have a public-hostname entry for
 `http://tunnel-nginx-proxy:80`. DNS/tunnel provisioning remains an operator
 step; the repository nginx route fails closed if the Northstar container is not
 healthy.
+
+The D-11 overlay enables two Northstar-only receiver test controls for the
+separate uncut resilience runs. They never call Marty: one submits a tampered
+signature to the receiver and one replays the last valid signed envelope. The
+duplicate run must follow the positive run without restarting Northstar so the
+in-memory, already-processed event remains available. Browser responses contain
+only the receiver status, event identifier, and whether admissions state stayed
+unchanged; signatures and the signing secret remain server-side.

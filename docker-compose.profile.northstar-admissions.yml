@@ -16,6 +16,7 @@ services:
       MARTY_PUBLIC_GATEWAY_ORIGIN: ${MARTY_PUBLIC_GATEWAY_ORIGIN:-https://beta.elevenidllc.com}
       NORTHSTAR_CALLBACK_URL: https://${NORTHSTAR_ADMISSIONS_PUBLIC_HOST:-admissions-test.elevenidllc.com}/webhooks/marty
       NORTHSTAR_RUN_SECRET_FILE: /run/secrets/northstar_run
+      NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED: "true"
     secrets:
       - source: northstar_run
         target: northstar_run

@@ -52,6 +52,16 @@ function render(state) {
   byId('enrollment-status').textContent = state.enrollmentStatus;
   byId('webhook-status').className = `signature ${state.webhookEvents.length ? 'verified' : 'waiting'}`;
   renderStatus(byId('webhook-status'), state.webhookEvents.length ? '✓' : '○', state.webhookStatus);
+  const receiverTest = byId('receiver-test-status');
+  if (state.receiverTests?.lastResult) {
+    const result = state.receiverTests.lastResult;
+    receiverTest.hidden = false;
+    receiverTest.className = `receiver-test ${result.admissionsUnchanged ? 'passed' : 'failed'}`;
+    receiverTest.textContent = `${result.kind} · ${result.code} · admissions ${result.admissionsUnchanged ? 'unchanged' : 'changed'}`;
+  } else {
+    receiverTest.hidden = true;
+    receiverTest.textContent = '';
+  }
   if (state.webhookEvents.length && !state.deliveryEvidence && !deliveryEvidencePolling) {
     void refreshDeliveryEvidence();
   }

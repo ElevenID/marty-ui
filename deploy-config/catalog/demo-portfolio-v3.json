@@ -12,6 +12,7 @@
     { "demo_id": "D-07", "slug": "canvas-learning-achievement", "happy_path": ["capture_canvas_evidence", "governed_review", "issue_open_badge"], "failure_paths": ["invalid_evidence_provenance_denied"] },
     { "demo_id": "D-08", "slug": "external-evidence-to-credential", "happy_path": ["normalize_external_evidence", "evaluate_policy", "review_and_issue"], "failure_paths": ["insufficient_or_conflicting_evidence_review"] },
     { "demo_id": "D-09", "slug": "offline-facility-verification", "happy_path": ["provision_edge_trust", "verify_offline", "buffer_audit", "restore_and_sync"], "failure_paths": ["expired_offline_trust_denied"] },
-    { "demo_id": "D-10", "slug": "organization-primitives", "happy_path": ["configure_organization", "configure_issuer_profiles", "configure_trust_and_mip_primitives"], "failure_paths": ["unauthorized_administration_denied"] }
+    { "demo_id": "D-10", "slug": "organization-primitives", "happy_path": ["configure_organization", "configure_issuer_profiles", "configure_trust_and_mip_primitives"], "failure_paths": ["unauthorized_administration_denied"] },
+    { "demo_id": "D-11", "slug": "external-admissions-gateway-webhooks", "happy_path": ["gateway_only_summary", "scoped_approval", "signed_webhook_correlated"], "failure_paths": ["insufficient_scope_denied", "invalid_signature_rejected", "duplicate_event_ignored"] }
   ]
 }

@@ -2226,26 +2226,38 @@ export const DEMO_MANIFESTS = {
         "wallets": [],
         "assertions": [
           {
-            "id": "gateway-only-summary",
+            "id": "gateway_only_summary",
             "label": "The partner browser exposes only a safe gateway integration summary.",
             "result": "NOT_RUN",
             "evidence_sha256": null
           },
           {
-            "id": "insufficient-scope-denied",
+            "id": "insufficient_scope_denied",
             "label": "The read-only key is denied without side effects.",
             "result": "NOT_RUN",
             "evidence_sha256": null
           },
           {
-            "id": "scoped-approval",
+            "id": "scoped_approval",
             "label": "The scoped key approves through the public gateway.",
             "result": "NOT_RUN",
             "evidence_sha256": null
           },
           {
-            "id": "signed-webhook-correlated",
+            "id": "signed_webhook_correlated",
             "label": "The verified event is bound to public delivery history.",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "invalid_signature_rejected",
+            "label": "A webhook with an invalid signature is rejected without changing admissions state.",
+            "result": "NOT_RUN",
+            "evidence_sha256": null
+          },
+          {
+            "id": "duplicate_event_ignored",
+            "label": "A valid duplicate event is acknowledged without a second admissions transition.",
             "result": "NOT_RUN",
             "evidence_sha256": null
           }

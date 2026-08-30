@@ -116,6 +116,42 @@ test('public server bounds JSON bodies and sends browser security headers', asyn
     });
     assert.equal(oversized.status, 413);
     assert.equal((await oversized.json()).code, 'BODY_TOO_LARGE');
+
+    const disabledTestControl = await fetch(`${origin}/api/test-events/invalid-signature`, { method: 'POST' });
+    assert.equal(disabledTestControl.status, 404);
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
+test('receiver resilience controls require explicit enablement and expose no secret material', async () => {
+  const { server } = startServer({
+    PORT: '0',
+    MARTY_PUBLIC_GATEWAY_ORIGIN: config.gatewayOrigin,
+    NORTHSTAR_ORGANIZATION_ID: config.organizationId,
+    NORTHSTAR_APPLICATION_ID: config.applicationId,
+    NORTHSTAR_WEBHOOK_ID: config.webhookId,
+    NORTHSTAR_RUNTIME_API_KEY: config.runtimeKey,
+    NORTHSTAR_READ_ONLY_API_KEY: config.readOnlyKey,
+    NORTHSTAR_EVIDENCE_API_KEY: config.evidenceKey,
+    NORTHSTAR_WEBHOOK_SECRET: config.webhookSecret,
+    NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED: 'true',
+  });
+  await once(server, 'listening');
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  try {
+    const invalid = await fetch(`${origin}/api/test-events/invalid-signature`, { method: 'POST' });
+    assert.equal(invalid.status, 200);
+    assert.deepEqual(await invalid.json(), {
+      kind: 'INVALID_SIGNATURE', receiverStatus: 401, code: 'INVALID_SIGNATURE', admissionsUnchanged: true,
+    });
+    const duplicate = await fetch(`${origin}/api/test-events/duplicate`, { method: 'POST' });
+    assert.equal(duplicate.status, 409);
+    const serialized = JSON.stringify(await (await fetch(`${origin}/api/demo-state`)).json());
+    assert.equal(serialized.includes(secret), false);
+    assert.equal(serialized.includes('runtime-secret'), false);
   } finally {
     server.close();
     await once(server, 'close');
@@ -128,9 +164,22 @@ test('valid events update enrollment once and invalid signatures do not', async 
     id: 'event-1', type: 'application.approved', timestamp: '2026-08-30T00:00:00Z',
     organization_id: 'org-1', data: { application_id: 'app-1', status: 'APPROVED' },
   };
+  assert.equal((await app.testDuplicateEvent()).status, 409);
+  const invalidTest = await app.testInvalidSignature();
+  assert.equal(invalidTest.status, 200);
+  assert.deepEqual(invalidTest.body, {
+    kind: 'INVALID_SIGNATURE', receiverStatus: 401, code: 'INVALID_SIGNATURE', admissionsUnchanged: true,
+  });
+  assert.equal(app.safeState().enrollmentStatus, 'Waiting for approval');
+  assert.equal(app.safeState().webhookEvents.length, 0);
   assert.equal((await app.receiveWebhook(webhookRequest(payload))).body.status, 'processed');
   assert.equal(app.safeState().enrollmentStatus, 'Enrollment workflow ready');
-  assert.equal((await app.receiveWebhook(webhookRequest(payload))).body.status, 'duplicate_ignored');
+  const duplicateTest = await app.testDuplicateEvent();
+  assert.equal(duplicateTest.status, 200);
+  assert.deepEqual(duplicateTest.body, {
+    kind: 'DUPLICATE_EVENT', receiverStatus: 200, code: 'duplicate_ignored',
+    eventId: 'event-1', admissionsUnchanged: true,
+  });
   assert.equal(app.safeState().webhookEvents.length, 1);
   const invalid = { ...payload, id: 'event-2' };
   assert.equal((await app.receiveWebhook(webhookRequest(invalid, 'sha256=bad'))).status, 401);
