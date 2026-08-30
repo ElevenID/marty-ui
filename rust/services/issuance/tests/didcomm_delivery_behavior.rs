@@ -6,7 +6,8 @@ use marty_issuance_service::{
     http::router_with_didcomm_delivery,
     initiation_didcomm::{
         NativeDidcommDeliveryStatus, NativeInitiationDidcommDeliveryError,
-        NativeInitiationDidcommDeliveryReceipt,
+        NativeInitiationDidcommDeliveryReceipt, DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS,
+        DIDCOMM_TRANSPORT_READY_STATUS, DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
     },
     initiation_didcomm_http::{DirectDidcommDelivery, InitiationDidcommHttpService},
     transport::TransportPolicy,
@@ -20,6 +21,23 @@ use tower::ServiceExt;
 struct ContractDelivery {
     calls: Arc<Mutex<Vec<Value>>>,
     receipt: NativeInitiationDidcommDeliveryReceipt,
+}
+
+#[derive(Clone, Copy)]
+struct ErrorContractDelivery {
+    error: NativeInitiationDidcommDeliveryError,
+}
+
+#[async_trait]
+impl DirectDidcommDelivery for ErrorContractDelivery {
+    async fn deliver_for_organization(
+        &self,
+        _organization_id: &str,
+        _transaction_id: &str,
+        _holder_did: &str,
+    ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
+        Err(self.error)
+    }
 }
 
 #[async_trait]
@@ -55,6 +73,21 @@ fn app(delivery: ContractDelivery) -> axum::Router {
         StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
         TransportPolicy::new([]),
         InitiationDidcommHttpService::new(Arc::new(delivery), Some("test-api-key")),
+    )
+}
+
+fn error_app(error: NativeInitiationDidcommDeliveryError) -> axum::Router {
+    let config =
+        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+    let runtime = IssuanceRuntime::new(&config).unwrap();
+    router_with_didcomm_delivery(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
+        TransportPolicy::new([]),
+        InitiationDidcommHttpService::new(
+            Arc::new(ErrorContractDelivery { error }),
+            Some("test-api-key"),
+        ),
     )
 }
 
@@ -137,4 +170,64 @@ async fn direct_didcomm_route_rejects_private_selectors_and_missing_authenticati
         .unwrap();
     assert_eq!(invalid.status(), 422);
     assert!(delivery.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn direct_didcomm_route_replays_the_frozen_transport_claim_failures() {
+    let contract = contract();
+    assert_eq!(
+        contract["transport_claim"]["lease_seconds"].as_i64(),
+        Some(i64::from(DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS))
+    );
+    assert_eq!(
+        contract["transport_claim"]["claim_aware_statuses"]["ready"],
+        DIDCOMM_TRANSPORT_READY_STATUS
+    );
+    assert_eq!(
+        contract["transport_claim"]["claim_aware_statuses"]["definitely_unattempted"],
+        DIDCOMM_TRANSPORT_RETRYABLE_STATUS
+    );
+    assert_eq!(
+        contract["transport_claim"]["legacy_unmarked_statuses"],
+        json!(["pending", "failed"])
+    );
+    assert_eq!(
+        contract["transport_claim"]["legacy_unmarked_transition"],
+        "delivery_unknown"
+    );
+    assert_eq!(
+        contract["transport_claim"]["post_attempt_completion_failure"],
+        json!({
+            "response": "delivery_outcome_unknown",
+            "reconciliation": "attempt_delivery_unknown_transition",
+            "automatic_resend": false,
+        })
+    );
+    for failure in contract["transport_claim"]["http_failures"]
+        .as_array()
+        .unwrap()
+    {
+        let error = match failure["error"].as_str().unwrap() {
+            "concurrent_delivery" => NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
+            "delivery_outcome_unknown" => {
+                NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown
+            }
+            name => panic!("unsupported frozen DIDComm transport-claim failure: {name}"),
+        };
+        let response = error_app(error)
+            .oneshot(request(
+                contract["valid_request"].clone(),
+                Some("test-api-key"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            failure["status"].as_u64().unwrap() as u16
+        );
+        assert_eq!(
+            body(response).await,
+            json!({"detail": failure["detail"].as_str().unwrap()})
+        );
+    }
 }
