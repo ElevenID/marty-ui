@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
-import { Box, Button, Alert, Typography, useTheme, useMediaQuery } from '@mui/material';
+import { Alert, AlertTitle, Box, Button, Typography, useTheme, useMediaQuery } from '@mui/material';
 import { SidebarNavigation } from '../navigation/index.js';
 import { ConsoleHeaderBar } from '../navigation/ConsoleHeaderBar';
 import { useAuth } from '../../hooks/useAuth';
@@ -50,8 +50,11 @@ function ConsoleContentFallback({ error, onRetry }) {
 function AuthenticatedLayout({ children }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { isAdministrator, isVendor, isApplicant } = useAuth();
+  const { isAdministrator, isVendor, isApplicant, user } = useAuth();
   const location = useLocation();
+  const credentialLoginSucceeded = Boolean(user)
+    && new URLSearchParams(location.search).get('auth_method') === 'credential';
+  const authenticatedIdentity = user?.email || user?.username || null;
 
   // Mobile drawer state
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -97,6 +100,18 @@ function AuthenticatedLayout({ children }) {
             bgcolor: 'background.default',
           }}
         >
+          {credentialLoginSucceeded && (
+            <Alert
+              severity="success"
+              variant="filled"
+              data-testid="credential-login-success"
+              sx={{ mb: 3 }}
+            >
+              <AlertTitle sx={{ fontWeight: 700 }}>Signed in with Membership Badge</AlertTitle>
+              Credential presentation verified. You are signed in without entering another password.
+              {authenticatedIdentity && ` Signed in as ${authenticatedIdentity}.`}
+            </Alert>
+          )}
           <ErrorBoundary key={location.pathname} FallbackComponent={ConsoleContentFallback}>
             {children || <Outlet />}
           </ErrorBoundary>

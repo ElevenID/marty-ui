@@ -356,7 +356,7 @@ async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior()
     assert_eq!(finalized.status(), StatusCode::FOUND);
     assert_eq!(
         finalized.headers()[header::LOCATION],
-        "https://elevenidllc.com/console"
+        "https://elevenidllc.com/console/applicant/catalog?auth_method=credential"
     );
     assert!(finalized.headers()[header::SET_COOKIE]
         .to_str()
