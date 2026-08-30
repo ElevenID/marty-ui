@@ -1,12 +1,15 @@
 use std::{
     collections::{BTreeSet, HashMap},
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
+    task::{Context, Poll},
 };
 
 use async_trait::async_trait;
+use futures_core::Stream;
 use tokio::sync::mpsc;
 
 use crate::credential_management::{CredentialLifecycleEvent, CredentialLifecycleEventSink};
@@ -156,12 +159,24 @@ impl std::fmt::Debug for CredentialLifecycleEventSubscription {
 
 impl CredentialLifecycleEventSubscription {
     pub async fn recv(&mut self) -> Option<CredentialLifecycleEvent> {
-        while let Some(event) = self.receiver.recv().await {
-            if self.filter.matches(&event) {
-                return Some(event);
+        std::future::poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
+    }
+}
+
+impl futures_core::Stream for CredentialLifecycleEventSubscription {
+    type Item = CredentialLifecycleEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            match self.receiver.poll_recv(context) {
+                Poll::Ready(Some(event)) if self.filter.matches(&event) => {
+                    return Poll::Ready(Some(event));
+                }
+                Poll::Ready(Some(_)) => {}
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
             }
         }
-        None
     }
 }
 
