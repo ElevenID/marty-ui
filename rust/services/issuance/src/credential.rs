@@ -628,81 +628,23 @@ impl CredentialIssuanceService {
         issuer: IssuerContext,
         proof: VerifiedCredentialProof,
     ) -> Result<CredentialResponse, CredentialIssuanceError> {
-        let status = self
-            .ports
-            .lifecycle
-            .allocate_status(transaction, credential_id, &policy.remote_format)
-            .await?;
-        let clean_claims = clean_claims(&transaction.claims);
-        let disclosures = if policy.kind == CredentialBuilderKind::SdJwt
-            && transaction.selective_disclosure_claims.is_empty()
-        {
-            clean_claims
-                .keys()
-                .filter(|name| !name.starts_with('_'))
-                .cloned()
-                .collect()
-        } else {
-            transaction.selective_disclosure_claims.clone()
-        };
-        let build_request = CredentialBuildRequest {
-            organization_id: transaction.organization_id.clone(),
-            kind: policy.kind,
-            response_format: policy.response_format.clone(),
-            remote_credential_format: policy.remote_format,
-            credential_id: credential_id.to_owned(),
-            credential_type: signing_credential_type(
-                transaction,
-                policy.kind,
-                &self.issuer_base_url,
-            ),
-            achievement_id: is_open_badge_type(transaction.credential_type.as_deref())
-                .then(|| signing_vct(transaction, &self.issuer_base_url)),
-            subject_did: if policy.kind == CredentialBuilderKind::Mdoc {
-                None
-            } else {
-                (!proof.holder_did.is_empty())
-                    .then_some(proof.holder_did.clone())
-                    .or_else(|| transaction.subject_did.clone())
-            },
-            holder_jwk: proof.holder_jwk,
-            claims: clean_claims,
-            credential_subject: transaction.claims.get("_credential_subject").cloned(),
-            credential_document: transaction.claims.get("_credential_document").cloned(),
-            selective_disclosure_claims: disclosures,
-            validity_seconds: transaction.validity_days.saturating_mul(86_400),
-            issuer: issuer.clone(),
-            status_list_entries: status.entries.clone(),
-        };
-        let built = self.ports.builder.build(&build_request).await?;
-        if built.credential_id != credential_id {
-            return Err(CredentialIssuanceError::BuilderChangedCredentialId);
-        }
-        let issued_at = Utc::now();
-        let expires_at = issued_at + Duration::days(transaction.validity_days);
-        let issued = IssuedCredential {
-            id: credential_id.to_owned(),
-            transaction_id: transaction.id.clone(),
-            organization_id: transaction.organization_id.clone(),
-            credential_template_id: transaction.credential_template_id.clone(),
-            applicant_id: transaction.applicant_id.clone(),
-            subject_did: build_request.subject_did.clone(),
-            issuer_did: issuer.issuer_did,
-            revocation_profile_id: status.revocation_profile_id,
-            renewed_from_credential_id: transaction.renewal_of_credential_id.clone(),
-            status_list_entries: status.entries,
-            credential_hash: format!("{:x}", Sha256::digest(built.credential.as_bytes())),
-            credential: built.credential.clone(),
-            issued_at,
-            expires_at,
-        };
+        let issued = materialize_credential(
+            &self.ports,
+            &self.issuer_base_url,
+            transaction,
+            credential_id,
+            &policy,
+            issuer,
+            proof,
+        )
+        .await?;
         self.ports.repository.finalize(transaction, &issued).await?;
         self.ports
             .lifecycle
             .after_issued(transaction, &issued, &policy.response_format)
             .await?;
         response(
-            &built.credential,
+            &issued.credential,
             policy.kind,
             &policy.response_format,
             self.ports.notification_ids.generate(),
@@ -710,11 +652,85 @@ impl CredentialIssuanceService {
     }
 }
 
+pub(crate) async fn materialize_credential(
+    ports: &CredentialPorts,
+    issuer_base_url: &str,
+    transaction: &CredentialTransaction,
+    credential_id: &str,
+    policy: &FormatPolicy,
+    issuer: IssuerContext,
+    proof: VerifiedCredentialProof,
+) -> Result<IssuedCredential, CredentialIssuanceError> {
+    let status = ports
+        .lifecycle
+        .allocate_status(transaction, credential_id, &policy.remote_format)
+        .await?;
+    let clean_claims = clean_claims(&transaction.claims);
+    let disclosures = if policy.kind == CredentialBuilderKind::SdJwt
+        && transaction.selective_disclosure_claims.is_empty()
+    {
+        clean_claims
+            .keys()
+            .filter(|name| !name.starts_with('_'))
+            .cloned()
+            .collect()
+    } else {
+        transaction.selective_disclosure_claims.clone()
+    };
+    let build_request = CredentialBuildRequest {
+        organization_id: transaction.organization_id.clone(),
+        kind: policy.kind,
+        response_format: policy.response_format.clone(),
+        remote_credential_format: policy.remote_format.clone(),
+        credential_id: credential_id.to_owned(),
+        credential_type: signing_credential_type(transaction, policy.kind, issuer_base_url),
+        achievement_id: is_open_badge_type(transaction.credential_type.as_deref())
+            .then(|| signing_vct(transaction, issuer_base_url)),
+        subject_did: if policy.kind == CredentialBuilderKind::Mdoc {
+            None
+        } else {
+            (!proof.holder_did.is_empty())
+                .then_some(proof.holder_did.clone())
+                .or_else(|| transaction.subject_did.clone())
+        },
+        holder_jwk: proof.holder_jwk,
+        claims: clean_claims,
+        credential_subject: transaction.claims.get("_credential_subject").cloned(),
+        credential_document: transaction.claims.get("_credential_document").cloned(),
+        selective_disclosure_claims: disclosures,
+        validity_seconds: transaction.validity_days.saturating_mul(86_400),
+        issuer: issuer.clone(),
+        status_list_entries: status.entries.clone(),
+    };
+    let built = ports.builder.build(&build_request).await?;
+    if built.credential_id != credential_id {
+        return Err(CredentialIssuanceError::BuilderChangedCredentialId);
+    }
+    let issued_at = Utc::now();
+    let expires_at = issued_at + Duration::days(transaction.validity_days);
+    Ok(IssuedCredential {
+        id: credential_id.to_owned(),
+        transaction_id: transaction.id.clone(),
+        organization_id: transaction.organization_id.clone(),
+        credential_template_id: transaction.credential_template_id.clone(),
+        applicant_id: transaction.applicant_id.clone(),
+        subject_did: build_request.subject_did,
+        issuer_did: issuer.issuer_did,
+        revocation_profile_id: status.revocation_profile_id,
+        renewed_from_credential_id: transaction.renewal_of_credential_id.clone(),
+        status_list_entries: status.entries,
+        credential_hash: format!("{:x}", Sha256::digest(built.credential.as_bytes())),
+        credential: built.credential,
+        issued_at,
+        expires_at,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct FormatPolicy {
-    kind: CredentialBuilderKind,
-    response_format: String,
-    remote_format: String,
+pub(crate) struct FormatPolicy {
+    pub(crate) kind: CredentialBuilderKind,
+    pub(crate) response_format: String,
+    pub(crate) remote_format: String,
 }
 
 fn bearer_token(authorization: Option<&str>) -> Result<&str, CredentialIssuanceError> {
