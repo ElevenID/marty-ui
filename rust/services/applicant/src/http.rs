@@ -156,7 +156,8 @@ impl From<ServiceError> for ApiError {
             | ServiceError::ConcurrentModification
             | ServiceError::InvalidApplicationState(_)
             | ServiceError::InactiveEvidence
-            | ServiceError::NoActiveFlow => StatusCode::CONFLICT,
+            | ServiceError::NoActiveFlow
+            | ServiceError::Domain(ApplicantError::Locked(_)) => StatusCode::CONFLICT,
             ServiceError::Provider(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServiceError::Domain(ApplicantError::EvidenceSize { .. }) => {
                 StatusCode::PAYLOAD_TOO_LARGE
@@ -957,20 +958,17 @@ async fn approve(
         .organization_application(&organization_id, &application_id)
         .await?;
     Ok(Json(application_json(
-        &state
-            .service
-            .review(
-                &application_id,
-                ReviewRequestContext {
-                    reviewer_id: &reviewer,
-                    correlation_id: &request_id,
-                },
-                true,
-                body.notes,
-                None,
-                Utc::now(),
-            )
-            .await?,
+        &review_with_transient_lock(
+            &state,
+            &headers,
+            &application_id,
+            &reviewer,
+            &request_id,
+            true,
+            body.notes,
+            None,
+        )
+        .await?,
     )))
 }
 
@@ -987,21 +985,72 @@ async fn reject(
         .organization_application(&organization_id, &application_id)
         .await?;
     Ok(Json(application_json(
-        &state
-            .service
-            .review(
-                &application_id,
-                ReviewRequestContext {
-                    reviewer_id: &reviewer,
-                    correlation_id: &request_id,
-                },
-                false,
-                body.notes,
-                Some(body.reason),
-                Utc::now(),
-            )
-            .await?,
+        &review_with_transient_lock(
+            &state,
+            &headers,
+            &application_id,
+            &reviewer,
+            &request_id,
+            false,
+            body.notes,
+            Some(body.reason),
+        )
+        .await?,
     )))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn review_with_transient_lock(
+    state: &HttpState,
+    headers: &HeaderMap,
+    application_id: &str,
+    reviewer: &str,
+    request_id: &str,
+    approve: bool,
+    notes: Option<String>,
+    rejection_reason: Option<String>,
+) -> Result<Application, ApiError> {
+    let now = Utc::now();
+    let already_held = state
+        .service
+        .lock_status(application_id, now)
+        .await
+        .is_some_and(|lock| lock.reviewer_id == reviewer);
+    if !already_held {
+        let reviewer_name = {
+            let email = header(headers, "x-user-email");
+            if email.is_empty() {
+                reviewer.to_owned()
+            } else {
+                email
+            }
+        };
+        state
+            .service
+            .acquire_lock(application_id, reviewer, &reviewer_name, now)
+            .await?;
+    }
+    let result = state
+        .service
+        .review(
+            application_id,
+            ReviewRequestContext {
+                reviewer_id: reviewer,
+                correlation_id: request_id,
+            },
+            approve,
+            notes,
+            rejection_reason,
+            now,
+        )
+        .await;
+    if !already_held {
+        state
+            .service
+            .release_lock(application_id, reviewer, now)
+            .await;
+    }
+    result.map_err(Into::into)
 }
 
 async fn request_information(

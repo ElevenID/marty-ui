@@ -1,11 +1,16 @@
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import {
   createGatewayClient,
   normalizeGatewayOrigin,
   normalizeNorthstarCallbackUrl,
 } from '../src/gateway.mjs';
+import {
+  normalizeApplicationFixture,
+  prepareApplicationContext,
+} from '../src/preparation.mjs';
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -24,10 +29,24 @@ const organizationId = required('NORTHSTAR_ORGANIZATION_ID');
 const adminCookie = required('NORTHSTAR_ADMIN_SESSION_COOKIE');
 const applicantCookie = required('NORTHSTAR_APPLICANT_SESSION_COOKIE');
 const callbackUrl = normalizeNorthstarCallbackUrl(required('NORTHSTAR_CALLBACK_URL'));
-const applicationInput = JSON.parse(await readFile(resolve(required('NORTHSTAR_APPLICATION_REQUEST_FILE')), 'utf8'));
+const applicationFixture = normalizeApplicationFixture(
+  JSON.parse(await readFile(resolve(required('NORTHSTAR_APPLICATION_REQUEST_FILE')), 'utf8')),
+);
 const outputPath = resolve(required('NORTHSTAR_SECRET_OUTPUT_FILE'));
 const origins = [];
 const gateway = createGatewayClient({ origin: gatewayOrigin, observe: (entry) => origins.push(entry) });
+
+const {
+  applicationInput,
+  applicationTemplate,
+  credentialTemplate,
+} = await prepareApplicationContext({
+  gateway,
+  organizationId,
+  adminCookie,
+  fixture: applicationFixture,
+  runId: randomUUID().slice(0, 8),
+});
 
 const bootstrap = await expectOk('bootstrap API key creation', gateway(
   `/v1/api-keys?organization_id=${encodeURIComponent(organizationId)}`,
@@ -95,6 +114,8 @@ try {
     gateway_origin: gatewayOrigin,
     organization_id: organizationId,
     application_id: submitted.id || application.id,
+    application_template_id: applicationTemplate.id,
+    credential_template_id: credentialTemplate.id,
     webhook_id: webhook.id,
     subscription_id: subscription.id,
     runtime_api_key: runtime.key,

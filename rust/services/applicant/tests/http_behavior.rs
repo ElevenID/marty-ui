@@ -153,6 +153,7 @@ async fn profile_and_application_workflow_preserves_released_http_shapes() {
     assert_eq!(body["status"], "DRAFT");
 
     let created = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
@@ -179,6 +180,124 @@ async fn profile_and_application_workflow_preserves_released_http_shapes() {
     assert_eq!(body["organization_id"], "issuer-org");
     assert_eq!(body["claim_state"], "NOT_READY");
     assert_eq!(body["credential_offer_uris"], json!({}));
+
+    let application_id = body["id"].as_str().unwrap();
+    let submitted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/v1/me/applications/{application_id}/submit"))
+                .header("content-type", "application/json")
+                .header("x-user-id", "user-1")
+                .header("x-organization-id", "home-org")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submitted.status(), StatusCode::OK);
+
+    let competing_lock = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/organizations/issuer-org/applicants/{application_id}/lock"
+                ))
+                .header("x-user-id", "reviewer-2")
+                .header("x-user-email", "reviewer-2@example.com")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(competing_lock.status(), StatusCode::OK);
+
+    let contested_approval = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/organizations/issuer-org/applicants/{application_id}/approve"
+                ))
+                .header("content-type", "application/json")
+                .header("x-user-id", "partner-api-key-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:approve")
+                .header("x-request-id", "22222222-2222-4222-8222-222222222222")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(contested_approval.status(), StatusCode::CONFLICT);
+
+    let released = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!(
+                    "/v1/organizations/issuer-org/applicants/{application_id}/lock"
+                ))
+                .header("x-user-id", "reviewer-2")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(released.status(), StatusCode::OK);
+
+    let approved = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/v1/organizations/issuer-org/applicants/{application_id}/approve"
+                ))
+                .header("content-type", "application/json")
+                .header("x-user-id", "partner-api-key-1")
+                .header("x-user-email", "northstar@partner.example")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:approve")
+                .header("x-request-id", "11111111-1111-4111-8111-111111111111")
+                .body(Body::from(
+                    json!({"notes":"Approved by Northstar"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(approved.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["status"], "APPROVED");
+
+    let lock = app
+        .oneshot(
+            Request::get(format!(
+                "/v1/organizations/issuer-org/applicants/{application_id}/lock"
+            ))
+            .header("x-user-id", "partner-api-key-1")
+            .header("x-organization-id", "issuer-org")
+            .header("x-org-permissions", "application:review")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lock.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(lock.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["status"], "AVAILABLE");
 }
 
 #[tokio::test]
