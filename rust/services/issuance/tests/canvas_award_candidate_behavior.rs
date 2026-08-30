@@ -1,15 +1,27 @@
-use std::time::Duration;
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
+use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_award_candidate::{
         canvas_auto_approval_ready, plan_canvas_award_candidate_materialization,
-        CanvasAwardCandidate, CanvasAwardCandidateMaterializationPlan, CanvasCandidateObservation,
-        CanvasIdentityJoin, CanvasLinkedIdentity,
+        CanvasAwardCandidate, CanvasAwardCandidateMaterializationPlan,
+        CanvasAwardCandidateSelection, CanvasCandidateObservation, CanvasIdentityJoin,
+        CanvasLinkedIdentity,
+    },
+    canvas_award_candidate_service::{
+        CanvasAwardCandidateApprovalError, CanvasAwardCandidateApprover,
+        CanvasAwardCandidateMaterializerConfig, CanvasAwardCandidateMaterializerService,
+        CanvasAwardCandidateRepository, CanvasAwardCandidateRepositoryError,
+        CanvasAwardCandidateSnapshot, CanvasEvidenceFactIdGenerator,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::canvas_lti_experience_session_context,
-    canvas_lti_launch::CanvasLtiStoredLaunchState,
+    canvas_lti_launch::{CanvasLtiClock, CanvasLtiStoredLaunchState},
 };
 use serde_json::{json, Map, Value};
 
@@ -148,6 +160,19 @@ fn candidate_debug_output_redacts_identity_evidence_and_materialization_data() {
     assert!(candidate_debug.contains("[REDACTED]"));
     for secret in [identity_secret, canvas_user_secret, subject_secret] {
         assert!(!candidate_debug.contains(secret));
+    }
+
+    let selection = CanvasAwardCandidateSelection {
+        candidate: private_candidate,
+        lti_subject: Some(subject_secret.to_owned()),
+        canvas_user_id: Some(canvas_user_secret.to_owned()),
+        learner_identity_id: Some(identity_secret.to_owned()),
+    };
+    let selection_debug = format!("{selection:?}");
+    assert!(selection_debug.contains("candidate-safe-id"));
+    assert!(selection_debug.contains("[REDACTED]"));
+    for secret in [identity_secret, canvas_user_secret, subject_secret] {
+        assert!(!selection_debug.contains(secret));
     }
 
     let mut private_observation = observation(now());
@@ -424,4 +449,211 @@ fn auto_approval_rechecks_feature_and_current_readiness() {
         now(),
         Duration::from_secs(900)
     ));
+}
+
+struct MaterializationRepository {
+    events: Arc<Mutex<Vec<String>>>,
+    snapshot: Mutex<Option<CanvasAwardCandidateSnapshot>>,
+    observations: Vec<CanvasCandidateObservation>,
+    policy_allowed: bool,
+}
+
+#[async_trait]
+impl CanvasAwardCandidateRepository for MaterializationRepository {
+    async fn load_snapshot(
+        &self,
+        _context: &marty_issuance_service::canvas_lti_experience::CanvasLtiExperienceSessionContext,
+        _application: &CanvasLtiBootstrapApplication,
+    ) -> Result<Option<CanvasAwardCandidateSnapshot>, CanvasAwardCandidateRepositoryError> {
+        self.events.lock().unwrap().push("load".to_owned());
+        Ok(self.snapshot.lock().unwrap().clone())
+    }
+
+    async fn current_observations(
+        &self,
+        _organization_id: &str,
+        candidate_id: &str,
+    ) -> Result<Vec<CanvasCandidateObservation>, CanvasAwardCandidateRepositoryError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("observations:{candidate_id}"));
+        Ok(self.observations.clone())
+    }
+
+    async fn record_fact_and_evaluate_policy(
+        &self,
+        _application: &CanvasLtiBootstrapApplication,
+        _binding: &Map<String, Value>,
+        _application_template: &Map<String, Value>,
+        fact: &Value,
+    ) -> Result<bool, CanvasAwardCandidateRepositoryError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("fact:{}", fact["id"].as_str().unwrap()));
+        Ok(self.policy_allowed)
+    }
+
+    async fn link_candidate(
+        &self,
+        _application: &CanvasLtiBootstrapApplication,
+        plan: &marty_issuance_service::canvas_award_candidate::CanvasAwardCandidateMaterializationPlan,
+    ) -> Result<(), CanvasAwardCandidateRepositoryError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("link:{}", plan.candidate_id));
+        Ok(())
+    }
+}
+
+struct MaterializationApprover {
+    events: Arc<Mutex<Vec<String>>>,
+    result: CanvasAwardCandidateApprovalError,
+    succeeds: bool,
+}
+
+#[async_trait]
+impl CanvasAwardCandidateApprover for MaterializationApprover {
+    async fn approve_if_ready(
+        &self,
+        _context: &marty_issuance_service::canvas_lti_experience::CanvasLtiExperienceSessionContext,
+        _application: &CanvasLtiBootstrapApplication,
+        plan: &marty_issuance_service::canvas_award_candidate::CanvasAwardCandidateMaterializationPlan,
+        policy_allowed: bool,
+    ) -> Result<(), CanvasAwardCandidateApprovalError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("approve:{}:{policy_allowed}", plan.candidate_id));
+        if self.succeeds {
+            Ok(())
+        } else {
+            Err(self.result.clone())
+        }
+    }
+}
+
+struct FixedFactIds;
+
+impl CanvasEvidenceFactIdGenerator for FixedFactIds {
+    fn generate(&self) -> String {
+        "fact-service-1".to_owned()
+    }
+}
+
+struct FixedClock;
+
+impl CanvasLtiClock for FixedClock {
+    fn now(&self) -> DateTime<Utc> {
+        now()
+    }
+}
+
+fn service_config(enabled: bool, pilot: bool) -> CanvasAwardCandidateMaterializerConfig {
+    CanvasAwardCandidateMaterializerConfig {
+        enabled,
+        pilot_organizations: if pilot {
+            BTreeSet::from(["org-1".to_owned()])
+        } else {
+            BTreeSet::new()
+        },
+        evidence_max_age: Duration::from_secs(900),
+    }
+}
+
+fn service_repository(events: Arc<Mutex<Vec<String>>>) -> Arc<MaterializationRepository> {
+    Arc::new(MaterializationRepository {
+        events,
+        snapshot: Mutex::new(Some(CanvasAwardCandidateSnapshot {
+            binding: binding(),
+            application_template: json!({
+                "id": "application-template-1",
+                "organization_id": "org-1",
+                "approval_policy_set_id": null,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            candidates: vec![candidate("candidate-service", now())],
+            identity_by_subject: None,
+            identity_by_canvas_user: None,
+        })),
+        observations: vec![observation(now())],
+        policy_allowed: true,
+    })
+}
+
+#[tokio::test]
+async fn materializer_service_preserves_order_and_ignores_only_readiness_drift() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let repository = service_repository(events.clone());
+    let approver = Arc::new(MaterializationApprover {
+        events: events.clone(),
+        result: CanvasAwardCandidateApprovalError::ReadinessDrift,
+        succeeds: false,
+    });
+    let service = CanvasAwardCandidateMaterializerService::new(
+        repository,
+        approver,
+        Arc::new(FixedFactIds),
+        Arc::new(FixedClock),
+        service_config(true, true),
+    );
+    service
+        .materialize_candidate(&context(), &application())
+        .await
+        .unwrap();
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            "load",
+            "observations:candidate-service",
+            "fact:fact-service-1",
+            "link:candidate-service",
+            "approve:candidate-service:true",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn materializer_service_pilot_noops_and_dependency_failures_propagate() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let repository = service_repository(events.clone());
+    let service = CanvasAwardCandidateMaterializerService::new(
+        repository,
+        Arc::new(MaterializationApprover {
+            events: events.clone(),
+            result: CanvasAwardCandidateApprovalError::Unavailable,
+            succeeds: true,
+        }),
+        Arc::new(FixedFactIds),
+        Arc::new(FixedClock),
+        service_config(true, false),
+    );
+    service
+        .materialize_candidate(&context(), &application())
+        .await
+        .unwrap();
+    assert!(events.lock().unwrap().is_empty());
+
+    let repository = service_repository(events.clone());
+    let service = CanvasAwardCandidateMaterializerService::new(
+        repository,
+        Arc::new(MaterializationApprover {
+            events,
+            result: CanvasAwardCandidateApprovalError::Unavailable,
+            succeeds: false,
+        }),
+        Arc::new(FixedFactIds),
+        Arc::new(FixedClock),
+        service_config(true, true),
+    );
+    assert_eq!(
+        service
+            .materialize_candidate(&context(), &application())
+            .await,
+        Err(CanvasAwardCandidateRepositoryError::Unavailable)
+    );
 }
