@@ -214,22 +214,6 @@ impl InitiationDidcommRepository for FailingOnceRepository {
     ) -> Result<(), CredentialIssuanceError> {
         self.finalize_delivered(transaction, credential).await
     }
-
-    async fn mark_transport_delivered(
-        &self,
-        _transaction_id: &str,
-        _message_id: &str,
-    ) -> Result<(), CredentialIssuanceError> {
-        Ok(())
-    }
-
-    async fn mark_transport_failed(
-        &self,
-        _transaction_id: &str,
-        _message_id: &str,
-    ) -> Result<(), CredentialIssuanceError> {
-        Ok(())
-    }
 }
 
 struct FixedIssuerResolver;
@@ -419,7 +403,7 @@ async fn legacy_repository_without_transport_claims_fails_closed_before_post() {
         .await;
     assert_eq!(
         second,
-        Err(NativeInitiationDidcommDeliveryError::RetryStateUnavailable)
+        Err(NativeInitiationDidcommDeliveryError::CredentialUnavailable)
     );
     let calls_after_retry = transport_calls.load(Ordering::SeqCst);
 

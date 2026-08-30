@@ -16,6 +16,18 @@
     "expired_or_malformed_lease": "delivery_unknown",
     "automatic_resend_from_delivery_unknown": false,
     "completion_fenced_by_attempt_id": true,
+    "claim_aware_statuses": {
+      "ready": "transport_ready",
+      "definitely_unattempted": "transport_retryable"
+    },
+    "legacy_unmarked_statuses": ["pending", "failed"],
+    "legacy_unmarked_transition": "delivery_unknown",
+    "post_attempt_completion_failure": {
+      "response": "delivery_outcome_unknown",
+      "reconciliation": "attempt_delivery_unknown_transition",
+      "automatic_resend": false
+    },
+    "old_reader_visible_statuses": ["pending", "failed", "transported"],
     "http_failures": [
       {"error":"concurrent_delivery","status":409,"detail":"Issuance transaction is not available for DIDComm delivery"},
       {"error":"delivery_outcome_unknown","status":409,"detail":"DIDComm delivery outcome requires reconciliation"}

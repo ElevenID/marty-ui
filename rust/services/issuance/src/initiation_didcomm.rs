@@ -42,6 +42,10 @@ const MAX_POLICY_ISSUERS: usize = 1_000;
 const DEFAULT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const DIDCOMM_CONTENT_TYPE: &str = "application/didcomm-encrypted+json";
 pub const DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS: i32 = 60;
+/// A delivery staged by a claim-aware writer and safe for a first transport attempt.
+pub const DIDCOMM_TRANSPORT_READY_STATUS: &str = "transport_ready";
+/// A claim-aware transport failure proven to have occurred before any request was sent.
+pub const DIDCOMM_TRANSPORT_RETRYABLE_STATUS: &str = "transport_retryable";
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum NativeDidcommError {
@@ -280,18 +284,6 @@ pub trait InitiationDidcommRepository: Send + Sync {
         transaction: &CredentialTransaction,
         credential: &IssuedCredential,
         delivery: &StagedInitiationDidcommDelivery,
-    ) -> Result<(), CredentialIssuanceError>;
-
-    async fn mark_transport_delivered(
-        &self,
-        transaction_id: &str,
-        message_id: &str,
-    ) -> Result<(), CredentialIssuanceError>;
-
-    async fn mark_transport_failed(
-        &self,
-        transaction_id: &str,
-        message_id: &str,
     ) -> Result<(), CredentialIssuanceError>;
 
     async fn mark_transport_succeeded(
@@ -1180,11 +1172,20 @@ impl NativeInitiationDidcommDelivery {
             .await
         {
             DidcommTransportOutcome::Delivered => {
-                self.ports
+                if self
+                    .ports
                     .repository
                     .mark_transport_succeeded(&claim)
                     .await
-                    .map_err(|_| NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)?;
+                    .is_err()
+                {
+                    let _ = self
+                        .ports
+                        .repository
+                        .mark_transport_outcome_unknown(&claim)
+                        .await;
+                    return Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown);
+                }
                 self.project_transported(claim.into_pending()).await
             }
             DidcommTransportOutcome::Failed => {
@@ -1554,7 +1555,7 @@ fn preflight_plaintext(
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     };
 
@@ -1565,7 +1566,10 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use marty_didcomm::types::{Jwk, VerificationMethod};
     use serde_json::Map;
-    use tokio::sync::Notify;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        sync::Notify,
+    };
 
     fn recipient_document() -> DidDocument {
         let did = "did:example:holder";
@@ -1710,6 +1714,7 @@ mod tests {
         finalizations: AtomicUsize,
         delivery: Arc<Mutex<Option<InitiationDidcommDeliveryState>>>,
         transport_claim: Mutex<HarnessTransportClaimState>,
+        fail_transport_success_once: AtomicBool,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1719,6 +1724,7 @@ mod tests {
             delivery_id: String,
             attempt_id: String,
         },
+        Legacy(&'static str),
         OutcomeUnknown,
     }
 
@@ -1740,6 +1746,7 @@ mod tests {
                 finalizations: AtomicUsize::new(0),
                 delivery: Arc::new(Mutex::new(None)),
                 transport_claim: Mutex::new(HarnessTransportClaimState::Idle),
+                fail_transport_success_once: AtomicBool::new(false),
             }
         }
     }
@@ -1802,6 +1809,10 @@ mod tests {
                     Ok(InitiationDidcommTransportClaimOutcome::Busy)
                 }
                 HarnessTransportClaimState::OutcomeUnknown => {
+                    Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+                }
+                HarnessTransportClaimState::Legacy(_) => {
+                    *state = HarnessTransportClaimState::OutcomeUnknown;
                     Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
                 }
                 HarnessTransportClaimState::Idle => {
@@ -1903,26 +1914,17 @@ mod tests {
             Ok(())
         }
 
-        async fn mark_transport_delivered(
-            &self,
-            _transaction_id: &str,
-            _message_id: &str,
-        ) -> Result<(), CredentialIssuanceError> {
-            Err(CredentialIssuanceError::RepositoryUnavailable)
-        }
-
-        async fn mark_transport_failed(
-            &self,
-            _transaction_id: &str,
-            _message_id: &str,
-        ) -> Result<(), CredentialIssuanceError> {
-            Err(CredentialIssuanceError::RepositoryUnavailable)
-        }
-
         async fn mark_transport_succeeded(
             &self,
             claim: &InitiationDidcommTransportClaim,
         ) -> Result<(), CredentialIssuanceError> {
+            if self
+                .fail_transport_success_once
+                .swap(false, Ordering::SeqCst)
+            {
+                record(&self.order, "mark-transported-failed");
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             {
                 let mut state = self.transport_claim.lock().unwrap();
                 if *state != harness_claim_state(claim) {
@@ -2703,6 +2705,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unmarked_legacy_transport_states_fail_unknown_before_post() {
+        for legacy_status in ["pending", "failed"] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+                Box::new(staged_pending_delivery()),
+            ));
+            *repository.transport_claim.lock().unwrap() =
+                HarnessTransportClaimState::Legacy(legacy_status);
+
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown),
+                "an unmarked legacy {legacy_status} row must require reconciliation"
+            );
+            assert!(order.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn active_or_ambiguous_attempts_never_trigger_an_automatic_resend() {
         let (delivery, repository, order) = delivery_harness(HarnessOptions {
             endpoint_fail: false,
@@ -2749,6 +2777,47 @@ mod tests {
                 .await,
             Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery),
             "an abandoned active lease must block a second POST"
+        );
+        assert!(order.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn post_attempt_transition_failure_is_reconciled_unknown_without_resend() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+            Box::new(staged_pending_delivery()),
+        ));
+        repository
+            .fail_transport_success_once
+            .store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
+        );
+        assert_eq!(
+            *order.lock().unwrap(),
+            [
+                "validate-endpoint",
+                "transport",
+                "mark-transported-failed",
+                "mark-transport-unknown",
+            ]
+        );
+
+        order.lock().unwrap().clear();
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown)
         );
         assert!(order.lock().unwrap().is_empty());
     }
@@ -2952,5 +3021,37 @@ mod tests {
             DidcommTransport::new(Some("missing-didcomm-ca.pem")).err(),
             Some(NativeDidcommError::TlsUnavailable)
         );
+    }
+
+    #[tokio::test]
+    async fn concrete_transport_treats_non_success_response_as_outcome_unknown() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2_048];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let endpoint = ValidatedDidcommEndpoint {
+            original: format!("http://{address}/didcomm"),
+            url: Url::parse(&format!("http://{address}/didcomm")).unwrap(),
+            hostname: address.ip().to_string(),
+            addresses: vec![address],
+        };
+        let transport = DidcommTransport::with_timeout(None, Duration::from_secs(5)).unwrap();
+
+        assert_eq!(
+            transport
+                .deliver(&endpoint, "encrypted-message".to_owned())
+                .await,
+            DidcommTransportOutcome::OutcomeUnknown
+        );
+        server.await.unwrap();
     }
 }

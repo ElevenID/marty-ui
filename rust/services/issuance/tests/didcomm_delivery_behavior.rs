@@ -7,6 +7,7 @@ use marty_issuance_service::{
     initiation_didcomm::{
         NativeDidcommDeliveryStatus, NativeInitiationDidcommDeliveryError,
         NativeInitiationDidcommDeliveryReceipt, DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS,
+        DIDCOMM_TRANSPORT_READY_STATUS, DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
     },
     initiation_didcomm_http::{DirectDidcommDelivery, InitiationDidcommHttpService},
     transport::TransportPolicy,
@@ -177,6 +178,30 @@ async fn direct_didcomm_route_replays_the_frozen_transport_claim_failures() {
     assert_eq!(
         contract["transport_claim"]["lease_seconds"].as_i64(),
         Some(i64::from(DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS))
+    );
+    assert_eq!(
+        contract["transport_claim"]["claim_aware_statuses"]["ready"],
+        DIDCOMM_TRANSPORT_READY_STATUS
+    );
+    assert_eq!(
+        contract["transport_claim"]["claim_aware_statuses"]["definitely_unattempted"],
+        DIDCOMM_TRANSPORT_RETRYABLE_STATUS
+    );
+    assert_eq!(
+        contract["transport_claim"]["legacy_unmarked_statuses"],
+        json!(["pending", "failed"])
+    );
+    assert_eq!(
+        contract["transport_claim"]["legacy_unmarked_transition"],
+        "delivery_unknown"
+    );
+    assert_eq!(
+        contract["transport_claim"]["post_attempt_completion_failure"],
+        json!({
+            "response": "delivery_outcome_unknown",
+            "reconciliation": "attempt_delivery_unknown_transition",
+            "automatic_resend": false,
+        })
     );
     for failure in contract["transport_claim"]["http_failures"]
         .as_array()

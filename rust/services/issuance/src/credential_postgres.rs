@@ -25,6 +25,7 @@ use crate::{
         InitiationDidcommRepository, InitiationDidcommTransportClaim,
         InitiationDidcommTransportClaimOutcome, PendingInitiationDidcommDelivery,
         StagedInitiationDidcommDelivery, DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS,
+        DIDCOMM_TRANSPORT_READY_STATUS, DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
     },
     token_postgres::hash_access_token,
 };
@@ -370,11 +371,13 @@ impl PostgresCredentialRepository {
              WHERE credential.transaction_id = $1
                AND credential.organization_id = $2
                AND delivery.delivery_target = 'didcomm_v2'
-               AND (delivery.status IN ('pending', 'failed', 'transported')
-                    OR ($3 AND delivery.status = 'delivered'))",
+               AND (delivery.status IN ($3, $4, 'transported')
+                    OR ($5 AND delivery.status = 'delivered'))",
         )
         .bind(transaction_id)
         .bind(organization_id)
+        .bind(DIDCOMM_TRANSPORT_READY_STATUS)
+        .bind(DIDCOMM_TRANSPORT_RETRYABLE_STATUS)
         .bind(include_delivered)
         .fetch_optional(&self.pool)
         .await
@@ -575,6 +578,11 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             transported: delivery_status == "transported",
         };
         match delivery_status.as_str() {
+            "pending" | "failed" => {
+                mark_locked_didcomm_outcome_unknown(&mut database, &delivery_id).await?;
+                database.commit().await.map_err(repository_error)?;
+                Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
+            }
             "transported" => {
                 database.commit().await.map_err(repository_error)?;
                 Ok(InitiationDidcommTransportClaimOutcome::Transported(
@@ -604,7 +612,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
                 database.commit().await.map_err(repository_error)?;
                 Ok(InitiationDidcommTransportClaimOutcome::OutcomeUnknown)
             }
-            "pending" | "failed" => {
+            DIDCOMM_TRANSPORT_READY_STATUS | DIDCOMM_TRANSPORT_RETRYABLE_STATUS => {
                 let attempt_id = Uuid::new_v4().to_string();
                 let claimed = sqlx::query(
                     "UPDATE issuance_service.credential_delivery_records
@@ -747,7 +755,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
                  (id, credential_id, transaction_id, organization_id, delivery_target,
                   delivery_mode, status, canvas_account_id, last_error, metadata,
                   created_at, updated_at)
-             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, 'pending', NULL, NULL, $6,
+             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, $6, NULL, NULL, $7,
                      clock_timestamp(), clock_timestamp())",
         )
         .bind(delivery_record_id(&credential.id, "didcomm_v2", None))
@@ -755,6 +763,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         .bind(&transaction.id)
         .bind(&transaction.organization_id)
         .bind(&transaction.delivery_mode)
+        .bind(DIDCOMM_TRANSPORT_READY_STATUS)
         .bind(json!({
             "protocol": "didcomm_v2",
             "holder_did": delivery.holder_did,
@@ -775,28 +784,17 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         finish_didcomm_transport_claim(&self.pool, claim, "transported", None).await
     }
 
-    async fn mark_transport_delivered(
-        &self,
-        _transaction_id: &str,
-        _message_id: &str,
-    ) -> Result<(), CredentialIssuanceError> {
-        Err(CredentialIssuanceError::RepositoryUnavailable)
-    }
-
-    async fn mark_transport_failed(
-        &self,
-        _transaction_id: &str,
-        _message_id: &str,
-    ) -> Result<(), CredentialIssuanceError> {
-        Err(CredentialIssuanceError::RepositoryUnavailable)
-    }
-
     async fn mark_transport_unattempted(
         &self,
         claim: &InitiationDidcommTransportClaim,
     ) -> Result<(), CredentialIssuanceError> {
-        finish_didcomm_transport_claim(&self.pool, claim, "failed", Some("didcomm_delivery_failed"))
-            .await
+        finish_didcomm_transport_claim(
+            &self.pool,
+            claim,
+            DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
+            Some("didcomm_delivery_failed"),
+        )
+        .await
     }
 
     async fn mark_transport_outcome_unknown(
@@ -1193,7 +1191,7 @@ async fn mark_locked_didcomm_outcome_unknown(
              updated_at = clock_timestamp()
          WHERE id = $1
            AND delivery_target = 'didcomm_v2'
-           AND status = 'transporting'",
+           AND status IN ('transporting', 'pending', 'failed')",
     )
     .bind(delivery_id)
     .execute(&mut **database)
