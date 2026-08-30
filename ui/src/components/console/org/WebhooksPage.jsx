@@ -55,25 +55,16 @@ import {
   testWebhook,
   updateWebhook,
 } from '../../../services/webhooksApi';
+import { ASYNC_GATEWAY_EVENT_PRESET } from '../../../services/webhookEvents';
 
-const AUDIT_PRESET = [
-  'audit.access_logged',
-  'audit.configuration_changed',
-  'audit.credential_accessed',
-  'audit.export_performed',
-  'audit.security_event',
-  'audit.compliance_check',
-];
-
-const ASYNC_GATEWAY_PRESET = [
-  'application.submitted',
+const APPLICATION_PRESET = [
+  'application.received',
   'application.approved',
   'application.rejected',
-  'credential.issued',
-  'credential.revoked',
-  'verification.completed',
-  'verification.failed',
-  'verification.initiated',
+  'applicant.submitted',
+  'applicant.approved',
+  'applicant.rejected',
+  'applicant.status_changed',
 ];
 
 const getOrgTabs = (t) => [
@@ -92,7 +83,8 @@ const getBreadcrumbs = (t) => [
 function normalizeWebhook(webhook) {
   return {
     id: webhook?.id || '',
-    url: webhook?.url || '',
+    name: webhook?.name || '',
+    url: webhook?.url || webhook?.endpoint_url || '',
     description: webhook?.description || '',
     eventTypes: Array.isArray(webhook?.event_types)
       ? webhook.event_types
@@ -101,7 +93,7 @@ function normalizeWebhook(webhook) {
         : [],
     enabled: webhook?.enabled ?? webhook?.status === 'active',
     lastTriggeredAt: webhook?.last_triggered_at || webhook?.lastDelivery || webhook?.last_delivery_at || null,
-    secret: webhook?.secret || '',
+    secret: webhook?.signing_secret || webhook?.secret || '',
   };
 }
 
@@ -152,9 +144,10 @@ function WebhooksPage() {
   const [copiedMessage, setCopiedMessage] = useState('');
   const [createdSecret, setCreatedSecret] = useState('');
   const [formState, setFormState] = useState({
+    name: '',
     url: '',
     description: '',
-    eventTypes: [...ASYNC_GATEWAY_PRESET],
+    eventTypes: [...ASYNC_GATEWAY_EVENT_PRESET],
   });
 
   const { data, loading, error, reload } = useAsyncData(
@@ -181,9 +174,10 @@ function WebhooksPage() {
     setDialogError('');
     setCreatedSecret('');
     setFormState({
+      name: '',
       url: '',
       description: '',
-      eventTypes: [...ASYNC_GATEWAY_PRESET],
+      eventTypes: [...ASYNC_GATEWAY_EVENT_PRESET],
     });
   };
 
@@ -192,9 +186,10 @@ function WebhooksPage() {
     setCreatedSecret('');
     setDialogError('');
     setFormState({
+      name: '',
       url: '',
       description: '',
-      eventTypes: [...ASYNC_GATEWAY_PRESET],
+      eventTypes: [...ASYNC_GATEWAY_EVENT_PRESET],
     });
     setDialogOpen(true);
   };
@@ -204,6 +199,7 @@ function WebhooksPage() {
     setCreatedSecret('');
     setDialogError('');
     setFormState({
+      name: webhook.name,
       url: webhook.url,
       description: webhook.description,
       eventTypes: webhook.eventTypes,
@@ -238,6 +234,11 @@ function WebhooksPage() {
       return;
     }
 
+    if (!formState.name.trim()) {
+      setDialogError('Enter a webhook name.');
+      return;
+    }
+
     if (formState.eventTypes.length === 0) {
       setDialogError('Select at least one event type.');
       return;
@@ -249,6 +250,7 @@ function WebhooksPage() {
     try {
       if (editingWebhook) {
         await updateWebhook(organizationId, editingWebhook.id, {
+          name: formState.name.trim(),
           url: formState.url.trim(),
           description: formState.description.trim(),
           eventTypes: formState.eventTypes,
@@ -256,11 +258,12 @@ function WebhooksPage() {
         });
       } else {
         const created = await createWebhook(organizationId, {
+          name: formState.name.trim(),
           url: formState.url.trim(),
           description: formState.description.trim(),
           eventTypes: formState.eventTypes,
         });
-        setCreatedSecret(created?.secret || '');
+        setCreatedSecret(created?.signing_secret || created?.secret || '');
       }
 
       await reload();
@@ -295,8 +298,8 @@ function WebhooksPage() {
     setCopiedMessage(copied ? 'Webhook secret copied to clipboard.' : 'Unable to copy webhook secret.');
   };
 
-  const auditEnabledCount = webhooks.filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('audit.'))).length;
-  const asyncEnabledCount = webhooks.filter((webhook) => webhook.eventTypes.some((eventType) => ASYNC_GATEWAY_PRESET.includes(eventType))).length;
+  const applicationEnabledCount = webhooks.filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('application.') || eventType.startsWith('applicant.'))).length;
+  const asyncEnabledCount = webhooks.filter((webhook) => webhook.eventTypes.some((eventType) => ASYNC_GATEWAY_EVENT_PRESET.includes(eventType))).length;
 
   return (
     <>
@@ -343,11 +346,11 @@ function WebhooksPage() {
                 <CardContent>
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
                     <SecurityIcon color="primary" fontSize="small" />
-                    <Typography variant="subtitle2">Audit integrations</Typography>
+                    <Typography variant="subtitle2">Application integrations</Typography>
                   </Stack>
-                  <Typography variant="h4">{auditEnabledCount}</Typography>
+                  <Typography variant="h4">{applicationEnabledCount}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Endpoints forwarding audit and compliance activity to external systems.
+                    Endpoints receiving supported application and applicant lifecycle events.
                   </Typography>
                 </CardContent>
               </Card>
@@ -379,6 +382,7 @@ function WebhooksPage() {
               <Table>
                 <TableHead>
                   <TableRow>
+                    <TableCell>Name</TableCell>
                     <TableCell>URL</TableCell>
                     <TableCell>Description</TableCell>
                     <TableCell>Events</TableCell>
@@ -390,7 +394,7 @@ function WebhooksPage() {
                 <TableBody>
                   {webhooks.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
+                      <TableCell colSpan={7} align="center">
                         <Box sx={{ py: 5 }}>
                           <Typography variant="subtitle1" gutterBottom>
                             No webhooks configured
@@ -404,6 +408,7 @@ function WebhooksPage() {
                   ) : (
                     webhooks.map((webhook) => (
                       <TableRow key={webhook.id} hover>
+                        <TableCell>{webhook.name}</TableCell>
                         <TableCell>
                           <Typography variant="body2">{webhook.url}</Typography>
                         </TableCell>
@@ -458,6 +463,15 @@ function WebhooksPage() {
 
             <TextField
               autoFocus
+              label="Webhook name"
+              placeholder="Northstar admissions callback"
+              value={formState.name}
+              onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
+              fullWidth
+              helperText="A recognizable name for this external receiver."
+            />
+
+            <TextField
               label="Webhook URL"
               placeholder="https://partner.example.com/marty/events"
               value={formState.url}
@@ -479,11 +493,11 @@ function WebhooksPage() {
                 Quick presets
               </Typography>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                <Button variant="outlined" onClick={() => applyPreset(ASYNC_GATEWAY_PRESET)}>
+                <Button variant="outlined" onClick={() => applyPreset(ASYNC_GATEWAY_EVENT_PRESET)}>
                   Gateway async callbacks
                 </Button>
-                <Button variant="outlined" onClick={() => applyPreset(AUDIT_PRESET)}>
-                  External audit feed
+                <Button variant="outlined" onClick={() => applyPreset(APPLICATION_PRESET)}>
+                  Application lifecycle
                 </Button>
               </Stack>
             </Box>
@@ -493,7 +507,7 @@ function WebhooksPage() {
                 Event subscriptions
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                Select the events this receiver should process. Audit events are intended for SIEM, compliance, and external logging systems.
+                Select from the event types supported by the public webhook API.
               </Typography>
               <FormGroup>
                 {eventCatalog.map((category) => (

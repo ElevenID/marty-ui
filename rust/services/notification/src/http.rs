@@ -6,7 +6,7 @@ use crate::{
     service::{
         webhook_response, CreateSubscriptionRequest, CreateWebhookRequest, EventIngestRequest,
         NotificationResponse, NotificationService, ServiceError, SubscriptionResponse,
-        UpdateSubscriptionRequest, UpdateWebhookRequest,
+        UpdateSubscriptionRequest, UpdateWebhookRequest, STANDARD_EVENT_TYPES,
     },
 };
 use axum::{
@@ -165,9 +165,15 @@ pub fn router_with_service(service: NotificationService) -> Router {
                 .delete(delete_subscription),
         )
         .route("/v1/webhooks", post(create_webhook).get(list_webhooks))
+        .route("/v1/webhooks/event-types", get(webhook_event_types))
         .route(
             "/v1/webhooks/{webhook_id}/deliveries",
             get(list_webhook_deliveries),
+        )
+        .route("/v1/webhooks/{webhook_id}/test", post(test_webhook))
+        .route(
+            "/v1/webhooks/{webhook_id}/regenerate-secret",
+            post(regenerate_webhook_secret),
         )
         .route(
             "/v1/webhooks/{webhook_id}",
@@ -453,6 +459,10 @@ async fn list_webhooks(
     ))
 }
 
+async fn webhook_event_types() -> Json<Value> {
+    Json(json!({"event_types": STANDARD_EVENT_TYPES}))
+}
+
 async fn get_webhook(
     State(state): State<HttpState>,
     Path(id): Path<String>,
@@ -513,6 +523,31 @@ async fn list_webhook_deliveries(
             .service
             .repository()
             .list_webhook_deliveries(&id)
+            .await?,
+    ))
+}
+
+async fn test_webhook(
+    State(state): State<HttpState>,
+    Path(id): Path<String>,
+    Query(query): Query<OrganizationQuery>,
+) -> Result<(StatusCode, Json<crate::service::TestWebhookResponse>), ServiceError> {
+    let response = state
+        .service
+        .test_webhook(&id, &query.organization_id)
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn regenerate_webhook_secret(
+    State(state): State<HttpState>,
+    Path(id): Path<String>,
+    Query(query): Query<OrganizationQuery>,
+) -> Result<Json<crate::service::WebhookResponse>, ServiceError> {
+    Ok(Json(
+        state
+            .service
+            .rotate_webhook_secret(&id, &query.organization_id)
             .await?,
     ))
 }

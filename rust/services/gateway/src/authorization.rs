@@ -142,6 +142,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "webhook",
         ),
         rule(
+            r"^/v1/webhooks/[^/]+/regenerate-secret$",
+            &[("POST", "webhook:edit")],
+            "webhook",
+        ),
+        rule(
             r"^/v1/webhooks(?:/|$)",
             &[
                 ("GET", "webhook:view"),
@@ -157,15 +162,15 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
         rule(
             r"^/v1/subscriptions(?:/|$)",
             &[
-                ("GET", "notification:view"),
-                ("HEAD", "notification:view"),
-                ("OPTIONS", "notification:view"),
-                ("POST", "notification:send"),
-                ("PUT", "notification:send"),
-                ("PATCH", "notification:send"),
-                ("DELETE", "notification:send"),
+                ("GET", "webhook:view"),
+                ("HEAD", "webhook:view"),
+                ("OPTIONS", "webhook:view"),
+                ("POST", "webhook:create"),
+                ("PUT", "webhook:edit"),
+                ("PATCH", "webhook:edit"),
+                ("DELETE", "webhook:delete"),
             ],
-            "notification",
+            "webhook",
         ),
         rule(
             r"^/v1/notifications/send$",
@@ -862,6 +867,9 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     }
     if required_permission == "notification:send" {
         return scopes.contains("notifications:send");
+    }
+    if required_permission == "application:approve" {
+        return scopes.contains("applications:approve") || scopes.contains("applications:write");
     }
 
     let Some((resource, action)) = required_permission.split_once(':') else {

@@ -927,6 +927,46 @@ mod tests {
     }
 
     #[test]
+    fn d11_routes_resolve_only_through_the_public_gateway_contract() {
+        let proxy = GatewayContract::load()
+            .expect("gateway contract")
+            .proxy_route_table()
+            .expect("proxy routes");
+        for (method, path, service) in [
+            (HttpMethod::Post, "/v1/api-keys", "organizations"),
+            (HttpMethod::Delete, "/v1/api-keys/key-1", "organizations"),
+            (HttpMethod::Post, "/v1/me/applications", "applicant"),
+            (
+                HttpMethod::Post,
+                "/v1/me/applications/application-1/submit",
+                "applicant",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/organizations/org-1/applicants",
+                "applicant",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/organizations/org-1/applicants/application-1/approve",
+                "applicant",
+            ),
+            (HttpMethod::Post, "/v1/webhooks", "notifications"),
+            (HttpMethod::Post, "/v1/subscriptions", "notifications"),
+            (
+                HttpMethod::Get,
+                "/v1/webhooks/webhook-1/deliveries",
+                "notifications",
+            ),
+        ] {
+            let matched = route_for(&proxy, method, path)
+                .unwrap_or_else(|_| panic!("missing D-11 route {method:?} {path}"));
+            assert_eq!(matched.route.upstream_service, service, "{method:?} {path}");
+            assert!(!path.contains("/internal/"), "{path}");
+        }
+    }
+
+    #[test]
     fn public_and_management_boundaries_match_legacy_gateway() {
         for path in [
             "/health",

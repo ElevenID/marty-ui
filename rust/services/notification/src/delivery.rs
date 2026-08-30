@@ -1,6 +1,6 @@
 use crate::{
     domain::{ChannelType, DeliveryResult, Notification, WebhookDelivery},
-    outbox::{webhook_retry_delay, WebhookOutboxEvent},
+    outbox::{is_webhook_test_event, webhook_retry_delay, WebhookOutboxEvent},
     repository::NotificationRepository,
     service::match_event_patterns,
     webhook::{
@@ -300,6 +300,7 @@ pub async fn process_outbox_event(
         .await
         .ok()
         .flatten();
+    let test_delivery = is_webhook_test_event(&event);
     let mut webhook = repository
         .get_webhook(&event.webhook_id)
         .await
@@ -309,21 +310,24 @@ pub async fn process_outbox_event(
     let mut circuit_until = None;
     let outcome = if !valid_payload(&event) {
         WebhookAttempt::failed("WEBHOOK_PAYLOAD_INVALID", false)
-    } else if subscription.is_none() {
+    } else if !test_delivery && subscription.is_none() {
         WebhookAttempt::failed("WEBHOOK_SUBSCRIPTION_MISSING", false)
-    } else if subscription.as_ref().is_some_and(|value| {
-        !value.enabled
-            || value.organization_id != event.organization_id
-            || value.delivery_target_id.as_deref() != Some(&event.webhook_id)
-            || !match_event_patterns(&value.event_types, &event.event_type)
-    }) {
+    } else if !test_delivery
+        && subscription.as_ref().is_some_and(|value| {
+            !value.enabled
+                || value.organization_id != event.organization_id
+                || value.delivery_target_id.as_deref() != Some(&event.webhook_id)
+                || !match_event_patterns(&value.event_types, &event.event_type)
+        })
+    {
         WebhookAttempt::failed("WEBHOOK_SUBSCRIPTION_INVALID", false)
     } else if webhook.is_none() {
         WebhookAttempt::failed("WEBHOOK_ENDPOINT_MISSING", false)
     } else if webhook.as_ref().is_some_and(|value| {
         !value.enabled
             || value.organization_id != event.organization_id
-            || (!value.event_types.is_empty()
+            || (!test_delivery
+                && !value.event_types.is_empty()
                 && !match_event_patterns(&value.event_types, &event.event_type))
     }) {
         WebhookAttempt::failed("WEBHOOK_ENDPOINT_INVALID", false)

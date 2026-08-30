@@ -53,8 +53,10 @@ import {
   updateWebhook,
   deleteWebhook,
   testWebhook,
+  getAvailableEventTypes,
   getErrorMessage,
 } from '../../services/webhooksApi';
+import { flattenWebhookEventCatalog } from '../../services/webhookEvents';
 
 /**
  * Available webhook event types
@@ -226,7 +228,7 @@ export default function WebhookManager() {
   const { t } = useTranslation(['vendor', 'common']);
   const { organizationId } = useAuth();
   const { showSuccess } = useNotifications();
-  const eventTypes = getEventTypes(t);
+  const [eventTypes, setEventTypes] = useState([]);
   const [webhooks, setWebhooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -240,33 +242,44 @@ export default function WebhookManager() {
   const [selectedEvents, setSelectedEvents] = useState([]);
   const [saving, setSaving] = useState(false);
 
-  // Load webhooks on mount
-  useEffect(() => {
-    if (organizationId) {
-      loadWebhooks();
-    }
-  }, [organizationId, loadWebhooks]);
-
   const loadWebhooks = useCallback(async () => {
     setLoading(true);
     setError(null);
     
     try {
-      const webhookList = await listWebhooks(organizationId);
+      const [webhookList, eventCatalog] = await Promise.all([
+        listWebhooks(organizationId),
+        getAvailableEventTypes(),
+      ]);
+      const localizedMetadata = new Map(getEventTypes(t).map((event) => [event.id, event]));
+      setEventTypes(flattenWebhookEventCatalog(eventCatalog?.categories).map((event) => ({
+        ...event,
+        label: localizedMetadata.get(event.id)?.label || event.label,
+        description: localizedMetadata.get(event.id)?.description || event.label,
+        category: event.category.toLowerCase(),
+      })));
       setWebhooks(webhookList);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [organizationId]);
+  }, [organizationId, t]);
+
+  // Load webhooks and the Rust-owned event catalog on mount.
+  useEffect(() => {
+    if (organizationId) {
+      loadWebhooks();
+    }
+  }, [organizationId, loadWebhooks]);
 
   const handleOpenDialog = (webhook = null) => {
     if (webhook) {
       setEditingWebhook(webhook);
       setUrl(webhook.url);
       setDescription(webhook.description || '');
-      setSelectedEvents(webhook.event_types || []);
+      const supportedEventTypes = new Set(eventTypes.map((event) => event.id));
+      setSelectedEvents((webhook.event_types || []).filter((event) => supportedEventTypes.has(event)));
     } else {
       setEditingWebhook(null);
       setUrl('');
@@ -283,22 +296,11 @@ export default function WebhookManager() {
   };
 
   const handleEventToggle = (eventId) => {
-    setSelectedEvents((prev) => {
-      // If "All Events" is selected/deselected
-      if (eventId === '*') {
-        return prev.includes('*') ? [] : ['*'];
-      }
-      
-      // If selecting a specific event while "All Events" is selected, deselect "All Events"
-      if (prev.includes('*')) {
-        return [eventId];
-      }
-      
-      // Normal toggle
-      return prev.includes(eventId)
+    setSelectedEvents((prev) => (
+      prev.includes(eventId)
         ? prev.filter((id) => id !== eventId)
-        : [...prev, eventId];
-    });
+        : [...prev, eventId]
+    ));
   };
 
   const handleSave = async () => {
@@ -549,29 +551,6 @@ export default function WebhookManager() {
                 Select which events should trigger this webhook
               </Typography>
               
-              {/* All Events Option */}
-              <Box sx={{ mb: 2, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={selectedEvents.includes('*')}
-                      onChange={() => handleEventToggle('*')}
-                      color="primary"
-                    />
-                  }
-                  label={
-                    <Box>
-                      <Typography variant="body2" fontWeight="bold">
-                        All Events
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        Subscribe to all current and future events (recommended for comprehensive monitoring)
-                      </Typography>
-                    </Box>
-                  }
-                />
-              </Box>
-
               {/* Grouped Events */}
               <FormGroup>
                 {/* Credential Events */}
@@ -635,6 +614,54 @@ export default function WebhookManager() {
                     control={
                       <Checkbox
                         checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
+                        onChange={() => handleEventToggle(eventType.id)}
+                      />
+                    }
+                    label={
+                      <Box>
+                        <Typography variant="body2">{eventType.label}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {eventType.description}
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                ))}
+
+                {/* Applicant Events */}
+                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
+                  Applicant Events
+                </Typography>
+                {eventTypes.filter(e => e.category === 'applicant').map((eventType) => (
+                  <FormControlLabel
+                    key={eventType.id}
+                    control={
+                      <Checkbox
+                        checked={selectedEvents.includes(eventType.id)}
+                        onChange={() => handleEventToggle(eventType.id)}
+                      />
+                    }
+                    label={
+                      <Box>
+                        <Typography variant="body2">{eventType.label}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {eventType.description}
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                ))}
+
+                {/* Device Events */}
+                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
+                  Device Events
+                </Typography>
+                {eventTypes.filter(e => e.category === 'device').map((eventType) => (
+                  <FormControlLabel
+                    key={eventType.id}
+                    control={
+                      <Checkbox
+                        checked={selectedEvents.includes(eventType.id)}
                         onChange={() => handleEventToggle(eventType.id)}
                       />
                     }

@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
-import { createWebhook, deleteWebhook, updateWebhook } from '../webhooksApi'
+import {
+  createWebhook,
+  deleteWebhook,
+  getAvailableEventTypes,
+  getWebhookDeliveryAttempts,
+  regenerateWebhookSecret,
+  updateWebhook,
+} from '../webhooksApi'
 
 describe('webhooksApi', () => {
   it('creates webhooks with org context and an idempotency key', async () => {
@@ -18,6 +25,7 @@ describe('webhooksApi', () => {
     )
 
     const result = await createWebhook(' org-123 ', {
+      name: 'Partner callback',
       url: 'https://partner.example.com/marty/events',
       eventTypes: ['credential.issued'],
       description: 'Production callback',
@@ -25,6 +33,7 @@ describe('webhooksApi', () => {
 
     expect(String(idempotencyKey)).toContain('v1-webhooks')
     expect(requestBody?.organization_id).toBe('org-123')
+    expect(requestBody?.name).toBe('Partner callback')
     expect(result.id).toBe('webhook-1')
   })
 
@@ -51,5 +60,26 @@ describe('webhooksApi', () => {
     for (const requestUrl of requests) {
       expect(new URL(requestUrl).searchParams.get('organization_id')).toBe('org-123')
     }
+  })
+
+  it('normalizes backend webhook fields, delivery arrays, rotation, and supported events', async () => {
+    server.use(
+      http.get('http://localhost:8000/v1/webhooks/webhook-1/deliveries', () => (
+        HttpResponse.json([{ id: 'delivery-1' }])
+      )),
+      http.post('http://localhost:8000/v1/webhooks/webhook-1/regenerate-secret', () => (
+        HttpResponse.json({ id: 'webhook-1', endpoint_url: 'https://partner.example/hook', signing_secret: 'rotated' })
+      )),
+      http.get('http://localhost:8000/v1/webhooks/event-types', () => (
+        HttpResponse.json({ event_types: ['application.approved', 'credential.issued'] })
+      )),
+    )
+
+    expect(await getWebhookDeliveryAttempts('org-123', 'webhook-1')).toEqual([{ id: 'delivery-1' }])
+    expect((await regenerateWebhookSecret('org-123', 'webhook-1')).secret).toBe('rotated')
+    expect((await getAvailableEventTypes()).categories).toEqual([
+      { name: 'Application', events: [{ type: 'application.approved', description: 'application approved' }] },
+      { name: 'Credential', events: [{ type: 'credential.issued', description: 'credential issued' }] },
+    ])
   })
 })

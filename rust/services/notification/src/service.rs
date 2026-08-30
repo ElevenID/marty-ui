@@ -4,7 +4,10 @@ use crate::{
         ChannelType, Notification, NotificationPriority, NotificationStatus, NotificationTarget,
         NotificationType, RetryPolicy, Subscription, WebhookEndpoint,
     },
-    outbox::new_webhook_outbox_event,
+    outbox::{
+        new_webhook_outbox_event, WEBHOOK_TEST_EVENT_ID_PREFIX, WEBHOOK_TEST_EVENT_TYPE,
+        WEBHOOK_TEST_SUBSCRIPTION_ID,
+    },
     payload_security::{
         validate_internal_event_data, validate_notification_data, validate_notification_text,
     },
@@ -234,6 +237,7 @@ pub struct UpdateWebhookRequest {
     pub url: Option<String>,
     pub description: Option<String>,
     pub event_types: Option<Vec<String>>,
+    #[serde(skip_deserializing)]
     pub secret: Option<String>,
     pub enabled: Option<bool>,
 }
@@ -258,6 +262,13 @@ pub struct WebhookResponse {
     pub last_triggered_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestWebhookResponse {
+    pub delivery_id: String,
+    pub event_id: String,
+    pub status: String,
 }
 
 pub fn webhook_response(value: &WebhookEndpoint, include_secret: bool) -> WebhookResponse {
@@ -526,6 +537,79 @@ impl NotificationService {
         let mut response = webhook_response(&webhook, false);
         response.signing_secret = rotated_secret;
         Ok(response)
+    }
+
+    pub async fn rotate_webhook_secret(
+        &self,
+        id: &str,
+        organization_id: &str,
+    ) -> Result<WebhookResponse, ServiceError> {
+        self.update_webhook(
+            id,
+            organization_id,
+            UpdateWebhookRequest {
+                secret: Some(generate_webhook_secret()),
+                ..UpdateWebhookRequest::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn test_webhook(
+        &self,
+        id: &str,
+        organization_id: &str,
+    ) -> Result<TestWebhookResponse, ServiceError> {
+        let webhook = self
+            .repository
+            .get_webhook(id)
+            .await?
+            .filter(|item| item.organization_id == organization_id)
+            .ok_or(ServiceError::NotFound("Webhook"))?;
+        if !webhook.enabled {
+            return Err(ServiceError::Invalid("Webhook is disabled".into()));
+        }
+        let now = Utc::now();
+        let event_id = format!("{WEBHOOK_TEST_EVENT_ID_PREFIX}{}", Uuid::new_v4());
+        let payload = Map::from_iter([
+            ("id".into(), Value::String(event_id.clone())),
+            ("type".into(), Value::String(WEBHOOK_TEST_EVENT_TYPE.into())),
+            ("timestamp".into(), Value::String(now.to_rfc3339())),
+            ("aggregate_id".into(), Value::String(webhook.id.clone())),
+            ("aggregate_type".into(), Value::String("webhook".into())),
+            (
+                "organization_id".into(),
+                Value::String(webhook.organization_id.clone()),
+            ),
+            (
+                "data".into(),
+                Value::Object(Map::from_iter([("test".into(), Value::Bool(true))])),
+            ),
+        ]);
+        let event = new_webhook_outbox_event(
+            webhook.organization_id,
+            webhook.id,
+            WEBHOOK_TEST_SUBSCRIPTION_ID.into(),
+            event_id.clone(),
+            WEBHOOK_TEST_EVENT_TYPE.into(),
+            payload,
+            3,
+            1,
+            30,
+            now,
+            86_400,
+        );
+        let delivery_id = event.id.clone();
+        if !self.repository.enqueue_webhook_event(event).await? {
+            return Err(ServiceError::Unavailable(
+                "Webhook test delivery could not be queued".into(),
+            ));
+        }
+        Ok(TestWebhookResponse {
+            delivery_id,
+            event_id,
+            status: "QUEUED".into(),
+        })
     }
 
     pub async fn create_subscription(

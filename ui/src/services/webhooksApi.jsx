@@ -17,6 +17,25 @@ function scopedWebhookPath(organizationId, webhookId, suffix = '') {
   return withQuery(`${BASE_PATH}/${webhookId}${suffix}`, queryString);
 }
 
+function normalizeWebhookResponse(value) {
+  if (!value || typeof value !== 'object') return value;
+  return {
+    ...value,
+    url: value.endpoint_url ?? value.url ?? '',
+    event_types: Array.isArray(value.events) ? value.events : (value.event_types ?? []),
+    secret: value.signing_secret ?? value.secret,
+  };
+}
+
+function defaultWebhookName(url, description) {
+  if (description?.trim()) return description.trim().slice(0, 255);
+  try {
+    return `Webhook for ${new URL(url).hostname}`;
+  } catch {
+    return 'External webhook';
+  }
+}
+
 /**
  * List webhooks for an organization
  * @param {string} organizationId - Organization ID
@@ -27,7 +46,8 @@ export async function listWebhooks(organizationId) {
     organization_id: requireOrganizationId(organizationId, 'loading webhooks'),
   });
   const response = await get(withQuery(BASE_PATH, queryString));
-  return Array.isArray(response) ? response : (response?.webhooks || []);
+  const values = Array.isArray(response) ? response : (response?.webhooks || []);
+  return values.map(normalizeWebhookResponse);
 }
 
 /**
@@ -39,14 +59,16 @@ export async function listWebhooks(organizationId) {
  * @param {string} webhookData.description - Optional description
  * @returns {Promise<Object>} - Created webhook with secret for HMAC verification
  */
-export async function createWebhook(organizationId, { url, eventTypes, description }) {
+export async function createWebhook(organizationId, { name, url, eventTypes, description }) {
   const orgId = requireOrganizationId(organizationId, 'creating webhooks');
-  return postWithIdempotency(BASE_PATH, {
+  const response = await postWithIdempotency(BASE_PATH, {
     organization_id: orgId,
+    name: name?.trim() || defaultWebhookName(url, description),
     url,
     event_types: eventTypes,
     description: description || '',
   });
+  return normalizeWebhookResponse(response);
 }
 
 /**
@@ -55,7 +77,7 @@ export async function createWebhook(organizationId, { url, eventTypes, descripti
  * @returns {Promise<Object>} - Webhook object
  */
 export async function getWebhook(organizationId, webhookId) {
-  return get(scopedWebhookPath(organizationId, webhookId));
+  return normalizeWebhookResponse(await get(scopedWebhookPath(organizationId, webhookId)));
 }
 
 /**
@@ -68,13 +90,14 @@ export async function getWebhook(organizationId, webhookId) {
  * @param {boolean} updates.enabled - Enable/disable webhook
  * @returns {Promise<Object>} - Updated webhook object
  */
-export async function updateWebhook(organizationId, webhookId, { url, eventTypes, description, enabled }) {
+export async function updateWebhook(organizationId, webhookId, { name, url, eventTypes, description, enabled }) {
   const body = {};
+  if (name !== undefined) body.name = name;
   if (url !== undefined) body.url = url;
   if (eventTypes !== undefined) body.event_types = eventTypes;
   if (description !== undefined) body.description = description;
   if (enabled !== undefined) body.enabled = enabled;
-  return patch(scopedWebhookPath(organizationId, webhookId), body);
+  return normalizeWebhookResponse(await patch(scopedWebhookPath(organizationId, webhookId), body));
 }
 
 /**
@@ -110,7 +133,7 @@ export async function getWebhookDeliveryAttempts(organizationId, webhookId, { li
     offset,
   });
   const response = await get(withQuery(`${BASE_PATH}/${webhookId}/deliveries`, queryString));
-  return response?.deliveries || [];
+  return Array.isArray(response) ? response : (response?.deliveries || []);
 }
 
 /**
@@ -119,7 +142,7 @@ export async function getWebhookDeliveryAttempts(organizationId, webhookId, { li
  * @returns {Promise<Object>} - Updated webhook with new secret
  */
 export async function regenerateWebhookSecret(organizationId, webhookId) {
-  return post(scopedWebhookPath(organizationId, webhookId, '/regenerate-secret'), {});
+  return normalizeWebhookResponse(await post(scopedWebhookPath(organizationId, webhookId, '/regenerate-secret'), {}));
 }
 
 /**
@@ -127,56 +150,23 @@ export async function regenerateWebhookSecret(organizationId, webhookId) {
  * @returns {Promise<Array>} - Array of event type objects with categories
  */
 export async function getAvailableEventTypes() {
-  // This could be a backend endpoint or we can define it here
-  // For now, return the standardized event types
-  return Promise.resolve({
-    categories: [
-      {
-        name: 'Credential',
-        events: [
-          { type: 'credential.issued', description: 'A new credential was issued' },
-          { type: 'credential.revoked', description: 'A credential was revoked' },
-          { type: 'credential.suspended', description: 'A credential was suspended' },
-          { type: 'credential.reactivated', description: 'A suspended credential was reactivated' },
-        ],
-      },
-      {
-        name: 'Verification',
-        events: [
-          { type: 'verification.completed', description: 'A verification was completed successfully' },
-          { type: 'verification.failed', description: 'A verification attempt failed' },
-          { type: 'verification.initiated', description: 'A verification was initiated' },
-        ],
-      },
-      {
-        name: 'Application',
-        events: [
-          { type: 'application.submitted', description: 'An application was submitted' },
-          { type: 'application.approved', description: 'An application was approved' },
-          { type: 'application.rejected', description: 'An application was rejected' },
-          { type: 'application.pending_review', description: 'An application is pending review' },
-          { type: 'application.documents_requested', description: 'Additional documents were requested' },
-          { type: 'application.documents_received', description: 'Requested documents were received' },
-        ],
-      },
-      {
-        name: 'Audit',
-        events: [
-          { type: 'audit.access_logged', description: 'Access to a resource was logged' },
-          { type: 'audit.configuration_changed', description: 'System configuration was changed' },
-          { type: 'audit.credential_accessed', description: 'A credential was accessed' },
-        ],
-      },
-      {
-        name: 'Trust',
-        events: [
-          { type: 'trust.certificate_issued', description: 'A trust certificate was issued' },
-          { type: 'trust.certificate_expiring', description: 'A trust certificate is expiring soon' },
-          { type: 'trust.chain_validation_failed', description: 'Trust chain validation failed' },
-        ],
-      },
-    ],
-  });
+  const response = await get(`${BASE_PATH}/event-types`);
+  const eventTypes = Array.isArray(response?.event_types) ? response.event_types : [];
+  const grouped = new Map();
+  for (const type of eventTypes) {
+    const category = String(type).split('.')[0] || 'other';
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push({
+      type,
+      description: String(type).replaceAll('.', ' ').replaceAll('_', ' '),
+    });
+  }
+  return {
+    categories: Array.from(grouped, ([category, events]) => ({
+      name: category.charAt(0).toUpperCase() + category.slice(1),
+      events,
+    })),
+  };
 }
 
 // Re-export getErrorMessage for convenience

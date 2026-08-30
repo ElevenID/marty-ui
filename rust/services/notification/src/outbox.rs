@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const OUTBOX_NAMESPACE: Uuid = Uuid::from_u128(0xb431_a1c8_dfd9_44fa_b042_b633_f7d9_ec6c);
+pub const WEBHOOK_TEST_EVENT_ID_PREFIX: &str = "webhook-test/";
+pub const WEBHOOK_TEST_EVENT_TYPE: &str = "webhook.test";
+pub const WEBHOOK_TEST_SUBSCRIPTION_ID: &str = "webhook-test";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct WebhookOutboxEvent {
@@ -28,6 +31,26 @@ pub struct WebhookOutboxEvent {
     pub delivered_at: Option<DateTime<Utc>>,
     pub last_error_code: Option<String>,
     pub response_status_code: Option<i32>,
+}
+
+pub fn is_webhook_test_event(event: &WebhookOutboxEvent) -> bool {
+    event.subscription_id == WEBHOOK_TEST_SUBSCRIPTION_ID
+        && event.event_type == WEBHOOK_TEST_EVENT_TYPE
+        && event
+            .event_id
+            .strip_prefix(WEBHOOK_TEST_EVENT_ID_PREFIX)
+            .is_some_and(|id| Uuid::parse_str(id).is_ok())
+        && event.payload.get("id").and_then(Value::as_str) == Some(&event.event_id)
+        && event.payload.get("type").and_then(Value::as_str) == Some(WEBHOOK_TEST_EVENT_TYPE)
+        && event.payload.get("aggregate_id").and_then(Value::as_str) == Some(&event.webhook_id)
+        && event.payload.get("aggregate_type").and_then(Value::as_str) == Some("webhook")
+        && event
+            .payload
+            .get("data")
+            .and_then(Value::as_object)
+            .and_then(|data| data.get("test"))
+            .and_then(Value::as_bool)
+            == Some(true)
 }
 
 pub fn logical_webhook_delivery_id(
