@@ -78,7 +78,7 @@ pub struct InitiationDidcommClaim {
     pub previous_status: CredentialTransactionStatus,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct StagedInitiationDidcommDelivery {
     pub holder_did: String,
     pub service_endpoint: String,
@@ -86,12 +86,29 @@ pub struct StagedInitiationDidcommDelivery {
     pub encrypted_message: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl fmt::Debug for StagedInitiationDidcommDelivery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StagedInitiationDidcommDelivery")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct PendingInitiationDidcommDelivery {
     pub transaction: CredentialTransaction,
     pub credential: IssuedCredential,
     pub delivery: StagedInitiationDidcommDelivery,
     pub transported: bool,
+}
+
+impl fmt::Debug for PendingInitiationDidcommDelivery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingInitiationDidcommDelivery")
+            .field("transported", &self.transported)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -104,10 +121,29 @@ pub struct DeliveredInitiationDidcommDelivery {
     pub message_id: String,
 }
 
+impl fmt::Debug for DeliveredInitiationDidcommDelivery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeliveredInitiationDidcommDelivery")
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub enum InitiationDidcommDeliveryState {
     Pending(Box<PendingInitiationDidcommDelivery>),
     Delivered(DeliveredInitiationDidcommDelivery),
+}
+
+impl fmt::Debug for InitiationDidcommDeliveryState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending(_) => formatter.write_str("InitiationDidcommDeliveryState::Pending(..)"),
+            Self::Delivered(_) => {
+                formatter.write_str("InitiationDidcommDeliveryState::Delivered(..)")
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1404,6 +1440,28 @@ mod tests {
         }
     }
 
+    fn issued_credential(
+        transaction: &CredentialTransaction,
+        credential: &str,
+    ) -> IssuedCredential {
+        IssuedCredential {
+            id: reserved_credential_id(transaction),
+            transaction_id: transaction.id.clone(),
+            organization_id: transaction.organization_id.clone(),
+            credential_template_id: transaction.credential_template_id.clone(),
+            applicant_id: transaction.applicant_id.clone(),
+            subject_did: transaction.subject_did.clone(),
+            issuer_did: "did:example:issuer".to_owned(),
+            revocation_profile_id: transaction.revocation_profile_id.clone(),
+            renewed_from_credential_id: None,
+            status_list_entries: Vec::new(),
+            credential: credential.to_owned(),
+            credential_hash: "credential-hash".to_owned(),
+            issued_at: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+            expires_at: Utc.timestamp_opt(1_731_536_000, 0).single().unwrap(),
+        }
+    }
+
     struct HarnessRepository {
         order: Order,
         lookups: AtomicUsize,
@@ -2006,6 +2064,80 @@ mod tests {
         );
         assert!(order.lock().unwrap().is_empty());
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn didcomm_delivery_state_debug_output_is_stable_and_redacted() {
+        let secrets = [
+            "did:example:holder-debug-sentinel",
+            "https://wallet.example/debug-endpoint-sentinel",
+            "message-debug-sentinel",
+            "ciphertext-debug-sentinel",
+            "signed-credential-debug-sentinel",
+            "transaction-debug-sentinel",
+            "claim-debug-sentinel",
+            "organization-debug-sentinel",
+            "pre-authorized-code-debug-sentinel",
+        ];
+        let mut transaction = transaction();
+        transaction.id = secrets[5].to_owned();
+        transaction.organization_id = secrets[7].to_owned();
+        transaction.pre_authorized_code = secrets[8].to_owned();
+        transaction.claims = Map::from_iter([("secret_claim".to_owned(), json!(secrets[6]))]);
+        let staged = StagedInitiationDidcommDelivery {
+            holder_did: secrets[0].to_owned(),
+            service_endpoint: secrets[1].to_owned(),
+            message_id: secrets[2].to_owned(),
+            encrypted_message: secrets[3].to_owned(),
+        };
+        let delivered = DeliveredInitiationDidcommDelivery {
+            transaction_id: secrets[5].to_owned(),
+            organization_id: secrets[7].to_owned(),
+            credential_id: "credential-debug-sentinel".to_owned(),
+            holder_did: secrets[0].to_owned(),
+            service_endpoint: secrets[1].to_owned(),
+            message_id: secrets[2].to_owned(),
+        };
+        let pending = PendingInitiationDidcommDelivery {
+            credential: issued_credential(&transaction, secrets[4]),
+            transaction,
+            delivery: staged.clone(),
+            transported: true,
+        };
+
+        let staged_debug = format!("{staged:?}");
+        let pending_debug = format!("{pending:?}");
+        let delivered_debug = format!("{delivered:?}");
+        let pending_state_debug = format!(
+            "{:?}",
+            InitiationDidcommDeliveryState::Pending(Box::new(pending.clone()))
+        );
+        let delivered_state_debug =
+            format!("{:?}", InitiationDidcommDeliveryState::Delivered(delivered));
+        assert_eq!(staged_debug, "StagedInitiationDidcommDelivery { .. }");
+        assert_eq!(
+            pending_debug,
+            "PendingInitiationDidcommDelivery { transported: true, .. }"
+        );
+        assert_eq!(delivered_debug, "DeliveredInitiationDidcommDelivery { .. }");
+        assert_eq!(
+            pending_state_debug,
+            "InitiationDidcommDeliveryState::Pending(..)"
+        );
+        assert_eq!(
+            delivered_state_debug,
+            "InitiationDidcommDeliveryState::Delivered(..)"
+        );
+        for secret in secrets {
+            assert!(!staged_debug.contains(secret));
+            assert!(!pending_debug.contains(secret));
+            assert!(!delivered_debug.contains(secret));
+            assert!(!pending_state_debug.contains(secret));
+            assert!(!delivered_state_debug.contains(secret));
+        }
+        assert!(!delivered_debug.contains("credential-debug-sentinel"));
+        assert!(!pending_state_debug.contains("credential-debug-sentinel"));
+        assert!(!delivered_state_debug.contains("credential-debug-sentinel"));
     }
 
     #[tokio::test]
