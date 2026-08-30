@@ -1,5 +1,5 @@
 use axum::{routing::post, Json, Router};
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use hmac::{Hmac, Mac};
 use marty_issuance_service::canvas_issuance_guard::{
     CanvasGuardConfig, PostgresCanvasIssuanceGuard,
@@ -539,7 +539,14 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         .await
         .unwrap()
         .expect("retry reclaims the same stable credential identifier");
-    let now = Utc::now();
+    // PostgreSQL `timestamptz` is microsecond-precise. Use a non-zero,
+    // microsecond-aligned value so this round-trip contract verifies the
+    // precision the production repository can actually preserve instead of
+    // comparing an unrepresentable nanosecond remainder.
+    let now = Utc
+        .timestamp_opt(1_700_000_000, 123_456_000)
+        .single()
+        .unwrap();
     let issued = IssuedCredential {
         id: credential_id.to_owned(),
         transaction_id: claim.transaction.id.clone(),
