@@ -216,6 +216,35 @@ test('public server bounds JSON bodies and sends browser security headers', asyn
   }
 });
 
+test('public gateway failures become a safe retryable partner response', async () => {
+  const { server } = startServer({
+    PORT: '0',
+    MARTY_PUBLIC_GATEWAY_ORIGIN: config.gatewayOrigin,
+    NORTHSTAR_ORGANIZATION_ID: config.organizationId,
+    NORTHSTAR_APPLICATION_ID: config.applicationId,
+    NORTHSTAR_WEBHOOK_ID: config.webhookId,
+    NORTHSTAR_RUNTIME_API_KEY: config.runtimeKey,
+    NORTHSTAR_READ_ONLY_API_KEY: config.readOnlyKey,
+    NORTHSTAR_EVIDENCE_API_KEY: config.evidenceKey,
+    NORTHSTAR_WEBHOOK_SECRET: config.webhookSecret,
+    NORTHSTAR_CALLBACK_URL: config.callbackUrl,
+  }, { fetchImpl: async () => { throw new Error('sensitive upstream failure'); } });
+  await once(server, 'listening');
+  const address = server.address();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/applications/refresh`, { method: 'POST' });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      status: 'unavailable',
+      code: 'PUBLIC_GATEWAY_UNAVAILABLE',
+      detail: 'Northstar could not reach the Marty public gateway. Retry when the integration is available.',
+    });
+  } finally {
+    server.close();
+    await once(server, 'close');
+  }
+});
+
 test('receiver resilience controls require explicit enablement and expose no secret material', async () => {
   const { server } = startServer({
     PORT: '0',

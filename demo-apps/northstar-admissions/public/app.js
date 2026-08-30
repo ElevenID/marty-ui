@@ -1,6 +1,7 @@
 const byId = (id) => document.getElementById(id);
 let applicationId = '';
 let deliveryEvidencePolling = false;
+let refreshTimer = null;
 
 function short(value) {
   if (!value) return 'not returned';
@@ -94,23 +95,74 @@ async function refreshDeliveryEvidence() {
 
 async function refresh() {
   const response = await fetch('/api/demo-state', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Northstar state returned HTTP ${response.status}`);
   render(await response.json());
 }
 
+function setControlsEnabled(enabled) {
+  byId('deny-button').disabled = !enabled;
+  byId('approve-button').disabled = !enabled;
+}
+
+function showLoadError(detail) {
+  document.documentElement.dataset.demoState = 'error';
+  byId('integration-status').className = 'integration unavailable';
+  byId('integration-label').textContent = 'Marty Gateway unavailable';
+  byId('application-status').textContent = 'UNAVAILABLE';
+  byId('application-status').className = 'status error';
+  byId('load-error-detail').textContent = detail;
+  byId('load-error').hidden = false;
+  setControlsEnabled(false);
+}
+
+function startRefreshLoop() {
+  if (refreshTimer === null) {
+    refreshTimer = setInterval(() => { void refresh().catch(() => {}); }, 1000);
+  }
+}
+
+async function initialize() {
+  document.documentElement.dataset.demoState = 'loading';
+  byId('integration-status').className = 'integration';
+  byId('integration-label').textContent = 'Connecting to Marty Gateway';
+  byId('load-error').hidden = true;
+  setControlsEnabled(false);
+  try {
+    await refresh();
+    const initialApplication = await fetch('/api/applications/refresh', { method: 'POST' });
+    if (!initialApplication.ok) {
+      let detail = `Public applicant lookup returned HTTP ${initialApplication.status}.`;
+      try {
+        const body = await initialApplication.json();
+        if (body.detail) detail = body.detail;
+      } catch {}
+      throw new Error(detail);
+    }
+    await refresh();
+    setControlsEnabled(true);
+    byId('integration-status').className = 'integration ready';
+    byId('integration-label').textContent = 'Marty Gateway connected';
+    document.documentElement.dataset.demoState = 'ready';
+    startRefreshLoop();
+  } catch (error) {
+    await refresh().catch(() => {});
+    showLoadError(error instanceof Error ? error.message : 'The public gateway is unavailable.');
+  }
+}
+
 async function approve(mode) {
-  byId('deny-button').disabled = true;
-  byId('approve-button').disabled = true;
-  await fetch(`/api/applications/${encodeURIComponent(applicationId)}/approve`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }),
-  });
-  await refresh();
-  byId('deny-button').disabled = false;
-  byId('approve-button').disabled = false;
+  setControlsEnabled(false);
+  try {
+    await fetch(`/api/applications/${encodeURIComponent(applicationId)}/approve`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }),
+    });
+    await refresh();
+  } finally {
+    if (document.documentElement.dataset.demoState === 'ready') setControlsEnabled(true);
+  }
 }
 
 byId('deny-button').addEventListener('click', () => approve('read-only'));
 byId('approve-button').addEventListener('click', () => approve('runtime'));
-const initialApplication = await fetch('/api/applications/refresh', { method: 'POST' });
-if (!initialApplication.ok) throw new Error(`Public applicant lookup returned HTTP ${initialApplication.status}`);
-await refresh();
-setInterval(refresh, 1000);
+byId('retry-button').addEventListener('click', () => initialize());
+await initialize();
