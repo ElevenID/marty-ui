@@ -9,8 +9,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_award_candidate::{
         canvas_auto_approval_ready, plan_canvas_award_candidate_materialization,
-        CanvasAwardCandidate, CanvasAwardCandidateMaterializationPlan, CanvasCandidateObservation,
-        CanvasIdentityJoin, CanvasLinkedIdentity,
+        CanvasAwardCandidate, CanvasAwardCandidateMaterializationPlan,
+        CanvasAwardCandidateSelection, CanvasCandidateObservation, CanvasIdentityJoin,
+        CanvasLinkedIdentity,
     },
     canvas_award_candidate_service::{
         CanvasAwardCandidateApprovalError, CanvasAwardCandidateApprover,
@@ -159,6 +160,19 @@ fn candidate_debug_output_redacts_identity_evidence_and_materialization_data() {
     assert!(candidate_debug.contains("[REDACTED]"));
     for secret in [identity_secret, canvas_user_secret, subject_secret] {
         assert!(!candidate_debug.contains(secret));
+    }
+
+    let selection = CanvasAwardCandidateSelection {
+        candidate: private_candidate,
+        lti_subject: Some(subject_secret.to_owned()),
+        canvas_user_id: Some(canvas_user_secret.to_owned()),
+        learner_identity_id: Some(identity_secret.to_owned()),
+    };
+    let selection_debug = format!("{selection:?}");
+    assert!(selection_debug.contains("candidate-safe-id"));
+    assert!(selection_debug.contains("[REDACTED]"));
+    for secret in [identity_secret, canvas_user_secret, subject_secret] {
+        assert!(!selection_debug.contains(secret));
     }
 
     let mut private_observation = observation(now());

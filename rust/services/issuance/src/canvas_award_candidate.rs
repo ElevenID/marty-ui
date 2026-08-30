@@ -123,12 +123,24 @@ impl fmt::Debug for CanvasAwardCandidateMaterializationPlan {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasAwardCandidateSelection {
     pub candidate: CanvasAwardCandidate,
     pub lti_subject: Option<String>,
     pub canvas_user_id: Option<String>,
     pub learner_identity_id: Option<String>,
+}
+
+impl fmt::Debug for CanvasAwardCandidateSelection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasAwardCandidateSelection")
+            .field("candidate_id", &self.candidate.id)
+            .field("lti_subject", &REDACTED)
+            .field("canvas_user_id", &REDACTED)
+            .field("learner_identity_id", &REDACTED)
+            .finish()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
