@@ -1,4 +1,4 @@
-use std::{net::IpAddr, time::Duration};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -14,6 +14,7 @@ use crate::credential::{
     CredentialIssuanceError, CredentialProofVerifier, CredentialTransaction, IssuerContext,
     IssuerContextResolver, VerifiedCredentialProof,
 };
+use crate::network_policy::is_public_ip;
 
 const PROOF_MAX_AGE_SECONDS: i64 = 300;
 const MAX_STATUS_LIST_BYTES: usize = 1_048_576;
@@ -455,35 +456,6 @@ fn normalize_issuer_mode(mode: &str) -> &str {
     }
 }
 
-fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            !(ip.is_unspecified()
-                || ip.is_loopback()
-                || ip.is_private()
-                || ip.is_link_local()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || octets[0] == 0
-                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-                || (octets[0] == 198 && (18..=19).contains(&octets[1]))
-                || octets[0] >= 240)
-        }
-        IpAddr::V6(ip) => {
-            let segments = ip.segments();
-            !(ip.is_unspecified()
-                || ip.is_loopback()
-                || ip.is_multicast()
-                || (segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfe80
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8))
-                && (segments[0] & 0xe000) == 0x2000
-        }
-    }
-}
-
 fn invalid_proof(detail: impl Into<String>) -> CredentialIssuanceError {
     CredentialIssuanceError::InvalidProof(detail.into())
 }
@@ -494,7 +466,7 @@ fn issuer_error(detail: impl Into<String>) -> CredentialIssuanceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_public_ip, NativeCredentialProofVerifier};
+    use super::NativeCredentialProofVerifier;
     use crate::credential::{CredentialProofVerifier, IssuerContext};
     use serde_json::json;
 
@@ -522,14 +494,5 @@ mod tests {
             .await
             .expect("valid ordinary proof");
         assert!(verified.holder_did.starts_with("did:key:"));
-    }
-
-    #[test]
-    fn status_fetch_rejects_non_public_networks() {
-        assert!(!is_public_ip("127.0.0.1".parse().unwrap()));
-        assert!(!is_public_ip("10.0.0.1".parse().unwrap()));
-        assert!(!is_public_ip("::1".parse().unwrap()));
-        assert!(is_public_ip("1.1.1.1".parse().unwrap()));
-        assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 }

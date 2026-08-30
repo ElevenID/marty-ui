@@ -28,6 +28,7 @@ mmf-core.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 marty-oid4vci = { workspace = true, features = ["lti"] }
+marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-verification.workspace = true
 p256.workspace = true
 prost.workspace = true
