@@ -241,6 +241,7 @@ export default function WebhookManager() {
   const [description, setDescription] = useState('');
   const [selectedEvents, setSelectedEvents] = useState([]);
   const [saving, setSaving] = useState(false);
+  const eventCategories = Array.from(new Set(eventTypes.map((event) => event.category)));
 
   const loadWebhooks = useCallback(async () => {
     setLoading(true);
@@ -579,177 +580,34 @@ export default function WebhookManager() {
                   />
                 </Box>
 
-                {/* Credential Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  {t('webhookManager.eventCategories.credential')}
-                </Typography>
-                {eventTypes.filter(e => e.category === 'credential').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    disabled={selectedEvents.includes('*')}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
+                {eventCategories.map((category) => (
+                  <Box key={category}>
+                    <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
+                      {t(`webhookManager.eventCategories.${category}`, {
+                        defaultValue: `${category.charAt(0).toUpperCase()}${category.slice(1)} Events`,
+                      })}
+                    </Typography>
+                    {eventTypes.filter((event) => event.category === category).map((eventType) => (
+                      <FormControlLabel
+                        key={eventType.id}
+                        disabled={selectedEvents.includes('*')}
+                        control={(
+                          <Checkbox
+                            checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
+                            onChange={() => handleEventToggle(eventType.id)}
+                          />
+                        )}
+                        label={(
+                          <Box>
+                            <Typography variant="body2">{eventType.label}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {eventType.description}
+                            </Typography>
+                          </Box>
+                        )}
                       />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))}
-
-                {/* Verification Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  {t('webhookManager.eventCategories.verification')}
-                </Typography>
-                {eventTypes.filter(e => e.category === 'verification').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    disabled={selectedEvents.includes('*')}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))}
-
-                {/* Application Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  {t('webhookManager.eventCategories.application')}
-                </Typography>
-                {eventTypes.filter(e => e.category === 'application').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    disabled={selectedEvents.includes('*')}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))}
-
-                {/* Applicant Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Applicant Events
-                </Typography>
-                {eventTypes.filter(e => e.category === 'applicant').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))}
-
-                {/* Device Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  Device Events
-                </Typography>
-                {eventTypes.filter(e => e.category === 'device').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))}
-
-                {/* Audit Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  {t('webhookManager.eventCategories.audit')}
-                </Typography>
-                {eventTypes.filter(e => e.category === 'audit').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    disabled={selectedEvents.includes('*')}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))}
-
-                {/* Trust Events */}
-                <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
-                  {t('webhookManager.eventCategories.trust')}
-                </Typography>
-                {eventTypes.filter(e => e.category === 'trust').map((eventType) => (
-                  <FormControlLabel
-                    key={eventType.id}
-                    disabled={selectedEvents.includes('*')}
-                    control={
-                      <Checkbox
-                        checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
-                        onChange={() => handleEventToggle(eventType.id)}
-                      />
-                    }
-                    label={
-                      <Box>
-                        <Typography variant="body2">{eventType.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {eventType.description}
-                        </Typography>
-                      </Box>
-                    }
-                  />
+                    ))}
+                  </Box>
                 ))}
               </FormGroup>
             </FormControl>
