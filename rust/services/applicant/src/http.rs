@@ -156,7 +156,8 @@ impl From<ServiceError> for ApiError {
             | ServiceError::ConcurrentModification
             | ServiceError::InvalidApplicationState(_)
             | ServiceError::InactiveEvidence
-            | ServiceError::NoActiveFlow => StatusCode::CONFLICT,
+            | ServiceError::NoActiveFlow
+            | ServiceError::Domain(ApplicantError::Locked(_)) => StatusCode::CONFLICT,
             ServiceError::Provider(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServiceError::Domain(ApplicantError::EvidenceSize { .. }) => {
                 StatusCode::PAYLOAD_TOO_LARGE

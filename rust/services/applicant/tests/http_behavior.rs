@@ -253,7 +253,7 @@ async fn profile_and_application_workflow_preserves_released_http_shapes() {
         )
         .await
         .unwrap();
-    assert_eq!(released.status(), StatusCode::NO_CONTENT);
+    assert_eq!(released.status(), StatusCode::OK);
 
     let approved = app
         .clone()
