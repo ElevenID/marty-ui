@@ -13,6 +13,7 @@ const config = {
   gatewayOrigin: 'https://beta.elevenidllc.com', organizationId: 'org-1', applicationId: 'app-1',
   webhookId: 'webhook-1', runtimeKey: 'mk_live_runtime-secret', readOnlyKey: 'mk_live_readonly-secret',
   evidenceKey: 'mk_live_evidence-secret', webhookSecret: secret,
+  callbackUrl: 'https://admissions-test.elevenidllc.com/webhooks/marty',
 };
 
 function webhookRequest(payload, signature = expectedSignature(secret, payload)) {
@@ -86,6 +87,7 @@ test('run-secret loading carries only sanitized preparation observations into ap
     read_only_api_key: config.readOnlyKey,
     evidence_api_key: config.evidenceKey,
     webhook_signing_secret: config.webhookSecret,
+    callback_url: config.callbackUrl,
     outbound_requests: [observation],
   }));
   try {
@@ -157,6 +159,7 @@ test('public server bounds JSON bodies and sends browser security headers', asyn
     NORTHSTAR_READ_ONLY_API_KEY: config.readOnlyKey,
     NORTHSTAR_EVIDENCE_API_KEY: config.evidenceKey,
     NORTHSTAR_WEBHOOK_SECRET: config.webhookSecret,
+    NORTHSTAR_CALLBACK_URL: config.callbackUrl,
   });
   await once(server, 'listening');
   const address = server.address();
@@ -203,6 +206,7 @@ test('receiver resilience controls require explicit enablement and expose no sec
     NORTHSTAR_READ_ONLY_API_KEY: config.readOnlyKey,
     NORTHSTAR_EVIDENCE_API_KEY: config.evidenceKey,
     NORTHSTAR_WEBHOOK_SECRET: config.webhookSecret,
+    NORTHSTAR_CALLBACK_URL: config.callbackUrl,
     NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED: 'true',
   });
   await once(server, 'listening');

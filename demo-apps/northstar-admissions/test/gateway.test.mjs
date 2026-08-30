@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { assertPublicGatewayUrl, createGatewayClient, MIP_VERSION } from '../src/gateway.mjs';
+import {
+  assertPublicGatewayUrl,
+  createGatewayClient,
+  MIP_VERSION,
+  NORTHSTAR_CALLBACK_URL,
+  normalizeNorthstarCallbackUrl,
+} from '../src/gateway.mjs';
 
 test('only the configured public gateway origin and v1 routes are accepted', () => {
   assert.equal(assertPublicGatewayUrl('https://beta.elevenidllc.com', '/v1/webhooks').href, 'https://beta.elevenidllc.com/v1/webhooks');
   assert.throws(() => assertPublicGatewayUrl('https://beta.elevenidllc.com', 'http://notification:8010/v1/webhooks'), /Direct Marty service access rejected/);
   assert.throws(() => assertPublicGatewayUrl('https://beta.elevenidllc.com', '/internal/events'), /Non-public Marty route rejected/);
+});
+
+test('only the canonical Northstar HTTPS callback is accepted', () => {
+  assert.equal(normalizeNorthstarCallbackUrl(NORTHSTAR_CALLBACK_URL), NORTHSTAR_CALLBACK_URL);
+  for (const candidate of [
+    'http://admissions-test.elevenidllc.com/webhooks/marty',
+    'https://other.example.test/webhooks/marty',
+    'https://admissions-test.elevenidllc.com/webhooks/other',
+    'https://user:secret@admissions-test.elevenidllc.com/webhooks/marty',
+    'https://admissions-test.elevenidllc.com/webhooks/marty?token=value',
+    'https://admissions-test.elevenidllc.com/webhooks/marty#fragment',
+  ]) assert.throws(() => normalizeNorthstarCallbackUrl(candidate), /must be exactly/);
 });
 
 test('gateway observations are sanitized and requests carry the intended public headers', async () => {

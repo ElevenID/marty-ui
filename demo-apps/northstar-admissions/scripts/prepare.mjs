@@ -1,7 +1,11 @@
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { createGatewayClient, normalizeGatewayOrigin } from '../src/gateway.mjs';
+import {
+  createGatewayClient,
+  normalizeGatewayOrigin,
+  normalizeNorthstarCallbackUrl,
+} from '../src/gateway.mjs';
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -19,7 +23,7 @@ const gatewayOrigin = normalizeGatewayOrigin(required('MARTY_PUBLIC_GATEWAY_ORIG
 const organizationId = required('NORTHSTAR_ORGANIZATION_ID');
 const adminCookie = required('NORTHSTAR_ADMIN_SESSION_COOKIE');
 const applicantCookie = required('NORTHSTAR_APPLICANT_SESSION_COOKIE');
-const callbackUrl = required('NORTHSTAR_CALLBACK_URL');
+const callbackUrl = normalizeNorthstarCallbackUrl(required('NORTHSTAR_CALLBACK_URL'));
 const applicationInput = JSON.parse(await readFile(resolve(required('NORTHSTAR_APPLICATION_REQUEST_FILE')), 'utf8'));
 const outputPath = resolve(required('NORTHSTAR_SECRET_OUTPUT_FILE'));
 const origins = [];

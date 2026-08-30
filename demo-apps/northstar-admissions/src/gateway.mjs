@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 const FORBIDDEN_PATH_PREFIXES = ['/internal/', '/health', '/ready', '/metrics'];
 export const MIP_VERSION = '0.5.0';
+export const NORTHSTAR_CALLBACK_URL = 'https://admissions-test.elevenidllc.com/webhooks/marty';
 
 export function normalizeGatewayOrigin(value) {
   const url = new URL(String(value || ''));
@@ -10,6 +11,15 @@ export function normalizeGatewayOrigin(value) {
     throw new Error('Marty public gateway must be an origin without credentials, path, query, or fragment');
   }
   return url.origin;
+}
+
+export function normalizeNorthstarCallbackUrl(value) {
+  const url = new URL(String(value || ''));
+  if (url.href !== NORTHSTAR_CALLBACK_URL || url.protocol !== 'https:'
+    || url.username || url.password || url.search || url.hash) {
+    throw new Error(`Northstar callback URL must be exactly ${NORTHSTAR_CALLBACK_URL}`);
+  }
+  return url.href;
 }
 
 export function assertPublicGatewayUrl(origin, candidate) {

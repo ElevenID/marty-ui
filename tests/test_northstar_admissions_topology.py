@@ -19,6 +19,10 @@ def test_northstar_is_a_hardened_secret_mounted_partner_service() -> None:
         "MARTY_PUBLIC_GATEWAY_ORIGIN: ${MARTY_PUBLIC_GATEWAY_ORIGIN:-https://beta.elevenidllc.com}"
         in compose
     )
+    assert (
+        "NORTHSTAR_CALLBACK_URL: https://${NORTHSTAR_ADMISSIONS_PUBLIC_HOST:-admissions-test.elevenidllc.com}/webhooks/marty"
+        in compose
+    )
     assert "HOST: 0.0.0.0" in compose
     assert "read_only: true" in compose
     assert "no-new-privileges:true" in compose

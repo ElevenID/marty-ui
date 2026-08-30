@@ -4,7 +4,12 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { assertPublicGatewayUrl, createGatewayClient, normalizeGatewayOrigin } from './gateway.mjs';
+import {
+  assertPublicGatewayUrl,
+  createGatewayClient,
+  normalizeGatewayOrigin,
+  normalizeNorthstarCallbackUrl,
+} from './gateway.mjs';
 import { verifyMartyWebhook } from './webhook.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -69,6 +74,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
   const organizationId = String(config.organizationId || '').trim();
   const applicationId = String(config.applicationId || '').trim();
   const webhookId = String(config.webhookId || '').trim();
+  const callbackUrl = normalizeNorthstarCallbackUrl(config.callbackUrl);
   if (!organizationId || !applicationId || !webhookId) {
     throw new Error('organizationId, applicationId, and webhookId are required');
   }
@@ -119,7 +125,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
         runtimeKeyPrefix: String(config.runtimeKeyPrefix || 'mk_live_••••'),
         runtimeScopes: ['applications:read', 'applications:approve'],
         readOnlyScopes: ['applications:read'],
-        callbackUrl: String(config.callbackUrl || 'https://admissions-test.elevenidllc.com/webhooks/marty'),
+        callbackUrl,
         subscriptionEvent: 'application.approved',
       },
       enrollmentStatus: state.enrollmentStatus,
