@@ -40,6 +40,11 @@ use crate::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
+    canvas_management::CanvasPlatformRequest,
+    canvas_management_http::{
+        organization_id_from_query, parse_platform_request, CanvasManagementHttpError,
+        CanvasPlatformManagementHttpService, CanvasPlatformResponse,
+    },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
     },
@@ -86,6 +91,7 @@ struct IssuanceState {
     canvas_lti_evidence_sync: Option<CanvasLtiEvidenceSyncService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     canvas_oauth: Option<CanvasOAuthService>,
+    canvas_management: Option<CanvasPlatformManagementHttpService>,
 }
 
 pub struct IssuanceServices {
@@ -137,13 +143,22 @@ impl IssuanceCoreServices {
 #[derive(Clone, Debug)]
 pub struct CanvasServices {
     oauth: CanvasOAuthService,
+    management: CanvasPlatformManagementHttpService,
     lti: CanvasLtiServices,
 }
 
 impl CanvasServices {
     #[must_use]
-    pub fn new(oauth: CanvasOAuthService, lti: CanvasLtiServices) -> Self {
-        Self { oauth, lti }
+    pub fn new(
+        oauth: CanvasOAuthService,
+        management: CanvasPlatformManagementHttpService,
+        lti: CanvasLtiServices,
+    ) -> Self {
+        Self {
+            oauth,
+            management,
+            lti,
+        }
     }
 }
 
@@ -258,6 +273,7 @@ struct OptionalServices {
     canvas_lti_evidence_sync: Option<CanvasLtiEvidenceSyncService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     canvas_oauth: Option<CanvasOAuthService>,
+    canvas_management: Option<CanvasPlatformManagementHttpService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -329,6 +345,7 @@ pub fn router_with_all_services(
             didcomm_delivery: Some(services.didcomm_delivery),
             credential_management: Some(services.credential_management),
             canvas_oauth: Some(services.canvas.oauth),
+            canvas_management: Some(services.canvas.management),
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
             canvas_lti_experience: Some(services.canvas.lti.experience),
@@ -497,6 +514,23 @@ pub fn router_with_canvas_oauth(
         transport,
         OptionalServices {
             canvas_oauth: Some(canvas_oauth),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_canvas_management(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_management: CanvasPlatformManagementHttpService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_management: Some(canvas_management),
             ..OptionalServices::default()
         },
     )
@@ -772,6 +806,17 @@ fn router_with_optional_services(
                 delete(disconnect_canvas_oauth_connection),
             );
     }
+    if services.canvas_management.is_some() {
+        api = api
+            .route(
+                "/v1/integrations/canvas/platforms",
+                get(list_canvas_platforms).post(create_canvas_platform),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}",
+                get(get_canvas_platform).put(update_canvas_platform),
+            );
+    }
     if services.canvas_lti_login.is_some() {
         api = api
             .route(
@@ -848,6 +893,7 @@ fn router_with_optional_services(
         didcomm_delivery: services.didcomm_delivery,
         credential_management: services.credential_management,
         canvas_oauth: services.canvas_oauth,
+        canvas_management: services.canvas_management,
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
         canvas_lti_experience: services.canvas_lti_experience,
@@ -862,6 +908,66 @@ fn router_with_optional_services(
     system
         .merge(api)
         .layer(middleware::from_fn_with_state(transport, legacy_transport))
+}
+
+async fn create_canvas_platform(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Json<CanvasPlatformResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request = parse_platform_request(request).await?;
+    service.create(&headers, request).await.map(Json)
+}
+
+async fn list_canvas_platforms(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Json<Vec<CanvasPlatformResponse>>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let organization_id = organization_id_from_query(request.uri().query());
+    service
+        .list(request.headers(), organization_id.as_deref())
+        .await
+        .map(Json)
+}
+
+async fn get_canvas_platform(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasPlatformResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .get(&headers, &platform_id)
+        .await
+        .map(Json)
+}
+
+async fn update_canvas_platform(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasPlatformResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasPlatformRequest = parse_platform_request(request).await?;
+    service
+        .update(&headers, &platform_id, request)
+        .await
+        .map(Json)
+}
+
+fn canvas_management(
+    state: &IssuanceState,
+) -> Result<&CanvasPlatformManagementHttpService, CanvasManagementHttpError> {
+    state.canvas_management.as_ref().ok_or_else(|| {
+        CanvasManagementHttpError::Service(
+            crate::canvas_management_service::CanvasPlatformManagementError::RepositoryUnavailable,
+        )
+    })
 }
 
 async fn start_canvas_oauth_connection(

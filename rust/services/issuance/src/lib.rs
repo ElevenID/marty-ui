@@ -28,6 +28,7 @@ pub mod canvas_lti_sync_enqueue;
 pub mod canvas_lti_tool_signing;
 pub mod canvas_management;
 pub mod canvas_management_domain;
+pub mod canvas_management_http;
 pub mod canvas_management_postgres;
 pub mod canvas_management_service;
 pub mod canvas_oauth;

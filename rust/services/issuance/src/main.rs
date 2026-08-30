@@ -41,6 +41,10 @@ use marty_issuance_service::{
         HttpCanvasLtiToolIdentityResolver, HttpCanvasLtiToolSignatureProvider,
         IssuerDidCanvasLtiToolJwtSigner,
     },
+    canvas_management_domain::CanvasOriginPolicy,
+    canvas_management_http::CanvasPlatformManagementHttpService,
+    canvas_management_postgres::PostgresCanvasManagementRepository,
+    canvas_management_service::CanvasPlatformManagementService,
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
@@ -179,6 +183,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
         },
     )?;
+    let canvas_management =
+        CanvasPlatformManagementHttpService::new(CanvasPlatformManagementService::new(
+            Arc::new(PostgresCanvasManagementRepository::new(pool.clone())),
+            config.issuance_api_key.as_deref(),
+            CanvasOriginPolicy {
+                allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+                private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+                self_managed_origin_allowlist: config.canvas_self_managed_origins.clone(),
+            },
+        ));
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,
@@ -449,6 +463,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             credential_management_http,
             CanvasServices::new(
                 canvas_oauth,
+                canvas_management,
                 CanvasLtiServices::new(
                     canvas_lti_login,
                     canvas_lti_launch,

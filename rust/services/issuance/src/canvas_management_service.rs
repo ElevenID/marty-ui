@@ -96,6 +96,14 @@ impl CanvasPlatformManagementService {
         }
     }
 
+    pub fn authorize_request<'organization>(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&'organization str>,
+    ) -> Result<&'organization str, CanvasPlatformManagementError> {
+        self.authorize(api_key, trusted_organization_id)
+    }
+
     pub async fn create(
         &self,
         request: CanvasPlatformRequest,
