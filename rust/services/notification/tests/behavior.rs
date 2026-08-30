@@ -395,7 +395,8 @@ async fn webhook_wildcards_are_validated_and_preserve_delivery_semantics() {
         Arc::new(InMemoryNotificationRepository::default());
     let app = app(repository.clone());
     let mut webhook_request = fixture["valid_webhook"].clone();
-    webhook_request["event_types"] = json!(["*"]);
+    webhook_request["event_types"] =
+        json!([fixture["event_pattern_contract"]["all_current_and_future_supported"]]);
     let webhook = app
         .clone()
         .oneshot(request("POST", "/v1/webhooks", webhook_request))
@@ -406,7 +407,7 @@ async fn webhook_wildcards_are_validated_and_preserve_delivery_semantics() {
 
     let mut subscription_request = fixture["valid_subscription"].clone();
     subscription_request["delivery_target_id"] = webhook["id"].clone();
-    subscription_request["event_types"] = json!(["application.*"]);
+    subscription_request["event_types"] = json!([fixture["event_pattern_contract"]["category"]]);
     let subscription = app
         .clone()
         .oneshot(request("POST", "/v1/subscriptions", subscription_request))
@@ -430,14 +431,16 @@ async fn webhook_wildcards_are_validated_and_preserve_delivery_semantics() {
                 "/v1/subscriptions/{}?organization_id=org-a",
                 subscription["id"].as_str().unwrap()
             ),
-            json!({"event_types": ["unsupported.*"]}),
+            json!({
+                "event_types": [fixture["event_pattern_contract"]["unsupported"]]
+            }),
         ))
         .await
         .unwrap();
     assert_eq!(invalid_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let mut invalid_webhook = fixture["valid_webhook"].clone();
-    invalid_webhook["event_types"] = json!(["unsupported.*"]);
+    invalid_webhook["event_types"] = json!([fixture["event_pattern_contract"]["unsupported"]]);
     let invalid_webhook = app
         .oneshot(request("POST", "/v1/webhooks", invalid_webhook))
         .await

@@ -34,6 +34,16 @@
     "delivery_target_id": "$WEBHOOK_ID",
     "retry_policy": {"max_attempts": 3, "initial_backoff_seconds": 1, "max_backoff_seconds": 30}
   },
+  "event_pattern_contract": {
+    "exact": "application.approved",
+    "category": "application.*",
+    "all_current_and_future_supported": "*",
+    "unsupported": "unsupported.*"
+  },
+  "subscription_target_projection": [
+    "delivery_target_id",
+    "delivery.target_id"
+  ],
   "valid_internal_event": {
     "event_id": "event/application-a/approved",
     "event_type": "application.approved",
