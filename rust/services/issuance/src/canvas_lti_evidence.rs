@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -14,7 +14,9 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, PartialEq)]
+const REDACTED: &str = "[REDACTED]";
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiEvidenceApplication {
     pub id: String,
     pub organization_id: String,
@@ -24,7 +26,21 @@ pub struct CanvasLtiEvidenceApplication {
     pub integration_context: Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl fmt::Debug for CanvasLtiEvidenceApplication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiEvidenceApplication")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("application_template_id", &self.application_template_id)
+            .field("status", &self.status)
+            .field("credential_id", &self.credential_id)
+            .field("integration_context", &REDACTED)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiEvidenceBinding {
     pub id: String,
     pub organization_id: String,
@@ -32,6 +48,20 @@ pub struct CanvasLtiEvidenceBinding {
     pub application_template_id: String,
     pub evidence_requirements: Vec<Value>,
     pub config_version: i64,
+}
+
+impl fmt::Debug for CanvasLtiEvidenceBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiEvidenceBinding")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("platform_id", &self.platform_id)
+            .field("application_template_id", &self.application_template_id)
+            .field("evidence_requirements", &REDACTED)
+            .field("config_version", &self.config_version)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,13 +77,26 @@ pub struct CanvasLtiEvidenceScope {
     pub platform: CanvasLtiEvidencePlatform,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiEvidenceFact {
     pub provider: String,
     pub requirement_id: Option<String>,
     pub source: Value,
     pub verification: Value,
     pub observed_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for CanvasLtiEvidenceFact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiEvidenceFact")
+            .field("provider", &self.provider)
+            .field("requirement_id", &self.requirement_id)
+            .field("source", &REDACTED)
+            .field("verification", &REDACTED)
+            .field("observed_at", &self.observed_at)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,13 +108,26 @@ pub struct CanvasLtiEvidenceSyncTarget {
     pub config_version: i64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiEvidenceSyncJob {
     pub id: String,
     pub status: String,
     pub result: Value,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl fmt::Debug for CanvasLtiEvidenceSyncJob {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiEvidenceSyncJob")
+            .field("id", &self.id)
+            .field("status", &self.status)
+            .field("result", &REDACTED)
+            .field("created_at", &self.created_at)
+            .field("completed_at", &self.completed_at)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

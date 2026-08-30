@@ -790,15 +790,7 @@ async fn get_canvas_lti_evidence_status(
         .ok_or(CanvasLtiEvidenceError::RepositoryUnavailable)?
         .status(token)
         .await?;
-    let mut response = Json(status).into_response();
-    response.headers_mut().insert(
-        http_header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
-    response
-        .headers_mut()
-        .insert(http_header::PRAGMA, HeaderValue::from_static("no-cache"));
-    Ok(response)
+    Ok(private_no_store(Json(status).into_response()))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1521,7 +1513,7 @@ impl From<CanvasLtiEvidenceError> for CanvasLtiEvidenceHttpError {
 impl IntoResponse for CanvasLtiEvidenceHttpError {
     fn into_response(self) -> Response {
         use CanvasLtiEvidenceError as Error;
-        match self {
+        let response = match self {
             Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
             Self::Service(Error::SessionNotFound) => (
                 StatusCode::NOT_FOUND,
@@ -1543,7 +1535,8 @@ impl IntoResponse for CanvasLtiEvidenceHttpError {
             Self::Service(Error::RepositoryUnavailable) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
             }
-        }
+        };
+        private_no_store(response)
     }
 }
 

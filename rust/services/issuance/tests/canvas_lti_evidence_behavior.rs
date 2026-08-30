@@ -107,6 +107,48 @@ fn target() -> CanvasLtiEvidenceSyncTarget {
 }
 
 #[test]
+fn evidence_debug_output_redacts_private_projection_data() {
+    let context_secret = "private-integration-context";
+    let requirements_secret = "private-evidence-requirements";
+    let source_secret = "private-evidence-source";
+    let verification_secret = "private-evidence-verification";
+    let result_secret = "private-sync-result";
+    let application = CanvasLtiEvidenceApplication {
+        integration_context: json!({"secret": context_secret}),
+        ..scope().application
+    };
+    let binding = CanvasLtiEvidenceBinding {
+        evidence_requirements: vec![json!({"secret": requirements_secret})],
+        ..scope().binding
+    };
+    let fact = CanvasLtiEvidenceFact {
+        source: json!({"secret": source_secret}),
+        verification: json!({"secret": verification_secret}),
+        ..verified_fact("required-score", 10)
+    };
+    let job = CanvasLtiEvidenceSyncJob {
+        id: "job-safe-id".to_owned(),
+        status: "succeeded".to_owned(),
+        result: json!({"secret": result_secret}),
+        created_at: time(10),
+        completed_at: Some(time(11)),
+    };
+
+    let debug = format!("{application:?} {binding:?} {fact:?} {job:?}");
+    assert!(debug.contains("job-safe-id"));
+    assert!(debug.contains("[REDACTED]"));
+    for secret in [
+        context_secret,
+        requirements_secret,
+        source_secret,
+        verification_secret,
+        result_secret,
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[test]
 fn projection_requires_current_config_success_and_returns_only_browser_safe_counts() {
     let response = project_canvas_lti_evidence_status(
         &scope(),
@@ -398,6 +440,8 @@ async fn evidence_status_http_requires_session_bearer_and_disables_browser_cachi
         .unwrap();
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(unauthorized.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert_eq!(unauthorized.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(unauthorized.headers()[header::PRAGMA], "no-cache");
 
     let response = make_app()
         .oneshot(
@@ -426,6 +470,11 @@ async fn evidence_status_http_requires_session_bearer_and_disables_browser_cachi
         .await
         .unwrap();
     assert_eq!(bootstrap_required.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        bootstrap_required.headers()[header::CACHE_CONTROL],
+        "no-store"
+    );
+    assert_eq!(bootstrap_required.headers()[header::PRAGMA], "no-cache");
     assert_eq!(
         response_json(bootstrap_required).await,
         json!({"detail": "Bootstrap the Canvas application before synchronizing evidence"})
