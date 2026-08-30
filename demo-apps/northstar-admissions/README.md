@@ -19,10 +19,12 @@ server validates that inventory against the exact configured gateway before it
 starts and exposes only that safe inventory to the recorder.
 
 The callback verifies Marty's canonical HMAC-SHA256 signature, binds event
-headers to the signed body, checks organization and application scope, and
-processes a valid event only once.
+headers to the signed body, checks organization and application scope, requires
+the signed event correlation ID to equal the successful gateway approval
+request ID, and processes a valid event only once.
 After the callback returns, the server uses the evidence key to retrieve and
-bind the persisted delivery record through `/v1/webhooks/{id}/deliveries`.
+bind the persisted delivery record through `/v1/webhooks/{id}/deliveries`. The
+delivery record must preserve that same correlation ID or the run fails closed.
 
 Run unit tests with `npm test`. The public deployment is expected at
 `https://admissions-test.elevenidllc.com`, with `/webhooks/marty` routed to this

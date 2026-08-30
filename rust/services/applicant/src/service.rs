@@ -89,14 +89,22 @@ pub struct ApprovalFacts {
     pub applicant_country: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ApplicationEvent {
+    pub event_id: String,
     pub event_type: String,
     pub aggregate_id: String,
     pub aggregate_type: String,
     pub organization_id: String,
+    pub correlation_id: String,
     pub timestamp: DateTime<Utc>,
     pub data: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReviewRequestContext<'a> {
+    pub reviewer_id: &'a str,
+    pub correlation_id: &'a str,
 }
 
 #[async_trait]
@@ -234,6 +242,7 @@ pub struct ApplicantService {
     flow: Arc<dyn FlowProvider>,
     authorizer: Arc<dyn ApprovalAuthorizer>,
     events: Arc<dyn EventPublisher>,
+    event_delivery: Mutex<()>,
     persistence: Arc<dyn StorePersistence>,
 }
 
@@ -270,6 +279,7 @@ impl ApplicantService {
             flow,
             authorizer,
             events,
+            event_delivery: Mutex::new(()),
             persistence,
         }
     }
@@ -987,7 +997,7 @@ impl ApplicantService {
     pub async fn review(
         &self,
         application_id: &str,
-        reviewer_id: &str,
+        context: ReviewRequestContext<'_>,
         approve: bool,
         notes: Option<String>,
         rejection_reason: Option<String>,
@@ -997,7 +1007,7 @@ impl ApplicantService {
             .locks
             .lock()
             .await
-            .held_by(application_id, reviewer_id, now)
+            .held_by(application_id, context.reviewer_id, now)
         {
             return Err(ServiceError::ReviewerLockRequired);
         }
@@ -1019,7 +1029,7 @@ impl ApplicantService {
                 validate_required_evidence(&mut store, &application, now)?;
             }
             (
-                approval_facts(&store, &application, reviewer_id),
+                approval_facts(&store, &application, context.reviewer_id),
                 application.applicant_id,
             )
         };
@@ -1060,11 +1070,8 @@ impl ApplicantService {
         {
             advance_applicant_projection(applicant, target, now)?;
         }
-        store.applications[index] = application.clone();
-        self.persistence.persist(&store)?;
-        drop(store);
-
         let event = ApplicationEvent {
+            event_id: Uuid::new_v4().to_string(),
             event_type: if approve {
                 "application.approved"
             } else {
@@ -1074,6 +1081,7 @@ impl ApplicantService {
             aggregate_id: application.id.clone(),
             aggregate_type: "application".into(),
             organization_id: application.organization_id.clone(),
+            correlation_id: context.correlation_id.to_owned(),
             timestamp: now,
             data: json!({
                 "applicant_id": &application.applicant_id,
@@ -1082,10 +1090,45 @@ impl ApplicantService {
                 "status": application.status
             }),
         };
-        // The durable decision is authoritative; delivery is observable and retryable
-        // through the concrete event adapter, but does not roll back the review.
-        let _ = self.events.publish(&event).await;
+        store.applications[index] = application.clone();
+        store.pending_application_events.push(event);
+        self.persistence.persist(&store)?;
+        drop(store);
+
+        // The decision and event are committed together. Delivery failure leaves the
+        // stable event ID in the durable queue for the background retry worker.
+        let _ = self.publish_pending_events().await;
         Ok(application)
+    }
+
+    pub async fn publish_pending_events(&self) -> Result<usize, ProviderError> {
+        let _delivery = self.event_delivery.lock().await;
+        let pending = self.store.read().await.pending_application_events.clone();
+        let mut delivered = 0;
+        let mut first_error = None;
+        for event in pending {
+            if let Err(error) = self.events.publish(&event).await {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                continue;
+            }
+            let mut store = self.store.write().await;
+            let Some(index) = store
+                .pending_application_events
+                .iter()
+                .position(|candidate| candidate.event_id == event.event_id)
+            else {
+                continue;
+            };
+            let removed = store.pending_application_events.remove(index);
+            if let Err(error) = self.persistence.persist(&store) {
+                store.pending_application_events.insert(index, removed);
+                return Err(error);
+            }
+            delivered += 1;
+        }
+        first_error.map_or(Ok(delivered), Err)
     }
 
     pub async fn request_information(

@@ -297,6 +297,7 @@ pub struct EventIngestRequest {
     pub aggregate_id: String,
     pub aggregate_type: String,
     pub organization_id: String,
+    pub correlation_id: String,
     #[serde(default)]
     pub data: Map<String, Value>,
     pub timestamp: Option<String>,
@@ -693,6 +694,10 @@ impl NotificationService {
                 "organization_id".into(),
                 Value::String(event.organization_id.clone()),
             ),
+            (
+                "correlation_id".into(),
+                Value::String(event.correlation_id.clone()),
+            ),
             ("data".into(), Value::Object(event.data.clone())),
         ]);
         let mut deliveries = 0_i64;
@@ -944,6 +949,9 @@ fn validate_event(event: &EventIngestRequest) -> Result<(), ServiceError> {
             "event_id contains unsafe characters".into(),
         ));
     }
+    Uuid::parse_str(&event.correlation_id).map_err(|_| {
+        ServiceError::Invalid("correlation_id must be a gateway request UUID".into())
+    })?;
     validate_internal_event_data(&event.event_type, &event.data)
         .map_err(|error| ServiceError::Invalid(error.to_string()))?;
     if let Some(timestamp) = &event.timestamp {

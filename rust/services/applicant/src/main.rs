@@ -13,9 +13,13 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::{net::TcpListener, sync::RwLock};
+use tokio::{
+    net::TcpListener,
+    sync::RwLock,
+    time::{self, Duration, MissedTickBehavior},
+};
 use tonic::transport::Endpoint;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -74,6 +78,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
         persistence,
     ));
+    let event_delivery_service = Arc::clone(&service);
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(5));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(error) = event_delivery_service.publish_pending_events().await {
+                warn!(error = %error, "applicant event outbox delivery failed");
+            }
+        }
+    });
     let port = env_value("APPLICANT_SERVICE_PORT", "8006").parse()?;
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let listener = TcpListener::bind(address).await?;

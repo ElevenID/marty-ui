@@ -122,6 +122,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       organizationId,
       application: { id: applicationId, status: state.applicationStatus },
       integration: {
+        webhookId,
         runtimeKeyPrefix: String(config.runtimeKeyPrefix || 'mk_live_••••'),
         runtimeScopes: ['applications:read', 'applications:approve'],
         readOnlyScopes: ['applications:read'],
@@ -146,6 +147,10 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       { method: 'POST', organizationId, apiKey, body: { notes: 'Approved by Northstar Admissions' } },
     );
     state.lastGatewayResult = { mode, status: result.status, requestId: result.requestId, detail: result.payload?.detail };
+    if (result.ok && !isUuid(result.requestId)) {
+      state.lastGatewayResult.detail = 'Gateway response did not include a valid request ID';
+      return { ok: false, status: 502, requestId: null, payload: { detail: state.lastGatewayResult.detail } };
+    }
     const refreshed = await refreshApplication();
     if (refreshed.status !== 200) {
       return { ok: false, status: refreshed.status, requestId: result.requestId, payload: refreshed.body };
@@ -181,6 +186,15 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       state.webhookStatus = 'Rejected: event scope mismatch';
       return { status: 422, body: { status: 'rejected', code: 'EVENT_SCOPE_MISMATCH' } };
     }
+    const approvalRequestId = state.lastGatewayResult?.mode === 'runtime'
+      && state.lastGatewayResult.status >= 200
+      && state.lastGatewayResult.status < 300
+      ? state.lastGatewayResult.requestId
+      : null;
+    if (!approvalRequestId || payload.correlation_id !== approvalRequestId) {
+      state.webhookStatus = 'Rejected: approval correlation mismatch';
+      return { status: 422, body: { status: 'rejected', code: 'APPROVAL_CORRELATION_MISMATCH' } };
+    }
     state.lastVerifiedEnvelope = {
       payload: structuredClone(payload),
       headers: {
@@ -200,6 +214,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       eventId: payload.id,
       type: payload.type,
       timestamp: payload.timestamp,
+      correlationId: payload.correlation_id,
       deliveryId: request.headers['x-mip-delivery-id'] || null,
       verified: true,
     });
@@ -209,25 +224,37 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
   }
 
   async function refreshDeliveryEvidence() {
-    const eventId = state.webhookEvents.at(-1)?.eventId;
-    if (!eventId) return { status: 409, body: { detail: 'No verified webhook event is available' } };
+    const event = state.webhookEvents.at(-1);
+    if (!event) return { status: 409, body: { detail: 'No verified webhook event is available' } };
     const result = await gateway(
       `/v1/webhooks/${encodeURIComponent(webhookId)}/deliveries?organization_id=${encodeURIComponent(organizationId)}`,
       { method: 'GET', organizationId, apiKey: evidenceKey },
     );
     const deliveries = Array.isArray(result.payload) ? result.payload : result.payload?.deliveries || [];
-    const match = deliveries.find((delivery) => delivery.event_id === eventId);
+    const eventDelivery = deliveries.find((delivery) => delivery.event_id === event.eventId);
+    const match = eventDelivery?.correlation_id === event.correlationId
+      && eventDelivery.organization_id === organizationId
+      && eventDelivery.webhook_id === webhookId
+      ? eventDelivery
+      : null;
     if (result.ok && match) {
       state.deliveryEvidence = {
         eventId: match.event_id,
         deliveryId: match.id || match.delivery_id,
+        correlationId: match.correlation_id,
+        organizationId: match.organization_id,
+        webhookId: match.webhook_id,
         status: match.status || (match.success === true ? 'DELIVERED' : match.success === false ? 'FAILED' : 'UNKNOWN'),
         responseStatusCode: match.response_status_code,
       };
     }
     return {
-      status: result.ok ? (match ? 200 : 202) : result.status,
-      body: match ? state.deliveryEvidence : { detail: result.payload?.detail || 'Delivery record is not available yet' },
+      status: result.ok ? (match ? 200 : eventDelivery ? 409 : 202) : result.status,
+      body: match ? state.deliveryEvidence : {
+        detail: eventDelivery
+          ? 'Delivery record does not match the approval request and subscription scope'
+          : result.payload?.detail || 'Delivery record is not available yet',
+      },
     };
   }
 
@@ -341,6 +368,11 @@ export function loadRunConfig(config = process.env) {
     callbackUrl: config.NORTHSTAR_CALLBACK_URL || run.callback_url,
     preparationGatewayRequests: run.outbound_requests || [],
   };
+}
+
+function isUuid(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 export function startServer(config = process.env) {

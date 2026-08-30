@@ -1,5 +1,5 @@
 use crate::{
-    service::{ApplicantService, Identity, ServiceError},
+    service::{ApplicantService, Identity, ReviewRequestContext, ServiceError},
     Applicant, ApplicantError, Application, Biometric, Evidence, EvidenceStatus, EvidenceUpload,
     ReviewerLock, VettingCheck, LOCK_TTL_SECONDS, MAX_EVIDENCE_BYTES,
 };
@@ -20,6 +20,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, path::Path as FilePath, sync::Arc};
 use tower_http::trace::TraceLayer;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -305,6 +306,17 @@ fn header(headers: &HeaderMap, name: &'static str) -> String {
         .map(str::trim)
         .unwrap_or_default()
         .to_owned()
+}
+
+fn gateway_request_id(headers: &HeaderMap) -> Result<String, ApiError> {
+    let request_id = header(headers, "x-request-id");
+    Uuid::parse_str(&request_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A valid gateway request ID is required",
+        )
+    })?;
+    Ok(request_id)
 }
 
 fn user(headers: &HeaderMap) -> Result<String, ApiError> {
@@ -939,6 +951,7 @@ async fn approve(
     Json(body): Json<ApproveRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let reviewer = organization_identity(&headers, &organization_id, "application:approve")?;
+    let request_id = gateway_request_id(&headers)?;
     state
         .service
         .organization_application(&organization_id, &application_id)
@@ -948,7 +961,10 @@ async fn approve(
             .service
             .review(
                 &application_id,
-                &reviewer,
+                ReviewRequestContext {
+                    reviewer_id: &reviewer,
+                    correlation_id: &request_id,
+                },
                 true,
                 body.notes,
                 None,
@@ -965,6 +981,7 @@ async fn reject(
     Json(body): Json<RejectRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let reviewer = organization_identity(&headers, &organization_id, "application:reject")?;
+    let request_id = gateway_request_id(&headers)?;
     state
         .service
         .organization_application(&organization_id, &application_id)
@@ -974,7 +991,10 @@ async fn reject(
             .service
             .review(
                 &application_id,
-                &reviewer,
+                ReviewRequestContext {
+                    reviewer_id: &reviewer,
+                    correlation_id: &request_id,
+                },
                 false,
                 body.notes,
                 Some(body.reason),
@@ -1534,4 +1554,25 @@ async fn metrics() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
         "# TYPE marty_applicant_backend_info gauge\nmarty_applicant_backend_info{backend=\"rust\"} 1\n",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_events_require_a_gateway_request_uuid() {
+        let mut headers = HeaderMap::new();
+        assert!(gateway_request_id(&headers).is_err());
+        headers.insert("x-request-id", HeaderValue::from_static("client-chosen"));
+        assert!(gateway_request_id(&headers).is_err());
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_static("11111111-1111-4111-8111-111111111111"),
+        );
+        assert_eq!(
+            gateway_request_id(&headers).expect("valid gateway request ID"),
+            "11111111-1111-4111-8111-111111111111"
+        );
+    }
 }

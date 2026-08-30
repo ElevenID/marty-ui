@@ -9,6 +9,7 @@ import { createNorthstarApp, loadRunConfig, startServer } from '../src/server.mj
 import { expectedSignature } from '../src/webhook.mjs';
 
 const secret = '0123456789abcdef0123456789abcdef';
+const approvalRequestId = '11111111-1111-4111-8111-111111111111';
 const config = {
   gatewayOrigin: 'https://beta.elevenidllc.com', organizationId: 'org-1', applicationId: 'app-1',
   webhookId: 'webhook-1', runtimeKey: 'mk_live_runtime-secret', readOnlyKey: 'mk_live_readonly-secret',
@@ -105,22 +106,42 @@ test('run-secret loading carries only sanitized preparation observations into ap
 test('delivery evidence is retrieved through the public gateway and sanitized', async () => {
   const payload = {
     id: 'event-3', type: 'application.approved', timestamp: '2026-08-30T00:00:00Z',
-    organization_id: 'org-1', data: { application_id: 'app-1', status: 'APPROVED' },
+    organization_id: 'org-1', correlation_id: approvalRequestId,
+    data: { application_id: 'app-1', status: 'APPROVED' },
   };
   const app = createNorthstarApp(config, {
     fetchImpl: async (url, options) => {
       assert.equal(url.origin, 'https://beta.elevenidllc.com');
+      if (url.pathname.endsWith('/approve')) {
+        return new Response(JSON.stringify({ status: 'APPROVED' }), {
+          status: 200, headers: {
+            'content-type': 'application/json', 'x-mip-version': '0.5.0', 'x-request-id': approvalRequestId,
+          },
+        });
+      }
+      if (url.pathname.endsWith('/applicants')) {
+        return new Response(JSON.stringify({ applicants: [{ id: 'app-1', status: 'APPROVED' }] }), {
+          status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0' },
+        });
+      }
       assert.equal(url.pathname, '/v1/webhooks/webhook-1/deliveries');
       assert.equal(options.headers.get('X-API-Key'), 'mk_live_evidence-secret');
-      return new Response(JSON.stringify([{ id: 'delivery-3', event_id: 'event-3', success: true, response_status_code: 200 }]), {
+      return new Response(JSON.stringify([{
+        id: 'delivery-3', event_id: 'event-3', correlation_id: approvalRequestId,
+        organization_id: 'org-1', webhook_id: 'webhook-1',
+        success: true, response_status_code: 200,
+      }]), {
         status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0' },
       });
     },
   });
-  await app.receiveWebhook(webhookRequest(payload));
+  assert.equal((await app.approve('runtime')).status, 200);
+  assert.equal((await app.receiveWebhook(webhookRequest(payload))).status, 200);
   assert.equal((await app.refreshDeliveryEvidence()).status, 200);
   assert.deepEqual(app.safeState().deliveryEvidence, {
-    eventId: 'event-3', deliveryId: 'delivery-3', status: 'DELIVERED', responseStatusCode: 200,
+    eventId: 'event-3', deliveryId: 'delivery-3', correlationId: approvalRequestId,
+    organizationId: 'org-1', webhookId: 'webhook-1',
+    status: 'DELIVERED', responseStatusCode: 200,
   });
   assert.equal(JSON.stringify(app.safeState()).includes('evidence-secret'), false);
 });
@@ -132,7 +153,7 @@ test('approval state is re-read through the public applicant route', async () =>
       requests.push({ path: url.pathname, method: options.method, key: options.headers.get('X-API-Key') });
       if (options.method === 'POST') {
         return new Response(JSON.stringify({ status: 'APPROVED' }), {
-          status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0', 'x-request-id': 'request-1' },
+          status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0', 'x-request-id': approvalRequestId },
         });
       }
       return new Response(JSON.stringify({ applicants: [{ id: 'app-1', status: 'APPROVED' }] }), {
@@ -230,10 +251,22 @@ test('receiver resilience controls require explicit enablement and expose no sec
 });
 
 test('valid events update enrollment once and invalid signatures do not', async () => {
-  const app = createNorthstarApp(config, { fetchImpl: async () => new Response('{}') });
+  const app = createNorthstarApp(config, { fetchImpl: async (url, options) => {
+    if (options.method === 'POST' && url.pathname.endsWith('/approve')) {
+      return new Response(JSON.stringify({ status: 'APPROVED' }), {
+        status: 200, headers: {
+          'content-type': 'application/json', 'x-mip-version': '0.5.0', 'x-request-id': approvalRequestId,
+        },
+      });
+    }
+    return new Response(JSON.stringify({ applicants: [{ id: 'app-1', status: 'APPROVED' }] }), {
+      status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0' },
+    });
+  } });
   const payload = {
     id: 'event-1', type: 'application.approved', timestamp: '2026-08-30T00:00:00Z',
-    organization_id: 'org-1', data: { application_id: 'app-1', status: 'APPROVED' },
+    organization_id: 'org-1', correlation_id: approvalRequestId,
+    data: { application_id: 'app-1', status: 'APPROVED' },
   };
   assert.equal((await app.testDuplicateEvent()).status, 409);
   const invalidTest = await app.testInvalidSignature();
@@ -242,6 +275,13 @@ test('valid events update enrollment once and invalid signatures do not', async 
     kind: 'INVALID_SIGNATURE', receiverStatus: 401, code: 'INVALID_SIGNATURE', admissionsUnchanged: true,
   });
   assert.equal(app.safeState().enrollmentStatus, 'Waiting for approval');
+  assert.equal(app.safeState().webhookEvents.length, 0);
+  assert.equal((await app.approve('runtime')).status, 200);
+  const mismatched = { ...payload, id: 'event-mismatch', correlation_id: '22222222-2222-4222-8222-222222222222' };
+  assert.deepEqual(await app.receiveWebhook(webhookRequest(mismatched)), {
+    status: 422,
+    body: { status: 'rejected', code: 'APPROVAL_CORRELATION_MISMATCH' },
+  });
   assert.equal(app.safeState().webhookEvents.length, 0);
   assert.equal((await app.receiveWebhook(webhookRequest(payload))).body.status, 'processed');
   assert.equal(app.safeState().enrollmentStatus, 'Enrollment workflow ready');

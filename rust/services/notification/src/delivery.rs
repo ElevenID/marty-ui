@@ -441,6 +441,11 @@ pub async fn process_outbox_event(
                 subscription_id: Some(event.subscription_id.clone()),
                 event_id: event.event_id.clone(),
                 event_type: event.event_type.clone(),
+                correlation_id: event
+                    .payload
+                    .get("correlation_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 success: outcome.success,
                 response_status_code: outcome.response_status_code,
                 error_message: outcome.error_code,

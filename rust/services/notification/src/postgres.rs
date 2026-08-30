@@ -227,6 +227,7 @@ fn row_delivery(row: PgRow) -> Result<WebhookDelivery, RepositoryError> {
         subscription_id: row.try_get("subscription_id").map_err(database)?,
         event_id: row.try_get("event_id").map_err(database)?,
         event_type: row.try_get("event_type").map_err(database)?,
+        correlation_id: row.try_get("correlation_id").map_err(database)?,
         success: row.try_get("success").map_err(database)?,
         response_status_code: row.try_get("response_status_code").map_err(database)?,
         error_message: row.try_get("error_message").map_err(database)?,
@@ -420,7 +421,7 @@ impl NotificationRepository for PgNotificationRepository {
         )
     }
     async fn save_webhook_delivery(&self, item: WebhookDelivery) -> Result<(), RepositoryError> {
-        sqlx::query("INSERT INTO notification_service.webhook_deliveries (id,organization_id,webhook_id,subscription_id,event_id,event_type,success,response_status_code,error_message,retry_count,response_time_ms,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET success=EXCLUDED.success,response_status_code=EXCLUDED.response_status_code,error_message=EXCLUDED.error_message,retry_count=EXCLUDED.retry_count,response_time_ms=EXCLUDED.response_time_ms") .bind(item.id).bind(item.organization_id).bind(item.webhook_id).bind(item.subscription_id).bind(item.event_id).bind(item.event_type).bind(item.success).bind(item.response_status_code).bind(item.error_message).bind(item.retry_count).bind(item.response_time_ms).bind(item.created_at).execute(&self.pool).await.map_err(database)?;
+        sqlx::query("INSERT INTO notification_service.webhook_deliveries (id,organization_id,webhook_id,subscription_id,event_id,event_type,correlation_id,success,response_status_code,error_message,retry_count,response_time_ms,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(id) DO UPDATE SET correlation_id=EXCLUDED.correlation_id,success=EXCLUDED.success,response_status_code=EXCLUDED.response_status_code,error_message=EXCLUDED.error_message,retry_count=EXCLUDED.retry_count,response_time_ms=EXCLUDED.response_time_ms") .bind(item.id).bind(item.organization_id).bind(item.webhook_id).bind(item.subscription_id).bind(item.event_id).bind(item.event_type).bind(item.correlation_id).bind(item.success).bind(item.response_status_code).bind(item.error_message).bind(item.retry_count).bind(item.response_time_ms).bind(item.created_at).execute(&self.pool).await.map_err(database)?;
         Ok(())
     }
     async fn list_webhook_deliveries(

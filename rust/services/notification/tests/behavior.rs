@@ -371,6 +371,20 @@ async fn subscriptions_are_tenant_bound_and_enqueue_each_logical_delivery_once()
         service.ingest_event(event.clone()).await.unwrap()["deliveries"],
         1
     );
+    let logical = marty_notification::outbox::logical_webhook_delivery_id(
+        event.event_id.as_str(),
+        subscription["id"].as_str().unwrap(),
+        webhook["id"].as_str().unwrap(),
+    );
+    let queued = repository
+        .get_webhook_outbox_event(&logical)
+        .await
+        .unwrap()
+        .expect("queued webhook");
+    assert_eq!(
+        queued.payload["correlation_id"],
+        "11111111-1111-4111-8111-111111111111"
+    );
     assert_eq!(service.ingest_event(event).await.unwrap()["deliveries"], 0);
 }
 

@@ -72,8 +72,8 @@ function render(state) {
   }
   const activity = [
     ...state.gatewayRequests.map((item) => ({ type: 'request', title: `${item.method} ${item.path}`, detail: `${item.authentication} · ${item.origin}` })),
-    ...state.webhookEvents.map((item) => ({ type: 'event', title: `${item.type} verified`, detail: `Event ${short(item.eventId)} · Delivery ${short(item.deliveryId)}` })),
-    ...(state.deliveryEvidence ? [{ type: 'event', title: 'Gateway delivery record bound', detail: `HTTP ${state.deliveryEvidence.responseStatusCode} · ${short(state.deliveryEvidence.deliveryId)}` }] : []),
+    ...state.webhookEvents.map((item) => ({ type: 'event', title: `${item.type} verified`, detail: `Event ${short(item.eventId)} · Correlation ${short(item.correlationId)}` })),
+    ...(state.deliveryEvidence ? [{ type: 'event', title: 'Gateway delivery record bound', detail: `HTTP ${state.deliveryEvidence.responseStatusCode} · Correlation ${short(state.deliveryEvidence.correlationId)}` }] : []),
   ];
   renderTimeline(byId('timeline'), activity);
 }

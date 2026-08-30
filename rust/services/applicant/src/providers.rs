@@ -210,6 +210,48 @@ impl GrpcEventPublisher {
     }
 }
 
+fn event_stream_wire(event: &ApplicationEvent, event_id: &str) -> DomainEvent {
+    let data = event
+        .data
+        .as_object()
+        .map(|values| {
+            values
+                .iter()
+                .map(|(key, value)| {
+                    let wire = value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string());
+                    (key.clone(), wire)
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    DomainEvent {
+        event_id: event_id.into(),
+        event_type: event.event_type.clone(),
+        aggregate_id: event.aggregate_id.clone(),
+        aggregate_type: event.aggregate_type.clone(),
+        organization_id: event.organization_id.clone(),
+        data,
+        timestamp: event.timestamp.to_rfc3339(),
+        correlation_id: event.correlation_id.clone(),
+    }
+}
+
+fn notification_wire(event: &ApplicationEvent, event_id: &str) -> Value {
+    json!({
+        "event_id": event_id,
+        "event_type": event.event_type,
+        "aggregate_id": event.aggregate_id,
+        "aggregate_type": event.aggregate_type,
+        "organization_id": event.organization_id,
+        "correlation_id": event.correlation_id,
+        "data": event.data,
+        "timestamp": event.timestamp.to_rfc3339(),
+    })
+}
+
 #[async_trait]
 impl EventPublisher for GrpcEventPublisher {
     async fn publish(&self, event: &ApplicationEvent) -> Result<(), ProviderError> {
@@ -218,33 +260,23 @@ impl EventPublisher for GrpcEventPublisher {
                 "refusing to publish an unscoped applicant event".into(),
             ));
         }
-        let data = event
-            .data
-            .as_object()
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|(key, value)| {
-                        let wire = value
-                            .as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| value.to_string());
-                        (key.clone(), wire)
-                    })
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
-        let event_id = Uuid::new_v4().to_string();
-        let wire = DomainEvent {
-            event_id: event_id.clone(),
-            event_type: event.event_type.clone(),
-            aggregate_id: event.aggregate_id.clone(),
-            aggregate_type: event.aggregate_type.clone(),
-            organization_id: event.organization_id.clone(),
-            data,
-            timestamp: event.timestamp.to_rfc3339(),
-            correlation_id: String::new(),
+        let (Some(url), Some(token)) = (&self.notification_url, &self.notification_token) else {
+            return Err(ProviderError::Unavailable(
+                "notification event delivery is not configured".into(),
+            ));
         };
+        self.client
+            .post(url)
+            .header("x-service-token", token)
+            .header("x-marty-event-producer", "applicant")
+            .json(&notification_wire(event, &event.event_id))
+            .send()
+            .await
+            .map_err(|error| ProviderError::Unavailable(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
+
+        let wire = event_stream_wire(event, &event.event_id);
         let response = EventStreamServiceClient::new(self.channel.clone())
             .publish(PublishEventRequest { event: Some(wire) })
             .await
@@ -255,24 +287,36 @@ impl EventPublisher for GrpcEventPublisher {
                 "event stream rejected applicant event".into(),
             ));
         }
-        if let (Some(url), Some(token)) = (&self.notification_url, &self.notification_token) {
-            let _ = self
-                .client
-                .post(url)
-                .header("x-service-token", token)
-                .header("x-marty-event-producer", "applicant")
-                .json(&json!({
-                    "event_id": event_id,
-                    "event_type": event.event_type,
-                    "aggregate_id": event.aggregate_id,
-                    "aggregate_type": event.aggregate_type,
-                    "organization_id": event.organization_id,
-                    "data": event.data,
-                    "timestamp": event.timestamp.to_rfc3339(),
-                }))
-                .send()
-                .await;
-        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn approval_correlation_is_identical_on_both_event_boundaries() {
+        let event = ApplicationEvent {
+            event_id: "event-1".into(),
+            event_type: "application.approved".into(),
+            aggregate_id: "application-1".into(),
+            aggregate_type: "application".into(),
+            organization_id: "organization-1".into(),
+            correlation_id: "11111111-1111-4111-8111-111111111111".into(),
+            timestamp: chrono::Utc
+                .with_ymd_and_hms(2026, 8, 30, 12, 0, 0)
+                .single()
+                .expect("timestamp"),
+            data: json!({"application_id": "application-1"}),
+        };
+        let stream = event_stream_wire(&event, "event-1");
+        let notification = notification_wire(&event, "event-1");
+
+        assert_eq!(stream.event_id, "event-1");
+        assert_eq!(stream.correlation_id, event.correlation_id);
+        assert_eq!(notification["event_id"], "event-1");
+        assert_eq!(notification["correlation_id"], event.correlation_id);
     }
 }

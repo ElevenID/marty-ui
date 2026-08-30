@@ -19,7 +19,10 @@ The authenticated Applicant role may emit only:
 
 Both events must use aggregate type `application`, bind `data.application_id`
 to `aggregate_id`, and include only non-empty Applicant, application, credential
-template, and status identifiers. Notification then considers subscriptions
+template, and status identifiers. They must also carry the valid UUID assigned
+to the originating public gateway request. Notification includes that
+correlation ID in the signed webhook payload and persisted delivery history.
+Notification then considers subscriptions
 only from the event's `organization_id`; webhook lookup retains the same tenant
 boundary.
 
@@ -51,3 +54,7 @@ Generate a random token of at least 32 characters, store it as
 mounts together. Notification fails startup if its credential is absent, weak,
 ambiguous, or a known placeholder. Applicant fails closed and skips the network
 request if either its exact producer role or credential is unavailable.
+Applicant commits each application decision and a stable event ID in the same
+durable store update. Failed delivery remains queued and is retried; Notification
+deduplicates the stable event ID before creating its own durable webhook outbox
+record.

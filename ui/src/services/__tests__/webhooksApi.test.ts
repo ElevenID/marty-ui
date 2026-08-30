@@ -65,7 +65,10 @@ describe('webhooksApi', () => {
   it('normalizes backend webhook fields, delivery arrays, rotation, and supported events', async () => {
     server.use(
       http.get('http://localhost:8000/v1/webhooks/webhook-1/deliveries', () => (
-        HttpResponse.json([{ id: 'delivery-1' }])
+        HttpResponse.json([{
+          id: 'delivery-1',
+          correlation_id: '11111111-1111-4111-8111-111111111111',
+        }])
       )),
       http.post('http://localhost:8000/v1/webhooks/webhook-1/regenerate-secret', () => (
         HttpResponse.json({ id: 'webhook-1', endpoint_url: 'https://partner.example/hook', signing_secret: 'rotated' })
@@ -75,7 +78,10 @@ describe('webhooksApi', () => {
       )),
     )
 
-    expect(await getWebhookDeliveryAttempts('org-123', 'webhook-1')).toEqual([{ id: 'delivery-1' }])
+    expect(await getWebhookDeliveryAttempts('org-123', 'webhook-1')).toEqual([{
+      id: 'delivery-1',
+      correlation_id: '11111111-1111-4111-8111-111111111111',
+    }])
     expect((await regenerateWebhookSecret('org-123', 'webhook-1')).secret).toBe('rotated')
     expect((await getAvailableEventTypes()).categories).toEqual([
       { name: 'Application', events: [{ type: 'application.approved', description: 'application approved' }] },
