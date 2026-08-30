@@ -888,6 +888,7 @@ mod tests {
         Json, Router,
     };
     use ed25519_dalek::{Signer, SigningKey};
+    use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey as P256SecretKey};
     use serde_json::json;
 
     use super::*;
@@ -1089,11 +1090,14 @@ mod tests {
             "_mdoc_x5c".to_owned(),
             json!(["attacker-selected-certificate"]),
         );
+        let holder_secret =
+            P256SecretKey::from_slice(&[0x33; 32]).expect("valid deterministic P-256 key");
+        let holder_public = holder_secret.public_key().to_encoded_point(false);
         request.holder_jwk = Some(json!({
             "kty":"EC", "crv":"P-256", "alg":"ES256",
-            "x": URL_SAFE_NO_PAD.encode([0x11; 32]),
-            "y": URL_SAFE_NO_PAD.encode([0x22; 32]),
-            "d": URL_SAFE_NO_PAD.encode([0x33; 32]),
+            "x": URL_SAFE_NO_PAD.encode(holder_public.x().expect("P-256 x coordinate")),
+            "y": URL_SAFE_NO_PAD.encode(holder_public.y().expect("P-256 y coordinate")),
+            "d": URL_SAFE_NO_PAD.encode(holder_secret.to_bytes()),
         }));
 
         let built = builder.build(&request).await.expect("mdoc build");
