@@ -24,12 +24,12 @@ hex = "0.4"
 http = "1"
 httpdate = "1"
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
-marty-crypto = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
-marty-didcomm = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
-marty-iso18013 = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
-marty-oid4vci = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
-marty-verification = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c", default-features = false }
-marty-status = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "55693a0ff50b5d3eeeca6e80fda02d85793a192c" }
+marty-crypto = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }
+marty-iso18013 = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }
+marty-oid4vci = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }
+marty-verification = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }
+marty-status = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1" }
 mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "020beffb4da1e0ef52b4330b55c3b4633022d529" }
 mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "020beffb4da1e0ef52b4330b55c3b4633022d529" }
 mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "020beffb4da1e0ef52b4330b55c3b4633022d529" }
@@ -73,5 +73,5 @@ debug = "line-tables-only"
 debug = "line-tables-only"
 
 [patch.crates-io]
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "7a443cf6c37c8d7f11e9a767c1002684842ab5d0" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "671044c9495aec101bf0cd381669d5ed6f64dd11" }
 ssi-jwt = { path = "third_party/ssi-jwt" }
