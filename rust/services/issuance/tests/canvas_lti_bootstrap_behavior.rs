@@ -7,6 +7,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::{
+    body::{to_bytes, Body},
+    http::{header, Request, StatusCode},
+};
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     canvas_lti_bootstrap::{
@@ -25,8 +29,13 @@ use marty_issuance_service::{
         CanvasLtiClock, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
         CanvasLtiStoredLaunchState,
     },
+    http::router_with_canvas_lti_bootstrap,
+    transport::TransportPolicy,
+    IssuanceRuntime, IssuanceServiceConfig,
 };
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use serde_json::{json, Map, Value};
+use tower::ServiceExt;
 
 fn contract() -> Value {
     serde_json::from_str(include_str!(
@@ -298,6 +307,42 @@ impl CanvasLtiClock for FixedClock {
     fn now(&self) -> chrono::DateTime<Utc> {
         now()
     }
+}
+
+fn bootstrap_service(
+    session_repository: Arc<SessionRepository>,
+    repository: Arc<BootstrapRepository>,
+    portable_enabled: bool,
+) -> CanvasLtiBootstrapService {
+    CanvasLtiBootstrapService::new(
+        CanvasLtiExperienceSessionService::new(session_repository),
+        repository.clone(),
+        Arc::new(Materializer {
+            repository,
+            calls: AtomicUsize::new(0),
+        }),
+        Arc::new(FailingSync(AtomicUsize::new(0))),
+        Arc::new(CountingGenerator(AtomicUsize::new(0))),
+        Arc::new(FixedClock),
+        portable_enabled,
+        BTreeSet::from(["org-1".to_owned()]),
+    )
+}
+
+fn bootstrap_app(service: CanvasLtiBootstrapService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    router_with_canvas_lti_bootstrap(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        service,
+    )
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap()
 }
 
 #[test]
@@ -758,4 +803,225 @@ async fn bootstrap_service_validates_template_before_listing_applications() {
             ["get_template"]
         );
     }
+}
+
+fn assert_private_no_store(response: &axum::response::Response) {
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+}
+
+#[tokio::test]
+async fn bootstrap_http_replays_the_frozen_request_and_browser_safe_response() {
+    let session_repository = Arc::new(SessionRepository {
+        record: Mutex::new(Some(bootstrap_context().launch_state)),
+    });
+    let repository = Arc::new(BootstrapRepository {
+        feature_enabled: Mutex::new(Some(true)),
+        ..BootstrapRepository::default()
+    });
+    let vector = &contract()["experience"]["bootstrap"]["vector"];
+    let response = bootstrap_app(bootstrap_service(session_repository, repository, true))
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+                .header(
+                    header::AUTHORIZATION,
+                    "  bEaReR   bootstrap-session-token  ",
+                )
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(Body::from(vector["request"].to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_private_no_store(&response);
+    let body = response_json(response).await;
+    assert_eq!(body["application_id"], "application-1");
+    assert_eq!(body["application_status"], "approved");
+    assert_eq!(body["created"], true);
+    assert_eq!(body["organization_id"], "org-1");
+    assert_eq!(body["application_template_id"], "application-template-1");
+    assert_eq!(body["credential_template_id"], "credential-template-1");
+    assert_eq!(body["canvas_account_id"], "account-1");
+    assert_eq!(body["canvas_platform_id"], "platform-1");
+    assert_eq!(body["canvas_program_binding_id"], "binding-1");
+    assert_eq!(
+        body["canvas_context"],
+        vector["expected_public_canvas_context"]
+    );
+    for field in contract()["experience"]["bootstrap"]["response"]["private_fields_forbidden"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(body.get(field.as_str().unwrap()).is_none());
+    }
+}
+
+#[tokio::test]
+async fn bootstrap_http_authenticates_before_parsing_the_json_body() {
+    let response = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository::default()),
+        Arc::new(BootstrapRepository::default()),
+        true,
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("not-json"))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await,
+        json!({"detail": "Canvas LTI experience session bearer token is required"})
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_http_rejects_non_json_content_types_with_fastapi_compatible_422s() {
+    let response = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository {
+            record: Mutex::new(Some(bootstrap_context().launch_state)),
+        }),
+        Arc::new(BootstrapRepository::default()),
+        true,
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+            .header(header::AUTHORIZATION, "Bearer bootstrap-session-token")
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await,
+        json!({
+            "detail": [{
+                "type": "model_attributes_type",
+                "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": "{}",
+            }]
+        })
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_http_rejects_bodies_over_64_kib_without_processing_them() {
+    let response = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository {
+            record: Mutex::new(Some(bootstrap_context().launch_state)),
+        }),
+        Arc::new(BootstrapRepository::default()),
+        true,
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+            .header(header::AUTHORIZATION, "Bearer bootstrap-session-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("x".repeat(64 * 1024 + 1)))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_private_no_store(&response);
+    assert_eq!(
+        response_json(response).await,
+        json!({"detail": "Canvas LTI bootstrap body exceeds the size limit"})
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_http_rejects_schema_drift_with_fastapi_compatible_422s() {
+    let cases = [
+        json!([]),
+        json!({"applicant_identifier": 42}),
+        json!({"applicant_data": []}),
+    ];
+    for body in cases {
+        let response = bootstrap_app(bootstrap_service(
+            Arc::new(SessionRepository {
+                record: Mutex::new(Some(bootstrap_context().launch_state)),
+            }),
+            Arc::new(BootstrapRepository::default()),
+            true,
+        ))
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/experience-sessions/current/bootstrap")
+                .header(header::AUTHORIZATION, "Bearer bootstrap-session-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_private_no_store(&response);
+        assert!(response_json(response).await["detail"].is_array());
+    }
+}
+
+#[tokio::test]
+async fn bootstrap_http_maps_domain_failures_without_exposing_repository_details() {
+    let path = "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap";
+    let missing = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository::default()),
+        Arc::new(BootstrapRepository::default()),
+        true,
+    ))
+    .oneshot(
+        Request::post(path)
+            .header(header::AUTHORIZATION, "Bearer missing-session")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_private_no_store(&missing);
+    assert_eq!(
+        response_json(missing).await,
+        json!({"detail": "Canvas LTI experience session not found"})
+    );
+
+    let disabled = bootstrap_app(bootstrap_service(
+        Arc::new(SessionRepository {
+            record: Mutex::new(Some(bootstrap_context().launch_state)),
+        }),
+        Arc::new(BootstrapRepository {
+            feature_enabled: Mutex::new(Some(false)),
+            ..BootstrapRepository::default()
+        }),
+        true,
+    ))
+    .oneshot(
+        Request::post(path)
+            .header(header::AUTHORIZATION, "Bearer bootstrap-session-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(disabled.status(), StatusCode::CONFLICT);
+    assert_private_no_store(&disabled);
+    assert_eq!(
+        response_json(disabled).await,
+        json!({"detail": "Canvas LTI is disabled for this deployment profile"})
+    );
 }

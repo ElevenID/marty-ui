@@ -1,7 +1,19 @@
 use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
+    canvas_award_candidate_approval::{
+        CanvasAwardCandidateApprovalService, SecureCanvasAwardApprovalSeedGenerator,
+    },
+    canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
+    canvas_award_candidate_postgres::PostgresCanvasAwardCandidateRepository,
+    canvas_award_candidate_service::{
+        CanvasAwardCandidateMaterializerConfig, CanvasAwardCandidateMaterializerService,
+        UuidCanvasEvidenceFactIdGenerator,
+    },
     canvas_issuance_guard::CanvasGuardConfig,
+    canvas_lti_bootstrap::{
+        CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
+    },
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionService,
         SecureCanvasLtiExperienceSessionGenerator,
@@ -14,6 +26,9 @@ use marty_issuance_service::{
     canvas_lti_postgres::{
         CanvasLtiJwksRefreshConfig, MartyCanvasLtiAgsServiceUrlValidator,
         PostgresCanvasLtiJwksRefresher, PostgresCanvasLtiLoginRepository,
+    },
+    canvas_lti_sync_enqueue::{
+        PostgresCanvasLtiBootstrapSyncEnqueuer, UuidCanvasSyncEnqueueIdGenerator,
     },
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
@@ -142,11 +157,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let canvas_lti_experience_exchange = CanvasLtiExperienceExchangeService::new(
         canvas_lti_repository.clone(),
         Arc::new(SecureCanvasLtiExperienceSessionGenerator),
-        canvas_lti_clock,
+        canvas_lti_clock.clone(),
         config.canvas_lti_experience_session_ttl,
     )?;
     let canvas_lti_experience_session =
-        CanvasLtiExperienceSessionService::new(canvas_lti_repository);
+        CanvasLtiExperienceSessionService::new(canvas_lti_repository.clone());
+    let issuer_resolver = Arc::new(HttpIssuerContextResolver::new(
+        config.signing_keys_internal_url.clone(),
+        config.signing_keys_internal_api_key.as_deref(),
+        config.dependency_timeout,
+    )?);
+    let canvas_award_approver = Arc::new(CanvasAwardCandidateApprovalService::new(
+        Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone())),
+        issuer_resolver.clone(),
+        Arc::new(SecureCanvasAwardApprovalSeedGenerator),
+        canvas_lti_clock.clone(),
+        config.canvas_readiness_max_age,
+    ));
+    let canvas_award_materializer = Arc::new(CanvasAwardCandidateMaterializerService::new(
+        Arc::new(PostgresCanvasAwardCandidateRepository::new(pool.clone())),
+        canvas_award_approver,
+        Arc::new(UuidCanvasEvidenceFactIdGenerator),
+        canvas_lti_clock.clone(),
+        CanvasAwardCandidateMaterializerConfig {
+            enabled: config.canvas_portable_enabled,
+            pilot_organizations: config.canvas_pilot_organizations.clone(),
+            evidence_max_age: config.canvas_evidence_max_age,
+        },
+    ));
+    let canvas_lti_bootstrap = CanvasLtiBootstrapService::new(
+        canvas_lti_experience_session.clone(),
+        canvas_lti_repository,
+        canvas_award_materializer,
+        Arc::new(PostgresCanvasLtiBootstrapSyncEnqueuer::new(
+            pool.clone(),
+            config.canvas_portable_enabled,
+            config.canvas_pilot_organizations.clone(),
+            Arc::new(UuidCanvasSyncEnqueueIdGenerator),
+        )),
+        Arc::new(SecureCanvasLtiBootstrapApplicationGenerator),
+        canvas_lti_clock,
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+    );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -156,18 +209,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             nonce_repository,
             dpop_verifier: Arc::new(MartyDpopProofVerifier),
             proof_verifier: Arc::new(NativeCredentialProofVerifier),
-            issuer_resolver: Arc::new(HttpIssuerContextResolver::new(
-                config.signing_keys_internal_url.clone(),
-                config.signing_keys_internal_api_key.as_deref(),
-                config.dependency_timeout,
-            )?),
+            issuer_resolver,
             builder: Arc::new(HttpCredentialBuilder::new(
                 config.signing_keys_internal_url.clone(),
                 config.signing_keys_internal_api_key.as_deref(),
                 config.dependency_timeout,
             )?),
             lifecycle: Arc::new(PostgresCredentialLifecycle::new(
-                pool,
+                pool.clone(),
                 config.revocation_profile_service_url.clone(),
                 config.internal_service_token.as_deref(),
                 config.dependency_timeout,
@@ -201,6 +250,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 canvas_lti_experience,
                 canvas_lti_experience_exchange,
                 canvas_lti_experience_session,
+                canvas_lti_bootstrap,
             ),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),

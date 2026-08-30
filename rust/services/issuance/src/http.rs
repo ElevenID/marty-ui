@@ -18,6 +18,10 @@ use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    canvas_lti_bootstrap::{
+        CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
+        CanvasLtiBootstrapServiceError,
+    },
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangeService,
         CanvasLtiExperienceSessionError, CanvasLtiExperienceSessionService,
@@ -54,6 +58,7 @@ struct IssuanceState {
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
+    canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
 }
 
 pub struct IssuanceServices {
@@ -73,6 +78,7 @@ pub struct CanvasLtiServices {
     experience: CanvasLtiExperienceService,
     experience_exchange: CanvasLtiExperienceExchangeService,
     experience_session: CanvasLtiExperienceSessionService,
+    bootstrap: CanvasLtiBootstrapService,
 }
 
 impl CanvasLtiServices {
@@ -83,6 +89,7 @@ impl CanvasLtiServices {
         experience: CanvasLtiExperienceService,
         experience_exchange: CanvasLtiExperienceExchangeService,
         experience_session: CanvasLtiExperienceSessionService,
+        bootstrap: CanvasLtiBootstrapService,
     ) -> Self {
         Self {
             login,
@@ -90,6 +97,7 @@ impl CanvasLtiServices {
             experience,
             experience_exchange,
             experience_session,
+            bootstrap,
         }
     }
 }
@@ -129,6 +137,7 @@ struct OptionalServices {
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
     canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     canvas_lti_experience_session: Option<CanvasLtiExperienceSessionService>,
+    canvas_lti_bootstrap: Option<CanvasLtiBootstrapService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -201,6 +210,7 @@ pub fn router_with_all_services(
             canvas_lti_experience: Some(services.canvas_lti.experience),
             canvas_lti_experience_exchange: Some(services.canvas_lti.experience_exchange),
             canvas_lti_experience_session: Some(services.canvas_lti.experience_session),
+            canvas_lti_bootstrap: Some(services.canvas_lti.bootstrap),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -364,6 +374,23 @@ pub fn router_with_canvas_lti_experience_session(
     )
 }
 
+pub fn router_with_canvas_lti_bootstrap(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_bootstrap: CanvasLtiBootstrapService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_bootstrap: Some(canvas_lti_bootstrap),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -473,6 +500,12 @@ fn router_with_optional_services(
             get(get_canvas_lti_experience_session),
         );
     }
+    if services.canvas_lti_bootstrap.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
+            post(bootstrap_canvas_lti_experience_application),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -485,6 +518,7 @@ fn router_with_optional_services(
         canvas_lti_experience: services.canvas_lti_experience,
         canvas_lti_experience_exchange: services.canvas_lti_experience_exchange,
         canvas_lti_experience_session: services.canvas_lti_experience_session,
+        canvas_lti_bootstrap: services.canvas_lti_bootstrap,
     });
     system
         .merge(api)
@@ -577,6 +611,25 @@ async fn get_canvas_lti_experience_session(
         .current(token)
         .await?;
     Ok(private_no_store(Json(session).into_response()))
+}
+
+async fn bootstrap_canvas_lti_experience_application(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Response, CanvasLtiBootstrapHttpError> {
+    // Match the Python dependency order: reject an invalid bearer before
+    // parsing a caller-controlled body.
+    let token = canvas_lti_experience_bearer_token(request.headers())
+        .map_err(|_| CanvasLtiBootstrapHttpError::Unauthorized)?
+        .to_owned();
+    let request = parse_canvas_lti_bootstrap_request(request).await?;
+    let response = state
+        .canvas_lti_bootstrap
+        .as_ref()
+        .ok_or(CanvasLtiBootstrapServiceError::RepositoryUnavailable)?
+        .bootstrap(&token, &request)
+        .await?;
+    Ok(private_no_store(Json(response).into_response()))
 }
 
 fn canvas_lti_experience_bearer_token(
@@ -1101,9 +1154,145 @@ enum CanvasLtiExperienceExchangeHttpError {
     BodyTooLarge,
 }
 
+async fn parse_canvas_lti_bootstrap_request(
+    request: Request,
+) -> Result<CanvasLtiBootstrapRequest, CanvasLtiBootstrapHttpError> {
+    const MAX_BOOTSTRAP_BODY_BYTES: usize = 64 * 1024;
+    let is_json = request
+        .headers()
+        .get(http_header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            let media_type = value.trim().to_ascii_lowercase();
+            media_type == "application/json"
+                || (media_type.starts_with("application/") && media_type.ends_with("+json"))
+        });
+    let bytes = to_bytes(request.into_body(), MAX_BOOTSTRAP_BODY_BYTES)
+        .await
+        .map_err(|_| CanvasLtiBootstrapHttpError::BodyTooLarge)?;
+    if !is_json {
+        return Err(CanvasLtiBootstrapHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": String::from_utf8_lossy(&bytes),
+        })]));
+    }
+    let input: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        CanvasLtiBootstrapHttpError::Validation(vec![json!({
+            "type": "json_invalid",
+            "loc": ["body", error.line(), error.column()],
+            "msg": "JSON decode error",
+            "input": {},
+            "ctx": {"error": error.to_string()},
+        })])
+    })?;
+    let Some(object) = input.as_object() else {
+        return Err(CanvasLtiBootstrapHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": input,
+        })]));
+    };
+    let mut errors = Vec::new();
+    let applicant_identifier = match object.get("applicant_identifier") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(value) => {
+            errors.push(json!({
+                "type": "string_type",
+                "loc": ["body", "applicant_identifier"],
+                "msg": "Input should be a valid string",
+                "input": value,
+            }));
+            None
+        }
+    };
+    let applicant_data = match object.get("applicant_data") {
+        None => Map::new(),
+        Some(Value::Object(value)) => value.clone(),
+        Some(value) => {
+            errors.push(json!({
+                "type": "dict_type",
+                "loc": ["body", "applicant_data"],
+                "msg": "Input should be a valid dictionary",
+                "input": value,
+            }));
+            Map::new()
+        }
+    };
+    if !errors.is_empty() {
+        return Err(CanvasLtiBootstrapHttpError::Validation(errors));
+    }
+    Ok(CanvasLtiBootstrapRequest {
+        applicant_identifier,
+        applicant_data,
+    })
+}
+
 enum CanvasLtiExperienceSessionHttpError {
     Unauthorized,
     Service(CanvasLtiExperienceSessionError),
+}
+
+enum CanvasLtiBootstrapHttpError {
+    Unauthorized,
+    Service(CanvasLtiBootstrapServiceError),
+    Validation(Vec<Value>),
+    BodyTooLarge,
+}
+
+impl From<CanvasLtiBootstrapServiceError> for CanvasLtiBootstrapHttpError {
+    fn from(value: CanvasLtiBootstrapServiceError) -> Self {
+        Self::Service(value)
+    }
+}
+
+impl IntoResponse for CanvasLtiBootstrapHttpError {
+    fn into_response(self) -> Response {
+        let response = match self {
+            Self::Unauthorized => CanvasLtiExperienceSessionHttpError::Unauthorized.into_response(),
+            Self::Service(CanvasLtiBootstrapServiceError::SessionNotFound)
+            | Self::Service(CanvasLtiBootstrapServiceError::Plan(
+                CanvasLtiBootstrapPlanError::InvalidSession,
+            )) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Canvas LTI experience session not found"})),
+            )
+                .into_response(),
+            Self::Service(CanvasLtiBootstrapServiceError::Plan(cause)) => {
+                let status = match cause {
+                    CanvasLtiBootstrapPlanError::PilotDisabled
+                    | CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound => {
+                        StatusCode::NOT_FOUND
+                    }
+                    CanvasLtiBootstrapPlanError::FeatureDisabled
+                    | CanvasLtiBootstrapPlanError::MissingApplicationTemplate
+                    | CanvasLtiBootstrapPlanError::CrossOrganizationTemplate => {
+                        StatusCode::CONFLICT
+                    }
+                    CanvasLtiBootstrapPlanError::InvalidSession => unreachable!(),
+                };
+                (status, Json(json!({"detail": cause.to_string()}))).into_response()
+            }
+            Self::Service(CanvasLtiBootstrapServiceError::RepositoryUnavailable) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
+            Self::Validation(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail": errors})),
+            )
+                .into_response(),
+            Self::BodyTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "Canvas LTI bootstrap body exceeds the size limit"})),
+            )
+                .into_response(),
+        };
+        private_no_store(response)
+    }
 }
 
 impl From<CanvasLtiExperienceSessionError> for CanvasLtiExperienceSessionHttpError {
