@@ -77,7 +77,7 @@ export const DEMO_MANIFESTS = {
         "Requires fresh wallet evidence under MIP 0.5."
       ],
       "integrations": [
-        "Retains stock Canvas and external-evidence portability coverage."
+        "Retains stock Canvas and external-evidence portability coverage while adding the Northstar public-gateway integration."
       ],
       "operations": [
         "Defers all release identity and digest binding until the aggregate beta deployment exists."
