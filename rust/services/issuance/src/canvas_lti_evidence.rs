@@ -202,6 +202,24 @@ pub enum CanvasLtiEvidenceError {
     RepositoryUnavailable,
 }
 
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum CanvasLtiEvidenceSyncEnqueueError {
+    #[error("Canvas application context was not found")]
+    NotFound,
+    #[error("Canvas synchronization is unavailable")]
+    Conflict { code: &'static str },
+    #[error("Canvas evidence synchronization is temporarily unavailable")]
+    RepositoryUnavailable,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum CanvasLtiEvidenceSyncError {
+    #[error(transparent)]
+    Evidence(#[from] CanvasLtiEvidenceError),
+    #[error(transparent)]
+    Enqueue(#[from] CanvasLtiEvidenceSyncEnqueueError),
+}
+
 #[async_trait]
 pub trait CanvasLtiEvidenceRepository: Send + Sync {
     async fn load_scope(
@@ -213,6 +231,15 @@ pub trait CanvasLtiEvidenceRepository: Send + Sync {
         &self,
         scope: &CanvasLtiEvidenceScope,
     ) -> Result<CanvasLtiEvidenceProjectionData, CanvasLtiEvidenceError>;
+}
+
+#[async_trait]
+pub trait CanvasLtiEvidenceSyncEnqueuer: Send + Sync {
+    async fn enqueue(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<(), CanvasLtiEvidenceSyncEnqueueError>;
 }
 
 #[derive(Clone)]
@@ -253,6 +280,14 @@ impl CanvasLtiEvidenceService {
         &self,
         session_token: &str,
     ) -> Result<CanvasLtiApplicationEvidenceStatusResponse, CanvasLtiEvidenceError> {
+        let scope = self.resolve_scope(session_token).await?;
+        self.status_for_scope(&scope).await
+    }
+
+    async fn resolve_scope(
+        &self,
+        session_token: &str,
+    ) -> Result<CanvasLtiEvidenceScope, CanvasLtiEvidenceError> {
         let context = self
             .sessions
             .load(session_token)
@@ -286,8 +321,50 @@ impl CanvasLtiEvidenceService {
         ) {
             return Err(CanvasLtiEvidenceError::PilotDisabled);
         }
-        let data = self.repository.load_projection_data(&scope).await?;
-        project_canvas_lti_evidence_status(&scope, &data)
+        Ok(scope)
+    }
+
+    async fn status_for_scope(
+        &self,
+        scope: &CanvasLtiEvidenceScope,
+    ) -> Result<CanvasLtiApplicationEvidenceStatusResponse, CanvasLtiEvidenceError> {
+        let data = self.repository.load_projection_data(scope).await?;
+        project_canvas_lti_evidence_status(scope, &data)
+    }
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiEvidenceSyncService {
+    evidence: CanvasLtiEvidenceService,
+    enqueuer: Arc<dyn CanvasLtiEvidenceSyncEnqueuer>,
+}
+
+impl std::fmt::Debug for CanvasLtiEvidenceSyncService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiEvidenceSyncService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiEvidenceSyncService {
+    #[must_use]
+    pub fn new(
+        evidence: CanvasLtiEvidenceService,
+        enqueuer: Arc<dyn CanvasLtiEvidenceSyncEnqueuer>,
+    ) -> Self {
+        Self { evidence, enqueuer }
+    }
+
+    pub async fn sync(
+        &self,
+        session_token: &str,
+    ) -> Result<CanvasLtiApplicationEvidenceStatusResponse, CanvasLtiEvidenceSyncError> {
+        let scope = self.evidence.resolve_scope(session_token).await?;
+        self.enqueuer
+            .enqueue(&scope.application.organization_id, &scope.application.id)
+            .await?;
+        Ok(self.evidence.status_for_scope(&scope).await?)
     }
 }
 

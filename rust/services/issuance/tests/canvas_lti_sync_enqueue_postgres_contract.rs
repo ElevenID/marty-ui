@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use marty_issuance_service::{
     canvas_lti_bootstrap::CanvasLtiBootstrapSyncEnqueuer,
+    canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueueError,
     canvas_lti_sync_enqueue::{
         CanvasSyncEnqueueIdGenerator, CanvasSyncEnqueueIds, PostgresCanvasLtiBootstrapSyncEnqueuer,
     },
@@ -103,6 +104,37 @@ async fn sync_enqueue_is_tenant_bound_durable_and_idempotent() {
     assert_eq!(target.get::<i32, _>("schedule_seconds"), 21_600);
     assert_eq!(table_count(&pool, "canvas_evidence_sync_jobs").await, 1);
 
+    // An active job from another tenant must never satisfy the idempotent
+    // fallback, even if corrupted legacy data reuses this target identifier.
+    sqlx::query("DELETE FROM issuance_service.canvas_evidence_sync_jobs")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_evidence_sync_jobs (
+            id, organization_id, target_id, status, attempt_count, max_attempts,
+            available_at, result, created_at, updated_at
+         ) VALUES ('foreign-job', 'org-other', 'target-1', 'queued', 0, 8,
+                   clock_timestamp(), '{}'::json, clock_timestamp(), clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        marty_issuance_service::canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueuer::enqueue(
+            &enqueuer,
+            "org-1",
+            "application-1",
+        )
+        .await
+        .unwrap_err(),
+        CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable
+    );
+    sqlx::query("DELETE FROM issuance_service.canvas_evidence_sync_jobs")
+        .execute(&pool)
+        .await
+        .unwrap();
+
     assert!(enqueuer
         .enqueue("org-other", "application-1")
         .await
@@ -115,6 +147,28 @@ async fn sync_enqueue_is_tenant_bound_durable_and_idempotent() {
     .await
     .unwrap();
     assert!(enqueuer.enqueue("org-1", "application-1").await.is_err());
+    assert_eq!(
+        marty_issuance_service::canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueuer::enqueue(
+            &enqueuer,
+            "org-1",
+            "application-1",
+        )
+        .await
+        .unwrap_err(),
+        CanvasLtiEvidenceSyncEnqueueError::Conflict {
+            code: "canvas_binding_inactive"
+        }
+    );
+    assert_eq!(
+        marty_issuance_service::canvas_lti_evidence::CanvasLtiEvidenceSyncEnqueuer::enqueue(
+            &enqueuer,
+            "org-1",
+            "missing-application",
+        )
+        .await
+        .unwrap_err(),
+        CanvasLtiEvidenceSyncEnqueueError::NotFound
+    );
 }
 
 async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {

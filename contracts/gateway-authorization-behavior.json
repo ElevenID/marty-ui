@@ -134,6 +134,7 @@
     {"path":"/v1/flows/instances/f1/request","skipped":true},
     {"path":"/v1/verify/s1/submit","skipped":true},
     {"path":"/v1/integrations/canvas/lti/experience-sessions/current/evidence-status","skipped":true},
+    {"path":"/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync","skipped":true},
     {"path":"/v1/integrations/canvas/lti/experience-sessions/state-1/evidence-status","skipped":false},
     {"path":"/v1/flows/instances/f1/result","skipped":false},
     {"path":"/v1/signing-keys/services/example","skipped":false}

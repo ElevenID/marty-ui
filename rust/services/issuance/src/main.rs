@@ -18,7 +18,7 @@ use marty_issuance_service::{
         CanvasLtiDeepLinkingService, SecureCanvasLtiDeepLinkingNonceGenerator,
     },
     canvas_lti_deep_linking_postgres::PostgresCanvasLtiDeepLinkingRepository,
-    canvas_lti_evidence::CanvasLtiEvidenceService,
+    canvas_lti_evidence::{CanvasLtiEvidenceService, CanvasLtiEvidenceSyncService},
     canvas_lti_evidence_postgres::PostgresCanvasLtiEvidenceRepository,
     canvas_lti_experience::{
         CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionService,
@@ -199,16 +199,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             evidence_max_age: config.canvas_evidence_max_age,
         },
     ));
+    let canvas_lti_sync_enqueuer = Arc::new(PostgresCanvasLtiBootstrapSyncEnqueuer::new(
+        pool.clone(),
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+        Arc::new(UuidCanvasSyncEnqueueIdGenerator),
+    ));
     let canvas_lti_bootstrap = CanvasLtiBootstrapService::new(
         canvas_lti_experience_session.clone(),
         canvas_lti_repository.clone(),
         canvas_award_materializer,
-        Arc::new(PostgresCanvasLtiBootstrapSyncEnqueuer::new(
-            pool.clone(),
-            config.canvas_portable_enabled,
-            config.canvas_pilot_organizations.clone(),
-            Arc::new(UuidCanvasSyncEnqueueIdGenerator),
-        )),
+        canvas_lti_sync_enqueuer.clone(),
         Arc::new(SecureCanvasLtiBootstrapApplicationGenerator),
         canvas_lti_clock.clone(),
         config.canvas_portable_enabled,
@@ -247,6 +248,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
     );
+    let canvas_lti_evidence_sync =
+        CanvasLtiEvidenceSyncService::new(canvas_lti_evidence.clone(), canvas_lti_sync_enqueuer);
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -301,6 +304,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     canvas_lti_bootstrap,
                     canvas_lti_deep_linking,
                     canvas_lti_evidence,
+                    canvas_lti_evidence_sync,
                 ),
                 canvas_lti_tool_signer,
             ),
