@@ -45,6 +45,7 @@ pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod http;
 pub mod initiation;
+pub mod initiation_dependencies;
 pub mod integration_secret;
 pub mod management_security;
 pub mod proof_nonce;
@@ -65,4 +66,16 @@ pub use runtime::*;
 
 pub mod issuance_proto {
     tonic::include_proto!("marty.ui.issuance.v1");
+}
+
+pub mod organization_proto {
+    tonic::include_proto!("marty.ui.organization.v1");
+}
+
+pub mod credential_template_proto {
+    tonic::include_proto!("marty.ui.credential_template.v1");
+}
+
+pub mod revocation_profile_proto {
+    tonic::include_proto!("marty.ui.revocation_profile.v1");
 }

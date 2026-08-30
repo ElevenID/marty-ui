@@ -15,8 +15,11 @@ use marty_issuance_service::credential_management::{
 use marty_issuance_service::credential_management_postgres::PostgresCredentialManagementRepository;
 use marty_issuance_service::credential_postgres::PostgresCredentialRepository;
 use marty_issuance_service::initiation::{
-    IdempotencyBinding, InitiationRepository, InitiationRepositoryError,
+    IdempotencyBinding, InitiationApplicationClaimsResolver, InitiationClientRepository,
+    InitiationRepository, InitiationRepositoryError,
 };
+use marty_issuance_service::initiation_dependencies::PostgresInitiationApplicationClaimsResolver;
+use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
@@ -456,7 +459,55 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
 
     assert_authorization_only_race(&pool, &repository, key.as_bytes()).await;
     assert_initiation_idempotency_race(&repository).await;
+    assert_initiation_dependency_reads(&pool, key.as_bytes()).await;
     drop_contract_schema(&pool).await;
+}
+
+async fn assert_initiation_dependency_reads(pool: &sqlx::PgPool, key: &[u8]) {
+    sqlx::query(
+        "UPDATE issuance_service.applications
+         SET form_data = '{\"employee_id\":\"employee-1\",\"role\":\"engineer\"}'::jsonb
+         WHERE id = 'application-a'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let applications = PostgresInitiationApplicationClaimsResolver::new(pool.clone());
+    let claims = applications
+        .resolve("application-a")
+        .await
+        .unwrap()
+        .expect("application claims");
+    assert_eq!(claims["employee_id"], "employee-1");
+    assert_eq!(claims["role"], "engineer");
+    assert!(applications
+        .resolve("application-missing")
+        .await
+        .unwrap()
+        .is_none());
+
+    sqlx::query(
+        "INSERT INTO issuance_service.oid4vci_registered_clients
+             (organization_id, client_id, jwks, token_endpoint_auth_method, active)
+         VALUES ('org-a', 'wallet-client-a', '{}'::jsonb, 'private_key_jwt', true)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let clients = PostgresTokenExchangeRepository::new(pool.clone(), key);
+    let client = InitiationClientRepository::get(&clients, "org-a", "wallet-client-a")
+        .await
+        .unwrap()
+        .expect("registered initiation client");
+    assert_eq!(client.client_id, "wallet-client-a");
+    assert!(client.active);
+    assert_eq!(client.token_endpoint_auth_method, "private_key_jwt");
+    assert!(
+        InitiationClientRepository::get(&clients, "org-b", "wallet-client-a")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 async fn revocation_server() -> (Url, tokio::task::JoinHandle<()>) {
@@ -705,9 +756,14 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE issuance_service.applications (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             application_template_id TEXT, status TEXT, issuance_transaction_id TEXT,
-            credential_id TEXT,
+            credential_id TEXT, form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
             integration_context JSONB NOT NULL DEFAULT '{}'::jsonb,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())",
+        "CREATE TABLE issuance_service.oid4vci_registered_clients (
+            organization_id TEXT NOT NULL, client_id TEXT NOT NULL,
+            jwks JSONB NOT NULL, token_endpoint_auth_method TEXT NOT NULL,
+            active BOOLEAN NOT NULL,
+            PRIMARY KEY (organization_id, client_id))",
         "CREATE TABLE issuance_service.application_templates (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL, approval_policy_set_id TEXT,
@@ -771,6 +827,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
 async fn drop_contract_schema(pool: &sqlx::PgPool) {
     for statement in [
         "DROP TABLE IF EXISTS issuance_service.credential_delivery_records",
+        "DROP TABLE IF EXISTS issuance_service.oid4vci_registered_clients",
         "DROP TABLE IF EXISTS issuance_service.issuance_events",
         "DROP TABLE IF EXISTS issuance_service.canvas_evidence_sync_targets",
         "DROP TABLE IF EXISTS issuance_service.evidence_fact_heads",

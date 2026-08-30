@@ -238,6 +238,8 @@ pub enum InitiationDependencyError {
     NotFound,
     #[error("dependency resource is invalid: {0}")]
     Invalid(String),
+    #[error("dependency rejected the request with HTTP {status}: {detail}")]
+    HttpClient { status: u16, detail: String },
     #[error("dependency is unavailable")]
     Unavailable,
     #[error("dependency timed out")]
