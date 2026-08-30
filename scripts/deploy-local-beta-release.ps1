@@ -15,6 +15,10 @@ param(
 
     [string]$GeneratedEnvFile,
 
+    [switch]$OfficialStackRelease,
+
+    [string]$RecorderRevision,
+
     [switch]$PlanOnly
 )
 
@@ -190,6 +194,88 @@ function Get-FileSha256([string]$Path) {
 function Write-Utf8Text([string]$Path, [string]$Content) {
     $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllText($Path, $Content, $utf8WithoutBom)
+}
+
+function Get-OfficialReleasePlan {
+    $manifestPath = Join-Path $script:ArtifactDir "stack-manifest.json"
+    $checksumsPath = Join-Path $script:ArtifactDir "SHA256SUMS"
+    foreach ($required in @($manifestPath, $checksumsPath)) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw "Official stack release input is missing: $required"
+        }
+    }
+    $output = & python `
+        (Join-Path $script:RepoRoot "scripts\prepare_official_beta_release.py") `
+        --manifest $manifestPath `
+        --checksums $checksumsPath `
+        --recorder-revision $RecorderRevision `
+        --expected-ui-revision (git -C $script:RepoRoot rev-parse HEAD) 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Official stack release validation failed: $($output -join ' ')"
+    }
+    try {
+        return (($output -join "`n") | ConvertFrom-Json)
+    }
+    catch {
+        throw "Official stack release validator returned invalid JSON"
+    }
+}
+
+function Assert-OfficialReleaseSource([object]$Plan, [switch]$VerifyAttestation) {
+    $head = & git -C $script:RepoRoot rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $head -ne $Plan.marty_ui_sha) {
+        throw "Official beta deployment must execute from the released Marty UI commit"
+    }
+    $status = & git -C $script:RepoRoot status --porcelain=v1 --untracked-files=normal
+    if ($LASTEXITCODE -ne 0 -or @($status).Count -ne 0) {
+        throw "Official beta deployment requires a clean released Marty UI worktree"
+    }
+    $tag = "v$($Plan.release_version)"
+    $tagType = & git -C $script:RepoRoot cat-file -t "refs/tags/$tag" 2>$null
+    $tagCommit = & git -C $script:RepoRoot rev-parse "refs/tags/$tag^{commit}" 2>$null
+    if ($LASTEXITCODE -ne 0 -or $tagType -ne "tag" -or $tagCommit -ne $Plan.marty_ui_sha) {
+        throw "Official beta deployment requires the exact local annotated release tag"
+    }
+    $remoteTag = @(& git ls-remote https://github.com/ElevenID/marty-ui.git "refs/tags/$tag" "refs/tags/$tag^{}")
+    if ($LASTEXITCODE -ne 0 -or $remoteTag.Count -ne 2) {
+        throw "Official beta deployment requires the published annotated release tag"
+    }
+    $remoteTagRecords = @{}
+    foreach ($record in $remoteTag) {
+        $parts = $record -split "\s+", 2
+        if ($parts.Count -ne 2) { throw "Published release tag response is invalid" }
+        $remoteTagRecords[$parts[1]] = $parts[0]
+    }
+    if ($remoteTagRecords["refs/tags/$tag"] -ne (& git -C $script:RepoRoot rev-parse "refs/tags/$tag") -or
+        $remoteTagRecords["refs/tags/$tag^{}"] -ne $Plan.marty_ui_sha) {
+        throw "Local and published release tags do not identify the same official source"
+    }
+    $remoteRecorder = @(& git ls-remote https://github.com/ElevenID/marty-demo-recorder.git refs/heads/main)
+    if ($LASTEXITCODE -ne 0 -or $remoteRecorder.Count -ne 1 -or ($remoteRecorder[0] -split "\s+", 2)[0] -ne $RecorderRevision) {
+        throw "Recorder revision must match protected marty-demo-recorder main"
+    }
+    if ($VerifyAttestation) {
+        Invoke-Checked -FilePath gh -Arguments @(
+            "attestation", "verify", (Join-Path $script:ArtifactDir "stack-manifest.json"),
+            "--repo", "ElevenID/marty-ui"
+        )
+    }
+}
+
+function Assert-OfficialImageLabels(
+    [string]$Reference,
+    [string]$Role,
+    [string]$ExpectedVersion,
+    [string]$ExpectedRevision
+) {
+    $version = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+    if ($LASTEXITCODE -ne 0 -or $version -ne $ExpectedVersion) {
+        throw "Official $Role image version label does not match the stack release"
+    }
+    $revision = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+    if ($LASTEXITCODE -ne 0 -or $revision -ne $ExpectedRevision) {
+        throw "Official $Role image revision label does not match the stack release"
+    }
 }
 
 function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
@@ -423,6 +509,28 @@ if ($EnablePortableCanvas -and $PilotOrganizationId -notmatch '^[0-9a-fA-F]{8}-[
 }
 
 $sourceManifestPath = Join-Path $script:ArtifactDir "source-manifest.json"
+if ($OfficialStackRelease) {
+    if ($RecorderRevision -notmatch '^[0-9a-f]{40}$') {
+        throw "OfficialStackRelease requires RecorderRevision as a full lowercase commit SHA"
+    }
+    $officialPlan = Get-OfficialReleasePlan
+    $sourceManifest = $officialPlan.source_manifest
+}
+else {
+    if (-not [string]::IsNullOrWhiteSpace($RecorderRevision)) {
+        throw "RecorderRevision is only valid with OfficialStackRelease"
+    }
+    if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
+        throw "Missing source manifest: $sourceManifestPath"
+    }
+    $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
+    if ($sourceManifest.schema_version -ne 1 -or $sourceManifest.mip_version -ne "0.5.0") {
+        throw "Source manifest is not a supported MIP 0.5.0 local release"
+    }
+    if ($sourceManifest.source_kind -ne "local-worktree-snapshot" -or $sourceManifest.promotion_eligible -ne $false) {
+        throw "Local source manifest must be a non-promotable worktree snapshot"
+    }
+}
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 $redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
 $encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)
@@ -489,17 +597,6 @@ foreach ($name in $workloadLeafNames) {
     Invoke-Checked -FilePath openssl -Arguments @("x509", "-checkend", "3600", "-noout", "-in", $certificate)
     Invoke-Checked -FilePath openssl -Arguments @("verify", "-CAfile", $workloadCa, $certificate)
 }
-if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
-    throw "Missing source manifest: $sourceManifestPath"
-}
-$sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
-if ($sourceManifest.schema_version -ne 1 -or $sourceManifest.mip_version -ne "0.5.0") {
-    throw "Source manifest is not a supported MIP 0.5.0 local release"
-}
-if ($sourceManifest.source_kind -ne "local-worktree-snapshot" -or $sourceManifest.promotion_eligible -ne $false) {
-    throw "Local source manifest must be a non-promotable worktree snapshot"
-}
-
 $repositoryNames = @($sourceManifest.repositories.PSObject.Properties.Name | Sort-Object)
 $componentEntries = @($sourceManifest.component_revisions)
 $componentNames = @($componentEntries | ForEach-Object { [string]$_.component } | Sort-Object)
@@ -519,10 +616,16 @@ foreach ($entry in $componentEntries) {
 $releaseVersion = [string]$sourceManifest.release_version
 $sourceId = [string]$sourceManifest.marty_ui_sha
 if ($sourceId -notmatch '^[0-9a-f]{40}$') {
-    throw "Local source ID must be 40 lowercase hexadecimal characters"
+    throw "Source ID must be 40 lowercase hexadecimal characters"
 }
 
-$stackLock = Get-Content -LiteralPath (Join-Path $script:RepoRoot "release\stack-lock.json") -Raw | ConvertFrom-Json
+$stackLockPath = if ($OfficialStackRelease) {
+    Join-Path $script:ArtifactDir "stack-manifest.json"
+}
+else {
+    Join-Path $script:RepoRoot "release\stack-lock.json"
+}
+$stackLock = Get-Content -LiteralPath $stackLockPath -Raw | ConvertFrom-Json
 function Get-StackArtifact([string]$Name, [string]$Type, [string]$SourceRepository) {
     $component = @($stackLock.components | Where-Object name -eq $Name)
     if ($component.Count -ne 1) { throw "Stack lock must contain exactly one $Name component" }
@@ -559,13 +662,19 @@ $martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci" "marty-cre
 $backupDir = Join-Path $script:ArtifactDir "backup"
 $preflightBackupDir = Join-Path $script:ArtifactDir "preflight-backup"
 $logsDir = Join-Path $script:ArtifactDir "logs"
+$sourceKind = [string]$sourceManifest.source_kind
+$promotionEligible = [bool]$sourceManifest.promotion_eligible
+$releaseInput = if ($OfficialStackRelease) { "official attested stack release" } else { "local coordinated worktree snapshot" }
+$plannedImageStep = if ($OfficialStackRelease) { "pull and verify digest-only official images" } else { "build migration, application, and UI images" }
 
-Write-Step "Local beta release plan"
+Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"
 Write-Host "Source ID: $sourceId"
+Write-Host "Source kind: $sourceKind"
+Write-Host "Release input: $releaseInput"
 Write-Host "Origin: $BetaOrigin"
 Write-Host "Artifact directory: $script:ArtifactDir"
-Write-Host "Promotion eligible: false"
+Write-Host "Promotion eligible: $promotionEligible"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
 Write-Host "Compose project: $script:BetaProject"
 Write-Host "UI Compose project: $script:BetaUiProject"
@@ -575,6 +684,9 @@ if ($PlanOnly) {
     [ordered]@{
         release_version = $releaseVersion
         marty_ui_sha = $sourceId
+        source_kind = $sourceKind
+        release_input = $releaseInput
+        promotion_eligible = $promotionEligible
         beta_origin = $BetaOrigin
         portable_canvas_enabled = [bool]$EnablePortableCanvas
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
@@ -585,9 +697,8 @@ if ($PlanOnly) {
         application_services = $script:ApplicationServices
         steps = @(
             "backup",
-            "build migration image",
+            $plannedImageStep,
             "isolated beta-copy rehearsal",
-            "build application and UI images",
             "maintenance stop",
             "live migration",
             "atomic application/UI recreation",
@@ -598,12 +709,21 @@ if ($PlanOnly) {
 }
 
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+if ($OfficialStackRelease) {
+    Write-Utf8Text -Path $sourceManifestPath -Content (($sourceManifest | ConvertTo-Json -Depth 8) + "`n")
+}
 $releaseComposeFile = Join-Path $script:ArtifactDir "local-release-images.yml"
 $releaseCompose = @("services:")
 foreach ($service in $script:ApplicationServices) {
     $releaseCompose += "  ${service}:"
     if ($service -in @("issuance", "canvas-sync-worker")) {
         $releaseCompose += '    image: ${MARTY_ISSUANCE_IMAGE}'
+    }
+    elseif ($OfficialStackRelease) {
+        $releaseCompose += '    image: ${MARTY_SERVICES_IMAGE}'
+        $runtimeServiceName = $service -replace '-', '_'
+        $releaseCompose += "    environment:"
+        $releaseCompose += "      SERVICE_NAME: $runtimeServiceName"
     }
     else {
         $releaseCompose += "    image: elevenid-local/${service}:${releaseVersion}"
@@ -612,12 +732,18 @@ foreach ($service in $script:ApplicationServices) {
 $releaseCompose -join "`n" | Set-Content -LiteralPath $releaseComposeFile -Encoding utf8
 $script:ComposeFiles += $releaseComposeFile
 
-Write-Step "Verify immutable source snapshot and worktree"
-Invoke-Checked -FilePath python -Arguments @(
-    (Join-Path $script:RepoRoot "scripts\create_local_release_manifest.py"),
-    "--workspace", $script:WorkspaceRoot,
-    "--verify-manifest", $sourceManifestPath
-)
+if ($OfficialStackRelease) {
+    Write-Step "Verify official release source, protected recorder, and artifact attestation"
+    Assert-OfficialReleaseSource -Plan $officialPlan -VerifyAttestation
+}
+else {
+    Write-Step "Verify immutable source snapshot and worktree"
+    Invoke-Checked -FilePath python -Arguments @(
+        (Join-Path $script:RepoRoot "scripts\create_local_release_manifest.py"),
+        "--workspace", $script:WorkspaceRoot,
+        "--verify-manifest", $sourceManifestPath
+    )
+}
 
 Write-Step "Stage durable source-pinned beta runtime configuration"
 Initialize-DurableRuntimeConfig -SourceRevision $sourceId
@@ -634,7 +760,21 @@ $env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest
 $env:MARTY_ISO18013_URI = $martyIso18013.Uri
 $env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
 $env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
-Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
+if ($OfficialStackRelease) {
+    $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
+    $migrationImage = [string]$officialPlan.images.migrations.reference
+    $uiImage = [string]$officialPlan.images.ui.reference
+    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_ISSUANCE_IMAGE)) {
+        Invoke-Checked -FilePath docker -Arguments @("pull", $image)
+    }
+    Assert-OfficialImageLabels -Reference $env:MARTY_SERVICES_IMAGE -Role "services" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
+    Assert-OfficialImageLabels -Reference $migrationImage -Role "migrations" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
+    Assert-OfficialImageLabels -Reference $uiImage -Role "UI" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
+    Assert-OfficialImageLabels -Reference $env:MARTY_ISSUANCE_IMAGE -Role "issuance" -ExpectedVersion "v$($martyIssuance.Version)" -ExpectedRevision $martyIssuance.Commit
+}
+else {
+    Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
+}
 $docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
 if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
 $env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
@@ -663,22 +803,24 @@ New-BetaStateBackup `
     -WritersStopped $false `
     -RedisPassword $redisPassword
 
-Write-Step "Build immutable migration image"
-$migrationImage = "elevenid-local/db-migrate:$releaseVersion"
-Invoke-Checked -FilePath docker -Arguments @(
-    "build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"),
-    "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
-    "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
-    "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)",
-    "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)", "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)",
-    "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
-    "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
-    "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
-    "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
-    "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)",
-    "--tag", $migrationImage, "--label", "org.opencontainers.image.version=$releaseVersion",
-    "--label", "org.opencontainers.image.revision=$sourceId", $script:RepoRoot
-)
+if (-not $OfficialStackRelease) {
+    Write-Step "Build immutable migration image"
+    $migrationImage = "elevenid-local/db-migrate:$releaseVersion"
+    Invoke-Checked -FilePath docker -Arguments @(
+        "build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"),
+        "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
+        "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
+        "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)",
+        "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)", "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)",
+        "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
+        "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
+        "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
+        "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
+        "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)",
+        "--tag", $migrationImage, "--label", "org.opencontainers.image.version=$releaseVersion",
+        "--label", "org.opencontainers.image.revision=$sourceId", $script:RepoRoot
+    )
+}
 
 Write-Step "Rehearse one-way migration on isolated beta copy"
 $copySuffix = $sourceId.Substring(0, 12)
@@ -761,31 +903,33 @@ finally {
     }
 }
 
-Write-Step "Build marker-bearing application images"
 $env:MARTY_RELEASE_VERSION = $releaseVersion
 $env:MARTY_UI_SHA = $sourceId
-$applicationBuildArguments = @(
-    "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
-)
-# BuildKit bake can schedule every Compose target concurrently and exhaust the
-# local Docker Desktop VM. Build one immutable target at a time so a release
-# cannot take the currently healthy beta stack down through builder pressure.
-foreach ($service in $script:ApplicationBuildServices) {
-    Write-Host "Building release image: $service"
-    Invoke-Compose -Arguments ($applicationBuildArguments + @($service))
-}
+if (-not $OfficialStackRelease) {
+    Write-Step "Build marker-bearing application images"
+    $applicationBuildArguments = @(
+        "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
+    )
+    # BuildKit bake can schedule every Compose target concurrently and exhaust the
+    # local Docker Desktop VM. Build one immutable target at a time so a release
+    # cannot take the currently healthy beta stack down through builder pressure.
+    foreach ($service in $script:ApplicationBuildServices) {
+        Write-Host "Building release image: $service"
+        Invoke-Compose -Arguments ($applicationBuildArguments + @($service))
+    }
 
-Write-Step "Build marker-bearing public UI image"
-$uiImage = "elevenid-local/ui:$releaseVersion"
-Invoke-Checked -FilePath docker -Arguments @(
-    "buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"),
-    "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf",
-    "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
-    "--build-arg", "MARTY_API_CORE_VERSION=$($martyApiCore.Version)", "--build-arg", "MARTY_API_CORE_URI=$($martyApiCore.Uri)",
-    "--build-arg", "MARTY_API_CORE_DIGEST=$($martyApiCore.Digest)", "--build-arg", "MARTY_BLOG_VERSION=$($martyBlog.Version)",
-    "--build-arg", "MARTY_BLOG_URI=$($martyBlog.Uri)", "--build-arg", "MARTY_BLOG_DIGEST=$($martyBlog.Digest)",
-    "--tag", $uiImage, $script:RepoRoot
-)
+    Write-Step "Build marker-bearing public UI image"
+    $uiImage = "elevenid-local/ui:$releaseVersion"
+    Invoke-Checked -FilePath docker -Arguments @(
+        "buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"),
+        "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf",
+        "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
+        "--build-arg", "MARTY_API_CORE_VERSION=$($martyApiCore.Version)", "--build-arg", "MARTY_API_CORE_URI=$($martyApiCore.Uri)",
+        "--build-arg", "MARTY_API_CORE_DIGEST=$($martyApiCore.Digest)", "--build-arg", "MARTY_BLOG_VERSION=$($martyBlog.Version)",
+        "--build-arg", "MARTY_BLOG_URI=$($martyBlog.Uri)", "--build-arg", "MARTY_BLOG_DIGEST=$($martyBlog.Digest)",
+        "--tag", $uiImage, $script:RepoRoot
+    )
+}
 
 Write-Step "Verify public UI image homepage content"
 $uiRootHtml = @(docker run --rm --entrypoint cat $uiImage /usr/share/nginx/html/index.html)
@@ -797,15 +941,25 @@ if ($uiRootText -notmatch "ElevenID" -or $uiRootText -match "Welcome to nginx") 
     throw "Public UI image homepage failed the ElevenID content contract"
 }
 
-# Builds consume coordinated live worktrees. Revalidate every snapshotted input
-# after the final build and before stopping beta writers, so a concurrent edit
-# cannot be deployed under the source identity captured at the start of the run.
-Write-Step "Reverify coordinated source after image builds"
-Invoke-Checked -FilePath python -Arguments @(
-    (Join-Path $script:RepoRoot "scripts\create_local_release_manifest.py"),
-    "--workspace", $script:WorkspaceRoot,
-    "--verify-manifest", $sourceManifestPath
-)
+# Revalidate the selected release input before stopping beta writers, so a
+# concurrent change cannot be deployed under the source identity captured at
+# the start of the run.
+if ($OfficialStackRelease) {
+    Write-Step "Reverify official source and release inputs before maintenance"
+    $revalidatedPlan = Get-OfficialReleasePlan
+    if (($revalidatedPlan | ConvertTo-Json -Depth 10 -Compress) -ne ($officialPlan | ConvertTo-Json -Depth 10 -Compress)) {
+        throw "Official release inputs changed during deployment preparation"
+    }
+    Assert-OfficialReleaseSource -Plan $officialPlan
+}
+else {
+    Write-Step "Reverify coordinated source after image builds"
+    Invoke-Checked -FilePath python -Arguments @(
+        (Join-Path $script:RepoRoot "scripts\create_local_release_manifest.py"),
+        "--workspace", $script:WorkspaceRoot,
+        "--verify-manifest", $sourceManifestPath
+    )
+}
 
 Write-Step "Bind runtime evidence marker to the completed image set"
 $stackVersion = (Get-Content -LiteralPath (Join-Path $script:RepoRoot "VERSION") -Raw).Trim()
@@ -814,23 +968,38 @@ if ($stackVersion -notmatch '^\d{4}\.\d{2}\.\d+$') {
 }
 $runtimeImageDigests = [ordered]@{}
 foreach ($service in $script:ApplicationServices) {
-    $imageRef = if ($service -in @("issuance", "canvas-sync-worker")) {
-        $env:MARTY_ISSUANCE_IMAGE
+    if ($OfficialStackRelease) {
+        $runtimeImageDigests[$service] = if ($service -in @("issuance", "canvas-sync-worker")) {
+            [string]$officialPlan.images.issuance.digest
+        }
+        else {
+            [string]$officialPlan.images.services.digest
+        }
     }
     else {
-        "elevenid-local/${service}:${releaseVersion}"
+        $imageRef = if ($service -in @("issuance", "canvas-sync-worker")) {
+            $env:MARTY_ISSUANCE_IMAGE
+        }
+        else {
+            "elevenid-local/${service}:${releaseVersion}"
+        }
+        $imageId = docker image inspect $imageRef --format '{{.Id}}'
+        if ($LASTEXITCODE -ne 0 -or $imageId -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Could not resolve immutable image ID for $imageRef"
+        }
+        $runtimeImageDigests[$service] = $imageId
     }
-    $imageId = docker image inspect $imageRef --format '{{.Id}}'
-    if ($LASTEXITCODE -ne 0 -or $imageId -notmatch '^sha256:[0-9a-f]{64}$') {
-        throw "Could not resolve immutable image ID for $imageRef"
+}
+if ($OfficialStackRelease) {
+    $runtimeImageDigests["ui-prod"] = [string]$officialPlan.images.ui.digest
+}
+else {
+    $uiImageId = docker image inspect $uiImage --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $uiImageId -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Could not resolve immutable image ID for $uiImage"
     }
-    $runtimeImageDigests[$service] = $imageId
+    $runtimeImageDigests["ui-prod"] = $uiImageId
 }
-$uiImageId = docker image inspect $uiImage --format '{{.Id}}'
-if ($LASTEXITCODE -ne 0 -or $uiImageId -notmatch '^sha256:[0-9a-f]{64}$') {
-    throw "Could not resolve immutable image ID for $uiImage"
-}
-$runtimeImageDigests["ui-prod"] = $uiImageId
 $env:ELEVENID_STACK_VERSION = $stackVersion
 $env:ELEVENID_COMPONENT_REVISIONS_JSON = $componentRevisions | ConvertTo-Json -Compress
 $env:ELEVENID_IMAGE_DIGESTS_JSON = $runtimeImageDigests | ConvertTo-Json -Compress
@@ -1019,16 +1188,18 @@ $deploymentManifest = [ordered]@{
     release_version = $releaseVersion
     stack_version = $stackVersion
     mip_version = "0.5.0"
-    source_kind = "local-worktree-snapshot"
+    source_kind = $sourceKind
     marty_ui_sha = $sourceId
     beta_origin = $BetaOrigin
     compose_project = $script:BetaProject
     ui_compose_project = $script:BetaUiProject
     network = $script:BetaNetwork
-    promotion_eligible = $false
+    promotion_eligible = $promotionEligible
     release_ready = $false
     backup_manifest = "backup-manifest.json"
     source_manifest = "source-manifest.json"
+    official_stack_manifest = if ($OfficialStackRelease) { "stack-manifest.json" } else { $null }
+    official_stack_manifest_sha256 = if ($OfficialStackRelease) { [string]$officialPlan.stack_manifest_sha256 } else { $null }
     runtime_config_root = $script:RuntimeConfigRoot
     runtime_config_manifest_sha256 = Get-FileSha256 $script:RuntimeConfigManifestPath
     component_revisions = $componentRevisions
@@ -1053,7 +1224,7 @@ Write-Utf8Text `
     -Path (Join-Path $script:ArtifactDir "local-deployment-manifest.json") `
     -Content ($deploymentManifestJson + "`n")
 
-Write-Step "Local beta deployment complete"
+Write-Step "Beta deployment complete"
 Write-Host "Release: $releaseVersion"
 Write-Host "Source ID: $sourceId"
 Write-Host "Evidence: $script:ArtifactDir"

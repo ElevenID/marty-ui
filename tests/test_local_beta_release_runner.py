@@ -71,7 +71,8 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert '"NGINX_CONFIG=nginx.spa.conf"' in script
     assert "marty-ui-release.json" in script
     assert "/.well-known/marty-release" in script
-    assert 'promotion_eligible = $false' in script
+    assert 'promotion_eligible = $promotionEligible' in script
+    assert 'promotion_eligible -ne $false' in script
     assert 'release_ready = $false' in script
     assert '"canvas-sync-worker"' in script
     assert '$_ -notin @("issuance", "canvas-sync-worker")' in script
@@ -260,10 +261,10 @@ def test_direct_ui_proxy_uses_canonical_gateway() -> None:
 def test_canvas_beta_wrapper_enables_only_the_disposable_portable_target() -> None:
     script = text("scripts/deploy-canvas-oss-beta.ps1")
 
-    assert '-BetaOrigin "https://beta.elevenidllc.com"' in script
-    assert "-EnablePortableCanvas" in script
-    assert '-CanvasOrigin "https://canvas-test.elevenidllc.com"' in script
-    assert '-PilotOrganizationId "00000000-0000-0000-0000-000000000001"' in script
+    assert 'BetaOrigin = "https://beta.elevenidllc.com"' in script
+    assert "EnablePortableCanvas = $true" in script
+    assert 'CanvasOrigin = "https://canvas-test.elevenidllc.com"' in script
+    assert 'PilotOrganizationId = "00000000-0000-0000-0000-000000000001"' in script
     assert "selfhost_production_touched" in script
     assert '"America/Denver", "Mountain Standard Time"' in script
     assert "$denverNow.Hour -lt 2 -or $denverNow.Hour -ge 6" in script
@@ -277,6 +278,50 @@ def test_canvas_beta_wrapper_enables_only_the_disposable_portable_target() -> No
     for field in ("container_id", "image_id", "started_at", "running"):
         assert field in script
     assert "Compare-SelfhostProductionInvariant" in script
+
+
+def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    assert "[switch]$OfficialStackRelease" in script
+    assert "[string]$RecorderRevision" in script
+    assert "prepare_official_beta_release.py" in script
+    assert '"attestation", "verify"' in script
+    assert '"--repo", "ElevenID/marty-ui"' in script
+    assert "Official beta deployment requires the published annotated release tag" in script
+    assert "Recorder revision must match protected marty-demo-recorder main" in script
+    assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
+    assert '$migrationImage = [string]$officialPlan.images.migrations.reference' in script
+    assert '$uiImage = [string]$officialPlan.images.ui.reference' in script
+    assert 'image: ${MARTY_SERVICES_IMAGE}' in script
+    assert 'SERVICE_NAME: $runtimeServiceName' in script
+    assert '[string]$officialPlan.images.services.digest' in script
+    assert '[string]$officialPlan.images.issuance.digest' in script
+    assert '[string]$officialPlan.images.ui.digest' in script
+    assert "Official release inputs changed during deployment preparation" in script
+    assert 'official_stack_manifest = if ($OfficialStackRelease)' in script
+    assert 'official_stack_manifest_sha256 = if ($OfficialStackRelease)' in script
+
+    first_source_check = script.index(
+        'Write-Step "Verify official release source, protected recorder, and artifact attestation"'
+    )
+    second_source_check = script.index(
+        'Write-Step "Reverify official source and release inputs before maintenance"'
+    )
+    maintenance = script.index('Write-Step "Enter maintenance window and apply live migration"')
+    assert first_source_check < second_source_check < maintenance
+
+
+def test_official_beta_wrapper_requires_release_bundle_and_recorder_revision() -> None:
+    script = text("scripts/deploy-canvas-oss-beta.ps1")
+
+    assert "[switch]$OfficialStackRelease" in script
+    assert "[string]$RecorderRevision" in script
+    assert '@("stack-manifest.json", "SHA256SUMS")' in script
+    assert "$deployArguments.OfficialStackRelease = $true" in script
+    assert "$deployArguments.RecorderRevision = $RecorderRevision" in script
+    assert "source_kind = $source.source_kind" in script
+
 
 
 def test_beta_inventory_tolerates_services_added_by_the_release() -> None:

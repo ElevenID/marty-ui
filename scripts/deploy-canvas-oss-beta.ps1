@@ -6,6 +6,14 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AuditPath,
 
+    [switch]$OfficialStackRelease,
+
+    [string]$RecorderRevision,
+
+    [string]$TunnelEnvFile,
+
+    [string]$GeneratedEnvFile,
+
     [switch]$AllowOutsideMaintenanceWindow
 )
 
@@ -105,8 +113,23 @@ if (-not $resolvedArtifacts.StartsWith($artifactPrefix, [StringComparison]::Ordi
 if ($resolvedArtifacts -match "selfhost|production") {
     throw "Beta deploy evidence path cannot target self-host production"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $resolvedArtifacts "source-manifest.json") -PathType Leaf)) {
-    throw "Beta deploy artifact is missing source-manifest.json"
+if ($OfficialStackRelease) {
+    if ($RecorderRevision -notmatch '^[0-9a-f]{40}$') {
+        throw "OfficialStackRelease requires RecorderRevision as a full lowercase commit SHA"
+    }
+    foreach ($name in @("stack-manifest.json", "SHA256SUMS")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $resolvedArtifacts $name) -PathType Leaf)) {
+            throw "Official beta deploy artifact is missing $name"
+        }
+    }
+}
+else {
+    if (-not [string]::IsNullOrWhiteSpace($RecorderRevision)) {
+        throw "RecorderRevision is only valid with OfficialStackRelease"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $resolvedArtifacts "source-manifest.json") -PathType Leaf)) {
+        throw "Beta deploy artifact is missing source-manifest.json"
+    }
 }
 
 $resolvedAudit = [IO.Path]::GetFullPath($AuditPath)
@@ -134,12 +157,24 @@ $invariantError = $null
 $exitCode = 1
 $outcome = "failed"
 try {
-    & (Join-Path $PSScriptRoot "deploy-local-beta-release.ps1") `
-        -ArtifactDir $resolvedArtifacts `
-        -BetaOrigin "https://beta.elevenidllc.com" `
-        -EnablePortableCanvas `
-        -CanvasOrigin "https://canvas-test.elevenidllc.com" `
-        -PilotOrganizationId "00000000-0000-0000-0000-000000000001"
+    $deployArguments = @{
+        ArtifactDir = $resolvedArtifacts
+        BetaOrigin = "https://beta.elevenidllc.com"
+        EnablePortableCanvas = $true
+        CanvasOrigin = "https://canvas-test.elevenidllc.com"
+        PilotOrganizationId = "00000000-0000-0000-0000-000000000001"
+    }
+    if ($OfficialStackRelease) {
+        $deployArguments.OfficialStackRelease = $true
+        $deployArguments.RecorderRevision = $RecorderRevision
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
+        $deployArguments.TunnelEnvFile = $TunnelEnvFile
+    }
+    if (-not [string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
+        $deployArguments.GeneratedEnvFile = $GeneratedEnvFile
+    }
+    & (Join-Path $PSScriptRoot "deploy-local-beta-release.ps1") @deployArguments
     $exitCode = 0
     $outcome = "passed"
 }
@@ -168,7 +203,13 @@ finally {
         $outcome = "failed"
     }
 
-    $source = Get-Content -LiteralPath (Join-Path $resolvedArtifacts "source-manifest.json") -Raw | ConvertFrom-Json
+    $sourcePath = Join-Path $resolvedArtifacts "source-manifest.json"
+    $source = if (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
+        Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json
+    }
+    else {
+        [pscustomobject]@{ marty_ui_sha = $null; release_version = $null; source_kind = $null }
+    }
     $deploymentPath = Join-Path $resolvedArtifacts "local-deployment-manifest.json"
     $deploymentSha256 = $null
     if (Test-Path -LiteralPath $deploymentPath -PathType Leaf) {
@@ -182,6 +223,7 @@ finally {
         beta_origin = "https://beta.elevenidllc.com"
         source_id = $source.marty_ui_sha
         release_version = $source.release_version
+        source_kind = $source.source_kind
         maintenance_window = "02:00-06:00 America/Denver"
         maintenance_window_override = [bool]$AllowOutsideMaintenanceWindow
         denver_started_at = $denverNow.ToString("o")
