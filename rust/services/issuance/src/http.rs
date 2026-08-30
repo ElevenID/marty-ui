@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     body::to_bytes,
-    extract::{ConnectInfo, Path, RawForm, RawQuery, Request, State},
+    extract::{ConnectInfo, FromRequest, Path, RawForm, RawQuery, Request, State},
     http::{header as http_header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -48,10 +48,11 @@ use crate::{
         CredentialLifecycleAction, CredentialManagementError, CredentialStatusView,
     },
     credential_management_http::{CredentialManagementHttpError, CredentialManagementHttpService},
-    initiation_didcomm::NativeInitiationDidcommDeliveryReceipt,
+    initiation::InitiationRequest,
     initiation_didcomm_http::{
         DidcommDeliverRequest, InitiationDidcommHttpError, InitiationDidcommHttpService,
     },
+    initiation_http::{InitiationHttpError, InitiationHttpService},
     proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
@@ -71,6 +72,7 @@ struct IssuanceState {
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
+    initiation: Option<InitiationHttpService>,
     didcomm_delivery: Option<InitiationDidcommHttpService>,
     credential_management: Option<CredentialManagementHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
@@ -92,6 +94,7 @@ pub struct IssuanceServices {
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
     credential: CredentialIssuanceService,
+    initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
@@ -103,6 +106,7 @@ pub struct IssuanceCoreServices {
     token_exchange: TokenExchangeService,
     proof_nonce: ProofNonceService,
     credential: CredentialIssuanceService,
+    initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
 }
 
@@ -114,6 +118,7 @@ impl IssuanceCoreServices {
         token_exchange: TokenExchangeService,
         proof_nonce: ProofNonceService,
         credential: CredentialIssuanceService,
+        initiation: InitiationHttpService,
         didcomm_delivery: InitiationDidcommHttpService,
     ) -> Self {
         Self {
@@ -122,6 +127,7 @@ impl IssuanceCoreServices {
             token_exchange,
             proof_nonce,
             credential,
+            initiation,
             didcomm_delivery,
         }
     }
@@ -220,6 +226,7 @@ impl IssuanceServices {
             token_exchange: core.token_exchange,
             proof_nonce: core.proof_nonce,
             credential: core.credential,
+            initiation: core.initiation,
             didcomm_delivery: core.didcomm_delivery,
             canvas,
             token_rate_limiter,
@@ -234,6 +241,7 @@ struct OptionalServices {
     token_exchange: Option<TokenExchangeService>,
     proof_nonce: Option<ProofNonceService>,
     credential: Option<CredentialIssuanceService>,
+    initiation: Option<InitiationHttpService>,
     didcomm_delivery: Option<InitiationDidcommHttpService>,
     credential_management: Option<CredentialManagementHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
@@ -314,6 +322,7 @@ pub fn router_with_all_services(
             token_exchange: Some(services.token_exchange),
             proof_nonce: Some(services.proof_nonce),
             credential: Some(services.credential),
+            initiation: Some(services.initiation),
             didcomm_delivery: Some(services.didcomm_delivery),
             credential_management: None,
             canvas_oauth: Some(services.canvas.oauth),
@@ -417,6 +426,23 @@ pub fn router_with_didcomm_delivery(
         transport,
         OptionalServices {
             didcomm_delivery: Some(didcomm_delivery),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_initiation(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    initiation: InitiationHttpService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            initiation: Some(initiation),
             ..OptionalServices::default()
         },
     )
@@ -700,6 +726,9 @@ fn router_with_optional_services(
     if services.credential.is_some() {
         api = api.route("/v1/issuance/credential", post(issue_credential));
     }
+    if services.initiation.is_some() {
+        api = api.route("/v1/issuance/initiate", post(initiate_issuance));
+    }
     if services.didcomm_delivery.is_some() {
         api = api.route(
             "/v1/issuance/didcomm/deliver",
@@ -812,6 +841,7 @@ fn router_with_optional_services(
         token_exchange: services.token_exchange,
         proof_nonce: services.proof_nonce,
         credential: services.credential,
+        initiation: services.initiation,
         didcomm_delivery: services.didcomm_delivery,
         credential_management: services.credential_management,
         canvas_oauth: services.canvas_oauth,
@@ -1618,20 +1648,45 @@ async fn issue_credential(
         .map_err(Into::into)
 }
 
+async fn initiate_issuance(State(state): State<IssuanceState>, request: Request) -> Response {
+    let Some(service) = state.initiation.as_ref() else {
+        return InitiationHttpError::Unavailable.into_response();
+    };
+    if let Err(error) = service.authorize(request.headers()) {
+        return error.into_response();
+    }
+    let headers = request.headers().clone();
+    let Json(input) = match Json::<InitiationRequest>::from_request(request, &state).await {
+        Ok(input) => input,
+        Err(rejection) => return rejection.into_response(),
+    };
+    match service.initiate_authorized(&headers, &input).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 async fn deliver_didcomm_credential(
     State(state): State<IssuanceState>,
-    headers: HeaderMap,
-    Json(request): Json<DidcommDeliverRequest>,
-) -> Result<Json<NativeInitiationDidcommDeliveryReceipt>, InitiationDidcommHttpError> {
-    state
-        .didcomm_delivery
-        .as_ref()
-        .ok_or(InitiationDidcommHttpError::Delivery(
+    request: Request,
+) -> Response {
+    let Some(service) = state.didcomm_delivery.as_ref() else {
+        return InitiationDidcommHttpError::Delivery(
             crate::initiation_didcomm::NativeInitiationDidcommDeliveryError::InvalidConfiguration,
-        ))?
-        .deliver(&headers, &request)
-        .await
-        .map(Json)
+        )
+        .into_response();
+    };
+    if let Err(error) = service.authorize(request.headers()) {
+        return error.into_response();
+    }
+    let Json(input) = match Json::<DidcommDeliverRequest>::from_request(request, &state).await {
+        Ok(input) => input,
+        Err(rejection) => return rejection.into_response(),
+    };
+    match service.deliver_authorized(&input).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 async fn token_rate_limit_middleware(

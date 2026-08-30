@@ -54,7 +54,21 @@ impl InitiationHttpService {
         headers: &HeaderMap,
         request: &InitiationRequest,
     ) -> Result<InitiationOfferResponse, InitiationHttpError> {
-        self.security.authorize(header(headers, "X-API-Key"))?;
+        self.authorize(headers)?;
+        self.initiate_authorized(headers, request).await
+    }
+
+    pub fn authorize(&self, headers: &HeaderMap) -> Result<(), InitiationHttpError> {
+        self.security
+            .authorize(header(headers, "X-API-Key"))
+            .map_err(Into::into)
+    }
+
+    pub async fn initiate_authorized(
+        &self,
+        headers: &HeaderMap,
+        request: &InitiationRequest,
+    ) -> Result<InitiationOfferResponse, InitiationHttpError> {
         reject_direct_signing_headers(headers)?;
         let reservation = self
             .initiation

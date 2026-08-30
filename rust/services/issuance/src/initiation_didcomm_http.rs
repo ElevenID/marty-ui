@@ -82,7 +82,20 @@ impl InitiationDidcommHttpService {
         headers: &HeaderMap,
         request: &DidcommDeliverRequest,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, InitiationDidcommHttpError> {
-        self.security.authorize(header(headers, "X-API-Key"))?;
+        self.authorize(headers)?;
+        self.deliver_authorized(request).await
+    }
+
+    pub fn authorize(&self, headers: &HeaderMap) -> Result<(), InitiationDidcommHttpError> {
+        self.security
+            .authorize(header(headers, "X-API-Key"))
+            .map_err(Into::into)
+    }
+
+    pub async fn deliver_authorized(
+        &self,
+        request: &DidcommDeliverRequest,
+    ) -> Result<NativeInitiationDidcommDeliveryReceipt, InitiationDidcommHttpError> {
         self.delivery
             .deliver_for_organization(
                 &request.organization_id,

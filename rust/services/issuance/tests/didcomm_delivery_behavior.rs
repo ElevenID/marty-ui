@@ -123,7 +123,7 @@ async fn direct_didcomm_route_rejects_private_selectors_and_missing_authenticati
         },
     };
     let missing_auth = app(delivery.clone())
-        .oneshot(request(contract["valid_request"].clone(), None))
+        .oneshot(request(json!({"malformed":"unauthorized"}), None))
         .await
         .unwrap();
     assert_eq!(missing_auth.status(), 401);

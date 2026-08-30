@@ -55,11 +55,20 @@ use marty_issuance_service::{
         router_with_all_services, CanvasLtiExperienceSessionServices, CanvasLtiServices,
         CanvasServices, IssuanceCoreServices, IssuanceServices,
     },
+    initiation::{
+        InitiationPorts, InitiationService, SecureInitiationSeedGenerator, SystemInitiationClock,
+    },
+    initiation_dependencies::{
+        HttpInitiationRelatedResourceValidator, NativeInitiationControlPlane,
+        PostgresInitiationApplicationClaimsResolver,
+    },
     initiation_didcomm::{
         DidcommEndpointValidator, DidcommTransport, NativeDidcommEnvelope,
         NativeInitiationDidcommDelivery, NativeInitiationDidcommPorts,
     },
     initiation_didcomm_http::InitiationDidcommHttpService,
+    initiation_http::InitiationHttpService,
+    initiation_response::InitiationOfferProjector,
     integration_secret::IntegrationSecretCipher,
     proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
@@ -124,7 +133,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ));
     let token_exchange = TokenExchangeService::new(
         token_repository.clone(),
-        Arc::new(RegisteredClientAuthenticator::new(token_repository)),
+        Arc::new(RegisteredClientAuthenticator::new(token_repository.clone())),
         Arc::new(MartyDpopProofVerifier),
         Arc::new(MartyTokenGenerator),
         &config.issuer_base_url,
@@ -327,8 +336,46 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
         &config.issuer_base_url,
     )?);
-    let didcomm_http =
-        InitiationDidcommHttpService::new(didcomm_delivery, config.issuance_api_key.as_deref());
+    let didcomm_http = InitiationDidcommHttpService::new(
+        didcomm_delivery.clone(),
+        config.issuance_api_key.as_deref(),
+    );
+    let initiation_control_plane = Arc::new(NativeInitiationControlPlane::connect_lazy(
+        &config.organization_grpc_target,
+        &config.credential_template_grpc_target,
+        &config.revocation_profile_grpc_target,
+        config.credential_template_service_url.clone(),
+        config.internal_service_token.as_deref(),
+        config.dependency_timeout,
+    )?);
+    let initiation = InitiationService::new(
+        InitiationPorts {
+            repository: credential_repository.clone(),
+            organizations: initiation_control_plane.clone(),
+            clients: token_repository,
+            templates: initiation_control_plane.clone(),
+            revocation_profiles: initiation_control_plane,
+            applications: Arc::new(PostgresInitiationApplicationClaimsResolver::new(
+                pool.clone(),
+            )),
+            related_resources: Arc::new(HttpInitiationRelatedResourceValidator::new(
+                config.vcdm_related_resource_urls.clone(),
+                config.vcdm_related_resource_max_bytes,
+                config.vcdm_related_resource_timeout,
+            )?),
+            issuer_resolver: issuer_resolver.clone(),
+            seeds: Arc::new(SecureInitiationSeedGenerator),
+            clock: Arc::new(SystemInitiationClock),
+        },
+        config.issuer_base_url.clone(),
+    )?;
+    let initiation_projector =
+        InitiationOfferProjector::new(config.issuer_base_url.clone(), didcomm_delivery)?;
+    let initiation_http = InitiationHttpService::new(
+        initiation,
+        initiation_projector,
+        config.issuance_api_key.as_deref(),
+    );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: credential_repository,
@@ -356,6 +403,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 token_exchange,
                 proof_nonce,
                 credential,
+                initiation_http,
                 didcomm_http,
             ),
             CanvasServices::new(
