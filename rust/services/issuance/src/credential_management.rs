@@ -92,6 +92,7 @@ pub struct CredentialStatusView {
 pub struct CredentialLifecycleEvent {
     pub event_type: String,
     pub credential_id: String,
+    pub transaction_id: String,
     pub organization_id: String,
     pub credential_template_id: String,
     pub status: String,
@@ -249,6 +250,7 @@ impl CredentialManagementService {
             .emit(CredentialLifecycleEvent {
                 event_type: action.event_type().to_owned(),
                 credential_id: updated.id.clone(),
+                transaction_id: String::new(),
                 organization_id: updated.organization_id.clone(),
                 credential_template_id: updated.credential_template_id.clone(),
                 status: updated.status.as_str().to_owned(),

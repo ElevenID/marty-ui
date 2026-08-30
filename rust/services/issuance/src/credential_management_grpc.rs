@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, sync::Arc};
 
 use futures_core::Stream;
 use mmf_security::constant_time_secret_eq;
@@ -7,10 +7,17 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     credential_management::{
-        CredentialLifecycleAction, CredentialManagementError, CredentialManagementService,
-        CredentialStatusView,
+        CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
+        CredentialManagementError, CredentialManagementService, CredentialStatusView,
     },
     credential_management_events::{CredentialLifecycleEventBus, CredentialLifecycleEventFilter},
+    initiation::{
+        InitiationDependencyError, InitiationRepositoryError, InitiationRequest, InitiationService,
+        InitiationServiceError,
+    },
+    initiation_response::{
+        InitiationOfferProjectionError, InitiationOfferProjector, InitiationOfferResponse,
+    },
     issuance_proto::{
         issuance_service_server::IssuanceService, CredentialEvent, CredentialLifecycleRequest,
         CredentialStatusResponse, ExchangeTokenRequest, GetCredentialStatusRequest,
@@ -27,7 +34,14 @@ const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 pub struct CredentialManagementGrpcService {
     lifecycle: CredentialManagementService,
     events: CredentialLifecycleEventBus,
+    initiation: Option<Arc<InitiationGrpcPlatform>>,
     service_token: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Debug)]
+struct InitiationGrpcPlatform {
+    service: InitiationService,
+    projector: InitiationOfferProjector,
 }
 
 impl std::fmt::Debug for CredentialManagementGrpcService {
@@ -50,11 +64,22 @@ impl CredentialManagementGrpcService {
         Self {
             lifecycle,
             events,
+            initiation: None,
             service_token: service_token
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(|value| value.as_bytes().to_vec()),
         }
+    }
+
+    #[cfg(test)]
+    fn with_initiation(
+        mut self,
+        service: InitiationService,
+        projector: InitiationOfferProjector,
+    ) -> Self {
+        self.initiation = Some(Arc::new(InitiationGrpcPlatform { service, projector }));
+        self
     }
 
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
@@ -102,9 +127,38 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<InitiateIssuanceRequest>,
     ) -> Result<Response<IssuanceResponse>, Status> {
         self.authorize(&request)?;
-        Err(Status::unimplemented(
-            "native InitiateIssuance is not registered yet",
-        ))
+        let platform = self.initiation.as_ref().ok_or_else(|| {
+            Status::unimplemented("native InitiateIssuance is not registered yet")
+        })?;
+        let request = initiation_request(request.into_inner())?;
+        let idempotency_key = request
+            .idempotency_key
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        let reservation = platform
+            .service
+            .initiate(&request.request, idempotency_key)
+            .await
+            .map_err(initiation_status)?;
+        let created = reservation.created;
+        let event = CredentialLifecycleEvent {
+            event_type: "offer_created".to_owned(),
+            credential_id: String::new(),
+            transaction_id: reservation.transaction.id.clone(),
+            organization_id: reservation.transaction.organization_id.clone(),
+            credential_template_id: reservation.transaction.credential_template_id.clone(),
+            status: "pending".to_owned(),
+            timestamp: chrono::Utc::now(),
+        };
+        let response = platform
+            .projector
+            .project(reservation, &request.request)
+            .await
+            .map_err(projection_status)?;
+        if created {
+            self.events.emit(event).await;
+        }
+        Ok(Response::new(issuance_response(response)))
     }
 
     async fn exchange_token(
@@ -215,7 +269,7 @@ impl IssuanceService for CredentialManagementGrpcService {
                 Ok(CredentialEvent {
                     event_type: event.event_type,
                     credential_id: event.credential_id,
-                    transaction_id: String::new(),
+                    transaction_id: event.transaction_id,
                     organization_id: event.organization_id,
                     credential_template_id: event.credential_template_id,
                     status: event.status,
@@ -236,6 +290,117 @@ impl IssuanceService for CredentialManagementGrpcService {
             status: "serving".to_owned(),
         }))
     }
+}
+
+struct ParsedInitiationRequest {
+    request: InitiationRequest,
+    idempotency_key: Option<String>,
+}
+
+fn initiation_request(value: InitiateIssuanceRequest) -> Result<ParsedInitiationRequest, Status> {
+    let claims = if value.claims_json.trim().is_empty() {
+        value
+            .claims
+            .into_iter()
+            .map(|(name, value)| (name, serde_json::Value::String(value)))
+            .collect()
+    } else {
+        serde_json::from_str::<serde_json::Value>(&value.claims_json)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .ok_or_else(|| Status::invalid_argument("claims_json must be a JSON object"))?
+    };
+    Ok(ParsedInitiationRequest {
+        request: InitiationRequest {
+            organization_id: value.organization_id,
+            credential_template_id: optional(value.credential_template_id),
+            application_id: optional(value.application_id),
+            applicant_id: optional(value.applicant_id),
+            subject_did: optional(value.subject_did),
+            holder_did: optional(value.holder_did),
+            issuer_did: value.issuer_did,
+            authorized_client_id: optional(value.authorized_client_id),
+            delivery_mode: value.delivery_mode,
+            claims: Some(claims),
+            credential_subject: None,
+            credential_document: None,
+        },
+        idempotency_key: optional(value.idempotency_key),
+    })
+}
+
+fn issuance_response(value: InitiationOfferResponse) -> IssuanceResponse {
+    IssuanceResponse {
+        id: value.id,
+        organization_id: value.organization_id,
+        credential_template_id: value.credential_template_id,
+        status: value.status,
+        credential_offer_uri: value.credential_offer_uri,
+        credential_offer_uris: value.credential_offer_uris.into_iter().collect(),
+        credential_offer_labels: value.credential_offer_labels.into_iter().collect(),
+        pre_auth_code: value.pre_auth_code,
+        expires_at: value.expires_at,
+    }
+}
+
+fn initiation_status(error: InitiationServiceError) -> Status {
+    match error {
+        InitiationServiceError::Request(_) => Status::invalid_argument(error.to_string()),
+        InitiationServiceError::Repository(InitiationRepositoryError::IdempotencyConflict) => {
+            Status::already_exists(error.to_string())
+        }
+        InitiationServiceError::Repository(_) => Status::unavailable(error.to_string()),
+        InitiationServiceError::OrganizationNotFound => Status::not_found(error.to_string()),
+        InitiationServiceError::AuthorizedClientNotRegistered
+        | InitiationServiceError::AuthorizedClientInactive
+        | InitiationServiceError::AuthorizedClientAuthMethod => {
+            Status::failed_precondition(error.to_string())
+        }
+        InitiationServiceError::AuthorizedClientDependency(_) => {
+            Status::unavailable(error.to_string())
+        }
+        InitiationServiceError::Template(InitiationDependencyError::NotFound) => {
+            Status::not_found(error.to_string())
+        }
+        InitiationServiceError::Template(
+            InitiationDependencyError::Unavailable | InitiationDependencyError::Timeout,
+        ) => Status::unavailable(error.to_string()),
+        InitiationServiceError::Template(_) => Status::internal(error.to_string()),
+        InitiationServiceError::TemplateIssuerMissing
+        | InitiationServiceError::TemplateAlgorithmUnsupported => {
+            Status::failed_precondition(error.to_string())
+        }
+        InitiationServiceError::TemplateIssuerMismatch
+        | InitiationServiceError::CredentialSubjectFormat
+        | InitiationServiceError::CredentialDocumentFormat
+        | InitiationServiceError::IdempotentDidcommUnsupported
+        | InitiationServiceError::UnsupportedPayloadFormat => {
+            Status::invalid_argument(error.to_string())
+        }
+        InitiationServiceError::RelatedResourceValidation(_) => {
+            Status::invalid_argument(error.to_string())
+        }
+        InitiationServiceError::RevocationProfile(InitiationDependencyError::NotFound) => {
+            Status::not_found(error.to_string())
+        }
+        InitiationServiceError::RevocationProfile(InitiationDependencyError::Invalid(_)) => {
+            Status::failed_precondition(error.to_string())
+        }
+        InitiationServiceError::RevocationProfile(_) => Status::unavailable(error.to_string()),
+        InitiationServiceError::InvalidIssuerBaseUrl
+        | InitiationServiceError::IssuerUnavailable => Status::unavailable(error.to_string()),
+        InitiationServiceError::IssuerContextMismatch => {
+            Status::failed_precondition(error.to_string())
+        }
+    }
+}
+
+fn projection_status(error: InitiationOfferProjectionError) -> Status {
+    Status::unavailable(error.to_string())
+}
+
+fn optional(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
 }
 
 fn status_response(value: CredentialStatusView) -> CredentialStatusResponse {
@@ -269,16 +434,39 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
+        time::Duration as StdDuration,
+    };
 
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
-    use serde_json::json;
+    use serde_json::{json, Map, Value};
 
     use super::*;
     use crate::credential_management::{
         CredentialManagementPortError, CredentialManagementRepository, CredentialStatusPublisher,
         ManagedCredential, ManagedCredentialStatus,
+    };
+    use crate::{
+        credential::{
+            CredentialIssuanceError, CredentialTransaction, IssuerContext, IssuerContextResolver,
+        },
+        initiation::{
+            IdempotencyBinding, InitiationApplicationClaimsResolver, InitiationClientRepository,
+            InitiationClock, InitiationDependencyError, InitiationOrganizationValidator,
+            InitiationPorts, InitiationRegisteredClient, InitiationRelatedResourceValidator,
+            InitiationRepository, InitiationReservation, InitiationRevocationProfileValidator,
+            InitiationSeed, InitiationSeedGenerator, InitiationTemplate,
+            InitiationTemplateResolver, OrganizationValidation,
+        },
+        initiation_response::{
+            InitiationDidcommDelivery, InitiationDidcommDeliveryError,
+            InitiationDidcommDeliveryReceipt,
+        },
     };
 
     const SERVICE_TOKEN: &str = "service-token-with-at-least-32-bytes";
@@ -387,6 +575,283 @@ mod tests {
             .metadata_mut()
             .insert(SERVICE_TOKEN_HEADER, SERVICE_TOKEN.parse().expect("token"));
         request
+    }
+
+    struct GrpcInitiationRepository {
+        first: AtomicBool,
+        stored: Arc<Mutex<Option<CredentialTransaction>>>,
+    }
+
+    #[async_trait]
+    impl InitiationRepository for GrpcInitiationRepository {
+        async fn recover_idempotently(
+            &self,
+            _organization_id: &str,
+            _binding: &IdempotencyBinding,
+        ) -> Result<Option<CredentialTransaction>, InitiationRepositoryError> {
+            Ok(None)
+        }
+
+        async fn reserve_idempotently(
+            &self,
+            transaction: &CredentialTransaction,
+        ) -> Result<InitiationReservation, InitiationRepositoryError> {
+            *self.stored.lock().expect("stored transaction") = Some(transaction.clone());
+            Ok(InitiationReservation {
+                transaction: transaction.clone(),
+                created: self.first.swap(false, Ordering::SeqCst),
+            })
+        }
+    }
+
+    struct GrpcOrganizations;
+
+    #[async_trait]
+    impl InitiationOrganizationValidator for GrpcOrganizations {
+        async fn validate(&self, _organization_id: &str) -> OrganizationValidation {
+            OrganizationValidation::Found
+        }
+    }
+
+    struct GrpcClients;
+
+    #[async_trait]
+    impl InitiationClientRepository for GrpcClients {
+        async fn get(
+            &self,
+            _organization_id: &str,
+            client_id: &str,
+        ) -> Result<Option<InitiationRegisteredClient>, InitiationDependencyError> {
+            Ok(Some(InitiationRegisteredClient {
+                client_id: client_id.to_owned(),
+                active: true,
+                token_endpoint_auth_method: "private_key_jwt".into(),
+            }))
+        }
+    }
+
+    struct GrpcTemplates;
+
+    #[async_trait]
+    impl InitiationTemplateResolver for GrpcTemplates {
+        async fn resolve(
+            &self,
+            _template_id: &str,
+        ) -> Result<InitiationTemplate, InitiationDependencyError> {
+            Ok(InitiationTemplate {
+                credential_type: "EmployeeCredential".into(),
+                credential_payload_format: "w3c_vcdm_v2_jwt_vc".into(),
+                revocation_profile_id: Some("profile-1".into()),
+                issuer_did: Some("did:web:issuer.example".into()),
+                issuer_algorithm: Some("ES256".into()),
+                ..InitiationTemplate::default()
+            })
+        }
+    }
+
+    struct GrpcRevocation;
+
+    #[async_trait]
+    impl InitiationRevocationProfileValidator for GrpcRevocation {
+        async fn validate_active(
+            &self,
+            organization_id: &str,
+            profile_id: Option<&str>,
+        ) -> Result<(), InitiationDependencyError> {
+            assert_eq!(organization_id, "org-a");
+            assert_eq!(profile_id, Some("profile-1"));
+            Ok(())
+        }
+    }
+
+    struct GrpcApplications;
+
+    #[async_trait]
+    impl InitiationApplicationClaimsResolver for GrpcApplications {
+        async fn resolve(&self, _application_id: &str) -> Result<Option<Map<String, Value>>, ()> {
+            Ok(None)
+        }
+    }
+
+    struct GrpcRelatedResources;
+
+    #[async_trait]
+    impl InitiationRelatedResourceValidator for GrpcRelatedResources {
+        async fn validate(
+            &self,
+            _credential_document: &Value,
+        ) -> Result<(), InitiationDependencyError> {
+            Ok(())
+        }
+    }
+
+    struct GrpcIssuer;
+
+    #[async_trait]
+    impl IssuerContextResolver for GrpcIssuer {
+        async fn resolve(
+            &self,
+            transaction: &CredentialTransaction,
+            credential_format: &str,
+            force: bool,
+        ) -> Result<IssuerContext, CredentialIssuanceError> {
+            assert_eq!(
+                transaction.issuer_did.as_deref(),
+                Some("did:web:issuer.example")
+            );
+            assert_eq!(credential_format, "jwt_vc_json");
+            assert!(!force);
+            Ok(IssuerContext {
+                issuer_profile_id: "issuer-profile-1".into(),
+                issuer_did: "did:web:issuer.example".into(),
+                signing_service_id: "kms-1".into(),
+                algorithm: "ES256".into(),
+                verification_method_id: Some("did:web:issuer.example#key-1".into()),
+                public_jwk: None,
+                certificate_chain: Vec::new(),
+                raw_context: json!({}),
+            })
+        }
+    }
+
+    struct GrpcSeeds;
+
+    impl InitiationSeedGenerator for GrpcSeeds {
+        fn generate(&self) -> InitiationSeed {
+            InitiationSeed {
+                transaction_id: "00000000-0000-4000-8000-000000000001".into(),
+                pre_authorized_code: "a".repeat(43),
+            }
+        }
+    }
+
+    struct GrpcClock;
+
+    impl InitiationClock for GrpcClock {
+        fn now(&self) -> chrono::DateTime<Utc> {
+            Utc.with_ymd_and_hms(2026, 8, 30, 12, 0, 0)
+                .single()
+                .unwrap()
+        }
+    }
+
+    struct GrpcDidcomm;
+
+    #[async_trait]
+    impl InitiationDidcommDelivery for GrpcDidcomm {
+        async fn deliver(
+            &self,
+            _transaction: &CredentialTransaction,
+            _holder_did: &str,
+        ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError> {
+            Err(InitiationDidcommDeliveryError)
+        }
+    }
+
+    fn initiation_platform() -> (
+        InitiationService,
+        InitiationOfferProjector,
+        Arc<Mutex<Option<CredentialTransaction>>>,
+    ) {
+        let stored = Arc::new(Mutex::new(None));
+        let service = InitiationService::new(
+            InitiationPorts {
+                repository: Arc::new(GrpcInitiationRepository {
+                    first: AtomicBool::new(true),
+                    stored: stored.clone(),
+                }),
+                organizations: Arc::new(GrpcOrganizations),
+                clients: Arc::new(GrpcClients),
+                templates: Arc::new(GrpcTemplates),
+                revocation_profiles: Arc::new(GrpcRevocation),
+                applications: Arc::new(GrpcApplications),
+                related_resources: Arc::new(GrpcRelatedResources),
+                issuer_resolver: Arc::new(GrpcIssuer),
+                seeds: Arc::new(GrpcSeeds),
+                clock: Arc::new(GrpcClock),
+            },
+            "https://issuer.example",
+        )
+        .unwrap();
+        let projector =
+            InitiationOfferProjector::new("https://issuer.example", Arc::new(GrpcDidcomm)).unwrap();
+        (service, projector, stored)
+    }
+
+    #[tokio::test]
+    async fn initiation_rpc_reuses_the_domain_and_emits_only_committed_creation() {
+        let (candidate, _calls) = candidate();
+        let mut events = candidate
+            .events
+            .subscribe(CredentialLifecycleEventFilter::new(
+                Some("org-a"),
+                Some("template-a"),
+                ["offer_created".to_owned()],
+            ));
+        let (initiation, projector, stored) = initiation_platform();
+        let service = candidate.with_initiation(initiation, projector);
+        let request = InitiateIssuanceRequest {
+            organization_id: "org-a".into(),
+            credential_template_id: "template-a".into(),
+            applicant_id: "applicant-a".into(),
+            subject_did: "did:key:holder".into(),
+            claims: std::collections::HashMap::from([("ignored".into(), "legacy".into())]),
+            holder_did: String::new(),
+            authorized_client_id: String::new(),
+            application_id: "application-a".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            delivery_mode: "wallet_only".into(),
+            idempotency_key: String::new(),
+            claims_json: r#"{"profile":{"level":2},"roles":["member"]}"#.into(),
+        };
+        let response = service
+            .initiate_issuance(authenticated(request.clone()))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.id, "00000000-0000-4000-8000-000000000001");
+        assert_eq!(response.organization_id, "org-a");
+        assert_eq!(response.credential_template_id, "template-a");
+        assert_eq!(response.status, "pending");
+        assert_eq!(response.pre_auth_code.len(), 43);
+        assert!(response
+            .credential_offer_uri
+            .starts_with("openid-credential-offer://"));
+        let stored = stored
+            .lock()
+            .expect("stored transaction")
+            .clone()
+            .expect("committed transaction");
+        assert_eq!(stored.claims["profile"], json!({"level":2}));
+        assert_eq!(stored.claims["roles"], json!(["member"]));
+        assert!(!stored.claims.contains_key("ignored"));
+        let event = events.recv().await.expect("offer-created event");
+        assert_eq!(event.event_type, "offer_created");
+        assert_eq!(event.transaction_id, response.id);
+        assert_eq!(event.organization_id, "org-a");
+        assert_eq!(event.credential_template_id, "template-a");
+
+        service
+            .initiate_issuance(authenticated(request))
+            .await
+            .expect("atomic recovery response");
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(10), events.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn initiation_grpc_projection_rejects_non_object_nested_claims() {
+        let error = initiation_request(InitiateIssuanceRequest {
+            claims_json: "[]".into(),
+            ..InitiateIssuanceRequest::default()
+        })
+        .err()
+        .expect("non-object claims are invalid");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
     }
 
     #[tokio::test]
