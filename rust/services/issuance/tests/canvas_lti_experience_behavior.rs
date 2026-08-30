@@ -7,6 +7,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::{
+    body::{to_bytes, Body},
+    http::{header, Request, StatusCode},
+};
 use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_lti_experience::{
@@ -17,8 +21,13 @@ use marty_issuance_service::{
         CanvasLtiExperienceSessionSeed, SecureCanvasLtiExperienceSessionGenerator,
     },
     canvas_lti_launch::CanvasLtiClock,
+    http::router_with_canvas_lti_experience_exchange,
+    transport::TransportPolicy,
+    IssuanceRuntime, IssuanceServiceConfig,
 };
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use serde_json::{json, Value};
+use tower::ServiceExt;
 
 fn contract() -> Value {
     serde_json::from_str(include_str!(
@@ -31,6 +40,7 @@ fn contract() -> Value {
 struct ExchangeRepository {
     requests: Mutex<Vec<CanvasLtiExperienceExchangePersistence>>,
     fail: Mutex<bool>,
+    invalid: Mutex<bool>,
 }
 
 #[async_trait]
@@ -43,6 +53,9 @@ impl CanvasLtiExperienceExchangeRepository for ExchangeRepository {
     ) -> Result<CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeError> {
         if *self.fail.lock().unwrap() {
             return Err(CanvasLtiExperienceExchangeError::RepositoryUnavailable);
+        }
+        if *self.invalid.lock().unwrap() {
+            return Err(CanvasLtiExperienceExchangeError::InvalidCode);
         }
         self.requests.lock().unwrap().push(request.clone());
         let session = generator.generate();
@@ -97,7 +110,7 @@ struct CountingClock {
     calls: AtomicUsize,
 }
 
-fn exchange_service(
+fn exchange_service_with_ttl(
     repository: Arc<ExchangeRepository>,
     session_ttl: Duration,
 ) -> Result<CanvasLtiExperienceExchangeService, CanvasLtiExperienceExchangeError> {
@@ -116,6 +129,37 @@ impl CanvasLtiClock for CountingClock {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.now
     }
+}
+
+fn exchange_service(
+    repository: Arc<ExchangeRepository>,
+    generator: Arc<dyn CanvasLtiExperienceSessionGenerator>,
+) -> CanvasLtiExperienceExchangeService {
+    CanvasLtiExperienceExchangeService::new(
+        repository,
+        generator,
+        Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 8, 29, 12, 2, 0).unwrap(),
+        )),
+        Duration::from_secs(30 * 60),
+    )
+    .unwrap()
+}
+
+fn exchange_app(service: CanvasLtiExperienceExchangeService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    router_with_canvas_lti_experience_exchange(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        service,
+    )
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap()
 }
 
 #[test]
@@ -143,7 +187,8 @@ fn exchange_metadata_replays_the_complete_frozen_vector() {
 #[tokio::test]
 async fn exchange_normalizes_the_code_and_responds_after_persistence() {
     let repository = Arc::new(ExchangeRepository::default());
-    let service = exchange_service(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
+    let service =
+        exchange_service_with_ttl(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
 
     let result = service
         .exchange("  experience-code-contract-0123456789  ")
@@ -192,11 +237,12 @@ async fn exchange_failure_returns_no_session_token() {
 #[test]
 fn exchange_rejects_invalid_session_ttls_at_construction() {
     assert_eq!(
-        exchange_service(Arc::new(ExchangeRepository::default()), Duration::ZERO,).unwrap_err(),
+        exchange_service_with_ttl(Arc::new(ExchangeRepository::default()), Duration::ZERO,)
+            .unwrap_err(),
         CanvasLtiExperienceExchangeError::InvalidConfiguration
     );
     assert_eq!(
-        exchange_service(
+        exchange_service_with_ttl(
             Arc::new(ExchangeRepository::default()),
             Duration::from_secs(u64::MAX),
         )
@@ -208,7 +254,8 @@ fn exchange_rejects_invalid_session_ttls_at_construction() {
 #[tokio::test]
 async fn exchange_rejects_out_of_contract_codes_before_persistence() {
     let repository = Arc::new(ExchangeRepository::default());
-    let service = exchange_service(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
+    let service =
+        exchange_service_with_ttl(repository.clone(), Duration::from_secs(30 * 60)).unwrap();
 
     for code in ["x".repeat(31), "x".repeat(257)] {
         assert_eq!(
@@ -258,4 +305,244 @@ fn secure_generator_never_reuses_the_plaintext_as_the_digest() {
     assert_eq!(generated.nonce.len(), 43);
     assert_eq!(generated.state_digest, sha256_hex(&generated.token));
     assert_ne!(generated.state_digest, generated.token);
+}
+
+#[tokio::test]
+async fn exchange_http_replays_success_headers_body_and_trimmed_consumption() {
+    let repository = Arc::new(ExchangeRepository::default());
+    let response = exchange_app(exchange_service(
+        repository.clone(),
+        Arc::new(FixedGenerator),
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .body(Body::from(
+                json!({"code": "  experience-code-contract-0000000000  "}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+    assert_eq!(
+        response_json(response).await,
+        contract()["experience"]["exchange"]["vector"]["expected_response"]
+    );
+    assert_eq!(
+        repository.requests.lock().unwrap()[0].code,
+        "experience-code-contract-0000000000"
+    );
+}
+
+#[tokio::test]
+async fn exchange_http_replays_every_frozen_schema_failure() {
+    let cases = [
+        (
+            json!({}),
+            json!({
+                "type": "missing",
+                "loc": ["body", "code"],
+                "msg": "Field required",
+                "input": {},
+            }),
+        ),
+        (
+            json!({"code": "x".repeat(31)}),
+            json!({
+                "type": "string_too_short",
+                "loc": ["body", "code"],
+                "msg": "String should have at least 32 characters",
+                "input": "x".repeat(31),
+                "ctx": {"min_length": 32},
+            }),
+        ),
+        (
+            json!({"code": "x".repeat(257)}),
+            json!({
+                "type": "string_too_long",
+                "loc": ["body", "code"],
+                "msg": "String should have at most 256 characters",
+                "input": "x".repeat(257),
+                "ctx": {"max_length": 256},
+            }),
+        ),
+        (
+            json!({"code": "x".repeat(32), "extra": 1}),
+            json!({
+                "type": "extra_forbidden",
+                "loc": ["body", "extra"],
+                "msg": "Extra inputs are not permitted",
+                "input": 1,
+            }),
+        ),
+    ];
+    assert_eq!(
+        contract()["experience"]["exchange"]["request"]["schema_failure_cases"]
+            .as_array()
+            .unwrap()
+            .len(),
+        cases.len()
+    );
+    for (body, expected) in cases {
+        let repository = Arc::new(ExchangeRepository::default());
+        let response = exchange_app(exchange_service(
+            repository.clone(),
+            Arc::new(FixedGenerator),
+        ))
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response_json(response).await, json!({"detail": [expected]}));
+        assert!(repository.requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn exchange_http_replays_non_json_media_as_model_validation() {
+    let repository = Arc::new(ExchangeRepository::default());
+    let app = exchange_app(exchange_service(
+        repository.clone(),
+        Arc::new(FixedGenerator),
+    ));
+    let cases = [
+        (None, r#"{"code":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#),
+        (
+            Some("application/x-www-form-urlencoded"),
+            "code=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        ),
+        (
+            Some("text/plain"),
+            r#"{"code":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#,
+        ),
+    ];
+    let request_contract = &contract()["experience"]["exchange"]["request"];
+    let non_json_contract = &request_contract["non_json_body_behavior"];
+    assert_eq!(non_json_contract["status_code"], 422);
+    assert_eq!(non_json_contract["error_type"], "model_attributes_type");
+    assert_eq!(non_json_contract["input_projection"], "raw-decoded-body");
+    assert_eq!(non_json_contract["cache_headers"], "absent");
+    assert_eq!(
+        non_json_contract["cases"].as_array().unwrap().len(),
+        cases.len()
+    );
+    for (content_type, body) in cases {
+        let mut request = Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange");
+        if let Some(content_type) = content_type {
+            request = request.header(header::CONTENT_TYPE, content_type);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert_eq!(
+            response_json(response).await,
+            json!({
+                "detail": [{
+                    "type": "model_attributes_type",
+                    "loc": ["body"],
+                    "msg": "Input should be a valid dictionary or object to extract fields from",
+                    "input": body,
+                }]
+            })
+        );
+    }
+    assert!(repository.requests.lock().unwrap().is_empty());
+
+    let accepted = app
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+                .header(header::CONTENT_TYPE, "application/vnd.elevenid+json")
+                .body(Body::from(json!({"code": "x".repeat(32)}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn exchange_http_bounds_non_json_body_before_validation_projection() {
+    let repository = Arc::new(ExchangeRepository::default());
+    let max_body_bytes = contract()["experience"]["exchange"]["request"]["body_max_bytes"]
+        .as_u64()
+        .unwrap() as usize;
+    let response = exchange_app(exchange_service(
+        repository.clone(),
+        Arc::new(FixedGenerator),
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("x".repeat(max_body_bytes + 1)))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response_json(response).await,
+        json!({"detail": "Canvas LTI exchange body exceeds the size limit"})
+    );
+    assert!(repository.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn exchange_http_sanitizes_failures_and_never_returns_a_token() {
+    let invalid_repository = Arc::new(ExchangeRepository::default());
+    *invalid_repository.invalid.lock().unwrap() = true;
+    let invalid_generator = Arc::new(CountingGenerator(AtomicUsize::new(0)));
+    let invalid = exchange_app(exchange_service(
+        invalid_repository,
+        invalid_generator.clone(),
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({"code": "x".repeat(32)}).to_string()))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_generator.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        response_json(invalid).await,
+        json!({"detail": "Canvas LTI experience code has expired, is invalid, or was already used"})
+    );
+
+    let failed_repository = Arc::new(ExchangeRepository::default());
+    *failed_repository.fail.lock().unwrap() = true;
+    let failed_generator = Arc::new(CountingGenerator(AtomicUsize::new(0)));
+    let failed = exchange_app(exchange_service(
+        failed_repository,
+        failed_generator.clone(),
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/experience-sessions/exchange")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({"code": "x".repeat(32)}).to_string()))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(failed_generator.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        to_bytes(failed.into_body(), 1024).await.unwrap(),
+        "Internal Server Error"
+    );
 }

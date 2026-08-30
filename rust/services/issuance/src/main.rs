@@ -2,6 +2,9 @@ use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
     canvas_issuance_guard::CanvasGuardConfig,
+    canvas_lti_experience::{
+        CanvasLtiExperienceExchangeService, SecureCanvasLtiExperienceSessionGenerator,
+    },
     canvas_lti_launch::{
         CanvasLtiExperienceService, CanvasLtiLaunchPorts, CanvasLtiLaunchService,
         SecureCanvasLtiExperienceCodeGenerator, SystemCanvasLtiClock,
@@ -129,11 +132,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let canvas_lti_experience = CanvasLtiExperienceService::new(
         canvas_lti_launch.clone(),
-        canvas_lti_repository,
+        canvas_lti_repository.clone(),
         Arc::new(SecureCanvasLtiExperienceCodeGenerator),
-        canvas_lti_clock,
+        canvas_lti_clock.clone(),
         config.canvas_lti_experience_code_ttl,
         &config.canvas_lti_experience_base_url,
+    )?;
+    let canvas_lti_experience_exchange = CanvasLtiExperienceExchangeService::new(
+        canvas_lti_repository,
+        Arc::new(SecureCanvasLtiExperienceSessionGenerator),
+        canvas_lti_clock,
+        config.canvas_lti_experience_session_ttl,
     )?;
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
@@ -183,7 +192,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             token_exchange,
             proof_nonce,
             credential,
-            CanvasLtiServices::new(canvas_lti_login, canvas_lti_launch, canvas_lti_experience),
+            CanvasLtiServices::new(
+                canvas_lti_login,
+                canvas_lti_launch,
+                canvas_lti_experience,
+                canvas_lti_experience_exchange,
+            ),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );
