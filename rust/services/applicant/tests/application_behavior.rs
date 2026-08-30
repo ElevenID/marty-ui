@@ -4,8 +4,8 @@ use marty_applicant::{
     issuance::IssuanceOffer,
     service::{
         ApplicantService, ApplicationEvent, ApplicationTemplate, ApprovalAuthorizer, ApprovalFacts,
-        EventPublisher, FlowProvider, Identity, MmfApprovalAuthorizer, ProviderError, ServiceError,
-        StorePersistence, TemplateProvider,
+        EventPublisher, FlowProvider, Identity, MmfApprovalAuthorizer, ProviderError,
+        ReviewRequestContext, ServiceError, StorePersistence, TemplateProvider,
     },
     store::StoreDocument,
     Application, ClaimState, LifecycleStatus,
@@ -84,6 +84,26 @@ impl EventPublisher for EventsMock {
 }
 
 #[derive(Default)]
+struct FlakyEvents {
+    calls: Mutex<Vec<ApplicationEvent>>,
+    attempts: AtomicUsize,
+}
+
+#[async_trait]
+impl EventPublisher for FlakyEvents {
+    async fn publish(&self, event: &ApplicationEvent) -> Result<(), ProviderError> {
+        self.calls.lock().await.push(event.clone());
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(ProviderError::Unavailable(
+                "notification unavailable".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Default)]
 struct PersistenceMock(StdMutex<Vec<StoreDocument>>);
 
 impl StorePersistence for PersistenceMock {
@@ -146,6 +166,13 @@ fn identity() -> Identity {
     Identity {
         user_id: "user-1".into(),
         organization_id: "holder-org".into(),
+    }
+}
+
+fn review_context() -> ReviewRequestContext<'static> {
+    ReviewRequestContext {
+        reviewer_id: "reviewer-1",
+        correlation_id: "11111111-1111-4111-8111-111111111111",
     }
 }
 
@@ -288,7 +315,7 @@ async fn approval_requires_lock_and_uses_persisted_issuer_scope() {
         service
             .review(
                 &application.id,
-                "reviewer-1",
+                review_context(),
                 true,
                 None,
                 None,
@@ -309,7 +336,7 @@ async fn approval_requires_lock_and_uses_persisted_issuer_scope() {
     let approved = service
         .review(
             &application.id,
-            "reviewer-1",
+            review_context(),
             true,
             None,
             None,
@@ -320,6 +347,76 @@ async fn approval_requires_lock_and_uses_persisted_issuer_scope() {
     assert_eq!(approved.status, LifecycleStatus::Approved);
     assert_eq!(authorizer.0.lock().await[0].organization_id, "issuer-org");
     assert_eq!(events.0.lock().await[0].organization_id, "issuer-org");
+    assert_eq!(
+        events.0.lock().await[0].correlation_id,
+        "11111111-1111-4111-8111-111111111111"
+    );
+}
+
+#[tokio::test]
+async fn review_commits_a_stable_event_id_and_retries_failed_delivery() {
+    let events = Arc::new(FlakyEvents::default());
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        Arc::new(TemplateMock(template())),
+        Arc::new(FlowMock::default()),
+        Arc::new(AuthorizerMock::default()),
+        events.clone(),
+        persistence.clone(),
+    );
+    let application = draft(&service).await;
+    service
+        .submit(&application.id, application.created_at)
+        .await
+        .unwrap();
+    service
+        .acquire_lock(
+            &application.id,
+            "reviewer-1",
+            "Reviewer",
+            application.created_at,
+        )
+        .await
+        .unwrap();
+    service
+        .review(
+            &application.id,
+            review_context(),
+            true,
+            None,
+            None,
+            application.created_at,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .store()
+            .read()
+            .await
+            .pending_application_events
+            .len(),
+        1
+    );
+    assert_eq!(service.publish_pending_events().await.unwrap(), 1);
+    assert!(service
+        .store()
+        .read()
+        .await
+        .pending_application_events
+        .is_empty());
+    let calls = events.calls.lock().await;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].event_id, calls[1].event_id);
+    assert_eq!(calls[0].correlation_id, calls[1].correlation_id);
+    assert!(persistence
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|snapshot| !snapshot.pending_application_events.is_empty()));
 }
 
 #[tokio::test]
@@ -374,7 +471,7 @@ async fn prior_credential_status_does_not_block_a_new_application_review() {
     let approved = service
         .review(
             &application.id,
-            "reviewer-1",
+            review_context(),
             true,
             None,
             None,
@@ -416,7 +513,7 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
     service
         .review(
             &application.id,
-            "reviewer-1",
+            review_context(),
             true,
             None,
             None,

@@ -33,10 +33,10 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 vi.mock('../../../services/webhooksApi', () => ({
   listWebhooks: (...args: unknown[]) => mockListWebhooks(...args),
   getAvailableEventTypes: (...args: unknown[]) => mockGetAvailableEventTypes(...args),
-  createWebhook: (...args: unknown[]) => mockCreateWebhook(...args),
-  deleteWebhook: (...args: unknown[]) => mockDeleteWebhook(...args),
+  createWebhookConfiguration: (...args: unknown[]) => mockCreateWebhook(...args),
+  deleteWebhookConfiguration: (...args: unknown[]) => mockDeleteWebhook(...args),
   testWebhook: (...args: unknown[]) => mockTestWebhook(...args),
-  updateWebhook: (...args: unknown[]) => mockUpdateWebhook(...args),
+  updateWebhookConfiguration: (...args: unknown[]) => mockUpdateWebhook(...args),
 }))
 
 describe('WebhooksPage', () => {
@@ -65,6 +65,7 @@ describe('WebhooksPage', () => {
     mockListWebhooks.mockResolvedValueOnce([
       {
         id: 'wh-1',
+        name: 'Primary audit receiver',
         url: 'https://audit.example.com/events',
         description: 'Audit sink',
         event_types: ['audit.security_event'],
@@ -84,6 +85,7 @@ describe('WebhooksPage', () => {
     })
 
     expect(screen.getByText('https://audit.example.com/events')).toBeInTheDocument()
+    expect(screen.getByText('Primary audit receiver')).toBeInTheDocument()
     expect(screen.getByText('audit.security_event')).toBeInTheDocument()
     expect(screen.getByText('Active')).toBeInTheDocument()
   })
@@ -92,6 +94,7 @@ describe('WebhooksPage', () => {
     mockListWebhooks.mockResolvedValueOnce([
       {
         id: 'wh-1',
+        name: 'Primary audit receiver',
         url: 'https://audit.example.com/events',
         description: 'Audit sink',
         event_types: ['audit.security_event'],
@@ -123,6 +126,36 @@ describe('WebhooksPage', () => {
 
     await waitFor(() => {
       expect(mockDeleteWebhook).toHaveBeenCalledWith('org-123', 'wh-1')
+    })
+  })
+
+  it('requires and submits the native webhook name', async () => {
+    mockListWebhooks.mockResolvedValue([])
+    mockCreateWebhook.mockResolvedValue({ signing_secret: 'new-secret' })
+
+    const { user } = renderWithoutRouter(
+      <MemoryRouter>
+        <WebhooksPage />
+      </MemoryRouter>
+    )
+
+    await user.click(await screen.findByRole('button', { name: /add webhook/i }))
+    await user.type(screen.getByLabelText(/webhook url/i), 'https://partner.example.com/events')
+    await user.click(screen.getByRole('button', { name: /create webhook/i }))
+    expect(await screen.findByText('Enter a webhook name.')).toBeInTheDocument()
+    expect(mockCreateWebhook).not.toHaveBeenCalled()
+
+    await user.type(screen.getByLabelText(/webhook name/i), 'Admissions receiver')
+    await user.click(screen.getByRole('button', { name: /create webhook/i }))
+
+    await waitFor(() => {
+      expect(mockCreateWebhook).toHaveBeenCalledWith(
+        'org-123',
+        expect.objectContaining({
+          name: 'Admissions receiver',
+          url: 'https://partner.example.com/events',
+        }),
+      )
     })
   })
 })

@@ -23,7 +23,8 @@
       "event-stream"
     ],
     "selfhost_beta_tunnel": ["tunnel-nginx-proxy", "cloudflared-beta"],
-    "canvas_experiments": ["canvas-real", "issuance-canvas-localhost-bridge", "canvas-sandbox"]
+    "canvas_experiments": ["canvas-real", "issuance-canvas-localhost-bridge", "canvas-sandbox"],
+    "external_demo": ["northstar-admissions"]
   },
   "services": {
     "postgres": {"compose_service": "postgres", "k8s_deployment": "postgres", "group": "infra", "image_name": "postgres", "public_image": true},
@@ -56,6 +57,7 @@
     "event-stream": {"compose_service": "event-stream", "k8s_deployment": "event-stream", "group": "app", "image_name": "event-stream", "service_name_env": "event_stream", "dockerfile": "services/Dockerfile", "context": ".", "public_image": true},
     "canvas-real": {"compose_service": "canvas-real", "k8s_deployment": "", "group": "canvas_experiments", "image_name": "readystack/canvas", "public_image": true, "public_route_required": true},
     "issuance-canvas-localhost-bridge": {"compose_service": "issuance-canvas-localhost-bridge", "k8s_deployment": "", "group": "canvas_experiments", "image_name": "python", "public_image": true},
-    "canvas-sandbox": {"compose_service": "canvas-sandbox", "k8s_deployment": "", "group": "canvas_experiments", "image_name": "canvas-sandbox", "dockerfile": "docker/canvas-sandbox/Dockerfile", "context": ".", "public_image": true, "public_route_required": true}
+    "canvas-sandbox": {"compose_service": "canvas-sandbox", "k8s_deployment": "", "group": "canvas_experiments", "image_name": "canvas-sandbox", "dockerfile": "docker/canvas-sandbox/Dockerfile", "context": ".", "public_image": true, "public_route_required": true},
+    "northstar-admissions": {"compose_service": "northstar-admissions", "k8s_deployment": "", "group": "external_demo", "image_name": "northstar-admissions", "dockerfile": "demo-apps/northstar-admissions/Dockerfile", "context": "demo-apps/northstar-admissions", "public_image": false, "public_route_required": true}
   }
 }

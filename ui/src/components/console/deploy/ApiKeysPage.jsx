@@ -51,7 +51,15 @@ import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createApiKey, listApiKeys, revokeApiKey } from '../../../services/apiKeysApi';
-import { createWebhook, listWebhooks } from '../../../services/webhooksApi';
+import {
+  createWebhookConfiguration as createWebhook,
+  getAvailableEventTypes,
+  listWebhooks,
+} from '../../../services/webhooksApi';
+import {
+  ASYNC_GATEWAY_EVENT_PRESET,
+  flattenWebhookEventCatalog,
+} from '../../../services/webhookEvents';
 
 const API_KEY_SCOPES = [
   {
@@ -95,6 +103,21 @@ const API_KEY_SCOPES = [
     description: 'Provision and maintain callback endpoints programmatically.',
   },
   {
+    id: 'webhooks:read',
+    label: 'Read webhook delivery history',
+    description: 'Inspect webhook endpoints, subscriptions, and delivery records.',
+  },
+  {
+    id: 'applications:read',
+    label: 'Read applications',
+    description: 'Read organization applicant queues and application state.',
+  },
+  {
+    id: 'applications:approve',
+    label: 'Approve applications',
+    description: 'Approve submitted applications from an external integration.',
+  },
+  {
     id: 'integrations:read',
     label: 'Read integrations',
     description: 'Read Canvas platforms, bindings, readiness, synchronization jobs, and reviews.',
@@ -104,28 +127,6 @@ const API_KEY_SCOPES = [
     label: 'Manage integrations',
     description: 'Configure, authorize, activate, retry, and archive Canvas integrations.',
   },
-];
-
-const DEFAULT_CALLBACK_EVENTS = [
-  'application.submitted',
-  'application.approved',
-  'application.rejected',
-  'credential.issued',
-  'credential.revoked',
-  'verification.completed',
-  'verification.failed',
-];
-
-const CALLBACK_EVENT_OPTIONS = [
-  { id: 'application.submitted', label: 'Application submitted' },
-  { id: 'application.approved', label: 'Application approved' },
-  { id: 'application.rejected', label: 'Application rejected' },
-  { id: 'credential.issued', label: 'Credential issued' },
-  { id: 'credential.revoked', label: 'Credential revoked' },
-  { id: 'verification.completed', label: 'Verification completed' },
-  { id: 'verification.failed', label: 'Verification failed' },
-  { id: 'audit.configuration_changed', label: 'Audit configuration changed' },
-  { id: 'audit.security_event', label: 'Audit security event' },
 ];
 
 const CALLBACK_TAG_PATTERN = /\[api-key:([^\]]+)\]/i;
@@ -243,14 +244,15 @@ function ApiKeysPage() {
     createCallback: true,
     callbackUrl: '',
     callbackDescription: '',
-    callbackEvents: [...DEFAULT_CALLBACK_EVENTS],
+    callbackEvents: [...ASYNC_GATEWAY_EVENT_PRESET],
   });
 
   const { data, loading, error, reload } = useAsyncData(
     async () => {
-      const [keysResult, webhooksResult] = await Promise.allSettled([
+      const [keysResult, webhooksResult, eventCatalogResult] = await Promise.allSettled([
         listApiKeys(organizationId),
         listWebhooks(organizationId),
+        getAvailableEventTypes(),
       ]);
 
       if (keysResult.status === 'rejected') {
@@ -265,6 +267,12 @@ function ApiKeysPage() {
         webhookError: webhooksResult.status === 'rejected'
           ? webhooksResult.reason?.message || 'Webhook callback status could not be loaded.'
           : null,
+        callbackEventOptions: eventCatalogResult.status === 'fulfilled'
+          ? flattenWebhookEventCatalog(eventCatalogResult.value?.categories)
+          : [],
+        eventCatalogError: eventCatalogResult.status === 'rejected'
+          ? eventCatalogResult.reason?.message || 'Webhook event types could not be loaded.'
+          : null,
       };
     },
     [organizationId],
@@ -272,6 +280,8 @@ function ApiKeysPage() {
 
   const apiKeys = data?.keys || [];
   const webhookLoadError = data?.webhookError || null;
+  const callbackEventOptions = data?.callbackEventOptions || [];
+  const eventCatalogError = data?.eventCatalogError || null;
   const callbackMap = useMemo(() => {
     const map = new Map();
     (data?.webhooks || []).forEach((webhook) => {
@@ -313,7 +323,7 @@ function ApiKeysPage() {
       createCallback: true,
       callbackUrl: '',
       callbackDescription: '',
-      callbackEvents: [...DEFAULT_CALLBACK_EVENTS],
+      callbackEvents: [...ASYNC_GATEWAY_EVENT_PRESET],
     });
   };
 
@@ -341,6 +351,20 @@ function ApiKeysPage() {
     if (formState.createCallback && formState.callbackEvents.length === 0) {
       setFormError('Select at least one callback event.');
       return;
+    }
+
+    if (formState.createCallback && eventCatalogError) {
+      setFormError('Webhook event types are unavailable. Retry or turn off callback creation.');
+      return;
+    }
+
+    if (formState.createCallback) {
+      const supportedEvents = new Set(callbackEventOptions.map((event) => event.id));
+      const unsupportedEvents = formState.callbackEvents.filter((event) => !supportedEvents.has(event));
+      if (unsupportedEvents.length > 0) {
+        setFormError(`Unsupported callback events: ${unsupportedEvents.join(', ')}`);
+        return;
+      }
     }
 
     setSaving(true);
@@ -764,8 +788,13 @@ function ApiKeysPage() {
                     <Typography variant="subtitle2" gutterBottom>
                       Callback event subscriptions
                     </Typography>
+                    {eventCatalogError && (
+                      <Alert severity="warning" sx={{ mb: 1 }}>
+                        Webhook event types could not be loaded. Retry the page or turn off callback creation.
+                      </Alert>
+                    )}
                     <FormGroup>
-                      {CALLBACK_EVENT_OPTIONS.map((eventOption) => (
+                      {callbackEventOptions.map((eventOption) => (
                         <FormControlLabel
                           key={eventOption.id}
                           control={

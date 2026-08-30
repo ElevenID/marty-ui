@@ -81,6 +81,13 @@ describe('demoManifestService', () => {
     })).toThrow(DemoManifestError);
   });
 
+  it('accepts the public HTTPS webhook protocol used by external integrations', () => {
+    expect(() => validateDemoManifest({
+      ...manifest,
+      scenarios: [{ ...scenario, protocols: ['https-webhooks'] }],
+    })).not.toThrow();
+  });
+
   it('rejects a published video before the ElevenID LLC channel and release playlist are verified', () => {
     expect(() => validateDemoManifest({
       ...manifest,

@@ -67,6 +67,7 @@ async def test_notification_producer_attaches_the_purpose_scoped_token(
         "X-Marty-Event-Producer": "applicant",
     }
     assert calls[0]["json"]["event_id"] == event.event_id
+    assert calls[0]["json"]["correlation_id"] == event.correlation_id
 
 
 @pytest.mark.asyncio

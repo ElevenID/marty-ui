@@ -286,6 +286,7 @@ pub struct WebhookDelivery {
     pub subscription_id: Option<String>,
     pub event_id: String,
     pub event_type: String,
+    pub correlation_id: Option<String>,
     pub success: bool,
     pub response_status_code: Option<i32>,
     pub error_message: Option<String>,

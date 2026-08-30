@@ -1,5 +1,6 @@
 use crate::{
-    Applicant, Application, Biometric, CheckStatus, Evidence, EvidenceStatus, VettingCheck,
+    service::ApplicationEvent, Applicant, Application, Biometric, CheckStatus, Evidence,
+    EvidenceStatus, VettingCheck,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -19,6 +20,8 @@ pub struct StoreDocument {
     pub checks: Vec<VettingCheck>,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_application_events: Vec<ApplicationEvent>,
 }
 
 impl StoreDocument {

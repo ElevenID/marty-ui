@@ -171,8 +171,37 @@ impl OrganizationApplication {
             return Ok(None);
         }
         let key_hash = ApiKey::hash_key(raw_key);
-        let api_key = self.store.api_key_by_hash(&key_hash).await?;
-        Ok(api_key.filter(|api_key| api_key.verify(raw_key) && api_key.is_valid_at(now)))
+        let Some(candidate) = self.store.api_key_by_hash(&key_hash).await? else {
+            return Ok(None);
+        };
+        if !candidate.verify(raw_key) || !candidate.is_valid_at(now) {
+            return Ok(None);
+        }
+        let mut transaction = self.store.begin_transaction().await?;
+        let Some(mut api_key) = self
+            .store
+            .api_key_by_id_for_update_in_transaction(&mut transaction, candidate.id)
+            .await?
+        else {
+            transaction
+                .rollback()
+                .await
+                .map_err(RepositoryError::from)?;
+            return Ok(None);
+        };
+        if !api_key.verify(raw_key) || !api_key.is_valid_at(now) {
+            transaction
+                .rollback()
+                .await
+                .map_err(RepositoryError::from)?;
+            return Ok(None);
+        }
+        api_key.record_usage(None, now);
+        self.store
+            .save_api_key_in_transaction(&mut transaction, &api_key)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        Ok(Some(api_key))
     }
 
     pub async fn list_api_keys(

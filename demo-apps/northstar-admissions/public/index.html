@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Northstar Admissions</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="mark" aria-hidden="true">N</span><div><strong>Northstar Admissions</strong><span>Synthetic partner application</span></div></div>
+      <div class="integration"><span class="pulse" aria-hidden="true"></span>Marty Gateway integration</div>
+    </header>
+    <main>
+      <section class="hero">
+        <div><p class="eyebrow">Admissions operations</p><h1>Application review</h1><p>Approve a learner through the public Marty API and verify the signed result in Northstar.</p></div>
+        <span class="synthetic">Synthetic test data</span>
+      </section>
+      <section class="grid">
+        <article class="card applicant">
+          <div class="card-heading"><div><p class="eyebrow">Candidate</p><h2>Jordan Lee</h2></div><span id="application-status" class="status neutral">Loading</span></div>
+          <dl><div><dt>Program</dt><dd>Digital Trust Certificate</dd></div><div><dt>Term</dt><dd>Fall 2026</dd></div><div><dt>Application</dt><dd id="application-id" class="mono">—</dd></div></dl>
+          <div class="actions">
+            <button id="deny-button" data-testid="read-only-approval" class="secondary">Try read-only key</button>
+            <button id="approve-button" data-testid="scoped-approval" class="primary">Approve with scoped key</button>
+          </div>
+          <div id="gateway-result" data-testid="gateway-result" class="result empty">No gateway request yet.</div>
+        </article>
+        <article class="card integration-card">
+          <p class="eyebrow">Public API connection</p><h2>Gateway-only configuration</h2>
+          <div class="connection-row"><span>Gateway</span><strong id="gateway-origin" class="mono">—</strong></div>
+          <div class="connection-row"><span>Runtime key</span><strong id="key-prefix" class="mono">—</strong></div>
+          <div class="scopes"><span>applications:read</span><span>applications:approve</span></div>
+          <div class="connection-row"><span>Callback</span><strong id="callback-url" class="mono">—</strong></div>
+          <div class="connection-row"><span>Subscription</span><strong>application.approved</strong></div>
+        </article>
+        <article class="card timeline-card">
+          <p class="eyebrow">Correlated activity</p><h2>Request and webhook timeline</h2>
+          <ol id="timeline" data-testid="correlated-timeline" class="timeline"><li class="empty">Waiting for activity</li></ol>
+        </article>
+        <article class="card outcome-card">
+          <p class="eyebrow">Northstar outcome</p><h2 id="enrollment-status" data-testid="enrollment-status">Waiting for approval</h2>
+          <div id="webhook-status" data-testid="webhook-status" class="signature waiting"><span>○</span> Waiting for signed event</div>
+          <div id="receiver-test-status" data-testid="receiver-test-status" class="receiver-test" hidden></div>
+          <p class="boundary">Northstar changes enrollment state only after a correctly scoped gateway call and a verified webhook.</p>
+        </article>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

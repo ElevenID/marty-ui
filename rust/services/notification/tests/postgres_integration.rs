@@ -69,6 +69,7 @@ async fn migrated_postgres_preserves_secret_and_outbox_contracts() {
         aggregate_id: "application-db".into(),
         aggregate_type: "application".into(),
         organization_id: "org-db".into(),
+        correlation_id: "11111111-1111-4111-8111-111111111111".into(),
         data: Map::from_iter([
             ("applicant_id".into(), Value::String("applicant-db".into())),
             (
@@ -98,6 +99,17 @@ async fn migrated_postgres_preserves_secret_and_outbox_contracts() {
         .await
         .unwrap()
         .is_some());
+    let correlation_id: Option<String> = sqlx::query_scalar(
+        "SELECT payload->>'correlation_id' FROM notification_service.webhook_outbox WHERE id=$1",
+    )
+    .bind(&logical)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        correlation_id.as_deref(),
+        Some("11111111-1111-4111-8111-111111111111")
+    );
     let forbidden:i64=sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='notification_service' AND column_name IN ('secret','response_body')").fetch_one(&pool).await.unwrap();
     assert_eq!(forbidden, 0);
 }

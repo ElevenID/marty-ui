@@ -23,6 +23,7 @@ const FINAL_PROTOCOLS = new Set([
   'sd-jwt-vc',
   'open-badges-3.0',
   'lti-1.3',
+  'https-webhooks',
 ]);
 
 export class DemoManifestError extends Error {

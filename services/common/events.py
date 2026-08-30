@@ -52,6 +52,7 @@ class DomainEvent:
     data: dict[str, Any]
     timestamp: datetime = None
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -119,6 +120,7 @@ class EventPublisher:
             data=event.data,
             event_id=event.event_id,
             timestamp=event.timestamp.isoformat(),
+            correlation_id=event.correlation_id,
         )
 
         # APPLICATION_APPROVED goes directly to flow service via gRPC
@@ -139,6 +141,7 @@ class EventPublisher:
             "aggregate_id": event.aggregate_id,
             "aggregate_type": event.aggregate_type,
             "organization_id": event.organization_id,
+            "correlation_id": event.correlation_id,
             "data": event.data,
             "timestamp": event.timestamp.isoformat(),
         }

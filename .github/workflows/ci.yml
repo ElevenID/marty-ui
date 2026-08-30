@@ -108,6 +108,9 @@ jobs:
             wait "$tests_pid" || status=1
           fi
           exit "$status"
+      - name: Test standalone Northstar demo
+        working-directory: demo-apps/northstar-admissions
+        run: npm test
 
   test-ui:
     name: UI Tests (${{ matrix.shard }}/4)

@@ -968,9 +968,16 @@ async fn proxy_handler(
     }
     gateway_request.body = (!body.is_empty()).then(|| body.to_vec());
     gateway_request.client_ip = peer_ip;
-    if let Some(request_id) = gateway_request.header("x-request-id") {
-        gateway_request.request_id = request_id.to_owned();
-    }
+    // The public correlation ID is gateway-issued evidence. Never allow a
+    // caller-supplied identifier to become authoritative merely because it is
+    // syntactically a UUID.
+    let request_id = gateway_request.request_id.clone();
+    gateway_request
+        .headers
+        .retain(|name, _| !name.eq_ignore_ascii_case("x-request-id"));
+    gateway_request
+        .headers
+        .insert("x-request-id".into(), request_id.clone());
     // Authentication and tenant scope belong to the public contract. Some
     // compatibility paths are rewritten for an upstream service, so deriving
     // overrides from the upstream path can lose the authenticated tenant or
@@ -983,6 +990,9 @@ async fn proxy_handler(
         .await
     {
         Ok(mut response) => {
+            response
+                .headers
+                .insert("x-request-id".into(), request_id.clone());
             if response.status_code < 400 {
                 if credential_template_contract::response_route(method_name(method), &public_path) {
                     let projected = response
@@ -1149,10 +1159,14 @@ async fn proxy_handler(
                 }
             }
         }
-        Err(_) => error_response(
-            502,
-            MipError::new("bad_gateway", "Unable to execute upstream request"),
-        ),
+        Err(_) => {
+            let mut response = error_response(
+                502,
+                MipError::new("bad_gateway", "Unable to execute upstream request"),
+            );
+            insert_header(&mut response, "x-request-id", &request_id);
+            response
+        }
     }
 }
 
@@ -4601,6 +4615,12 @@ mod tests {
             instance: &ServiceInstance,
             request: GatewayRequest,
         ) -> Result<GatewayResponse, PlatformError> {
+            if let Some(forwarded) = request.header("x-request-id") {
+                assert_eq!(
+                    forwarded, request.request_id,
+                    "the public gateway ID must be forwarded to the upstream service"
+                );
+            }
             if request.path.starts_with("/internal/") {
                 let expected = match instance.service_name.as_str() {
                     "signing-keys" => Some("internal-signing-key"),
@@ -6298,6 +6318,7 @@ mod tests {
                     .method("POST")
                     .uri("/v1/organizations")
                     .header("cookie", "sessionId=valid")
+                    .header("x-request-id", "11111111-1111-4111-8111-111111111111")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         br#"{"name":"example-issuer","display_name":"Example Issuer","org_type":"healthcare","visibility":"PUBLIC","join_mechanism":"open","requires_approval":true}"#.as_slice(),
@@ -6307,6 +6328,13 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
+        let request_id = response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("gateway request ID");
+        assert_ne!(request_id, "11111111-1111-4111-8111-111111111111");
+        assert!(uuid::Uuid::parse_str(request_id).is_ok());
         let body: Value = serde_json::from_slice(
             &to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
                 .await
@@ -6316,6 +6344,33 @@ mod tests {
         assert_eq!(body["name"], "example-issuer");
         assert!(body.get("join_code").is_none());
         assert!(body.get("contact_phone").is_none());
+    }
+
+    #[tokio::test]
+    async fn public_gateway_replaces_every_client_request_id() {
+        let response = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/organizations")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .header("x-request-id", "client-chosen")
+                    .body(Body::from(
+                        br#"{"name":"request-id-test","display_name":"Request ID Test","org_type":"healthcare","visibility":"PUBLIC","join_mechanism":"open","requires_approval":true}"#.as_slice(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let request_id = response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("gateway request ID");
+        assert_ne!(request_id, "client-chosen");
+        assert!(uuid::Uuid::parse_str(request_id).is_ok());
     }
 
     #[tokio::test]

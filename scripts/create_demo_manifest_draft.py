@@ -88,6 +88,12 @@ PRESENTATION = {
         ["Administrator", "Issuer", "Verifier"],
         ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
     ),
+    "external-admissions-gateway-webhooks": (
+        "External Admissions Gateway and Webhooks",
+        "Approve a learner through Marty's public gateway and correlate the signed webhook in an external admissions application.",
+        ["Administrator", "Integrator"],
+        ["https-webhooks"],
+    ),
 }
 
 LEGACY_PRESENTATION = {
@@ -114,7 +120,7 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
     happy = list(contract["happy_path"])
     failures = list(contract["failure_paths"])
     paths = happy + failures
-    return {
+    scenario = {
         "demo_id": contract["demo_id"],
         "slug": slug,
         "title": title,
@@ -178,6 +184,116 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
         "publication_attestation": None,
         "inherited_evidence": None,
     }
+    if slug == "external-admissions-gateway-webhooks":
+        scenario.update(
+            {
+                "summary": "Approve a synthetic learner from Northstar through the public API and complete enrollment from a verified webhook.",
+                "audiences": [
+                    "Integration developer",
+                    "Security architect",
+                    "Identity product buyer",
+                ],
+                "capabilities": [
+                    "Gateway-only API-key integration",
+                    "Least-privilege application approval",
+                    "Canonical webhook signature verification",
+                    "Public delivery-history correlation",
+                    "Insufficient scope denied",
+                ],
+                "transcript": {
+                    "language": "en",
+                    "segments": [
+                        {
+                            "start_seconds": 0,
+                            "speaker": "Narrator",
+                            "text": "Northstar uses only Marty's public gateway and keeps credentials on its server.",
+                        },
+                        {
+                            "start_seconds": 12,
+                            "speaker": "Narrator",
+                            "text": "A read-only key is denied without changing application state or producing a webhook.",
+                        },
+                        {
+                            "start_seconds": 24,
+                            "speaker": "Narrator",
+                            "text": "The applications approve scope accepts the same public request.",
+                        },
+                        {
+                            "start_seconds": 36,
+                            "speaker": "Narrator",
+                            "text": "A verified webhook completes Northstar's enrollment workflow and binds public delivery evidence.",
+                        },
+                    ],
+                },
+                "chapters": [
+                    {
+                        "start_seconds": 0,
+                        "title": "Gateway-only integration",
+                        "role": "Integration developer",
+                        "mip_primitives": ["External application boundary"],
+                        "standards": ["HTTPS", "HMAC-SHA256"],
+                        "documentation_links": [
+                            {"label": "Marty API", "href": "/docs/api"}
+                        ],
+                    },
+                    {
+                        "start_seconds": 24,
+                        "title": "Scoped approval and signed webhook",
+                        "role": "Security architect",
+                        "mip_primitives": [
+                            "Gateway authorization",
+                            "Webhook delivery",
+                        ],
+                        "standards": ["HTTPS", "HMAC-SHA256"],
+                        "documentation_links": [
+                            {"label": "Marty API", "href": "/docs/api"}
+                        ],
+                    },
+                ],
+                "assertions": [
+                    {
+                        "id": "gateway_only_summary",
+                        "label": "The partner browser exposes only a safe gateway integration summary.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "insufficient_scope_denied",
+                        "label": "The read-only key is denied without side effects.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "scoped_approval",
+                        "label": "The scoped key approves through the public gateway.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "signed_webhook_correlated",
+                        "label": "The verified event is bound to public delivery history.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "invalid_signature_rejected",
+                        "label": "A webhook with an invalid signature is rejected without changing admissions state.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "duplicate_event_ignored",
+                        "label": "A valid duplicate event is acknowledged without a second admissions transition.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                ],
+                "limitations": [
+                    "Fresh release-bound positive, insufficient-scope, invalid-signature, and duplicate-event runs are required before publication."
+                ],
+            }
+        )
+    return scenario
 
 
 def legacy_scenario(
@@ -284,14 +400,14 @@ def build_manifest() -> dict[str, object]:
         "release_differences": {
             "previous_stack_version": "2026.07.0",
             "ux": [
-                "Adds a complete ten-scenario release catalog without removing historical wallet demonstrations."
+                "Adds an eleven-scenario release catalog, including a gateway-only external admissions integration, without removing historical wallet demonstrations."
             ],
             "services": [
                 "Qualifies the Rust-native platform through explicit happy and denial paths."
             ],
             "wallets": ["Requires fresh wallet evidence under MIP 0.5."],
             "integrations": [
-                "Retains stock Canvas and external-evidence portability coverage."
+                "Retains stock Canvas and external-evidence portability coverage while adding the Northstar public-gateway integration."
             ],
             "operations": [
                 "Defers all release identity and digest binding until the aggregate beta deployment exists."

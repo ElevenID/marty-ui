@@ -44,6 +44,11 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "unsupported or deprecated"):
             validate_manifest(manifest)
 
+    def test_https_webhook_protocol_is_accepted(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["scenarios"][0]["protocols"] = ["https-webhooks"]
+        validate_manifest(manifest)
+
     def test_published_video_requires_verified_youtube_distribution(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["video_distribution"]["status"] = "PENDING_CHANNEL_SETUP"

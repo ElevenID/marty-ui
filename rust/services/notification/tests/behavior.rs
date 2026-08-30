@@ -4,6 +4,7 @@ use axum::{
 };
 use marty_notification::{
     http::router,
+    outbox::is_webhook_test_event,
     repository::{InMemoryNotificationRepository, NotificationRepository},
 };
 use serde_json::{json, Value};
@@ -190,7 +191,8 @@ async fn webhook_secret_is_returned_only_on_creation_or_rotation() {
         .await
         .unwrap();
     assert!(json_body(fetched).await.get("signing_secret").is_none());
-    let rotated = app
+    let ordinary_update = app
+        .clone()
         .oneshot(request(
             "PATCH",
             &format!("/v1/webhooks/{id}?organization_id=org-a"),
@@ -198,10 +200,128 @@ async fn webhook_secret_is_returned_only_on_creation_or_rotation() {
         ))
         .await
         .unwrap();
-    assert_eq!(
-        json_body(rotated).await["signing_secret"],
+    assert!(json_body(ordinary_update)
+        .await
+        .get("signing_secret")
+        .is_none());
+    let rotated = app
+        .oneshot(request(
+            "POST",
+            &format!("/v1/webhooks/{id}/regenerate-secret?organization_id=org-a"),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    let rotated = json_body(rotated).await;
+    assert_ne!(
+        rotated["signing_secret"],
         "abcdef0123456789abcdef0123456789"
     );
+    assert!(rotated["signing_secret"].as_str().unwrap().len() >= 32);
+}
+
+#[tokio::test]
+async fn public_webhook_catalog_test_and_rotation_routes_match_the_ui_contract() {
+    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+    let repository: Arc<dyn NotificationRepository> =
+        Arc::new(InMemoryNotificationRepository::default());
+    let app = app(repository.clone());
+    let catalog = app
+        .clone()
+        .oneshot(request("GET", "/v1/webhooks/event-types", Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    assert!(json_body(catalog).await["event_types"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("application.approved")));
+
+    let created = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/v1/webhooks",
+                fixture["valid_webhook"].clone(),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let original_secret = created["signing_secret"].as_str().unwrap();
+    let wrong_tenant_test = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/webhooks/{id}/test?organization_id=org-b"),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wrong_tenant_test.status(), StatusCode::NOT_FOUND);
+    let wrong_tenant_rotation = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/webhooks/{id}/regenerate-secret?organization_id=org-b"),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wrong_tenant_rotation.status(), StatusCode::NOT_FOUND);
+    let tested = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/webhooks/{id}/test?organization_id=org-a"),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(tested.status(), StatusCode::ACCEPTED);
+    let tested = json_body(tested).await;
+    assert_eq!(tested["status"], "QUEUED");
+    let queued = repository
+        .get_webhook_outbox_event(tested["delivery_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(is_webhook_test_event(&queued));
+
+    let rotated = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/webhooks/{id}/regenerate-secret?organization_id=org-a"),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated = json_body(rotated).await;
+    assert_ne!(rotated["signing_secret"], original_secret);
+    assert!(rotated["signing_secret"].as_str().unwrap().len() >= 32);
+
+    let disabled = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/webhooks/{id}?organization_id=org-a"),
+            json!({"enabled": false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    let disabled_test = app
+        .oneshot(request(
+            "POST",
+            &format!("/v1/webhooks/{id}/test?organization_id=org-a"),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(disabled_test.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -251,7 +371,81 @@ async fn subscriptions_are_tenant_bound_and_enqueue_each_logical_delivery_once()
         service.ingest_event(event.clone()).await.unwrap()["deliveries"],
         1
     );
+    let logical = marty_notification::outbox::logical_webhook_delivery_id(
+        event.event_id.as_str(),
+        subscription["id"].as_str().unwrap(),
+        webhook["id"].as_str().unwrap(),
+    );
+    let queued = repository
+        .get_webhook_outbox_event(&logical)
+        .await
+        .unwrap()
+        .expect("queued webhook");
+    assert_eq!(
+        queued.payload["correlation_id"],
+        "11111111-1111-4111-8111-111111111111"
+    );
     assert_eq!(service.ingest_event(event).await.unwrap()["deliveries"], 0);
+}
+
+#[tokio::test]
+async fn webhook_wildcards_are_validated_and_preserve_delivery_semantics() {
+    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+    let repository: Arc<dyn NotificationRepository> =
+        Arc::new(InMemoryNotificationRepository::default());
+    let app = app(repository.clone());
+    let mut webhook_request = fixture["valid_webhook"].clone();
+    webhook_request["event_types"] =
+        json!([fixture["event_pattern_contract"]["all_current_and_future_supported"]]);
+    let webhook = app
+        .clone()
+        .oneshot(request("POST", "/v1/webhooks", webhook_request))
+        .await
+        .unwrap();
+    assert_eq!(webhook.status(), StatusCode::OK);
+    let webhook = json_body(webhook).await;
+
+    let mut subscription_request = fixture["valid_subscription"].clone();
+    subscription_request["delivery_target_id"] = webhook["id"].clone();
+    subscription_request["event_types"] = json!([fixture["event_pattern_contract"]["category"]]);
+    let subscription = app
+        .clone()
+        .oneshot(request("POST", "/v1/subscriptions", subscription_request))
+        .await
+        .unwrap();
+    assert_eq!(subscription.status(), StatusCode::OK);
+    let subscription = json_body(subscription).await;
+    assert_eq!(subscription["delivery_target_id"], webhook["id"]);
+    assert_eq!(subscription["delivery"]["target_id"], webhook["id"]);
+
+    let event: marty_notification::service::EventIngestRequest =
+        serde_json::from_value(fixture["valid_internal_event"].clone()).unwrap();
+    let service = marty_notification::service::NotificationService::new(repository);
+    assert_eq!(service.ingest_event(event).await.unwrap()["deliveries"], 1);
+
+    let invalid_update = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!(
+                "/v1/subscriptions/{}?organization_id=org-a",
+                subscription["id"].as_str().unwrap()
+            ),
+            json!({
+                "event_types": [fixture["event_pattern_contract"]["unsupported"]]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let mut invalid_webhook = fixture["valid_webhook"].clone();
+    invalid_webhook["event_types"] = json!([fixture["event_pattern_contract"]["unsupported"]]);
+    let invalid_webhook = app
+        .oneshot(request("POST", "/v1/webhooks", invalid_webhook))
+        .await
+        .unwrap();
+    assert_eq!(invalid_webhook.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

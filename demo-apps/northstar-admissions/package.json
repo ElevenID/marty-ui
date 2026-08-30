@@ -1,0 +1,12 @@
+{
+  "name": "@marty-demo/northstar-admissions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "prepare": "node scripts/prepare.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

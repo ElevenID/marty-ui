@@ -4,7 +4,10 @@ use crate::{
         ChannelType, Notification, NotificationPriority, NotificationStatus, NotificationTarget,
         NotificationType, RetryPolicy, Subscription, WebhookEndpoint,
     },
-    outbox::new_webhook_outbox_event,
+    outbox::{
+        new_webhook_outbox_event, WEBHOOK_TEST_EVENT_ID_PREFIX, WEBHOOK_TEST_EVENT_TYPE,
+        WEBHOOK_TEST_SUBSCRIPTION_ID,
+    },
     payload_security::{
         validate_internal_event_data, validate_notification_data, validate_notification_text,
     },
@@ -189,6 +192,7 @@ pub struct SubscriptionResponse {
     pub description: Option<String>,
     pub event_types: Vec<String>,
     pub delivery: Value,
+    pub delivery_target_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "filter")]
     pub filter_config: Option<Map<String, Value>>,
     pub enabled: bool,
@@ -205,7 +209,11 @@ impl From<&Subscription> for SubscriptionResponse {
             name: value.name.clone(),
             description: value.description.clone(),
             event_types: value.event_types.clone(),
-            delivery: serde_json::json!({"channel": "WEBHOOK"}),
+            delivery: serde_json::json!({
+                "channel": "WEBHOOK",
+                "target_id": value.delivery_target_id,
+            }),
+            delivery_target_id: value.delivery_target_id.clone(),
             filter_config: (!value.filter_config.is_empty()).then(|| value.filter_config.clone()),
             enabled: value.enabled,
             retry_policy: value.retry_policy.clone(),
@@ -234,6 +242,7 @@ pub struct UpdateWebhookRequest {
     pub url: Option<String>,
     pub description: Option<String>,
     pub event_types: Option<Vec<String>>,
+    #[serde(skip_deserializing)]
     pub secret: Option<String>,
     pub enabled: Option<bool>,
 }
@@ -258,6 +267,13 @@ pub struct WebhookResponse {
     pub last_triggered_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestWebhookResponse {
+    pub delivery_id: String,
+    pub event_id: String,
+    pub status: String,
 }
 
 pub fn webhook_response(value: &WebhookEndpoint, include_secret: bool) -> WebhookResponse {
@@ -286,6 +302,7 @@ pub struct EventIngestRequest {
     pub aggregate_id: String,
     pub aggregate_type: String,
     pub organization_id: String,
+    pub correlation_id: String,
     #[serde(default)]
     pub data: Map<String, Value>,
     pub timestamp: Option<String>,
@@ -418,6 +435,9 @@ impl NotificationService {
     ) -> Result<WebhookResponse, ServiceError> {
         require_text(&request.organization_id, "organization_id", 255)?;
         require_text(&request.name, "name", 255)?;
+        if !request.event_types.is_empty() {
+            validate_event_types(&request.event_types)?;
+        }
         resolve_webhook_destination(&request.url)
             .await
             .map_err(|error| ServiceError::Invalid(error.to_string()))?;
@@ -491,6 +511,9 @@ impl NotificationService {
             webhook.description = Some(description);
         }
         if let Some(event_types) = request.event_types {
+            if !event_types.is_empty() {
+                validate_event_types(&event_types)?;
+            }
             webhook.event_types = event_types;
         }
         let mut rotated_secret = None;
@@ -526,6 +549,79 @@ impl NotificationService {
         let mut response = webhook_response(&webhook, false);
         response.signing_secret = rotated_secret;
         Ok(response)
+    }
+
+    pub async fn rotate_webhook_secret(
+        &self,
+        id: &str,
+        organization_id: &str,
+    ) -> Result<WebhookResponse, ServiceError> {
+        self.update_webhook(
+            id,
+            organization_id,
+            UpdateWebhookRequest {
+                secret: Some(generate_webhook_secret()),
+                ..UpdateWebhookRequest::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn test_webhook(
+        &self,
+        id: &str,
+        organization_id: &str,
+    ) -> Result<TestWebhookResponse, ServiceError> {
+        let webhook = self
+            .repository
+            .get_webhook(id)
+            .await?
+            .filter(|item| item.organization_id == organization_id)
+            .ok_or(ServiceError::NotFound("Webhook"))?;
+        if !webhook.enabled {
+            return Err(ServiceError::Invalid("Webhook is disabled".into()));
+        }
+        let now = Utc::now();
+        let event_id = format!("{WEBHOOK_TEST_EVENT_ID_PREFIX}{}", Uuid::new_v4());
+        let payload = Map::from_iter([
+            ("id".into(), Value::String(event_id.clone())),
+            ("type".into(), Value::String(WEBHOOK_TEST_EVENT_TYPE.into())),
+            ("timestamp".into(), Value::String(now.to_rfc3339())),
+            ("aggregate_id".into(), Value::String(webhook.id.clone())),
+            ("aggregate_type".into(), Value::String("webhook".into())),
+            (
+                "organization_id".into(),
+                Value::String(webhook.organization_id.clone()),
+            ),
+            (
+                "data".into(),
+                Value::Object(Map::from_iter([("test".into(), Value::Bool(true))])),
+            ),
+        ]);
+        let event = new_webhook_outbox_event(
+            webhook.organization_id,
+            webhook.id,
+            WEBHOOK_TEST_SUBSCRIPTION_ID.into(),
+            event_id.clone(),
+            WEBHOOK_TEST_EVENT_TYPE.into(),
+            payload,
+            3,
+            1,
+            30,
+            now,
+            86_400,
+        );
+        let delivery_id = event.id.clone();
+        if !self.repository.enqueue_webhook_event(event).await? {
+            return Err(ServiceError::Unavailable(
+                "Webhook test delivery could not be queued".into(),
+            ));
+        }
+        Ok(TestWebhookResponse {
+            delivery_id,
+            event_id,
+            status: "QUEUED".into(),
+        })
     }
 
     pub async fn create_subscription(
@@ -608,6 +704,10 @@ impl NotificationService {
             (
                 "organization_id".into(),
                 Value::String(event.organization_id.clone()),
+            ),
+            (
+                "correlation_id".into(),
+                Value::String(event.correlation_id.clone()),
             ),
             ("data".into(), Value::Object(event.data.clone())),
         ]);
@@ -797,16 +897,26 @@ fn notification_type(channels: &[ChannelType]) -> NotificationType {
     }
 }
 
-fn validate_event_types(event_types: &[String]) -> Result<(), ServiceError> {
+pub(crate) fn validate_event_types(event_types: &[String]) -> Result<(), ServiceError> {
     if event_types.is_empty() {
         return Err(ServiceError::Invalid(
             "event_types must contain at least one event".into(),
         ));
     }
     let allowed = STANDARD_EVENT_TYPES.into_iter().collect::<HashSet<_>>();
+    let allowed_categories = STANDARD_EVENT_TYPES
+        .into_iter()
+        .filter_map(|event_type| event_type.split_once('.').map(|(category, _)| category))
+        .collect::<HashSet<_>>();
     let unknown = event_types
         .iter()
-        .filter(|value| !allowed.contains(value.as_str()))
+        .filter(|value| {
+            value.as_str() != "*"
+                && !allowed.contains(value.as_str())
+                && value
+                    .strip_suffix(".*")
+                    .is_none_or(|category| !allowed_categories.contains(category))
+        })
         .cloned()
         .collect::<Vec<_>>();
     if unknown.is_empty() {
@@ -860,6 +970,9 @@ fn validate_event(event: &EventIngestRequest) -> Result<(), ServiceError> {
             "event_id contains unsafe characters".into(),
         ));
     }
+    Uuid::parse_str(&event.correlation_id).map_err(|_| {
+        ServiceError::Invalid("correlation_id must be a gateway request UUID".into())
+    })?;
     validate_internal_event_data(&event.event_type, &event.data)
         .map_err(|error| ServiceError::Invalid(error.to_string()))?;
     if let Some(timestamp) = &event.timestamp {

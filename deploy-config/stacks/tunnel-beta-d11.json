@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "name": "tunnel-beta-d11",
+  "description": "Gateway-only D-11 beta stack with the separately branded Northstar Admissions partner application.",
+  "parent_stack": "tunnel-beta-experiments",
+  "env_file": ".env.tunnel.beta.local",
+  "compose_files": [
+    "docker-compose.base.yml",
+    "docker-compose.profile.dev.yml",
+    "docker-compose.profile.tunnel.yml",
+    "docker-compose.profile.canvas-real.yml",
+    "docker-compose.profile.canvas-sandbox.yml",
+    "docker-compose.profile.northstar-admissions.yml"
+  ],
+  "compose_profiles": [],
+  "domains": [
+    "beta.elevenidllc.com",
+    "canvas-test.elevenidllc.com",
+    "canvas-sandbox.elevenidllc.com",
+    "admissions-test.elevenidllc.com"
+  ],
+  "primary_domain": "beta.elevenidllc.com",
+  "required_service_groups": ["infra", "app", "canvas_experiments", "external_demo"],
+  "required_services": ["tunnel-nginx-proxy", "cloudflared"],
+  "required_secrets": ["cloudflare_tunnel_token", "canvas_credentials_shared_secret", "northstar_run"],
+  "artifact_profile": "oss-release",
+  "deployment_targets": ["docker-compose"],
+  "experiments": {
+    "d11": {
+      "partner": "Northstar Admissions",
+      "public_host": "admissions-test.elevenidllc.com",
+      "marty_gateway_origin": "https://beta.elevenidllc.com",
+      "marty_boundary": "public-v1-only"
+    }
+  },
+  "operations": {
+    "config": ["config"],
+    "up": ["up", "-d"],
+    "down": ["down"],
+    "ps": ["ps"],
+    "logs": ["logs", "-f"]
+  }
+}

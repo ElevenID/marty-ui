@@ -1,7 +1,11 @@
 use chrono::{Duration, Utc};
 use marty_notification::{
     domain::RetryPolicy,
-    outbox::{logical_webhook_delivery_id, new_webhook_outbox_event, webhook_retry_delay},
+    outbox::{
+        is_webhook_test_event, logical_webhook_delivery_id, new_webhook_outbox_event,
+        webhook_retry_delay, WEBHOOK_TEST_EVENT_ID_PREFIX, WEBHOOK_TEST_EVENT_TYPE,
+        WEBHOOK_TEST_SUBSCRIPTION_ID,
+    },
     repository::{InMemoryNotificationRepository, NotificationRepository},
     webhook::{canonical_signature, decode_bound_webhook_secret, encode_bound_webhook_secret},
 };
@@ -47,6 +51,40 @@ fn deterministic_identity_and_retry_delay_are_stable_and_bounded() {
     }
     .validate()
     .is_err());
+}
+
+#[test]
+fn only_exact_service_generated_webhook_test_events_bypass_subscription_lookup() {
+    let now = Utc::now();
+    let event_id = format!("{WEBHOOK_TEST_EVENT_ID_PREFIX}{}", uuid::Uuid::new_v4());
+    let mut item = new_webhook_outbox_event(
+        "org-a".into(),
+        "webhook-a".into(),
+        WEBHOOK_TEST_SUBSCRIPTION_ID.into(),
+        event_id.clone(),
+        WEBHOOK_TEST_EVENT_TYPE.into(),
+        Map::from_iter([
+            ("id".into(), Value::String(event_id)),
+            ("type".into(), Value::String(WEBHOOK_TEST_EVENT_TYPE.into())),
+            ("timestamp".into(), Value::String(now.to_rfc3339())),
+            ("organization_id".into(), Value::String("org-a".into())),
+            ("aggregate_id".into(), Value::String("webhook-a".into())),
+            ("aggregate_type".into(), Value::String("webhook".into())),
+            (
+                "data".into(),
+                Value::Object(Map::from_iter([("test".into(), Value::Bool(true))])),
+            ),
+        ]),
+        3,
+        1,
+        30,
+        now,
+        86_400,
+    );
+
+    assert!(is_webhook_test_event(&item));
+    item.webhook_id = "different-webhook".into();
+    assert!(!is_webhook_test_event(&item));
 }
 
 #[tokio::test]

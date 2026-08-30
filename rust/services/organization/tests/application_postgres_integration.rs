@@ -318,11 +318,19 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         })
         .await
         .expect("API-key creation must commit");
+    let used_at = Utc::now();
     assert!(application
-        .validate_api_key(&created_key.value.raw_key, Utc::now())
+        .validate_api_key(&created_key.value.raw_key, used_at)
         .await
         .expect("API-key validation must pass")
         .is_some());
+    assert!(application
+        .get_api_key(organization_id, created_key.value.api_key.id)
+        .await
+        .expect("used API key lookup must pass")
+        .expect("used API key must exist")
+        .last_used_at
+        .is_some_and(|value| value >= created_key.value.api_key.created_at));
     let cross_tenant_revoke = application
         .revoke_api_key(RevokeApiKeyCommand {
             organization_id: uuid::Uuid::new_v4(),

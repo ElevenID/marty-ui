@@ -117,6 +117,7 @@ class TestApplicationApprovedGrpc:
             },
             event_id=event.event_id,
             timestamp="2026-03-14T00:00:00+00:00",
+            correlation_id=event.correlation_id,
         )
 
     async def test_routes_to_grpc_not_http(self):
