@@ -14,7 +14,7 @@ use crate::{
 const CREDENTIAL_FORMAT: &str = "lti_tool_jwt";
 const KEY_PURPOSE: &str = "lti_tool_signing";
 const ALGORITHM: &str = "RS256";
-const PRIVATE_RSA_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "oth"];
+const PRIVATE_RSA_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CanvasLtiToolSigningError {
@@ -34,6 +34,8 @@ pub enum CanvasLtiToolSigningError {
     SigningFailed(String),
     #[error("Canvas LTI DID-mediated signer returned no signature")]
     MissingSignature,
+    #[error("Canvas LTI DID-mediated signer returned invalid signature encoding")]
+    InvalidSignatureEncoding,
 }
 
 #[async_trait]
@@ -141,8 +143,7 @@ impl IssuerDidCanvasLtiToolJwtSigner {
         if !verification_method_id.starts_with(&format!("{issuer_did}#"))
             || public_jwk.get("kid").and_then(Value::as_str)
                 != Some(verification_method_id.as_str())
-            || public_jwk.get("kty").and_then(Value::as_str) != Some("RSA")
-            || !valid_rsa_algorithm(public_jwk.get("alg"))
+            || !valid_public_rsa_jwk(&public_jwk)
         {
             return Err(CanvasLtiToolSigningError::InvalidVerificationMethod);
         }
@@ -178,56 +179,61 @@ impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
         if signature.is_empty() {
             return Err(CanvasLtiToolSigningError::MissingSignature);
         }
+        let signature = URL_SAFE_NO_PAD
+            .decode(signature)
+            .map_err(|_| CanvasLtiToolSigningError::InvalidSignatureEncoding)?;
+        if signature.is_empty() {
+            return Err(CanvasLtiToolSigningError::MissingSignature);
+        }
+        let signature = URL_SAFE_NO_PAD.encode(signature);
         Ok(format!("{signing_input}.{signature}"))
     }
 
     async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError> {
         let (_, issuer_did) = self.configuration()?;
-        let (active_id, mut active_jwk, resolution) = self.resolved_identity().await?;
-        active_jwk.insert("kid".to_owned(), Value::String(active_id.clone()));
-        active_jwk.insert("alg".to_owned(), Value::String(ALGORITHM.to_owned()));
-        active_jwk.insert("use".to_owned(), Value::String("sig".to_owned()));
+        let (active_id, active_jwk, resolution) = self.resolved_identity().await?;
+        let active_jwk = normalized_public_rsa_jwk(&active_jwk, &active_id)
+            .ok_or(CanvasLtiToolSigningError::InvalidVerificationMethod)?;
         let mut keys = BTreeMap::from([(active_id.clone(), Value::Object(active_jwk))]);
         let did_document = resolution.get("did_document").and_then(Value::as_object);
-        let assertion_ids = did_document
+        let assertion_methods = did_document
             .and_then(|document| document.get("assertionMethod"))
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(assertion_method_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let assertion_ids = assertion_methods
+            .iter()
+            .filter_map(|method| assertion_method_id(issuer_did, method))
             .collect::<std::collections::BTreeSet<_>>();
-        for method in did_document
+        let verification_methods = did_document
             .and_then(|document| document.get("verificationMethod"))
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for method in verification_methods
+            .iter()
+            .chain(assertion_methods.iter())
             .filter_map(Value::as_object)
         {
-            let method_id = method
+            let Some(method_id) = method
                 .get("id")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim();
-            let Some(mut public_jwk) = method
-                .get("publicKeyJwk")
-                .and_then(Value::as_object)
-                .cloned()
+                .and_then(|method_id| normalize_method_id(issuer_did, method_id))
             else {
                 continue;
             };
-            if !assertion_ids.contains(method_id)
+            let Some(public_jwk) = method.get("publicKeyJwk").and_then(Value::as_object) else {
+                continue;
+            };
+            if !assertion_ids.contains(&method_id)
                 || !method_id.starts_with(&format!("{issuer_did}#"))
-                || contains_private_material(&public_jwk)
-                || public_jwk.get("kty").and_then(Value::as_str) != Some("RSA")
-                || !valid_rsa_algorithm(public_jwk.get("alg"))
             {
                 continue;
             }
-            public_jwk.insert("kid".to_owned(), Value::String(method_id.to_owned()));
-            public_jwk.insert("alg".to_owned(), Value::String(ALGORITHM.to_owned()));
-            public_jwk.insert("use".to_owned(), Value::String("sig".to_owned()));
-            keys.entry(method_id.to_owned())
-                .or_insert(Value::Object(public_jwk));
+            let Some(public_jwk) = normalized_public_rsa_jwk(public_jwk, &method_id) else {
+                continue;
+            };
+            keys.entry(method_id).or_insert(Value::Object(public_jwk));
         }
         let mut ordered = Vec::with_capacity(keys.len());
         if let Some(active) = keys.remove(&active_id) {
@@ -238,11 +244,24 @@ impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
     }
 }
 
-fn assertion_method_id(value: &Value) -> Option<String> {
+fn assertion_method_id(issuer_did: &str, value: &Value) -> Option<String> {
     value
         .as_str()
         .or_else(|| value.as_object()?.get("id")?.as_str())
-        .map(str::to_owned)
+        .and_then(|method_id| normalize_method_id(issuer_did, method_id))
+}
+
+fn normalize_method_id(issuer_did: &str, method_id: &str) -> Option<String> {
+    let method_id = method_id.trim();
+    if method_id.is_empty() {
+        None
+    } else if method_id.starts_with('#') {
+        Some(format!("{issuer_did}{method_id}"))
+    } else if method_id.starts_with("did:") {
+        Some(method_id.to_owned())
+    } else {
+        Some(format!("{issuer_did}#{method_id}"))
+    }
 }
 
 fn contains_private_material(jwk: &Map<String, Value>) -> bool {
@@ -251,8 +270,54 @@ fn contains_private_material(jwk: &Map<String, Value>) -> bool {
         .any(|name| jwk.contains_key(*name))
 }
 
+fn valid_public_rsa_jwk(jwk: &Map<String, Value>) -> bool {
+    !contains_private_material(jwk)
+        && jwk.get("kty").and_then(Value::as_str) == Some("RSA")
+        && valid_rsa_algorithm(jwk.get("alg"))
+        && valid_rsa_use(jwk.get("use"))
+        && non_empty_string(jwk, "n")
+        && non_empty_string(jwk, "e")
+}
+
+fn non_empty_string(jwk: &Map<String, Value>, member: &str) -> bool {
+    jwk.get(member)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn normalized_public_rsa_jwk(
+    jwk: &Map<String, Value>,
+    method_id: &str,
+) -> Option<Map<String, Value>> {
+    if !valid_public_rsa_jwk(jwk) {
+        return None;
+    }
+    let mut normalized = Map::new();
+    normalized.insert("alg".to_owned(), Value::String(ALGORITHM.to_owned()));
+    normalized.insert("e".to_owned(), jwk.get("e")?.clone());
+    normalized.insert("kid".to_owned(), Value::String(method_id.to_owned()));
+    normalized.insert("kty".to_owned(), Value::String("RSA".to_owned()));
+    normalized.insert("n".to_owned(), jwk.get("n")?.clone());
+    normalized.insert("use".to_owned(), Value::String("sig".to_owned()));
+    if let Some(retired_at) = jwk
+        .get("retired_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        normalized.insert(
+            "retired_at".to_owned(),
+            Value::String(retired_at.to_owned()),
+        );
+    }
+    Some(normalized)
+}
+
 fn valid_rsa_algorithm(value: Option<&Value>) -> bool {
     matches!(value, None | Some(Value::Null)) || value.and_then(Value::as_str) == Some(ALGORITHM)
+}
+
+fn valid_rsa_use(value: Option<&Value>) -> bool {
+    matches!(value, None | Some(Value::Null)) || value.and_then(Value::as_str) == Some("sig")
 }
 
 #[derive(Clone)]

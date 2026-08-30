@@ -41,6 +41,7 @@ type SignatureRequest = (String, String, String, Vec<u8>);
 #[derive(Default)]
 struct Signatures {
     requests: Mutex<Vec<SignatureRequest>>,
+    response: Mutex<Option<String>>,
 }
 
 #[async_trait]
@@ -58,7 +59,12 @@ impl CanvasLtiToolSignatureProvider for Signatures {
             verification_method_id.to_owned(),
             payload.to_vec(),
         ));
-        Ok("c2ln==".to_owned())
+        Ok(self
+            .response
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "c2ln==".to_owned()))
     }
 }
 
@@ -190,6 +196,38 @@ async fn signer_fails_closed_for_configuration_and_resolver_key_drift() {
 }
 
 #[tokio::test]
+async fn signer_rejects_incomplete_rsa_keys_and_malformed_signature_encoding() {
+    let issuer_did = "did:web:issuer.example:canvas";
+    let kid = format!("{issuer_did}#lti-tool-rs256");
+    let resolver = Arc::new(Resolver {
+        response: Mutex::new(identity(issuer_did, &kid)),
+        ..Resolver::default()
+    });
+    let signatures = Arc::new(Signatures {
+        response: Mutex::new(Some("not+base64".to_owned())),
+        ..Signatures::default()
+    });
+    assert_eq!(
+        signer(resolver.clone(), signatures)
+            .sign_jwt(&json!({}))
+            .await
+            .unwrap_err(),
+        CanvasLtiToolSigningError::InvalidSignatureEncoding
+    );
+
+    let mut incomplete = identity(issuer_did, &kid);
+    incomplete["public_jwk"]["n"] = Value::String(String::new());
+    *resolver.response.lock().unwrap() = incomplete;
+    assert_eq!(
+        signer(resolver, Arc::new(Signatures::default()))
+            .public_jwks()
+            .await
+            .unwrap_err(),
+        CanvasLtiToolSigningError::InvalidVerificationMethod
+    );
+}
+
+#[tokio::test]
 async fn jwks_publishes_active_then_sorted_public_assertion_methods_only() {
     let issuer_did = "did:web:issuer.example:canvas";
     let active = format!("{issuer_did}#active");
@@ -227,6 +265,66 @@ async fn jwks_publishes_active_then_sorted_public_assertion_methods_only() {
                 .iter()
                 .any(|name| key.get(name).is_some())
     }));
+}
+
+#[tokio::test]
+async fn jwks_preserves_embedded_and_relative_assertion_methods_without_leaking_metadata() {
+    let issuer_did = "did:web:issuer.example:canvas";
+    let active = format!("{issuer_did}#active");
+    let inline = format!("{issuer_did}#inline-retiring");
+    let relative = format!("{issuer_did}#relative-retiring");
+    let mut resolution = identity(issuer_did, &active);
+    resolution["public_jwk"]["provider_reference"] = Value::String("secret-route".to_owned());
+    resolution["did_document"] = json!({
+        "verificationMethod": [
+            {
+                "id": "#relative-retiring",
+                "publicKeyJwk": {
+                    "kty": "RSA",
+                    "n": "relative",
+                    "e": "AQAB",
+                    "retired_at": "2026-08-29T00:00:00Z",
+                    "provider_reference": "must-not-be-public",
+                },
+            },
+            {
+                "id": "#missing-modulus",
+                "publicKeyJwk": {"kty": "RSA", "e": "AQAB"},
+            },
+            {
+                "id": "#encryption-only",
+                "publicKeyJwk": {"kty": "RSA", "use": "enc", "n": "enc", "e": "AQAB"},
+            },
+        ],
+        "assertionMethod": [
+            "#relative-retiring",
+            "#missing-modulus",
+            "#encryption-only",
+            {
+                "id": "#inline-retiring",
+                "publicKeyJwk": {"kty": "RSA", "n": "inline", "e": "AQAB"},
+            },
+        ],
+    });
+    let resolver = Arc::new(Resolver {
+        response: Mutex::new(resolution),
+        ..Resolver::default()
+    });
+    let document = signer(resolver, Arc::new(Signatures::default()))
+        .public_jwks()
+        .await
+        .unwrap();
+    let keys = document["keys"].as_array().unwrap();
+    assert_eq!(
+        keys.iter()
+            .map(|key| key["kid"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [active.as_str(), inline.as_str(), relative.as_str()]
+    );
+    assert!(keys
+        .iter()
+        .all(|key| key.get("provider_reference").is_none()));
+    assert_eq!(keys[2]["retired_at"], "2026-08-29T00:00:00Z");
 }
 
 #[tokio::test]
