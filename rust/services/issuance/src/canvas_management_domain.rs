@@ -10,7 +10,6 @@ use marty_oid4vci::lti::{
 };
 use serde_json::{json, Map, Value};
 use thiserror::Error;
-use url::Url;
 use uuid::Uuid;
 
 use crate::canvas_management::{
@@ -54,11 +53,6 @@ impl CanvasOriginPolicy {
         &self,
         candidate: &str,
     ) -> Result<ValidatedCanvasOrigin, CanvasManagementDomainError> {
-        let parsed = Url::parse(candidate.trim())
-            .map_err(|_| CanvasManagementDomainError::OriginUntrusted)?;
-        if !parsed.username().is_empty() || parsed.password().is_some() {
-            return Err(CanvasManagementDomainError::OriginUntrusted);
-        }
         let hardened = normalize_canvas_base_url(candidate, false, self.allow_http_localhost);
         let origin = match hardened {
             Ok(origin) => origin,
