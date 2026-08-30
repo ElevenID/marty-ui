@@ -234,10 +234,12 @@ async fn enqueue_application_sync(
     if inserted_job.is_none() {
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT id FROM issuance_service.canvas_evidence_sync_jobs
-             WHERE target_id = $1 AND status IN ('queued', 'leased', 'retry')
+             WHERE target_id = $1 AND organization_id = $2
+               AND status IN ('queued', 'leased', 'retry')
              ORDER BY created_at LIMIT 1 FOR SHARE",
         )
         .bind(&target_id)
+        .bind(organization_id)
         .fetch_optional(&mut *database)
         .await
         .map_err(sync_error)?;
