@@ -83,7 +83,8 @@ async fn native_health_preserves_the_legacy_body_and_mmf_readiness() {
         .expect("response");
     assert_eq!(not_ready.status(), 503);
 
-    runtime.mark_listener_healthy().expect("listener");
+    runtime.mark_http_listener_healthy().expect("HTTP listener");
+    runtime.mark_grpc_listener_healthy().expect("gRPC listener");
     runtime.activate().expect("active");
     let ready = app
         .oneshot(Request::get("/ready").body(Body::empty()).expect("request"))

@@ -1,5 +1,6 @@
 use std::{error::Error, sync::Arc};
 
+use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
     canvas_award_candidate_approval::{
         CanvasAwardCandidateApprovalService, SecureCanvasAwardApprovalSeedGenerator,
@@ -48,6 +49,11 @@ use marty_issuance_service::{
     credential_builder::HttpCredentialBuilder,
     credential_issuer::{HttpIssuerContextResolver, NativeCredentialProofVerifier},
     credential_lifecycle::PostgresCredentialLifecycle,
+    credential_management::CredentialManagementService,
+    credential_management_events::CredentialLifecycleEventBus,
+    credential_management_grpc::{CredentialManagementGrpcService, IssuanceGrpcPlatform},
+    credential_management_http::CredentialManagementHttpService,
+    credential_management_postgres::PostgresCredentialManagementRepository,
     credential_postgres::PostgresCredentialRepository,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
@@ -83,7 +89,9 @@ use marty_issuance_service::{
     validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -372,25 +380,51 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let initiation_projector =
         InitiationOfferProjector::new(config.issuer_base_url.clone(), didcomm_delivery)?;
     let initiation_http = InitiationHttpService::new(
-        initiation,
-        initiation_projector,
+        initiation.clone(),
+        initiation_projector.clone(),
         config.issuance_api_key.as_deref(),
     );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
-            repository: credential_repository,
+            repository: credential_repository.clone(),
             nonce_repository,
             dpop_verifier: Arc::new(MartyDpopProofVerifier),
             proof_verifier: Arc::new(NativeCredentialProofVerifier),
-            issuer_resolver,
-            builder: credential_builder,
-            lifecycle: credential_lifecycle,
+            issuer_resolver: issuer_resolver.clone(),
+            builder: credential_builder.clone(),
+            lifecycle: credential_lifecycle.clone(),
             notification_ids: Arc::new(UuidNotificationIdGenerator),
         },
         &config.issuer_base_url,
     );
-    let listener = TcpListener::bind(config.http_addr).await?;
-    runtime.mark_listener_healthy()?;
+    let lifecycle_events = CredentialLifecycleEventBus::default();
+    let credential_management = CredentialManagementService::new(
+        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
+        Arc::new(credential_lifecycle.status_publisher()),
+        Arc::new(lifecycle_events.clone()),
+    );
+    let credential_management_http = CredentialManagementHttpService::new(
+        credential_management.clone(),
+        config.issuance_api_key.as_deref(),
+    );
+    let grpc_platform = IssuanceGrpcPlatform::new(
+        initiation,
+        initiation_projector,
+        token_exchange.clone(),
+        credential.clone(),
+        transaction_reads.clone(),
+        &config.issuer_base_url,
+    );
+    let grpc_service = CredentialManagementGrpcService::new(
+        credential_management,
+        lifecycle_events,
+        grpc_platform,
+        config.internal_service_token.as_deref(),
+    );
+    let http_listener = TcpListener::bind(config.http_addr).await?;
+    runtime.mark_http_listener_healthy()?;
+    let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
+    runtime.mark_grpc_listener_healthy()?;
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
     let app = router_with_all_services(
         runtime.state(),
@@ -406,6 +440,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 initiation_http,
                 didcomm_http,
             ),
+            credential_management_http,
             CanvasServices::new(
                 canvas_oauth,
                 CanvasLtiServices::new(
@@ -426,23 +461,76 @@ async fn main() -> Result<(), Box<dyn Error>> {
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );
-    runtime.activate()?;
-    info!(
-        address = %config.http_addr,
-        release_version = %config.release_version,
-        build_revision = %config.build_revision,
-        "native Rust issuance candidate active"
-    );
-
-    let result = axum::serve(
-        listener,
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    let grpc_server = IssuanceServiceServer::new(grpc_service);
+    let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
+    let mut http_shutdown = listener_shutdown_rx.clone();
+    let mut grpc_shutdown = listener_shutdown_rx;
+    let http = axum::serve(
+        http_listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
-    .await;
-    runtime.drain()?;
+    .with_graceful_shutdown(async move {
+        wait_for_shutdown(&mut http_shutdown).await;
+    });
+    let grpc = Server::builder()
+        .add_service(health_service)
+        .add_service(grpc_server)
+        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
+            wait_for_shutdown(&mut grpc_shutdown).await;
+        });
+    runtime.activate()?;
+    health_reporter
+        .set_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
+        .await;
+    info!(
+        http_address = %config.http_addr,
+        grpc_address = %config.grpc_addr,
+        release_version = %config.release_version,
+        build_revision = %config.build_revision,
+        "native Rust issuance service active"
+    );
+
+    let servers = async {
+        tokio::try_join!(
+            async {
+                http.await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+            async {
+                grpc.await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+        )
+        .map(|_| ())
+    };
+    tokio::pin!(servers);
+    let (result, already_draining) = tokio::select! {
+        result = &mut servers => (result, false),
+        () = shutdown_signal() => {
+            info!("Issuance shutdown requested");
+            runtime.drain()?;
+            health_reporter
+                .set_not_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
+                .await;
+            let _ = listener_shutdown_tx.send(true);
+            (servers.await, true)
+        }
+    };
+    let _ = listener_shutdown_tx.send(true);
+    health_reporter
+        .set_not_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
+        .await;
+    if !already_draining {
+        runtime.drain()?;
+    }
     runtime.stop()?;
-    result.map_err(Into::into)
+    result?;
+    Ok(())
+}
+
+async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
+    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
 }
 
 async fn shutdown_signal() {

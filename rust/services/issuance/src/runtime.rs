@@ -4,6 +4,7 @@ use mmf_runtime::RuntimeState;
 use crate::IssuanceServiceConfig;
 
 const HTTP_LISTENER: &str = "http_listener";
+const GRPC_LISTENER: &str = "grpc_listener";
 
 #[derive(Clone)]
 pub struct IssuanceRuntime {
@@ -18,11 +19,13 @@ impl IssuanceRuntime {
             build_revision: config.build_revision.clone(),
             enabled_features: vec![
                 "http_candidate".to_owned(),
+                "grpc".to_owned(),
                 "contract_guard".to_owned(),
                 "static_discovery".to_owned(),
             ],
         });
         state.register_required_component(HTTP_LISTENER)?;
+        state.register_required_component(GRPC_LISTENER)?;
         state.transition(LifecycleState::Initialized)?;
         state.transition(LifecycleState::Starting)?;
         Ok(Self { state })
@@ -33,9 +36,19 @@ impl IssuanceRuntime {
         self.state.clone()
     }
 
-    pub fn mark_listener_healthy(&self) -> Result<(), MmfError> {
+    pub fn mark_http_listener_healthy(&self) -> Result<(), MmfError> {
         self.state.set_component_health(
             HTTP_LISTENER,
+            ComponentHealth {
+                status: HealthStatus::Healthy,
+                message: None,
+            },
+        )
+    }
+
+    pub fn mark_grpc_listener_healthy(&self) -> Result<(), MmfError> {
+        self.state.set_component_health(
+            GRPC_LISTENER,
             ComponentHealth {
                 status: HealthStatus::Healthy,
                 message: None,

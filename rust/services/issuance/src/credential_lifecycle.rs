@@ -308,6 +308,11 @@ impl PostgresCredentialLifecycle {
         })
     }
 
+    #[must_use]
+    pub fn status_publisher(&self) -> HttpCredentialStatusAllocator {
+        self.status.clone()
+    }
+
     async fn record_canvas_drift(
         &self,
         transaction: &CredentialTransaction,

@@ -269,15 +269,29 @@
       "canvas_oauth_behavior_case": "disconnect"
     }
   ],
+  "native_grpc": [
+    "ExchangeToken",
+    "GetCredentialStatus",
+    "GetOffer",
+    "GetTransaction",
+    "HealthCheck",
+    "InitiateIssuance",
+    "IssueCredential",
+    "ListTransactions",
+    "ReinstateCredential",
+    "RevokeCredential",
+    "StreamCredentialEvents",
+    "SuspendCredential"
+  ],
   "platform_additive_http": [
     {"method": "GET", "path": "/ready", "owner": "mmf-runtime"},
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
     "http": 99,
-    "grpc": 12,
+    "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 58,
+    "literal_environment_variables": 57,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
@@ -304,6 +318,7 @@
     "DATABASE_URL",
     "GRPC_SERVICE_TOKEN",
     "INTEGRATION_SECRET_MASTER_KEY_ENV",
+    "ISSUANCE_GRPC_PORT",
     "ISSUANCE_SERVICE_PORT",
     "ISSUANCE_API_KEY",
     "ISSUER_BASE_URL",

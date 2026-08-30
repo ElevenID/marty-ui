@@ -198,6 +198,18 @@ impl TransactionReadService {
             organization_id.ok_or(TransactionReadError::OrganizationIdRequired)?;
         self.security
             .require_organization(trusted_organization, organization_id, false)?;
+        self.list_authorized(organization_id).await
+    }
+
+    /// Lists transactions after the caller has authenticated an internal
+    /// transport and established the organization boundary.
+    pub async fn list_authorized(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<IssuanceTransactionResponse>, TransactionReadError> {
+        if organization_id.is_empty() {
+            return Err(TransactionReadError::OrganizationIdRequired);
+        }
         Ok(self
             .repository
             .list(organization_id)
@@ -214,16 +226,26 @@ impl TransactionReadService {
         trusted_organization: Option<&str>,
     ) -> Result<IssuanceTransactionResponse, TransactionReadError> {
         self.security.authorize(api_key)?;
-        let transaction = self
-            .repository
-            .get(transaction_id)
-            .await?
-            .ok_or(TransactionReadError::TransactionNotFound)?;
+        let transaction = self.get_authorized(transaction_id).await?;
         self.security.require_organization(
             trusted_organization,
             &transaction.organization_id,
             true,
         )?;
+        Ok(transaction)
+    }
+
+    /// Gets a transaction after the caller has authenticated an internal
+    /// transport. Transport adapters remain responsible for tenant policy.
+    pub async fn get_authorized(
+        &self,
+        transaction_id: &str,
+    ) -> Result<IssuanceTransactionResponse, TransactionReadError> {
+        let transaction = self
+            .repository
+            .get(transaction_id)
+            .await?
+            .ok_or(TransactionReadError::TransactionNotFound)?;
         Ok(IssuanceTransactionResponse::detail(transaction))
     }
 

@@ -6,6 +6,9 @@ use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 
 use crate::{
+    credential::{
+        CredentialIssuanceError, CredentialIssuanceService, CredentialRequest, CredentialResponse,
+    },
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
         CredentialManagementError, CredentialManagementService, CredentialStatusView,
@@ -19,12 +22,20 @@ use crate::{
         InitiationOfferProjectionError, InitiationOfferProjector, InitiationOfferResponse,
     },
     issuance_proto::{
-        issuance_service_server::IssuanceService, CredentialEvent, CredentialLifecycleRequest,
-        CredentialStatusResponse, ExchangeTokenRequest, GetCredentialStatusRequest,
-        GetOfferRequest, GetTransactionRequest, HealthCheckRequest, HealthCheckResponse,
-        InitiateIssuanceRequest, IssuanceResponse, IssueCredentialRequest, IssueCredentialResponse,
-        ListTransactionsRequest, ListTransactionsResponse, OfferResponse,
+        issuance_service_server::IssuanceService, CredentialEntry, CredentialEvent,
+        CredentialLifecycleRequest, CredentialStatusResponse, ExchangeTokenRequest,
+        GetCredentialStatusRequest, GetOfferRequest, GetTransactionRequest, HealthCheckRequest,
+        HealthCheckResponse, InitiateIssuanceRequest, IssuanceResponse, IssueCredentialRequest,
+        IssueCredentialResponse, ListTransactionsRequest, ListTransactionsResponse, OfferResponse,
         StreamCredentialEventsRequest, TokenResponse, TransactionResponse,
+    },
+    token_exchange::{
+        TokenExchangeError, TokenExchangeRequest as DomainTokenExchangeRequest,
+        TokenExchangeService,
+    },
+    transaction_reads::{
+        IssuanceTransactionResponse, TransactionReadError, TransactionReadService,
+        TransactionStatus,
     },
 };
 
@@ -34,7 +45,9 @@ const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 pub struct CredentialManagementGrpcService {
     lifecycle: CredentialManagementService,
     events: CredentialLifecycleEventBus,
-    initiation: Option<Arc<InitiationGrpcPlatform>>,
+    platform: Option<Arc<IssuanceGrpcPlatform>>,
+    #[cfg(test)]
+    initiation_override: Option<Arc<InitiationGrpcPlatform>>,
     service_token: Option<Vec<u8>>,
 }
 
@@ -42,6 +55,45 @@ pub struct CredentialManagementGrpcService {
 struct InitiationGrpcPlatform {
     service: InitiationService,
     projector: InitiationOfferProjector,
+}
+
+/// Canonical issuance services exposed through the authenticated internal
+/// gRPC transport. Keeping these services together makes partial production
+/// registration impossible.
+#[derive(Clone, Debug)]
+pub struct IssuanceGrpcPlatform {
+    initiation: InitiationGrpcPlatform,
+    token_exchange: TokenExchangeService,
+    credential: CredentialIssuanceService,
+    transactions: TransactionReadService,
+    issuer_base_url: Arc<str>,
+}
+
+impl IssuanceGrpcPlatform {
+    #[must_use]
+    pub fn new(
+        initiation: InitiationService,
+        projector: InitiationOfferProjector,
+        token_exchange: TokenExchangeService,
+        credential: CredentialIssuanceService,
+        transactions: TransactionReadService,
+        issuer_base_url: &str,
+    ) -> Self {
+        Self {
+            initiation: InitiationGrpcPlatform {
+                service: initiation,
+                projector,
+            },
+            token_exchange,
+            credential,
+            transactions,
+            issuer_base_url: Arc::from(issuer_base_url.trim_end_matches('/')),
+        }
+    }
+
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}{path}", self.issuer_base_url)
+    }
 }
 
 impl std::fmt::Debug for CredentialManagementGrpcService {
@@ -55,8 +107,27 @@ impl std::fmt::Debug for CredentialManagementGrpcService {
 
 impl CredentialManagementGrpcService {
     #[must_use]
+    pub fn new(
+        lifecycle: CredentialManagementService,
+        events: CredentialLifecycleEventBus,
+        platform: IssuanceGrpcPlatform,
+        service_token: Option<&str>,
+    ) -> Self {
+        Self {
+            lifecycle,
+            events,
+            platform: Some(Arc::new(platform)),
+            #[cfg(test)]
+            initiation_override: None,
+            service_token: service_token
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.as_bytes().to_vec()),
+        }
+    }
+
     #[cfg(test)]
-    pub(crate) fn new(
+    fn lifecycle_candidate(
         lifecycle: CredentialManagementService,
         events: CredentialLifecycleEventBus,
         service_token: Option<&str>,
@@ -64,7 +135,8 @@ impl CredentialManagementGrpcService {
         Self {
             lifecycle,
             events,
-            initiation: None,
+            platform: None,
+            initiation_override: None,
             service_token: service_token
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -78,8 +150,22 @@ impl CredentialManagementGrpcService {
         service: InitiationService,
         projector: InitiationOfferProjector,
     ) -> Self {
-        self.initiation = Some(Arc::new(InitiationGrpcPlatform { service, projector }));
+        self.initiation_override = Some(Arc::new(InitiationGrpcPlatform { service, projector }));
         self
+    }
+
+    fn platform(&self) -> Result<&IssuanceGrpcPlatform, Status> {
+        self.platform
+            .as_deref()
+            .ok_or_else(|| Status::internal("native issuance gRPC platform is not configured"))
+    }
+
+    fn initiation(&self) -> Result<&InitiationGrpcPlatform, Status> {
+        #[cfg(test)]
+        if let Some(platform) = self.initiation_override.as_deref() {
+            return Ok(platform);
+        }
+        self.platform().map(|platform| &platform.initiation)
     }
 
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
@@ -127,9 +213,7 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<InitiateIssuanceRequest>,
     ) -> Result<Response<IssuanceResponse>, Status> {
         self.authorize(&request)?;
-        let platform = self.initiation.as_ref().ok_or_else(|| {
-            Status::unimplemented("native InitiateIssuance is not registered yet")
-        })?;
+        let platform = self.initiation()?;
         let request = initiation_request(request.into_inner())?;
         let idempotency_key = request
             .idempotency_key
@@ -166,9 +250,23 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<ExchangeTokenRequest>,
     ) -> Result<Response<TokenResponse>, Status> {
         self.authorize(&request)?;
-        Err(Status::unimplemented(
-            "native ExchangeToken gRPC is not registered yet",
-        ))
+        let platform = self.platform()?;
+        let response = platform
+            .token_exchange
+            .exchange(
+                &token_exchange_request(request.into_inner()),
+                None,
+                &platform.endpoint("/v1/issuance/token"),
+            )
+            .await
+            .map_err(token_status)?;
+        Ok(Response::new(TokenResponse {
+            access_token: response.access_token,
+            token_type: response.token_type,
+            expires_in: i32::try_from(response.expires_in).unwrap_or(i32::MAX),
+            c_nonce: String::new(),
+            nonce: String::new(),
+        }))
     }
 
     async fn issue_credential(
@@ -176,9 +274,20 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<IssueCredentialRequest>,
     ) -> Result<Response<IssueCredentialResponse>, Status> {
         self.authorize(&request)?;
-        Err(Status::unimplemented(
-            "native IssueCredential gRPC is not registered yet",
-        ))
+        let platform = self.platform()?;
+        let request = request.into_inner();
+        let authorization = format!("Bearer {}", request.access_token);
+        let response = platform
+            .credential
+            .issue(
+                &credential_request(request)?,
+                Some(&authorization),
+                None,
+                &platform.endpoint("/v1/issuance/credential"),
+            )
+            .await
+            .map_err(credential_status)?;
+        Ok(Response::new(credential_response(response)?))
     }
 
     async fn get_offer(
@@ -186,9 +295,15 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<GetOfferRequest>,
     ) -> Result<Response<OfferResponse>, Status> {
         self.authorize(&request)?;
-        Err(Status::unimplemented(
-            "native GetOffer gRPC is not registered yet",
-        ))
+        let offer = self
+            .platform()?
+            .transactions
+            .offer(&request.into_inner().transaction_id)
+            .await
+            .map_err(transaction_status)?;
+        let offer_json = serde_json::to_string(&offer)
+            .map_err(|_| Status::internal("credential offer could not be encoded"))?;
+        Ok(Response::new(OfferResponse { offer_json }))
     }
 
     async fn list_transactions(
@@ -196,9 +311,38 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<ListTransactionsRequest>,
     ) -> Result<Response<ListTransactionsResponse>, Status> {
         self.authorize(&request)?;
-        Err(Status::unimplemented(
-            "native ListTransactions gRPC is not registered yet",
-        ))
+        let request = request.into_inner();
+        if request.limit < 0 || request.offset < 0 || request.limit > 500 {
+            return Err(Status::invalid_argument("pagination is out of range"));
+        }
+        let status = optional(request.status)
+            .map(|value| grpc_transaction_status(&value))
+            .transpose()?;
+        let mut transactions = self
+            .platform()?
+            .transactions
+            .list_authorized(&request.organization_id)
+            .await
+            .map_err(transaction_status)?;
+        if let Some(status) = status {
+            transactions.retain(|transaction| transaction.status == status);
+        }
+        let total = i32::try_from(transactions.len()).unwrap_or(i32::MAX);
+        let take = if request.limit == 0 {
+            100
+        } else {
+            request.limit as usize
+        };
+        let transactions = transactions
+            .into_iter()
+            .skip(request.offset as usize)
+            .take(take)
+            .map(transaction_response)
+            .collect();
+        Ok(Response::new(ListTransactionsResponse {
+            transactions,
+            total,
+        }))
     }
 
     async fn get_transaction(
@@ -206,9 +350,13 @@ impl IssuanceService for CredentialManagementGrpcService {
         request: Request<GetTransactionRequest>,
     ) -> Result<Response<TransactionResponse>, Status> {
         self.authorize(&request)?;
-        Err(Status::unimplemented(
-            "native GetTransaction gRPC is not registered yet",
-        ))
+        self.platform()?
+            .transactions
+            .get_authorized(&request.into_inner().transaction_id)
+            .await
+            .map(transaction_response)
+            .map(Response::new)
+            .map_err(transaction_status)
     }
 
     async fn revoke_credential(
@@ -298,6 +446,11 @@ struct ParsedInitiationRequest {
 }
 
 fn initiation_request(value: InitiateIssuanceRequest) -> Result<ParsedInitiationRequest, Status> {
+    if !value.claims_json.trim().is_empty() && !value.claims.is_empty() {
+        return Err(Status::invalid_argument(
+            "claims and claims_json cannot both be supplied",
+        ));
+    }
     let claims = if value.claims_json.trim().is_empty() {
         value
             .claims
@@ -401,6 +554,200 @@ fn projection_status(error: InitiationOfferProjectionError) -> Status {
 
 fn optional(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
+}
+
+fn token_exchange_request(value: ExchangeTokenRequest) -> DomainTokenExchangeRequest {
+    DomainTokenExchangeRequest {
+        grant_type: value.grant_type,
+        pre_authorized_code: optional(value.pre_authorized_code),
+        code: optional(value.code),
+        redirect_uri: optional(value.redirect_uri),
+        client_id: optional(value.client_id),
+        code_verifier: optional(value.code_verifier),
+        client_assertion_type: optional(value.client_assertion_type),
+        client_assertion: optional(value.client_assertion),
+    }
+}
+
+fn credential_request(value: IssueCredentialRequest) -> Result<CredentialRequest, Status> {
+    let mut proofs = serde_json::Map::new();
+    for proof in value.proofs {
+        let proof_type = proof.proof_type.trim();
+        if proof_type.is_empty() || proof.jwt.is_empty() {
+            return Err(Status::invalid_argument(
+                "each credential proof requires proof_type and jwt",
+            ));
+        }
+        let entry = proofs
+            .entry(proof_type.to_owned())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        let serde_json::Value::Array(values) = entry else {
+            return Err(Status::internal("credential proof projection failed"));
+        };
+        values.push(serde_json::Value::String(proof.jwt));
+    }
+    let credential_configuration_id = optional(value.credential_configuration_id);
+    let credential_identifier = optional(value.credential_identifier);
+    let legacy_format = optional(value.format).or_else(|| {
+        (credential_configuration_id.is_none() && credential_identifier.is_none())
+            .then(|| "vc+sd-jwt".to_owned())
+    });
+    Ok(CredentialRequest {
+        proofs: (!proofs.is_empty()).then_some(proofs),
+        credential_configuration_id,
+        credential_identifier,
+        legacy_format,
+    })
+}
+
+fn credential_response(value: CredentialResponse) -> Result<IssueCredentialResponse, Status> {
+    let credentials = value
+        .credentials
+        .into_iter()
+        .map(|entry| {
+            let object = entry.as_object().ok_or_else(|| {
+                Status::internal("credential response entry is not a JSON object")
+            })?;
+            let format = object
+                .get("format")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let credential = object
+                .get("credential")
+                .ok_or_else(|| Status::internal("credential response entry has no credential"))?;
+            let credential = credential.as_str().map_or_else(
+                || serde_json::to_string(credential),
+                |value| Ok(value.to_owned()),
+            );
+            Ok(CredentialEntry {
+                format,
+                credential: credential
+                    .map_err(|_| Status::internal("credential response could not be encoded"))?,
+            })
+        })
+        .collect::<Result<Vec<_>, Status>>()?;
+    Ok(IssueCredentialResponse {
+        credentials,
+        notification_id: value.notification_id,
+        c_nonce: String::new(),
+    })
+}
+
+fn grpc_transaction_status(value: &str) -> Result<TransactionStatus, Status> {
+    match value {
+        "pending" => Ok(TransactionStatus::Pending),
+        "authorized" => Ok(TransactionStatus::Authorized),
+        "signing" => Ok(TransactionStatus::Signing),
+        "issued" => Ok(TransactionStatus::Issued),
+        "failed" => Ok(TransactionStatus::Failed),
+        "expired" => Ok(TransactionStatus::Expired),
+        "revoked" => Ok(TransactionStatus::Revoked),
+        _ => Err(Status::invalid_argument("transaction status is invalid")),
+    }
+}
+
+fn transaction_status_name(value: TransactionStatus) -> &'static str {
+    match value {
+        TransactionStatus::Pending => "pending",
+        TransactionStatus::Authorized => "authorized",
+        TransactionStatus::Signing => "signing",
+        TransactionStatus::Issued => "issued",
+        TransactionStatus::Failed => "failed",
+        TransactionStatus::Expired => "expired",
+        TransactionStatus::Revoked => "revoked",
+    }
+}
+
+fn transaction_response(value: IssuanceTransactionResponse) -> TransactionResponse {
+    let updated_at = value.created_at.clone();
+    TransactionResponse {
+        id: value.id,
+        organization_id: value.organization_id,
+        credential_template_id: value.credential_template_id,
+        status: transaction_status_name(value.status).to_owned(),
+        applicant_id: value.applicant_id.unwrap_or_default(),
+        subject_did: value.subject_did.unwrap_or_default(),
+        created_at: value.created_at,
+        // The persisted issuance contract has no distinct updated_at column.
+        // Keep the legacy protobuf member populated with the last timestamp we
+        // can prove rather than inventing a mutation time.
+        updated_at,
+    }
+}
+
+fn token_status(error: TokenExchangeError) -> Status {
+    use TokenExchangeError as Error;
+    match error {
+        Error::GrantTypeRequired
+        | Error::AuthorizationCodeRequired
+        | Error::PreAuthorizedCodeRequired
+        | Error::UnsupportedGrantType
+        | Error::InvalidDpopProof
+        | Error::Protocol(_) => Status::invalid_argument(error.to_string()),
+        Error::InvalidAuthorizationCode | Error::InvalidPreAuthorizedCode => {
+            Status::not_found(error.to_string())
+        }
+        Error::InvalidClient => Status::unauthenticated(error.to_string()),
+        Error::AuthorizationCodeExpired
+        | Error::AuthorizationCodeUsed
+        | Error::TransactionExpired
+        | Error::PreAuthorizedCodeUsed
+        | Error::InvalidTransactionState => Status::failed_precondition(error.to_string()),
+        Error::RepositoryUnavailable => Status::internal(error.to_string()),
+    }
+}
+
+fn credential_status(error: CredentialIssuanceError) -> Status {
+    use CredentialIssuanceError as Error;
+    match error {
+        Error::MissingAuthorization | Error::InvalidAccessToken => {
+            Status::unauthenticated(error.to_string())
+        }
+        Error::SelectorRequired
+        | Error::UnknownConfiguration(_)
+        | Error::UnknownIdentifier(_)
+        | Error::ProofRequired
+        | Error::MalformedProof
+        | Error::AudienceMismatch { .. }
+        | Error::InvalidNonce
+        | Error::InvalidProof(_)
+        | Error::MdocHolderKeyRequired
+        | Error::UnsupportedFormat(_)
+        | Error::InvalidDpopProof
+        | Error::DpopMismatch => Status::invalid_argument(error.to_string()),
+        Error::DpopRequired
+        | Error::CredentialAlreadyIssued
+        | Error::InvalidTransactionState
+        | Error::IssuanceInProgress
+        | Error::RevocationProfileRequired
+        | Error::CanvasEligibilityDenied => Status::failed_precondition(error.to_string()),
+        Error::IssuerUnavailable(_)
+        | Error::SigningUnavailable(_)
+        | Error::LifecycleUnavailable(_) => Status::unavailable(error.to_string()),
+        Error::NonceRepositoryUnavailable
+        | Error::RepositoryUnavailable
+        | Error::BuilderChangedCredentialId
+        | Error::InvalidStoredDataIntegrityCredential => Status::internal(error.to_string()),
+    }
+}
+
+fn transaction_status(error: TransactionReadError) -> Status {
+    use TransactionReadError as Error;
+    match error {
+        Error::OfferNotFound | Error::TransactionNotFound | Error::ResourceNotFound => {
+            Status::not_found(error.to_string())
+        }
+        Error::OfferExpired => Status::failed_precondition(error.to_string()),
+        Error::OrganizationIdRequired => Status::invalid_argument(error.to_string()),
+        Error::ApiKeyMissing | Error::InvalidApiKey => Status::unauthenticated(error.to_string()),
+        Error::TrustedOrganizationRequired | Error::OrganizationMismatch => {
+            Status::permission_denied(error.to_string())
+        }
+        Error::RepositoryUnavailable | Error::OfferUnavailable | Error::ApiKeyNotConfigured => {
+            Status::internal(error.to_string())
+        }
+    }
 }
 
 fn status_response(value: CredentialStatusView) -> CredentialStatusResponse {
@@ -564,7 +911,11 @@ mod tests {
             Arc::new(events.clone()),
         );
         (
-            CredentialManagementGrpcService::new(lifecycle, events, Some(SERVICE_TOKEN)),
+            CredentialManagementGrpcService::lifecycle_candidate(
+                lifecycle,
+                events,
+                Some(SERVICE_TOKEN),
+            ),
             calls,
         )
     }
@@ -795,7 +1146,7 @@ mod tests {
             credential_template_id: "template-a".into(),
             applicant_id: "applicant-a".into(),
             subject_did: "did:key:holder".into(),
-            claims: std::collections::HashMap::from([("ignored".into(), "legacy".into())]),
+            claims: std::collections::HashMap::new(),
             holder_did: String::new(),
             authorized_client_id: String::new(),
             application_id: "application-a".into(),
@@ -825,7 +1176,6 @@ mod tests {
             .expect("committed transaction");
         assert_eq!(stored.claims["profile"], json!({"level":2}));
         assert_eq!(stored.claims["roles"], json!(["member"]));
-        assert!(!stored.claims.contains_key("ignored"));
         let event = events.recv().await.expect("offer-created event");
         assert_eq!(event.event_type, "offer_created");
         assert_eq!(event.transaction_id, response.id);
@@ -852,6 +1202,15 @@ mod tests {
         .err()
         .expect("non-object claims are invalid");
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
+
+        let conflict = initiation_request(InitiateIssuanceRequest {
+            claims: std::collections::HashMap::from([("name".into(), "Ada".into())]),
+            claims_json: r#"{"name":"Ada"}"#.into(),
+            ..InitiateIssuanceRequest::default()
+        })
+        .err()
+        .expect("legacy and nested claims are mutually exclusive");
+        assert_eq!(conflict.code(), tonic::Code::InvalidArgument);
     }
 
     #[tokio::test]
@@ -944,9 +1303,95 @@ mod tests {
     }
 
     #[test]
-    fn partial_grpc_candidate_is_not_registered_by_the_executable() {
+    fn complete_grpc_platform_is_registered_by_the_executable() {
         let main = include_str!("main.rs");
-        assert!(!main.contains("CredentialManagementGrpcService"));
-        assert!(!main.contains("IssuanceServiceServer"));
+        assert!(main.contains("CredentialManagementGrpcService::new"));
+        assert!(main.contains("IssuanceServiceServer::new"));
+        assert!(main.contains("config.grpc_addr"));
+        assert!(main.contains("tonic_health::server::health_reporter"));
+        let production = include_str!("credential_management_grpc.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert!(!production.contains("Status::unimplemented"));
+    }
+
+    #[test]
+    fn grpc_request_projections_preserve_canonical_protocol_fields() {
+        let token = token_exchange_request(ExchangeTokenRequest {
+            grant_type: "authorization_code".into(),
+            code: "code-a".into(),
+            redirect_uri: "https://wallet.example/callback".into(),
+            client_id: "wallet-a".into(),
+            code_verifier: "verifier-a".into(),
+            client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".into(),
+            client_assertion: "assertion-a".into(),
+            ..ExchangeTokenRequest::default()
+        });
+        assert_eq!(token.grant_type, "authorization_code");
+        assert_eq!(token.code.as_deref(), Some("code-a"));
+        assert_eq!(token.client_id.as_deref(), Some("wallet-a"));
+        assert_eq!(token.code_verifier.as_deref(), Some("verifier-a"));
+
+        let credential = credential_request(IssueCredentialRequest {
+            access_token: "access-a".into(),
+            format: "OpenBadgeCredential#sd-jwt".into(),
+            proofs: vec![
+                crate::issuance_proto::ProofJwt {
+                    proof_type: "jwt".into(),
+                    jwt: "proof-a".into(),
+                },
+                crate::issuance_proto::ProofJwt {
+                    proof_type: "jwt".into(),
+                    jwt: "proof-b".into(),
+                },
+            ],
+            credential_configuration_id: String::new(),
+            credential_identifier: String::new(),
+        })
+        .expect("credential projection");
+        assert!(credential.credential_configuration_id.is_none());
+        assert_eq!(
+            credential.legacy_format.as_deref(),
+            Some("OpenBadgeCredential#sd-jwt")
+        );
+        assert_eq!(
+            credential.proofs.as_ref().expect("proofs")["jwt"],
+            json!(["proof-a", "proof-b"])
+        );
+
+        let default_format = credential_request(IssueCredentialRequest::default())
+            .expect("legacy gRPC default format");
+        assert_eq!(default_format.legacy_format.as_deref(), Some("vc+sd-jwt"));
+    }
+
+    #[test]
+    fn grpc_response_projections_preserve_json_credentials_and_status_codes() {
+        let response = credential_response(CredentialResponse {
+            credentials: vec![json!({
+                "format": "ldp_vc",
+                "credential": {"@context": ["https://www.w3.org/ns/credentials/v2"]}
+            })],
+            notification_id: "notification-a".into(),
+        })
+        .expect("response projection");
+        assert_eq!(response.notification_id, "notification-a");
+        assert_eq!(response.credentials[0].format, "ldp_vc");
+        assert_eq!(
+            serde_json::from_str::<Value>(&response.credentials[0].credential).unwrap(),
+            json!({"@context": ["https://www.w3.org/ns/credentials/v2"]})
+        );
+        assert_eq!(
+            token_status(TokenExchangeError::InvalidClient).code(),
+            tonic::Code::Unauthenticated
+        );
+        assert_eq!(
+            credential_status(CredentialIssuanceError::RepositoryUnavailable).code(),
+            tonic::Code::Internal
+        );
+        assert_eq!(
+            transaction_status(TransactionReadError::TransactionNotFound).code(),
+            tonic::Code::NotFound
+        );
     }
 }

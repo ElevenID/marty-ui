@@ -12,6 +12,7 @@ use serde_json::{json, Map, Value};
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
+    pub grpc_addr: SocketAddr,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -64,6 +65,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
         formatter
             .debug_struct("IssuanceServiceConfig")
             .field("http_addr", &self.http_addr)
+            .field("grpc_addr", &self.grpc_addr)
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
@@ -207,6 +209,7 @@ struct Settings {
 struct ServerSettings {
     host: IpAddr,
     port: u16,
+    grpc_port: u16,
     cors_allowed_origins: Vec<String>,
 }
 
@@ -270,6 +273,16 @@ impl IssuanceServiceConfig {
                 "INTEGRATION_SECRET_MASTER_KEY or INTEGRATION_SECRET_MASTER_KEY_FILE is required",
             ));
         }
+        if config.internal_service_token.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "GRPC_SERVICE_TOKEN or GRPC_SERVICE_TOKEN_FILE is required",
+            ));
+        }
+        validate_production_grpc_service_token(
+            config.internal_service_token.as_deref(),
+            &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_owned()),
+        )?;
         Ok(config)
     }
 
@@ -283,6 +296,7 @@ impl IssuanceServiceConfig {
                 "server": {
                     "host": "0.0.0.0",
                     "port": 8005,
+                    "grpc_port": 9005,
                     "cors_allowed_origins": ["http://localhost:3000"]
                 },
                 "build": {
@@ -334,6 +348,7 @@ impl IssuanceServiceConfig {
                 .with_detail("cause", error.to_string())
         })?;
         let http_addr = SocketAddr::new(settings.server.host, settings.server.port);
+        let grpc_addr = SocketAddr::new(settings.server.host, settings.server.grpc_port);
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
@@ -397,7 +412,21 @@ impl IssuanceServiceConfig {
         let integration_secret_master_key = secret_value(&values, integration_secret_key_name)?;
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
-        let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?;
+        if values
+            .get("GRPC_SERVICE_TOKEN")
+            .is_some_and(|value| !value.trim().is_empty())
+            && values
+                .get("GRPC_SERVICE_TOKEN_FILE")
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are mutually exclusive",
+            ));
+        }
+        let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         let canvas_portable_enabled =
             environment_flag(&values, "CANVAS_PORTABLE_INTEGRATION_ENABLED");
         let canvas_pilot_organizations =
@@ -458,6 +487,7 @@ impl IssuanceServiceConfig {
             environment_flag(&values, "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS");
         Ok(Self {
             http_addr,
+            grpc_addr,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
@@ -520,6 +550,16 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             .with_detail("cause", error.to_string())
         })?;
         server.insert("port".to_owned(), json!(parsed));
+    }
+    if let Some(port) = values.get("ISSUANCE_GRPC_PORT") {
+        let parsed = port.parse::<u16>().map_err(|error| {
+            MmfError::new(
+                ErrorCode::Configuration,
+                "ISSUANCE_GRPC_PORT must be a valid TCP port",
+            )
+            .with_detail("cause", error.to_string())
+        })?;
+        server.insert("grpc_port".to_owned(), json!(parsed));
     }
     if let Some(origins) = values.get("CORS_ALLOWED_ORIGINS") {
         server.insert(
@@ -942,11 +982,51 @@ fn secret_value(values: &BTreeMap<String, String>, name: &str) -> Result<Option<
     Ok(Some(value.to_owned()))
 }
 
+fn validate_production_grpc_service_token(
+    token: Option<&str>,
+    environment: &str,
+) -> Result<(), MmfError> {
+    if ["development", "dev", "local", "test"]
+        .contains(&environment.trim().to_ascii_lowercase().as_str())
+    {
+        return Ok(());
+    }
+    let token = token.ok_or_else(|| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN is required outside development environments",
+        )
+    })?;
+    let normalized = token.to_ascii_lowercase();
+    if [
+        "change-me",
+        "change_me",
+        "changeme",
+        "replace-me",
+        "replace_me",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+    {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN must not be a placeholder in production",
+        ));
+    }
+    if token.chars().count() < 32 {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN must contain at least 32 characters in production",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use mmf_core::ErrorCode;
 
-    use super::IssuanceServiceConfig;
+    use super::{validate_production_grpc_service_token, IssuanceServiceConfig};
 
     fn values(entries: &[(&str, &str)]) -> Vec<(String, String)> {
         entries
@@ -960,6 +1040,7 @@ mod tests {
         let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
             .expect("defaults");
         assert_eq!(config.http_addr.to_string(), "0.0.0.0:8005");
+        assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9005");
         assert_eq!(config.release_version, "0.1.0");
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.issuer_base_url, "https://beta.elevenidllc.com");
@@ -1040,10 +1121,12 @@ mod tests {
     fn hierarchical_configuration_overrides_the_legacy_adapter() {
         let config = IssuanceServiceConfig::from_values(values(&[
             ("ISSUANCE_SERVICE_PORT", "8006"),
+            ("ISSUANCE_GRPC_PORT", "9006"),
             ("MARTY_RELEASE_VERSION", "1.2.3"),
             ("MARTY_UI_SHA", "abc123"),
             ("MARTY_ISSUANCE__SERVER__HOST", "127.0.0.1"),
             ("MARTY_ISSUANCE__SERVER__PORT", "8010"),
+            ("MARTY_ISSUANCE__SERVER__GRPC_PORT", "9010"),
             ("ISSUER_BASE_URL", "https://legacy.example/"),
             ("ISSUER_DISPLAY_NAME", "Legacy Issuer"),
             (
@@ -1098,6 +1181,7 @@ mod tests {
         ]))
         .expect("configuration");
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8010");
+        assert_eq!(config.grpc_addr.to_string(), "127.0.0.1:9010");
         assert_eq!(config.release_version, "1.2.3");
         assert_eq!(config.build_revision, "abc123");
         assert_eq!(config.issuer_base_url, "https://issuer.example");
@@ -1173,10 +1257,39 @@ mod tests {
 
     #[test]
     fn invalid_legacy_port_fails_closed() {
-        let error =
-            IssuanceServiceConfig::from_values(values(&[("ISSUANCE_SERVICE_PORT", "not-a-port")]))
+        for name in ["ISSUANCE_SERVICE_PORT", "ISSUANCE_GRPC_PORT"] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, "not-a-port")]))
                 .expect_err("invalid port");
-        assert_eq!(error.code, ErrorCode::Configuration);
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn grpc_service_token_configuration_preserves_the_fail_closed_python_boundary() {
+        let conflict = IssuanceServiceConfig::from_values(values(&[
+            ("GRPC_SERVICE_TOKEN", "direct-token"),
+            ("GRPC_SERVICE_TOKEN_FILE", "mounted-token"),
+        ]))
+        .expect_err("one service-token source is required");
+        assert_eq!(conflict.code, ErrorCode::Configuration);
+
+        for token in [
+            "change-me-production-token-that-is-long-enough",
+            "too-short",
+        ] {
+            assert_eq!(
+                validate_production_grpc_service_token(Some(token), "production")
+                    .expect_err("weak production service token")
+                    .code,
+                ErrorCode::Configuration
+            );
+        }
+        assert!(validate_production_grpc_service_token(
+            Some("production-service-token-with-at-least-32-bytes"),
+            "production"
+        )
+        .is_ok());
+        assert!(validate_production_grpc_service_token(None, "test").is_ok());
     }
 
     #[test]

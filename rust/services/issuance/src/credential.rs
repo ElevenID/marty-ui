@@ -53,6 +53,7 @@ pub struct CredentialRequest {
     pub proofs: Option<Map<String, Value>>,
     pub credential_configuration_id: Option<String>,
     pub credential_identifier: Option<String>,
+    pub(crate) legacy_format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +91,7 @@ impl<'de> Deserialize<'de> for CredentialRequest {
             proofs: canonical.proofs,
             credential_configuration_id: canonical.credential_configuration_id,
             credential_identifier: canonical.credential_identifier,
+            legacy_format: None,
         })
     }
 }
@@ -762,7 +764,13 @@ fn bearer_token(authorization: Option<&str>) -> Result<&str, CredentialIssuanceE
 }
 
 fn validate_selector(request: &CredentialRequest) -> Result<(), CredentialIssuanceError> {
-    if request.credential_configuration_id.is_some() == request.credential_identifier.is_some() {
+    if request.credential_configuration_id.is_some() && request.credential_identifier.is_some() {
+        return Err(CredentialIssuanceError::SelectorRequired);
+    }
+    if request.credential_configuration_id.is_none()
+        && request.credential_identifier.is_none()
+        && request.legacy_format.is_none()
+    {
         return Err(CredentialIssuanceError::SelectorRequired);
     }
     Ok(())
@@ -832,13 +840,15 @@ fn format_policy(
     request: &CredentialRequest,
     transaction: &CredentialTransaction,
 ) -> Result<FormatPolicy, CredentialIssuanceError> {
-    let response_format = request
-        .credential_configuration_id
-        .as_deref()
-        .or(request.credential_identifier.as_deref())
-        .and_then(format_from_configuration_id)
-        .map(str::to_owned)
-        .unwrap_or_else(|| default_request_format(&transaction.credential_payload_format));
+    let response_format = request.legacy_format.clone().unwrap_or_else(|| {
+        request
+            .credential_configuration_id
+            .as_deref()
+            .or(request.credential_identifier.as_deref())
+            .and_then(format_from_configuration_id)
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_request_format(&transaction.credential_payload_format))
+    });
     let normalized = normalize_format(&transaction.credential_payload_format);
     let kind = if MDOC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
         CredentialBuilderKind::Mdoc
@@ -1192,8 +1202,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        clean_claims, credential_configuration_id_for_format, reserved_credential_id,
-        validate_audience, CredentialRequest, CredentialTransaction, CredentialTransactionStatus,
+        clean_claims, credential_configuration_id_for_format, format_policy,
+        reserved_credential_id, validate_audience, validate_selector, CredentialRequest,
+        CredentialTransaction, CredentialTransactionStatus,
     };
 
     fn transaction() -> CredentialTransaction {
@@ -1255,6 +1266,21 @@ mod tests {
             credential_configuration_id_for_format("OpenBadgeCredential", "w3c_vcdm_v2_sd_jwt"),
             "OpenBadgeCredential#sd-jwt"
         );
+    }
+
+    #[test]
+    fn grpc_legacy_format_remains_transport_scoped_and_preserves_response_shape() {
+        let request = CredentialRequest {
+            legacy_format: Some("dc+sd-jwt".to_owned()),
+            ..CredentialRequest::default()
+        };
+        assert!(validate_selector(&request).is_ok());
+        let policy = format_policy(&request, &transaction()).expect("format policy");
+        assert_eq!(policy.response_format, "dc+sd-jwt");
+        assert_eq!(policy.remote_format, "dc+sd-jwt");
+
+        let http_request = CredentialRequest::default();
+        assert!(validate_selector(&http_request).is_err());
     }
 
     #[test]

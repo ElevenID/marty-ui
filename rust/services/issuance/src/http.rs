@@ -96,6 +96,7 @@ pub struct IssuanceServices {
     credential: CredentialIssuanceService,
     initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
+    credential_management: CredentialManagementHttpService,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
 }
@@ -217,6 +218,7 @@ impl IssuanceServices {
     #[must_use]
     pub fn new(
         core: IssuanceCoreServices,
+        credential_management: CredentialManagementHttpService,
         canvas: CanvasServices,
         token_rate_limiter: TokenRateLimiter,
     ) -> Self {
@@ -228,6 +230,7 @@ impl IssuanceServices {
             credential: core.credential,
             initiation: core.initiation,
             didcomm_delivery: core.didcomm_delivery,
+            credential_management,
             canvas,
             token_rate_limiter,
         }
@@ -324,7 +327,7 @@ pub fn router_with_all_services(
             credential: Some(services.credential),
             initiation: Some(services.initiation),
             didcomm_delivery: Some(services.didcomm_delivery),
-            credential_management: None,
+            credential_management: Some(services.credential_management),
             canvas_oauth: Some(services.canvas.oauth),
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
