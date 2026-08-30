@@ -809,8 +809,16 @@ fn router_with_optional_services(
     if services.canvas_management.is_some() {
         api = api
             .route(
+                "/v1/integrations/canvas/lti/config/{token}",
+                get(get_public_canvas_lti_config),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms",
                 get(list_canvas_platforms).post(create_canvas_platform),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
+                get(get_canvas_lti_registration_config),
             )
             .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
@@ -971,6 +979,32 @@ async fn delete_canvas_platform(
         .delete(&headers, &platform_id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_canvas_lti_registration_config(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .registration_config(&headers, &platform_id)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn get_public_canvas_lti_config(
+    State(state): State<IssuanceState>,
+    Path(token): Path<String>,
+) -> Result<Response, CanvasManagementHttpError> {
+    let configuration = canvas_management(&state)?
+        .public_registration_config(&token)
+        .await?;
+    let mut response = Json(configuration).into_response();
+    response.headers_mut().insert(
+        http_header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 fn canvas_management(

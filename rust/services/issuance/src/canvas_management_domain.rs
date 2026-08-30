@@ -20,6 +20,7 @@ const ENABLED_INTENT: &str = "enabled_intent";
 const LTI_CAPABILITY_INTENT: &str = "lti_capability_intent";
 const LTI_CONFIG_TOKEN_HASH: &str = "lti_config_token_hash";
 const LTI_CONFIG_TOKEN_STATUS: &str = "lti_config_token_status";
+const LTI_CONFIG_TOKEN_ISSUED_AT: &str = "lti_config_token_issued_at";
 const LTI_CONFIG_TOKEN_REVOKED_AT: &str = "lti_config_token_revoked_at";
 const OAUTH_STATUS: &str = "oauth_status";
 const OAUTH_PENDING_AUTHORIZATION_ID: &str = "oauth_pending_authorization_id";
@@ -241,13 +242,7 @@ impl CanvasPlatformRecord {
         self.enabled = false;
         self.archived_at = Some(now);
         self.registration_status = "archived".to_owned();
-        self.connection_config.remove(LTI_CONFIG_TOKEN_HASH);
-        self.connection_config
-            .insert(LTI_CONFIG_TOKEN_STATUS.to_owned(), json!("revoked"));
-        self.connection_config.insert(
-            LTI_CONFIG_TOKEN_REVOKED_AT.to_owned(),
-            json!(now.to_rfc3339()),
-        );
+        self.revoke_lti_config_token(now);
         self.apply_archival_oauth_state(oauth_connection_exists);
         self.updated_at = now;
         Ok(true)
@@ -282,6 +277,46 @@ impl CanvasPlatformRecord {
             self.updated_at = now;
         }
         changed
+    }
+
+    pub fn issue_lti_config_token(&mut self, token_hash: String, now: DateTime<Utc>) {
+        self.connection_config
+            .insert(LTI_CONFIG_TOKEN_HASH.to_owned(), json!(token_hash));
+        self.connection_config
+            .insert(LTI_CONFIG_TOKEN_STATUS.to_owned(), json!("active"));
+        self.connection_config.insert(
+            LTI_CONFIG_TOKEN_ISSUED_AT.to_owned(),
+            json!(now.to_rfc3339()),
+        );
+        self.connection_config.remove(LTI_CONFIG_TOKEN_REVOKED_AT);
+        self.updated_at = now;
+    }
+
+    pub fn revoke_lti_config_token(&mut self, now: DateTime<Utc>) {
+        self.connection_config.remove(LTI_CONFIG_TOKEN_HASH);
+        self.connection_config
+            .insert(LTI_CONFIG_TOKEN_STATUS.to_owned(), json!("revoked"));
+        self.connection_config.insert(
+            LTI_CONFIG_TOKEN_REVOKED_AT.to_owned(),
+            json!(now.to_rfc3339()),
+        );
+        self.updated_at = now;
+    }
+
+    #[must_use]
+    pub fn active_lti_config_token_hash(&self) -> Option<&str> {
+        (self
+            .connection_config
+            .get(LTI_CONFIG_TOKEN_STATUS)
+            .and_then(Value::as_str)
+            == Some("active"))
+        .then(|| {
+            self.connection_config
+                .get(LTI_CONFIG_TOKEN_HASH)
+                .and_then(Value::as_str)
+        })
+        .flatten()
+        .filter(|value| !value.is_empty())
     }
 
     fn apply_archival_oauth_state(&mut self, oauth_connection_exists: bool) {
@@ -535,6 +570,34 @@ mod tests {
             json!("revocation_pending")
         );
         assert!(!platform.synchronize_archived_oauth_state(true, now(3)));
+        assert_eq!(platform.updated_at, now(2));
+    }
+
+    #[test]
+    fn registration_token_lifecycle_retains_only_the_active_digest() {
+        let mut platform = CanvasPlatformRecord::new_draft(
+            "org-1".to_owned(),
+            request("https://canvas.example", false),
+            hosted("https://canvas.example"),
+            now(0),
+        )
+        .unwrap();
+        platform.issue_lti_config_token("a".repeat(64), now(1));
+        assert_eq!(
+            platform.active_lti_config_token_hash(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(platform.updated_at, now(1));
+        assert!(!platform
+            .connection_config
+            .contains_key(LTI_CONFIG_TOKEN_REVOKED_AT));
+
+        platform.revoke_lti_config_token(now(2));
+        assert!(platform.active_lti_config_token_hash().is_none());
+        assert_eq!(
+            platform.connection_config[LTI_CONFIG_TOKEN_STATUS],
+            json!("revoked")
+        );
         assert_eq!(platform.updated_at, now(2));
     }
 }

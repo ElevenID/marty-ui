@@ -63,6 +63,32 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         repository.create_platform(&platform).await,
         Err(CanvasManagementRepositoryError::Duplicate)
     );
+    let mut registration_platform = platform.clone();
+    registration_platform
+        .issue_lti_config_token("a".repeat(64), now + chrono::Duration::seconds(1));
+    let registration_platform = repository
+        .save_registration_state(&registration_platform, 1, platform.updated_at)
+        .await
+        .unwrap()
+        .expect("registration state CAS");
+    assert_eq!(
+        registration_platform.active_lti_config_token_hash(),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(
+        repository
+            .public_platform(&platform.id)
+            .await
+            .unwrap()
+            .expect("public token lookup")
+            .active_lti_config_token_hash(),
+        registration_platform.active_lti_config_token_hash()
+    );
+    assert!(repository
+        .save_registration_state(&registration_platform, 1, platform.updated_at)
+        .await
+        .unwrap()
+        .is_none());
     assert!(repository
         .active_platform("org-foreign", &platform.id)
         .await

@@ -56,6 +56,16 @@ const GET_PLATFORM_FOR_ARCHIVAL: &str = "SELECT id, organization_id, canvas_acco
  FROM issuance_service.canvas_platforms
  WHERE organization_id = $1 AND id = $2";
 
+const GET_PUBLIC_PLATFORM: &str = "SELECT id, organization_id, canvas_account_id,
+    display_name, canvas_base_url, lti_client_id, lti_deployment_id,
+    lti_trust_profile, lti_issuer, lti_jwks_url, lti_jwks_json,
+    lti_jwks_fetched_at, lti_jwks_expires_at, lti_openid_configuration,
+    registration_status, connection_config, capability_snapshot,
+    last_validated_at, last_connection_error, config_version, archived_at,
+    enabled, created_at, updated_at
+ FROM issuance_service.canvas_platforms
+ WHERE id = $1";
+
 const LOCK_PLATFORM_FOR_ARCHIVAL: &str = "SELECT id, organization_id, canvas_account_id,
     display_name, canvas_base_url, lti_client_id, lti_deployment_id,
     lti_trust_profile, lti_issuer, lti_jwks_url, lti_jwks_json,
@@ -165,6 +175,18 @@ const PERSIST_PLATFORM_ARCHIVE: &str = "UPDATE issuance_service.canvas_platforms
      last_connection_error, config_version, archived_at, enabled, created_at,
      updated_at";
 
+const PERSIST_REGISTRATION_STATE: &str = "UPDATE issuance_service.canvas_platforms
+ SET connection_config = $5, updated_at = $6
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND archived_at IS NULL
+ RETURNING id, organization_id, canvas_account_id, display_name,
+     canvas_base_url, lti_client_id, lti_deployment_id, lti_trust_profile,
+     lti_issuer, lti_jwks_url, lti_jwks_json, lti_jwks_fetched_at,
+     lti_jwks_expires_at, lti_openid_configuration, registration_status,
+     connection_config, capability_snapshot, last_validated_at,
+     last_connection_error, config_version, archived_at, enabled, created_at,
+     updated_at";
+
 const ARCHIVE_PLATFORM_BINDINGS: &str = "UPDATE issuance_service.canvas_program_bindings
  SET enabled = false, archived_at = $3, updated_at = $3
  WHERE organization_id = $1 AND platform_id = $2 AND archived_at IS NULL";
@@ -241,6 +263,19 @@ impl PostgresCanvasManagementRepository {
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
         sqlx::query(GET_PLATFORM_FOR_ARCHIVAL)
             .bind(organization_id)
+            .bind(platform_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(platform_from_row)
+            .transpose()
+    }
+
+    pub async fn public_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        sqlx::query(GET_PUBLIC_PLATFORM)
             .bind(platform_id)
             .fetch_optional(&self.pool)
             .await
@@ -394,6 +429,26 @@ impl PostgresCanvasManagementRepository {
         transaction.commit().await.map_err(repository_error)?;
         platform_from_row(row).map(Some)
     }
+
+    pub async fn save_registration_state(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        sqlx::query(PERSIST_REGISTRATION_STATE)
+            .bind(&platform.organization_id)
+            .bind(&platform.id)
+            .bind(version_i32(expected_config_version)?)
+            .bind(expected_updated_at)
+            .bind(Value::Object(platform.connection_config.clone()))
+            .bind(platform.updated_at)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(platform_from_row)
+            .transpose()
+    }
 }
 
 #[async_trait::async_trait]
@@ -419,6 +474,13 @@ impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
         organization_id: &str,
     ) -> Result<Vec<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
         PostgresCanvasManagementRepository::list_active_platforms(self, organization_id).await
+    }
+
+    async fn public_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::public_platform(self, platform_id).await
     }
 
     async fn platform_for_archival(
@@ -462,6 +524,21 @@ impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
             platform_id,
             expected_config_version,
             now,
+        )
+        .await
+    }
+
+    async fn save_registration_state(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::save_registration_state(
+            self,
+            platform,
+            expected_config_version,
+            expected_updated_at,
         )
         .await
     }
@@ -633,6 +710,10 @@ mod tests {
         assert!(ARCHIVE_PLATFORM_BINDINGS.contains("organization_id = $1"));
         assert!(ARCHIVE_PLATFORM_BINDINGS.contains("platform_id = $2"));
         assert!(ARCHIVE_PLATFORM_BINDINGS.contains("archived_at IS NULL"));
+        assert!(GET_PUBLIC_PLATFORM.contains("WHERE id = $1"));
+        assert!(PERSIST_REGISTRATION_STATE.contains("config_version = $3"));
+        assert!(PERSIST_REGISTRATION_STATE.contains("updated_at = $4"));
+        assert!(PERSIST_REGISTRATION_STATE.contains("archived_at IS NULL"));
     }
 
     #[test]

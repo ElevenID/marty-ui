@@ -81,6 +81,19 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
             .collect())
     }
 
+    async fn public_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        Ok(self
+            .platforms
+            .lock()
+            .expect("platforms")
+            .iter()
+            .find(|platform| platform.id == platform_id)
+            .cloned())
+    }
+
     async fn platform_for_archival(
         &self,
         organization_id: &str,
@@ -144,6 +157,27 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         platform.synchronize_archived_oauth_state(false, now);
         Ok(Some(platform.clone()))
     }
+
+    async fn save_registration_state(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        let mut platforms = self.platforms.lock().expect("platforms");
+        let Some(existing) = platforms.iter_mut().find(|candidate| {
+            candidate.organization_id == platform.organization_id
+                && candidate.id == platform.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == expected_config_version
+                && candidate.updated_at == expected_updated_at
+        }) else {
+            return Ok(None);
+        };
+        existing.connection_config = platform.connection_config.clone();
+        existing.updated_at = platform.updated_at;
+        Ok(Some(existing.clone()))
+    }
 }
 
 fn app(repository: Arc<MemoryRepository>) -> axum::Router {
@@ -154,6 +188,7 @@ fn app(repository: Arc<MemoryRepository>) -> axum::Router {
         repository,
         Some("management-key"),
         CanvasOriginPolicy::default(),
+        "https://issuer.example.edu",
     ));
     router_with_canvas_management(
         runtime.state(),
@@ -494,4 +529,140 @@ async fn platform_delete_reports_the_frozen_oauth_queue_conflict() {
     assert!(repository.platforms.lock().expect("platforms")[0]
         .archived_at
         .is_none());
+}
+
+#[tokio::test]
+async fn registration_config_rotates_digest_only_tokens_and_public_lookup_is_no_store() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/platforms"),
+            platform_request("Portable registration", "client-1"),
+        ))
+        .await
+        .expect("response");
+    let platform_id = response_json(created).await["id"]
+        .as_str()
+        .expect("platform ID")
+        .to_owned();
+
+    let mut issued_tokens = Vec::new();
+    for _ in 0..2 {
+        let registration = app
+            .clone()
+            .oneshot(
+                Request::get(format!(
+                    "/v1/integrations/canvas/platforms/{platform_id}/registration-config"
+                ))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(registration.status(), StatusCode::OK);
+        let registration = response_json(registration).await;
+        assert_eq!(registration["platform_id"], platform_id);
+        assert_eq!(
+            registration["developer_key_configuration"]["target_link_uri"],
+            format!(
+                "https://issuer.example.edu/v1/integrations/canvas/lti/platforms/{platform_id}/experience"
+            )
+        );
+        assert_eq!(
+            registration["developer_key_configuration"]["scopes"],
+            json!([
+                "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly",
+                "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
+                "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
+            ])
+        );
+        let config_url = registration["installation"]["config_url"]
+            .as_str()
+            .expect("config URL");
+        issued_tokens.push(
+            config_url
+                .rsplit('/')
+                .next()
+                .expect("config token")
+                .to_owned(),
+        );
+    }
+    assert_ne!(issued_tokens[0], issued_tokens[1]);
+    let persisted = repository.platforms.lock().expect("platforms")[0].clone();
+    let digest = persisted.connection_config["lti_config_token_hash"]
+        .as_str()
+        .expect("token digest");
+    assert_eq!(digest.len(), 64);
+    assert!(!serde_json::to_string(&persisted.connection_config)
+        .expect("connection config JSON")
+        .contains(&issued_tokens[1]));
+    assert_eq!(
+        persisted.connection_config["lti_config_token_status"],
+        "active"
+    );
+
+    let retired = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/lti/config/{}",
+                issued_tokens[0]
+            ))
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(retired.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(retired).await,
+        json!({"detail": "Canvas LTI configuration not found"})
+    );
+
+    let public = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/lti/config/{}",
+                issued_tokens[1]
+            ))
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(public.headers()["cache-control"], "no-store");
+    let public = response_json(public).await;
+    assert_eq!(public["tool_id"], "marty-portable-canvas-v1");
+    assert!(public.get("installation").is_none());
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/v1/integrations/canvas/platforms/{platform_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let revoked = app
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/lti/config/{}",
+                issued_tokens[1]
+            ))
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
 }

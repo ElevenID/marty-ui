@@ -13,7 +13,10 @@ use serde_json::{json, Map, Value};
 use crate::{
     canvas_management::CanvasPlatformRequest,
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
-    canvas_management_service::{CanvasPlatformManagementError, CanvasPlatformManagementService},
+    canvas_management_service::{
+        CanvasLtiRegistrationResponse, CanvasPlatformManagementError,
+        CanvasPlatformManagementService,
+    },
     transaction_reads::TransactionReadError,
 };
 
@@ -130,6 +133,31 @@ impl CanvasPlatformManagementHttpService {
                 header(headers, "X-API-Key"),
                 header(headers, "X-Organization-ID"),
             )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn registration_config(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+    ) -> Result<CanvasLtiRegistrationResponse, CanvasManagementHttpError> {
+        self.management
+            .registration_config(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn public_registration_config(
+        &self,
+        token: &str,
+    ) -> Result<Value, CanvasManagementHttpError> {
+        self.management
+            .public_registration_config(token)
             .await
             .map_err(Into::into)
     }
@@ -475,6 +503,10 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
         CanvasPlatformManagementError::PlatformNotFound => (
             StatusCode::NOT_FOUND,
             "Canvas platform not found".to_owned(),
+        ),
+        CanvasPlatformManagementError::LtiConfigurationNotFound => (
+            StatusCode::NOT_FOUND,
+            "Canvas LTI configuration not found".to_owned(),
         ),
         CanvasPlatformManagementError::ConfigurationChanged => (
             StatusCode::CONFLICT,

@@ -192,6 +192,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
                 self_managed_origin_allowlist: config.canvas_self_managed_origins.clone(),
             },
+            &config.issuer_base_url,
         ));
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),

@@ -3,7 +3,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
+use mmf_security::constant_time_secret_eq;
+use rand::RngCore;
+use serde::Serialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
@@ -37,6 +43,8 @@ pub enum CanvasPlatformManagementError {
     Domain(#[from] CanvasManagementDomainError),
     #[error("Canvas platform not found")]
     PlatformNotFound,
+    #[error("Canvas LTI configuration not found")]
+    LtiConfigurationNotFound,
     #[error("Canvas platform configuration changed; retry the request")]
     ConfigurationChanged,
     #[error("Canvas platform configuration changed; retry platform archival")]
@@ -67,6 +75,11 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         organization_id: &str,
     ) -> Result<Vec<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
 
+    async fn public_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
     async fn platform_for_archival(
         &self,
         organization_id: &str,
@@ -87,6 +100,20 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_config_version: i64,
         now: DateTime<Utc>,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
+    async fn save_registration_state(
+        &self,
+        platform: &CanvasPlatformRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasLtiRegistrationResponse {
+    pub platform_id: String,
+    pub developer_key_configuration: Value,
+    pub installation: Value,
 }
 
 #[derive(Clone)]
@@ -94,6 +121,7 @@ pub struct CanvasPlatformManagementService {
     repository: Arc<dyn CanvasPlatformManagementRepository>,
     security: ManagementSecurity,
     origin_policy: CanvasOriginPolicy,
+    issuer_base_url: String,
 }
 
 impl std::fmt::Debug for CanvasPlatformManagementService {
@@ -102,6 +130,7 @@ impl std::fmt::Debug for CanvasPlatformManagementService {
             .debug_struct("CanvasPlatformManagementService")
             .field("security", &self.security)
             .field("origin_policy", &self.origin_policy)
+            .field("issuer_base_url", &self.issuer_base_url)
             .finish_non_exhaustive()
     }
 }
@@ -112,11 +141,13 @@ impl CanvasPlatformManagementService {
         repository: Arc<dyn CanvasPlatformManagementRepository>,
         management_api_key: Option<&str>,
         origin_policy: CanvasOriginPolicy,
+        issuer_base_url: &str,
     ) -> Self {
         Self {
             repository,
             security: ManagementSecurity::new(management_api_key),
             origin_policy,
+            issuer_base_url: issuer_base_url.trim_end_matches('/').to_owned(),
         }
     }
 
@@ -227,6 +258,138 @@ impl CanvasPlatformManagementService {
         Ok(())
     }
 
+    pub async fn registration_config(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasLtiRegistrationResponse, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let mut platform = self
+            .repository
+            .active_platform(organization_id, platform_id)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::PlatformNotFound)?;
+        let expected_config_version = platform.config_version;
+        let expected_updated_at = platform.updated_at;
+        let token = issue_config_token(&platform.id);
+        platform.issue_lti_config_token(token_hash(&token), Utc::now());
+        let platform = self
+            .repository
+            .save_registration_state(&platform, expected_config_version, expected_updated_at)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(self.registration_response(&platform, Some(&token)))
+    }
+
+    pub async fn public_registration_config(
+        &self,
+        token: &str,
+    ) -> Result<Value, CanvasPlatformManagementError> {
+        let platform_id = platform_id_from_config_token(token)
+            .ok_or(CanvasPlatformManagementError::LtiConfigurationNotFound)?;
+        let platform = self
+            .repository
+            .public_platform(&platform_id)
+            .await
+            .map_err(map_repository_error)?
+            .filter(|platform| platform.archived_at.is_none())
+            .ok_or(CanvasPlatformManagementError::LtiConfigurationNotFound)?;
+        let expected = platform
+            .active_lti_config_token_hash()
+            .ok_or(CanvasPlatformManagementError::LtiConfigurationNotFound)?;
+        let actual = token_hash(token);
+        if !constant_time_secret_eq(expected.as_bytes(), actual.as_bytes()) {
+            return Err(CanvasPlatformManagementError::LtiConfigurationNotFound);
+        }
+        Ok(self
+            .registration_response(&platform, None)
+            .developer_key_configuration)
+    }
+
+    fn registration_response(
+        &self,
+        platform: &CanvasPlatformRecord,
+        config_token: Option<&str>,
+    ) -> CanvasLtiRegistrationResponse {
+        let launch_url = format!(
+            "{}/v1/integrations/canvas/lti/platforms/{}/experience",
+            self.issuer_base_url, platform.id
+        );
+        let login_url = format!(
+            "{}/v1/integrations/canvas/lti/platforms/{}/experience-login",
+            self.issuer_base_url, platform.id
+        );
+        let jwks_url = format!("{}/v1/integrations/canvas/lti/jwks", self.issuer_base_url);
+        let capability_intent = platform
+            .connection_config
+            .get("lti_capability_intent")
+            .and_then(Value::as_array);
+        let has_capability = |expected: &str| {
+            capability_intent
+                .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(expected)))
+        };
+        let mut scopes = Vec::new();
+        if has_capability("ags") {
+            scopes.push(json!(
+                "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly"
+            ));
+            scopes.push(json!(
+                "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly"
+            ));
+        }
+        if has_capability("nrps") {
+            scopes.push(json!(
+                "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
+            ));
+        }
+        let developer_key_configuration = json!({
+            "tool_id": "marty-portable-canvas-v1",
+            "title": "Marty Portable Credentials",
+            "description": "Issue externally signed Open Badges from authorized Canvas learning evidence.",
+            "target_link_uri": launch_url,
+            "oidc_initiation_url": login_url,
+            "public_jwk_url": jwks_url,
+            "custom_fields": {
+                "canvas_user_id": "$Canvas.user.id",
+                "canvas_course_id": "$Canvas.course.id",
+                "canvas_account_id": "$Canvas.account.id",
+                "canvas_assignment_id": "$Canvas.assignment.id",
+            },
+            "scopes": scopes,
+            "extensions": [{
+                "platform": "canvas.instructure.com",
+                "privacy_level": "public",
+                "settings": {"placements": [
+                    {"placement": "course_navigation", "message_type": "LtiResourceLinkRequest", "target_link_uri": launch_url},
+                    {"placement": "assignment_selection", "message_type": "LtiDeepLinkingRequest", "target_link_uri": launch_url},
+                ]},
+            }],
+        });
+        let mut installation = serde_json::Map::from_iter([
+            ("method".to_owned(), json!("institution_admin_lti_1_3")),
+            ("login_url".to_owned(), json!(login_url)),
+            ("launch_url".to_owned(), json!(launch_url)),
+            ("jwks_url".to_owned(), json!(jwks_url)),
+        ]);
+        if let Some(config_token) = config_token {
+            installation.insert(
+                "config_url".to_owned(),
+                json!(format!(
+                    "{}/v1/integrations/canvas/lti/config/{config_token}",
+                    self.issuer_base_url
+                )),
+            );
+        }
+        CanvasLtiRegistrationResponse {
+            platform_id: platform.id.clone(),
+            developer_key_configuration,
+            installation: Value::Object(installation),
+        }
+    }
+
     fn authorize<'organization>(
         &self,
         api_key: Option<&str>,
@@ -262,6 +425,31 @@ impl CanvasPlatformManagementService {
             .require_organization(Some(trusted), claimed, true)?;
         Ok(trusted)
     }
+}
+
+fn issue_config_token(platform_id: &str) -> String {
+    let mut secret = [0_u8; 32];
+    rand::rng().fill_bytes(&mut secret);
+    format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(platform_id.as_bytes()),
+        URL_SAFE_NO_PAD.encode(secret)
+    )
+}
+
+fn platform_id_from_config_token(token: &str) -> Option<String> {
+    let (prefix, secret) = token.split_once('.')?;
+    if prefix.is_empty() || secret.is_empty() {
+        return None;
+    }
+    String::from_utf8(URL_SAFE_NO_PAD.decode(prefix).ok()?)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn token_hash(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
 }
 
 fn map_repository_error(error: CanvasManagementRepositoryError) -> CanvasPlatformManagementError {
@@ -359,6 +547,19 @@ mod tests {
                 .collect())
         }
 
+        async fn public_platform(
+            &self,
+            platform_id: &str,
+        ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+            Ok(self
+                .platforms
+                .lock()
+                .await
+                .iter()
+                .find(|platform| platform.id == platform_id)
+                .cloned())
+        }
+
         async fn platform_for_archival(
             &self,
             organization_id: &str,
@@ -425,6 +626,27 @@ mod tests {
             platform.synchronize_archived_oauth_state(false, now);
             Ok(Some(platform.clone()))
         }
+
+        async fn save_registration_state(
+            &self,
+            platform: &CanvasPlatformRecord,
+            expected_config_version: i64,
+            expected_updated_at: DateTime<Utc>,
+        ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+            let mut platforms = self.platforms.lock().await;
+            let Some(existing) = platforms.iter_mut().find(|candidate| {
+                candidate.organization_id == platform.organization_id
+                    && candidate.id == platform.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == expected_config_version
+                    && candidate.updated_at == expected_updated_at
+            }) else {
+                return Ok(None);
+            };
+            existing.connection_config = platform.connection_config.clone();
+            existing.updated_at = platform.updated_at;
+            Ok(Some(existing.clone()))
+        }
     }
 
     fn request(name: &str, enabled: bool) -> CanvasPlatformRequest {
@@ -442,6 +664,7 @@ mod tests {
             repository,
             Some("management-secret"),
             CanvasOriginPolicy::default(),
+            "https://issuer.example.edu",
         )
     }
 
