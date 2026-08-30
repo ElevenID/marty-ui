@@ -349,29 +349,14 @@ pub fn evaluate_canvas_guard_snapshot(
         }
     }
 
-    let request = json!({
-        "app": {
-            "id": text(application.get("id")),
-            "organization_id": text(application.get("organization_id")),
-            "status": text(application.get("status")),
-        },
-        "template": {
-            "approval_policy_set_id": optional_text(template.get("approval_policy_set_id")),
-        },
-        "binding": {
-            "approval_policy_set_id": optional_text(binding.get("approval_policy_set_id")),
-            "auto_approve_on_evidence": binding.get("auto_approve_on_evidence").and_then(Value::as_bool).unwrap_or(false),
-        },
-        "requirements": requirements,
-        "facts": snapshot.evidence_facts.iter().map(policy_fact_payload).collect::<Vec<_>>(),
-        "policy_set": snapshot.policy_set,
-    });
-    let decision = marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
-        &request.to_string(),
-    )
-    .map_err(|_| "current_evidence_policy_denied")?;
-    let decision: Value =
-        serde_json::from_str(&decision).map_err(|_| "current_evidence_policy_denied")?;
+    let decision = evaluate_canvas_evidence_policy(
+        application,
+        Some(template),
+        Some(binding),
+        &requirements,
+        &snapshot.evidence_facts,
+        snapshot.policy_set.as_ref(),
+    )?;
     if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
         return Err("current_evidence_policy_denied");
     }
@@ -427,7 +412,7 @@ fn canvas_resources_active(platform: &Map<String, Value>, binding: &Map<String, 
             .is_some_and(|value| !value.is_null())
 }
 
-fn binding_readiness_is_current(
+pub(crate) fn binding_readiness_is_current(
     binding: &Map<String, Value>,
     max_age: Duration,
     now: DateTime<Utc>,
@@ -649,7 +634,9 @@ fn first_text(values: &[Option<&Value>]) -> String {
         .unwrap_or_default()
 }
 
-fn validated_requirements(binding: &Map<String, Value>) -> Result<Vec<Value>, &'static str> {
+pub(crate) fn validated_requirements(
+    binding: &Map<String, Value>,
+) -> Result<Vec<Value>, &'static str> {
     let requirements = binding
         .get("evidence_requirements")
         .and_then(Value::as_array)
@@ -770,6 +757,41 @@ fn validated_requirements(binding: &Map<String, Value>) -> Result<Vec<Value>, &'
     Ok(normalized)
 }
 
+pub(crate) fn evaluate_canvas_evidence_policy(
+    application: &Map<String, Value>,
+    template: Option<&Map<String, Value>>,
+    binding: Option<&Map<String, Value>>,
+    requirements: &[Value],
+    facts: &[Value],
+    policy_set: Option<&Value>,
+) -> Result<Value, &'static str> {
+    let request = json!({
+        "app": {
+            "id": text(application.get("id")),
+            "organization_id": text(application.get("organization_id")),
+            "status": text(application.get("status")),
+        },
+        "template": template.map(|template| json!({
+            "approval_policy_set_id": optional_text(template.get("approval_policy_set_id")),
+        })),
+        "binding": binding.map(|binding| json!({
+            "approval_policy_set_id": optional_text(binding.get("approval_policy_set_id")),
+            "auto_approve_on_evidence": binding
+                .get("auto_approve_on_evidence")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })),
+        "requirements": requirements,
+        "facts": facts.iter().map(policy_fact_payload).collect::<Vec<_>>(),
+        "policy_set": policy_set,
+    });
+    let decision = marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
+        &request.to_string(),
+    )
+    .map_err(|_| "current_evidence_policy_denied")?;
+    serde_json::from_str(&decision).map_err(|_| "current_evidence_policy_denied")
+}
+
 fn fact_matches(
     fact: &Value,
     requirement: &Value,
@@ -827,7 +849,7 @@ fn fact_is_verified_and_fresh(fact: &Value, now: DateTime<Utc>, max_age: Duratio
     age >= 0 && u64::try_from(age).is_ok_and(|age| age <= max_age.as_secs())
 }
 
-fn policy_fact_payload(fact: &Value) -> Value {
+pub(crate) fn policy_fact_payload(fact: &Value) -> Value {
     json!({
         "id": fact.get("id"),
         "logical_key": fact.get("logical_key"),
