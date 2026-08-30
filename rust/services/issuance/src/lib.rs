@@ -44,6 +44,7 @@ pub mod credential_postgres;
 pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod http;
+pub mod initiation;
 pub mod integration_secret;
 pub mod management_security;
 pub mod proof_nonce;
