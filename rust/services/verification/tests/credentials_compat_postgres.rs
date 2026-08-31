@@ -1,13 +1,19 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use marty_verification::verification::VerificationProcessingStatus;
 use marty_verification_service::credentials_compat::{
-    migrate_session_schema, ClaimState, EvidenceFailureReason, GovernanceEngine, GovernancePurpose,
-    PersistedEvidence, PostgresSessionRepository, ProcessingLease, ProcessingToken, SessionDraft,
-    SessionDurationSeconds, SessionRepository, SessionStatus, Sha256Digest, TerminalDecision,
-    VerificationMethod, VerifierNonce,
+    migrate_session_schema, AdapterFacts, ClaimState, CompatibilityUseCases, CreateSessionRequest,
+    CredentialStatus, CredentialVerificationKernel, CredentialsCompatibilityService,
+    EvidenceFailureReason, GovernanceEngine, GovernancePurpose, IssuerKeyRequest,
+    IssuerKeyResolver, IssuerResolutionError, PersistedEvidence, PostgresSessionRepository,
+    PresentationDefinition, ProcessingLease, ProcessingToken, ResolvedIssuerKey, SessionDraft,
+    SessionDurationSeconds, SessionRepository, SessionStatus, Sha256Digest,
+    SubmitPresentationRequest, TerminalDecision, VerificationMethod, VerifierNonce,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Row};
 
 fn draft(id: &str, nonce_character: char) -> SessionDraft {
@@ -33,6 +39,58 @@ fn draft(id: &str, nonce_character: char) -> SessionDraft {
 
 fn token(value: &str) -> ProcessingToken {
     ProcessingToken::parse(value).unwrap()
+}
+
+struct PassingKernel;
+
+#[async_trait]
+impl CredentialVerificationKernel for PassingKernel {
+    async fn verify_jwt_vp(&self, _: &str, _: &str, _: Option<&str>) -> AdapterFacts {
+        passing_facts()
+    }
+
+    async fn verify_structured_presentation(
+        &self,
+        _: &Map<String, Value>,
+        _: &PresentationDefinition,
+        _: &str,
+        _: &marty_verification_service::credentials_compat::GovernanceSnapshot,
+        _: &dyn IssuerKeyResolver,
+    ) -> AdapterFacts {
+        passing_facts()
+    }
+
+    async fn verify_vds_nc(&self, _: &str, _: &Value) -> AdapterFacts {
+        passing_facts()
+    }
+}
+
+fn passing_facts() -> AdapterFacts {
+    AdapterFacts {
+        processing_status: VerificationProcessingStatus::Completed,
+        presentation_structure_valid: Some(true),
+        presentation_proof_valid: Some(true),
+        credential_proofs_valid: Some(true),
+        trust_chain_valid: Some(true),
+        holder_binding_valid: Some(true),
+        transaction_binding_valid: Some(true),
+        presentation_constraints_valid: Some(true),
+        revocation_checked: Some(true),
+        revocation_status: Some(CredentialStatus::Valid),
+    }
+}
+
+struct UnusedResolver;
+
+#[async_trait]
+impl IssuerKeyResolver for UnusedResolver {
+    async fn resolve(
+        &self,
+        _: &marty_verification_service::credentials_compat::GovernanceSnapshot,
+        _: IssuerKeyRequest<'_>,
+    ) -> Result<ResolvedIssuerKey, IssuerResolutionError> {
+        Err(IssuerResolutionError::Unavailable)
+    }
 }
 
 #[tokio::test]
@@ -138,6 +196,63 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
     let repository = PostgresSessionRepository::new(pool.clone());
     let lifetime = SessionDurationSeconds::new(600).unwrap();
     let lease = ProcessingLease::from_seconds(60).unwrap();
+
+    let fixture: Value =
+        serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+    let governance_engine = GovernanceEngine::new(&fixture["governance"].to_string()).unwrap();
+    let application = CredentialsCompatibilityService::new(
+        Arc::new(repository.clone()),
+        Arc::new(PassingKernel),
+        Arc::new(UnusedResolver),
+        governance_engine.clone(),
+        lease,
+    );
+    let creation_governance = governance_engine
+        .authorize("purpose-scoped-test-key", GovernancePurpose::SessionCreate)
+        .unwrap();
+    let created = application
+        .create_session(
+            CreateSessionRequest {
+                verifier_did: "did:web:verifier.example".into(),
+                presentation_definition: serde_json::from_value(fixture["definition"].clone())
+                    .unwrap(),
+                session_duration_seconds: lifetime,
+            },
+            creation_governance,
+        )
+        .await
+        .unwrap();
+    let passing_presentation = "header.payload.signature";
+    let verified = application
+        .submit_presentation(
+            &created.id,
+            SubmitPresentationRequest {
+                presentation: passing_presentation.into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(verified.is_valid());
+    assert_eq!(verified.decision(), "PASS");
+    assert!(application
+        .submit_presentation(
+            &created.id,
+            SubmitPresentationRequest {
+                presentation: passing_presentation.into(),
+            },
+        )
+        .await
+        .unwrap()
+        .is_valid());
+    assert!(application
+        .submit_presentation(
+            &created.id,
+            SubmitPresentationRequest {
+                presentation: "different.presentation.value".into(),
+            },
+        )
+        .await
+        .is_err());
 
     repository
         .create(draft("race-session", 'r'), lifetime)
