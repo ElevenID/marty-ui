@@ -28,31 +28,34 @@ aggregate beta-only update after this wave lands. Production is not in scope.
 The active `rust-issuance/canvas-management-v1` worktree is intentionally
 isolated from `main`. It contains the unmerged Canvas migration stack and is two
 commits behind current `origin/main`; it must be rebased, reviewed and landed
-through a clean PR after
-the remaining slices pass. The 31-route language-neutral Canvas management
-floor is `contracts/issuance-canvas-management.json`.
+through a clean PR after the remaining cutover gates pass. The 31-route
+language-neutral Canvas management floor is
+`contracts/issuance-canvas-management.json`.
 
 | Canvas management state | Routes | Current evidence / owner |
 |---|---:|---|
-| Implemented and committed on the active Rust branch | 28 | Platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, read-only Canvas Credentials provider validation, native application approval at `e00c25b0a`, and the tenant-bound evidence-event status read with its exact 16-field replay projection |
-| In progress in an isolated worktree | 3 | The default-disabled legacy evidence, AGS score and NRPS membership ingestion adapters; these remain one shared-kernel slice and are not yet counted as committed Rust coverage |
+| Implemented and committed on the active Rust branch | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. The final slice is commit `3bdc2d144` |
+| Awaiting upstream provenance and deployed-profile cutover | 31 | The implementation is complete locally, but native-coverage declarations, Gateway routing and beta composition remain deliberately unchanged until the evolved behavior contract is merged upstream and can be pinned by its real commit and content hash |
 
-Thus, 28 of 31 routes are committed locally, and only the three shared
-legacy-ingest adapters remain. The latest combined committed Canvas gate passed
-200 Rust library tests, 26 black-box Canvas HTTP tests, two contract tests,
-strict all-target Clippy, a disposable-PostgreSQL event-status contract, and
-the preserved Python oracle tests. The earlier provider-only checkpoint passed
-196 Rust library tests, 22 black-box tests and 90 focused Python tests.
-Counts describe local migration progress, not merged `main` coverage.
+Thus, all 31 routes are implemented and committed locally; this is not yet a
+merged or deployed native cutover. The final independent maintainer gate passed
+220 Rust library tests and every issuance integration target, including 27
+Canvas management HTTP tests, six service-level and four HTTP legacy-ingest
+behavior tests, strict all-target Clippy, and a fresh disposable-PostgreSQL
+contract covering replay, reservation, lifecycle repair and rollback. The
+unchanged 27-case Python Canvas Credentials adapter oracle also passed. Counts
+describe local migration progress, not merged `main` coverage.
 
 ### Remaining work in the active wave
 
-1. Freeze and port the three compatibility ingest routes through one shared
-   kernel, including signature, replay/idempotency, fail-closed default-disable,
-   evidence-policy and exact response behavior.
-2. Move only the receipt/persistence ownership used by those routes and run
-   disposable PostgreSQL, full Rust/Python differential, packaging, ownership,
-   security and demo gates. Keep the Python webhook handlers as the production
+1. Merge the evolved language-neutral Canvas behavior contract into its
+   owning `marty-credentials` repository, then record that actual upstream
+   commit and normalized content hash in `marty-ui`. Only after that provenance
+   exists may the 31-route native-coverage declaration, Gateway routing and
+   beta composition be enabled.
+2. Re-run the full Rust/Python differential, packaging, ownership, security and
+   demo gates after the cutover metadata is bound. Keep the Python webhook
+   handlers as the production
    and self-host parity oracle during this beta-only canary: those consumers
    still route to the Python issuance image, so deleting the handlers now would
    fail the no-feature-loss gate. Delete them immediately only after every
@@ -82,13 +85,14 @@ Counts describe local migration progress, not merged `main` coverage.
 
 ### Next implementation target
 
-Do not split the three ingest endpoints among independent implementations:
-they share signature verification, canonical event mapping, replay protection,
-evidence persistence and application-policy transitions. Treat them as one DRY
-Rust event-ingest kernel with three thin HTTP adapters. The evidence-event
-status read is now complete. The three adapters are the only remaining route
-surface and must land together with differential tests against the preserved
-Python oracle.
+The three ingest endpoints now share one DRY Rust event-ingest kernel for
+signature verification, canonical event mapping, replay protection, evidence
+persistence and application-policy transitions, with three thin HTTP adapters.
+The next implementation boundary is therefore not another route port: it is
+contract provenance, native routing/composition, whole-stack gates and the
+aggregate beta-only canary. Do not duplicate this kernel while wiring the
+consumers, and keep differential tests against the preserved Python oracle
+until the all-consumer deletion gate passes.
 
 The eventual deletion boundary is route-level, not file-level, until the whole
 issuance service is native. Python's large `canvas_routes.py` module also owns
