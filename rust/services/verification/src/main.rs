@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let migration = VerificationMigrationConfig::from_env()?;
         let pool = PgPoolOptions::new()
             .max_connections(2)
-            .connect(&migration.database_url)
+            .connect(migration.database_url())
             .await?;
         migrate_session_schema(&pool).await?;
         pool.close().await;

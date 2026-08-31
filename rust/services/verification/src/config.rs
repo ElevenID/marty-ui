@@ -51,9 +51,9 @@ pub struct IssuerResolverConfig {
     pub did_web_allowed_hosts: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct VerificationMigrationConfig {
-    pub database_url: String,
+    database_url: String,
 }
 
 impl VerificationMigrationConfig {
@@ -71,6 +71,20 @@ impl VerificationMigrationConfig {
             })
             .and_then(normalize_postgres_url)?;
         Ok(Self { database_url })
+    }
+
+    #[must_use]
+    pub fn database_url(&self) -> &str {
+        &self.database_url
+    }
+}
+
+impl fmt::Debug for VerificationMigrationConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerificationMigrationConfig")
+            .field("database_url", &"[CONFIGURED]")
+            .finish()
     }
 }
 
@@ -658,5 +672,21 @@ mod tests {
             values.push((name.into(), value.into()));
             assert!(VerificationServiceConfig::from_values(values).is_err());
         }
+    }
+
+    #[test]
+    fn migration_configuration_exposes_the_url_only_through_an_explicit_accessor() {
+        let config = VerificationMigrationConfig::from_values([(
+            "DATABASE_URL".into(),
+            "postgres://verification:secret@postgres/verification".into(),
+        )])
+        .unwrap();
+        assert_eq!(
+            config.database_url(),
+            "postgres://verification:secret@postgres/verification"
+        );
+        let debug = format!("{config:?}");
+        assert!(debug.contains("[CONFIGURED]"));
+        assert!(!debug.contains("verification:secret"));
     }
 }

@@ -1,3 +1,5 @@
+use std::{future::Future, time::Duration};
+
 use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
 use mmf_runtime::RuntimeState;
 use sqlx::PgPool;
@@ -7,8 +9,8 @@ use crate::VerificationServiceConfig;
 
 const COMPATIBILITY_DATABASE_UNAVAILABLE: &str =
     "compatibility PostgreSQL session store unavailable";
-const COMPATIBILITY_DATABASE_CHECK_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(5);
+const COMPATIBILITY_DATABASE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const COMPATIBILITY_DATABASE_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VerificationDependency {
@@ -147,10 +149,11 @@ impl VerificationRuntime {
     }
 
     async fn refresh_compatibility_database_health(&self, pool: &PgPool) -> Result<(), MmfError> {
-        if sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(pool)
-            .await
-            .is_ok()
+        if bounded_database_check(
+            sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool),
+            COMPATIBILITY_DATABASE_CHECK_TIMEOUT,
+        )
+        .await
         {
             self.mark_healthy(VerificationDependency::CompatibilityDatabase)
         } else {
@@ -174,6 +177,15 @@ impl VerificationRuntime {
     }
 }
 
+async fn bounded_database_check<F, T, E>(check: F, timeout: Duration) -> bool
+where
+    F: Future<Output = Result<T, E>>,
+{
+    tokio::time::timeout(timeout, check)
+        .await
+        .is_ok_and(|result| result.is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -186,6 +198,21 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn compatibility_database_checks_are_success_sensitive_and_bounded() {
+        assert!(bounded_database_check(async { Ok::<_, ()>(()) }, Duration::from_millis(10)).await);
+        assert!(
+            !bounded_database_check(async { Err::<(), _>(()) }, Duration::from_millis(10)).await
+        );
+        assert!(
+            !bounded_database_check(
+                std::future::pending::<Result<(), ()>>(),
+                Duration::from_millis(1),
+            )
+            .await
+        );
+    }
 
     fn config(credentials_compat_enabled: bool) -> VerificationServiceConfig {
         let fixture: serde_json::Value =
