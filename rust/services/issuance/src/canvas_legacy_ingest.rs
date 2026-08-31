@@ -1729,27 +1729,66 @@ fn apply_application_context(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let updates = json!({
-        "runtime_source": "program_binding",
-        "canvas_platform_id": binding.get("platform_id"),
-        "canvas_program_binding_id": binding.get("id"),
-        "deployment_profile_id": binding.get("deployment_profile_id"),
-        "feature_flags": binding.get("feature_flags").cloned().unwrap_or_else(|| json!({})),
-        "delivery_mode": delivery_mode,
-        "canvas_account_id": event.canvas_account_id,
-        "canvas_course_id": event.canvas_course_id,
-        "canvas_user_id": event.canvas_user_id,
-        "canvas_enrollment_id": event.canvas_enrollment_id,
-        "source_event_id": event.canvas_event_id,
-        "evidence_fact_id": fact_id,
-        "standard_source": kind.audit_source(),
-    });
-    canvas.extend(
-        updates
-            .as_object()
-            .expect("Canvas context update is an object")
-            .clone(),
-    );
+    canvas.extend(Map::from_iter([
+        (
+            "runtime_source".to_owned(),
+            Value::String("program_binding".to_owned()),
+        ),
+        (
+            "canvas_platform_id".to_owned(),
+            binding.get("platform_id").cloned().unwrap_or(Value::Null),
+        ),
+        (
+            "canvas_program_binding_id".to_owned(),
+            binding.get("id").cloned().unwrap_or(Value::Null),
+        ),
+        (
+            "deployment_profile_id".to_owned(),
+            binding
+                .get("deployment_profile_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "feature_flags".to_owned(),
+            binding
+                .get("feature_flags")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        ),
+        (
+            "delivery_mode".to_owned(),
+            Value::String(delivery_mode.clone()),
+        ),
+        (
+            "canvas_account_id".to_owned(),
+            Value::String(event.canvas_account_id.clone()),
+        ),
+        (
+            "canvas_course_id".to_owned(),
+            Value::String(event.canvas_course_id.clone()),
+        ),
+        (
+            "canvas_user_id".to_owned(),
+            Value::String(event.canvas_user_id.clone()),
+        ),
+        (
+            "canvas_enrollment_id".to_owned(),
+            Value::String(event.canvas_enrollment_id.clone()),
+        ),
+        (
+            "source_event_id".to_owned(),
+            Value::String(event.canvas_event_id.clone()),
+        ),
+        (
+            "evidence_fact_id".to_owned(),
+            Value::String(fact_id.to_owned()),
+        ),
+        (
+            "standard_source".to_owned(),
+            Value::String(kind.audit_source().to_owned()),
+        ),
+    ]));
     integration.insert("canvas".to_owned(), Value::Object(canvas));
     integration.insert("delivery_mode".to_owned(), Value::String(delivery_mode));
     integration.insert("delivery".to_owned(), Value::Object(delivery));
@@ -1779,9 +1818,7 @@ fn response_from_stored(
 
 fn timestamp_string(now: DateTime<Utc>) -> String {
     let micros = now.nanosecond() / 1_000;
-    let truncated = now
-        .with_nanosecond(micros * 1_000)
-        .expect("microsecond truncation is a valid timestamp");
+    let truncated = now.with_nanosecond(micros * 1_000).unwrap_or(now);
     truncated.to_rfc3339_opts(
         if micros == 0 {
             SecondsFormat::Secs

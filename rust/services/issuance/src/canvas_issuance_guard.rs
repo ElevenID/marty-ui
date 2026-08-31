@@ -268,15 +268,17 @@ pub fn evaluate_canvas_guard_snapshot(
     now: DateTime<Utc>,
 ) -> Result<(), &'static str> {
     let application = object(&snapshot.application, "canvas_transaction_context_mismatch")?;
-    let canvas = application
+    let Some(canvas) = application
         .get("integration_context")
         .and_then(Value::as_object)
         .and_then(|integration| integration.get("canvas"))
-        .and_then(Value::as_object);
-    if !canvas.is_some_and(has_canvas_marker) {
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    if !has_canvas_marker(canvas) {
         return Ok(());
     }
-    let canvas = canvas.expect("checked Canvas context");
     if !config.enabled
         || !config
             .pilot_organizations

@@ -697,8 +697,14 @@ impl CanvasOAuthService {
         } else {
             None
         };
-        if client_secret.is_none()
-            || platform.canvas_base_url.as_deref() != Some(&authorization.canvas_base_url)
+        let Some(client_secret) = client_secret else {
+            return self.callback_response(
+                Some(&platform.id),
+                "error",
+                Some("oauth_configuration_changed"),
+            );
+        };
+        if platform.canvas_base_url.as_deref() != Some(&authorization.canvas_base_url)
             || platform.config_version != authorization.platform_config_version
             || authorization.redirect_uri != self.redirect_uri
         {
@@ -725,7 +731,7 @@ impl CanvasOAuthService {
             .exchange(
                 &authorization.canvas_base_url,
                 &authorization.client_id,
-                client_secret.as_deref().expect("checked above"),
+                &client_secret,
                 code,
                 &authorization.redirect_uri,
             )

@@ -598,24 +598,22 @@ async fn apply_review_transition(
             )
             .await?;
         }
-    } else if changed && review.is_some() && !current_allowed {
-        let review_id: String = review
-            .as_ref()
-            .expect("checked review")
-            .try_get("id")
+    } else if changed && !current_allowed {
+        if let Some(review) = review.as_ref() {
+            let review_id: String = review.try_get("id").map_err(repository_error)?;
+            sqlx::query(
+                "UPDATE issuance_service.evidence_policy_reviews
+                 SET current_decision = $2, triggering_fact_id = $3,
+                     resolution_recovery_pending = false, updated_at = clock_timestamp()
+                 WHERE id = $1",
+            )
+            .bind(review_id)
+            .bind(current_decision)
+            .bind(text(fact.get("id")))
+            .execute(&mut **database)
+            .await
             .map_err(repository_error)?;
-        sqlx::query(
-            "UPDATE issuance_service.evidence_policy_reviews
-             SET current_decision = $2, triggering_fact_id = $3,
-                 resolution_recovery_pending = false, updated_at = clock_timestamp()
-             WHERE id = $1",
-        )
-        .bind(review_id)
-        .bind(current_decision)
-        .bind(text(fact.get("id")))
-        .execute(&mut **database)
-        .await
-        .map_err(repository_error)?;
+        }
     } else if let Some(review) = review.filter(|_| current_allowed) {
         let review_id: String = review.try_get("id").map_err(repository_error)?;
         let review_credential: String =
