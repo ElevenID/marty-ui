@@ -204,6 +204,9 @@ impl PersistedEvidence {
         verifier_did: &str,
         presentation_definition: &Value,
     ) -> Result<(), PersistedEvidenceError> {
+        if matches!(self.kind, EvidenceKind::FailClosed { .. }) {
+            return Ok(());
+        }
         let EvidenceKind::Pending {
             governance: pending_governance,
         } = &pending.kind
@@ -718,6 +721,16 @@ mod tests {
             ),
             Err(PersistedEvidenceError::AuthorityMismatch)
         );
+
+        let invalid_pending = PersistedEvidence::from_database(json!({}));
+        PersistedEvidence::fail_closed(&digest, EvidenceFailureReason::MissingGovernanceProvenance)
+            .validate_session_authority(
+                &invalid_pending,
+                "mismatched-organization",
+                "did:web:mismatched.example",
+                &json!({"malformed": true}),
+            )
+            .unwrap();
     }
 
     #[test]

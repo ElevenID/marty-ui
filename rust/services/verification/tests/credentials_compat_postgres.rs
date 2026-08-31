@@ -419,6 +419,63 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
     );
 
     repository
+        .create(draft("missing-provenance", 'p'), lifetime)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE public.verification_sessions
+         SET verification_evidence='{}', organization_id='legacy-org',
+             presentation_definition='{}'
+         WHERE id='missing-provenance'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let missing_digest = Sha256Digest::calculate("missing-provenance-presentation");
+    let missing_token = token("missing-provenance-token");
+    assert_eq!(
+        repository
+            .claim("missing-provenance", &missing_digest, &missing_token, lease,)
+            .await
+            .unwrap()
+            .state,
+        ClaimState::Claimed
+    );
+    assert_eq!(
+        repository
+            .finalize(
+                "missing-provenance",
+                &missing_digest,
+                &missing_token,
+                TerminalDecision::failed(
+                    PersistedEvidence::fail_closed(
+                        &missing_digest,
+                        EvidenceFailureReason::MissingGovernanceProvenance,
+                    ),
+                    Some(VerificationMethod::JwtVp),
+                    "Verification provenance unavailable".into(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+            .state,
+        ClaimState::Finalized
+    );
+    let missing_evidence: Value = sqlx::query_scalar(
+        "SELECT verification_evidence FROM public.verification_sessions
+         WHERE id='missing-provenance'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        missing_evidence["reason_code"],
+        "MISSING_GOVERNANCE_PROVENANCE"
+    );
+    assert!(missing_evidence.get("governance").is_none());
+
+    repository
         .create(draft("exact-deadline", 'x'), lifetime)
         .await
         .unwrap();
