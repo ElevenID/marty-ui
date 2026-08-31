@@ -306,10 +306,13 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     assert "grep -v '^migrations$' || true" not in workflow
 
 
-def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate_overlay() -> None:
+def test_corrected_verifier_artifact_retains_safe_parity_and_rollback_anchors() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
-    assert "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml" in workflow
+    assert (
+        "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml"
+        in workflow
+    )
     assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
 
     lock = json.loads(_text("release/stack-lock.json"))
@@ -318,10 +321,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.76"
-    assert integration["commit"] == "85f7d794b28079781e9455be5715e69b8995f9f4"
+    assert lock["release"] == "marty-ui@1.1.210"
+    assert integration["version"] == "1.2.75"
+    assert integration["commit"] == "60b58b0812b92319ab67129dca22cae733d916d4"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:2617792b8499f34d48605f8874567292c2f4c6c050f3d68c002a3f9a94c29c59"
+        "sha256:426a281c6c19fb0a61b1f0325b3d01cfb24d998df3509f6ef8ef73e8cbd7620e"
     )
 
     issuance = next(
@@ -329,10 +333,37 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.72"
-    assert issuance["commit"] == "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
+    assert issuance["version"] == "0.1.71"
+    assert issuance["commit"] == "94f19ad369e7e41883f2aa3d77656ce561bb6534"
     assert issuance["artifacts"][0]["digest"] == (
+        "sha256:3b396ef763f99179a4d6123cc30b8fabd2afaadb200a3d4e6cf1317489a61c5c"
+    )
+
+    serialized_lock = json.dumps(lock, sort_keys=True)
+    assert "1.1.209" not in serialized_lock
+    assert "1.1.211" not in serialized_lock
+    assert "1.1.212" not in serialized_lock
+    assert "1.2.76" not in serialized_lock
+    assert "1.2.77" not in serialized_lock
+    assert "1.2.78" not in serialized_lock
+    assert "0.1.72" not in serialized_lock
+    assert "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8" not in serialized_lock
+    assert "85f7d794b28079781e9455be5715e69b8995f9f4" not in serialized_lock
+    assert (
+        "sha256:c223ee06d86dc85bc960a22aec4328f1e22fb6f38124bc261d38c3c21c0ac995"
+        not in serialized_lock
+    )
+    assert (
+        "sha256:28f48e7ed885046ae753c1f4eea8855b8769cd166602741a8783cbc3dba64643"
+        not in serialized_lock
+    )
+    assert (
+        "sha256:2617792b8499f34d48605f8874567292c2f4c6c050f3d68c002a3f9a94c29c59"
+        not in serialized_lock
+    )
+    assert (
         "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
+        not in serialized_lock
     )
 
 
