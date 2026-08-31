@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three and the 31-route Rust Canvas management cutover are merged; verification-image consolidation, cleanup and aggregate beta acceptance remain active; production is unchanged
+**Status:** Waves one through three, the 31-route Rust Canvas cutover and the canonical Rust verification-image consolidation are merged; immutable verifier pinning, Python deletion, cleanup and aggregate beta acceptance remain active; production is unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -21,10 +21,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 Wave three's MMF replacement and ordered Rust service plane are complete. The
 follow-on 31-route Canvas management cutover merged through protected PR
 `ElevenID/marty-ui#717` at `a6b375bb0ecc649f30db7053ba34e3ac64a23998`.
-The latest prepared stack release remains `v1.1.207` at source commit
+The latest published stack release remains `v1.1.207` at source commit
 `256bcff55c738e2dd90dac303eb0354f90335611`; the next deployment is one
-aggregate beta-only update after verification consolidation lands. Production
-is not in scope and its deployment configuration remains unchanged.
+aggregate beta-only update after the Rust verifier receives an immutable
+release pin and the superseded Python image is deleted. Bootstrap stack
+`v1.1.208` is being prepared to publish that first immutable Rust artifact but
+will not be deployed. Production is not in scope and its deployment
+configuration remains unchanged.
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -112,16 +115,16 @@ service cutover: it preserves and absorbs the extra seven-operation Credentials
 image compatibility surface instead of deleting it or creating a second Rust
 verifier.
 
-The stream is active and rebased cleanly. The Credentials source-surface,
+The Rust implementation is merged. The Credentials source-surface,
 governance and migration-dispatch work merged through protected PR
 `ElevenID/marty-credentials#249` at `f802d45a0eea6d3b36cf423fd722f30c967b03ad`;
 its 124-test Python parity-oracle suite and 40 focused contract/migration tests
-pass. The UI branch is in protected PR `ElevenID/marty-ui#718`, with 38 slices
+pass. The 38-slice UI implementation merged through protected PR
+`ElevenID/marty-ui#718` at `1f6c65cf398f222997d01f07411961971ec62915`,
 covering governed startup, typed compatibility DTOs and HTTP behavior, durable
 PostgreSQL session state, migration ownership, canonical decisions, native use
 cases, runtime activation, beta-only packaging, bounded readiness, secret
-redaction and removal of avoidable invariant panics. It is zero commits behind
-Canvas-merged `origin/main`.
+redaction and removal of avoidable invariant panics.
 
 Strict Rust formatting and Clippy pass; 64 library, six service-behavior and
 five session-behavior tests pass; the fresh native image ran the released
@@ -129,8 +132,14 @@ migration twice to Alembic head `202608091200` and started both ordinary and
 compatibility-enabled runtimes healthy. Beta Compose renders the migration and
 runtime from one immutable image. Production, self-host-production and
 Kubernetes-production manifests have no changes. Differential fixture
-execution, consumer/release pin changes, final review/PR and the Python service
-deletion gate remain open.
+execution now includes the same ten-gate artifact matrix against both the
+released Python oracle and the local Rust image. The dual-target consumer
+harness merged through `ElevenID/marty-integration-tests#394` at
+`32861513dc4c74b3232975e4e5e6a396a452ab1a` and was published in immutable
+integration release `v1.2.75` from
+`60b58b0812b92319ab67129dca22cae733d916d4`. Publishing the Rust services
+artifact, switching that consumer's immutable pin, and deleting the Python
+service remain open.
 
 ### Verification consolidation guardrails
 
