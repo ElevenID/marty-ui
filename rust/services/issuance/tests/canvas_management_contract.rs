@@ -122,6 +122,11 @@ fn canvas_management_contract_retains_the_feature_and_security_floor() {
         validation["tenant_secret"]["never_returned_or_logged"],
         true
     );
+    assert_eq!(
+        validation["operator_secret_fallback"]
+            ["tenant_selected_environment_file_or_inline_tokens_forbidden"],
+        true
+    );
     assert_eq!(validation["real_api"]["redirects_followed"], false);
     assert_eq!(
         validation["response_fields"]

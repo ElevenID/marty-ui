@@ -175,12 +175,18 @@
       "bridge"
     ],
     "tenant_secret": {
-      "required": true,
+      "required_when_tenant_configuration_is_non_empty": true,
       "provider": "canvas_credentials",
       "purpose": "api_token",
       "enabled": true,
       "missing_or_foreign_status": 404,
       "never_returned_or_logged": true
+    },
+    "operator_secret_fallback": {
+      "allowed_only_when_tenant_configuration_is_empty": true,
+      "fixed_environment_name": "CANVAS_CREDENTIALS_API_TOKEN",
+      "fixed_file_environment_name": "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+      "tenant_selected_environment_file_or_inline_tokens_forbidden": true
     },
     "bridge": {
       "requires_operator_publish_url": true,
