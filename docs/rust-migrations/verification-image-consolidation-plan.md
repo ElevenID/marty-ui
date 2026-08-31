@@ -1,13 +1,19 @@
 # Credentials verification-image consolidation plan
 
-Status: `corrected-artifact-repin-required`; deployment is held. The
+Status: `eligible-corrected-artifact-required`; deployment is held. The
 standalone Python verifier source/image deletion is merged in
 `marty-credentials@v0.1.72`, but release audit found that
 `marty-integration-tests@v1.2.76` pinned bootstrap `marty-ui@v1.1.208`, which
-predates the required corrections in `marty-ui#721`. Artifact-only
-`marty-ui@v1.1.210`, a new exact consumer pin, and a later aggregate binder are
-required before beta acceptance. The separate public Python binding and the
-still-used Credentials adapter remain supported. Production is unchanged.
+predates the required corrections in `marty-ui#721`. Pre-interlock
+`marty-ui@v1.1.210` is quarantined: its canceled attempts produced no GitHub
+release or services artifact. Comprehensive differential
+`marty-integration-tests@v1.2.77` is published and independently verified with
+the Python image as passing oracle and `v1.1.208` as bounded negative control.
+The fail-closed eligibility interlock is merged. The next eligible corrected
+Rust artifact (expected `v1.1.211`), an exact fully passing consumer release
+(expected `v1.2.78`), and a later aggregate binder are required before beta
+acceptance. The separate public Python binding and the still-used Credentials
+adapter remain supported. Production is unchanged.
 
 ## Objective
 
@@ -20,9 +26,11 @@ second Rust verifier or replace the existing `/v1/verify` product surface.
 
 The immutable Python service image remains the parity oracle until the
 corrected Rust artifact passes the full differential, database, migration,
-packaging and consumer gates. The reusable `marty-verification-python` binding
-is a separate public dependency and was not removed when the service image was
-retired.
+packaging and consumer gates. Release `marty-integration-tests@v1.2.77`
+packages that complete oracle and intentionally retains `v1.1.208` only as a
+negative control for the session-scoping regression. The reusable
+`marty-verification-python` binding is a separate public dependency and was not
+removed when the service image was retired.
 
 ## Frozen floor
 
@@ -207,8 +215,45 @@ lane, cross-platform native matrix, checksums, SBOM and OCI provenance passed.
 
 Those results do not authorize cutover because `v1.1.208` is not a descendant
 of required correction PR `#721`. Annotated `v1.1.209` records the intervening
-correction binder but has no published release. Artifact-only `v1.1.210` binds
-the released consumers and supplies the first corrected immutable Rust image.
-After it is verified, the integration harness must pin that exact image and
-publish a new release; a later aggregate stack then owns the one beta-only
-deployment, demos, acceptance soak and cleanup. Production is unchanged.
+correction binder but has no published release. Annotated `v1.1.210` was
+created before an explicit release-eligibility interlock; all attempts were
+canceled, leaving no GitHub release and no services artifact. It is quarantined
+and must not be retargeted or deployed.
+
+Protected `ElevenID/marty-integration-tests#398` expanded the artifact
+differential across stateful session create/reload/restart, minimized database
+persistence, retry/concurrency/fencing, direct verification, authorization and
+purpose isolation, resolver failures and VDS-NC. Published
+`marty-integration-tests@v1.2.77` preserves Python verifier `v0.1.71` as the
+passing oracle and proves that Rust `v1.1.208` fails the expected canonical
+transaction-ID session-scoping gate. Its release checksums, five Sigstore
+bundles and five GitHub provenance attestations bind exactly to source commit
+`5c008faa44859eb7d7528adc1ee2dba55bcca19a` and tag `v1.2.77`. The source
+archive is
+`sha256:39356e447f121f7eb9bc587d71f2d99b0ad9988601771c26631902b81448b52b`
+and the SPDX SBOM is
+`sha256:ff2afea7146954c51f8f7e3612443ad80853fb036f43d7e65307eaa07e56e4ac`.
+
+Protected `ElevenID/marty-ui#727` merged the fail-closed eligibility interlock
+at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`; the protected-main lock remains
+`hold`. The next corrected artifact (expected `v1.1.211`) must bind verified
+`v1.2.77`, pass the release gates and publish without deployment. The
+differential must then pin that exact image and pass every group before a new
+immutable integration release is published (expected `v1.2.78`). A later
+aggregate stack (expected `v1.1.212`) owns the single beta-only deployment,
+demos, acceptance soak and cleanup. Production is unchanged.
+
+Protected `ElevenID/marty-integration-tests#400` merged the post-`v1.2.77`
+differential strengthening at
+`a2ab449d2bbaa8c42734de1a6890c5f2d9868a2b`: deterministic Ed25519 fixtures,
+canonical input-digest and verification-method assertions, malformed-input
+ordering, and bounded retry scoped to the known ineligible negative control.
+Its PR-head artifact gates passed for both the Python oracle and rejected Rust
+control. Protected follow-up `ElevenID/marty-integration-tests#401` merged at
+`bd3abf0792bad5c61faa2ff3b0f56fb4df0807d7`, adding exact VDS-NC outcome/code
+projections and mutation-tested response/database privacy minimization for
+decoded claims, malformed terminal rows, expired sessions and all worker lease
+fields. Its Python-oracle and rejected-Rust artifact jobs passed. The corrected
+artifact repin must build on that protected-main tree. Both superseded source
+worktrees were removed after tree-equivalence checks; their generated,
+untracked `uv.lock` was absent from both PRs and was not release input.
