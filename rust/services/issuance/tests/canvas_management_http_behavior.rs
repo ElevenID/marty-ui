@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -20,9 +21,12 @@ use marty_issuance_service::{
     canvas_management_http::CanvasPlatformManagementHttpService,
     canvas_management_service::{
         CanvasManagementRepositoryError, CanvasPlatformManagementRepository,
-        CanvasPlatformManagementService,
+        CanvasPlatformManagementService, CanvasReadinessInputProvider,
     },
     canvas_oauth::CanvasOAuthError,
+    canvas_readiness::{
+        CanvasOAuthReadinessConnection, CanvasReadinessInputs, CanvasSyncReadiness,
+    },
     http::router_with_canvas_management,
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
@@ -43,6 +47,62 @@ struct MemoryRepository {
 }
 
 struct SuccessfulProbe;
+
+struct ReadyReadinessInputProvider;
+
+#[async_trait]
+impl CanvasReadinessInputProvider for ReadyReadinessInputProvider {
+    async fn inputs(
+        &self,
+        _platform: &CanvasPlatformRecord,
+        _binding: &CanvasProgramBindingRecord,
+        _evaluated_at: DateTime<Utc>,
+    ) -> CanvasReadinessInputs {
+        CanvasReadinessInputs {
+            rollout_allowed: true,
+            lti_metadata_ready: true,
+            lti_tool_signing_ready: true,
+            oauth_lookup_succeeded: true,
+            oauth_connection: Some(CanvasOAuthReadinessConnection {
+                connected: true,
+                reauthorization_required: false,
+                access_token_secret_configured: true,
+                capabilities: BTreeSet::from(["course_completion".to_owned()]),
+                scopes: BTreeSet::from([
+                    "url:GET|/api/v1/courses/:course_id/users/:user_id/progress".to_owned(),
+                ]),
+            }),
+            worker_heartbeat_configured: true,
+            sync_state: Some(CanvasSyncReadiness::default()),
+            application_template: None,
+            credential_template: json!({
+                "id": "credential-template-1",
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_type": "OpenBadgeCredential",
+                "credential_payload_format": "dc+sd-jwt",
+                "revocation_profile_id": "status-profile-1",
+                "issuer_did": "did:web:issuer.example.edu:orgs:org-1",
+                "issuer_algorithm": "ES256"
+            })
+            .as_object()
+            .expect("credential template")
+            .clone(),
+            credential_status_profile: json!({
+                "id": "status-profile-1",
+                "organization_id": "org-1",
+                "status": "active"
+            })
+            .as_object()
+            .expect("status profile")
+            .clone(),
+            kms_did_signing_ready: true,
+            learner_identity_status: None,
+            evidence_observed_at: None,
+            evidence_max_age: Duration::from_secs(900),
+        }
+    }
+}
 
 fn successful_probe(canvas_base_url: &str, kid: &str) -> CanvasLtiPlatformProbe {
     CanvasLtiPlatformProbe {
@@ -587,6 +647,33 @@ fn app_with_probe(
     )
 }
 
+fn app_with_readiness(repository: Arc<MemoryRepository>) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let management = CanvasPlatformManagementService::with_probe_client(
+        repository,
+        Some("management-key"),
+        CanvasOriginPolicy::default(),
+        "https://issuer.example.edu",
+        CanvasLtiJwksRefreshConfig {
+            timeout: Duration::from_secs(10),
+            ttl: Duration::from_secs(3_600),
+            self_managed_origins: Vec::new(),
+            allow_private_networks: false,
+            allow_http_localhost: false,
+        },
+        Arc::new(SuccessfulProbe),
+    )
+    .with_readiness_input_provider(Arc::new(ReadyReadinessInputProvider));
+    router_with_canvas_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        CanvasPlatformManagementHttpService::new(management),
+    )
+}
+
 fn app_with_catalog(
     repository: Arc<MemoryRepository>,
     oauth: Arc<dyn CanvasCatalogOAuth>,
@@ -721,6 +808,103 @@ async fn platform_readiness_requires_a_binding_and_preserves_tenant_hiding() {
         .oneshot(
             Request::get(format!(
                 "/v1/integrations/canvas/platforms/{platform_id}/readiness"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-2")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("hidden response");
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn binding_validation_returns_and_persists_the_frozen_readiness_projection() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository
+        .templates
+        .lock()
+        .expect("templates")
+        .push(CanvasApplicationTemplateProjection {
+            id: "application-template-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: Some("credential-template-1".to_owned()),
+            approval_policy_set_id: None,
+            active: true,
+        });
+    let app = app_with_readiness(repository.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+    {
+        let mut platforms = repository.platforms.lock().expect("platforms");
+        platforms[0].enabled = true;
+        platforms[0].registration_status = "installed".to_owned();
+    }
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/program-bindings"
+            )),
+            binding_request("course-101"),
+        ))
+        .await
+        .expect("binding response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let binding_id = response_json(created).await["id"]
+        .as_str()
+        .expect("binding ID")
+        .to_owned();
+
+    let validated = app
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/validate"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("validation response");
+    assert_eq!(validated.status(), StatusCode::OK);
+    let body = response_json(validated).await;
+    assert_eq!(
+        body.as_object()
+            .expect("response object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "active",
+            "binding_id",
+            "checks",
+            "config_version",
+            "evaluated_at",
+            "ready",
+            "valid",
+        ])
+    );
+    assert_eq!(body["binding_id"], binding_id);
+    assert_eq!(body["ready"], true);
+    assert_eq!(body["valid"], true);
+    assert_eq!(body["active"], false);
+    assert_eq!(body["config_version"], 1);
+    assert_eq!(body["checks"].as_array().expect("checks").len(), 23);
+    assert!(body["evaluated_at"].as_str().is_some());
+    {
+        let bindings = repository.bindings.lock().expect("bindings");
+        let persisted = &bindings[0];
+        assert_eq!(persisted.validated_config_version, Some(1));
+        assert_eq!(persisted.readiness_checks.len(), 23);
+    }
+
+    let hidden = app
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/validate"
             ))
             .header("x-api-key", "management-key")
             .header("x-organization-id", "org-2")

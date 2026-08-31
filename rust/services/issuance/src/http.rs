@@ -48,6 +48,7 @@ use crate::{
         parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
         program_binding_query, CanvasManagementHttpError, CanvasPlatformManagementHttpService,
         CanvasPlatformReadinessResponse, CanvasPlatformResponse, CanvasProgramBindingResponse,
+        CanvasProgramBindingValidationResponse,
     },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
@@ -863,6 +864,10 @@ fn router_with_optional_services(
                     .delete(delete_canvas_program_binding),
             )
             .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
+                post(validate_canvas_program_binding),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1197,6 +1202,17 @@ async fn delete_canvas_program_binding(
         .delete_binding(&headers, &binding_id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn validate_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .validate_binding(&headers, &binding_id)
+        .await
+        .map(Json)
 }
 
 fn canvas_management(

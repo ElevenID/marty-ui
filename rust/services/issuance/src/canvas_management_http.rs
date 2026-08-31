@@ -23,8 +23,9 @@ use crate::{
     },
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
-        CanvasLtiRegistrationResponse, CanvasPlatformManagementError,
-        CanvasPlatformManagementService, CanvasPlatformProbeResult, CanvasPlatformReadinessResult,
+        CanvasBindingValidationResult, CanvasLtiRegistrationResponse,
+        CanvasPlatformManagementError, CanvasPlatformManagementService, CanvasPlatformProbeResult,
+        CanvasPlatformReadinessResult,
     },
     canvas_oauth::CanvasOAuthError,
     canvas_readiness::CanvasReadinessCheck,
@@ -266,6 +267,22 @@ impl CanvasPlatformManagementHttpService {
                 header(headers, "X-Organization-ID"),
             )
             .await
+            .map_err(Into::into)
+    }
+
+    pub async fn validate_binding(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+    ) -> Result<CanvasProgramBindingValidationResponse, CanvasManagementHttpError> {
+        self.management
+            .validate_binding(
+                binding_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(CanvasProgramBindingValidationResponse::from)
             .map_err(Into::into)
     }
 
@@ -513,6 +530,31 @@ impl From<CanvasPlatformReadinessResult> for CanvasPlatformReadinessResponse {
             platform_id: result.platform_id,
             ready,
             checks: result.checks,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasProgramBindingValidationResponse {
+    pub binding_id: String,
+    pub ready: bool,
+    pub valid: bool,
+    pub active: bool,
+    pub config_version: i64,
+    pub evaluated_at: Option<String>,
+    pub checks: Vec<CanvasReadinessCheck>,
+}
+
+impl From<CanvasBindingValidationResult> for CanvasProgramBindingValidationResponse {
+    fn from(result: CanvasBindingValidationResult) -> Self {
+        Self {
+            binding_id: result.binding.id,
+            ready: result.readiness.ready,
+            valid: result.readiness.ready,
+            active: result.binding.enabled,
+            config_version: result.binding.config_version,
+            evaluated_at: Some(timestamp(result.readiness.evaluated_at)),
+            checks: result.readiness.checks,
         }
     }
 }
