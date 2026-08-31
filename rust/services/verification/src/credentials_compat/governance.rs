@@ -99,7 +99,7 @@ impl GovernanceEngine {
     /// Validate an untrusted persisted value in Core, then re-authorize it
     /// against the current registry before use.
     pub fn resume_value(&self, value: Value) -> Result<GovernanceSnapshot, GovernanceError> {
-        self.resume(&GovernanceSnapshot::from_persisted(value)?)
+        self.resume(&GovernanceSnapshot::validate_frozen_evidence(value)?)
     }
 }
 
@@ -158,7 +158,10 @@ struct TrustContent {
 }
 
 impl GovernanceSnapshot {
-    fn from_persisted(value: Value) -> Result<Self, GovernanceError> {
+    /// Validate a historical authority snapshot without consulting mutable
+    /// current governance. Use only to reconstruct immutable evidence; new or
+    /// resumed processing must use [`GovernanceEngine::resume_value`].
+    pub fn validate_frozen_evidence(value: Value) -> Result<Self, GovernanceError> {
         let request = json!({"snapshot": value});
         let validated = governance_from_snapshot_json(&request.to_string())
             .map_err(|_| GovernanceError::InvalidSnapshot)?;
@@ -382,6 +385,10 @@ mod tests {
         let mut rotated = fixture["governance"].clone();
         rotated["clients"][0]["client_id"] = json!("rotated-verifier");
         let rotated = GovernanceEngine::new(&rotated.to_string()).unwrap();
+        assert_eq!(
+            GovernanceSnapshot::validate_frozen_evidence(snapshot.value().clone()).unwrap(),
+            snapshot
+        );
         assert_eq!(
             rotated.resume_value(snapshot.value().clone()),
             Err(GovernanceError::InvalidSnapshot)
