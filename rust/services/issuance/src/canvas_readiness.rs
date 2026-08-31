@@ -34,6 +34,14 @@ const SUPPORTED_BADGE_FORMATS: &[&str] = &[
     "dc+sd-jwt",
 ];
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CanvasReadinessIssuerConfiguration {
+    pub issuer_did: String,
+    pub algorithm: String,
+    pub credential_format: &'static str,
+    pub key_purpose: &'static str,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasReadinessCheck {
     pub code: String,
@@ -111,7 +119,7 @@ pub fn evaluate_canvas_binding_readiness(
     inputs: &CanvasReadinessInputs,
     evaluated_at: DateTime<Utc>,
 ) -> CanvasBindingReadiness {
-    let timestamp = timestamp(evaluated_at);
+    let timestamp = readiness_timestamp(evaluated_at);
     let mut checks = Vec::new();
     let organization_matches = !platform.organization_id.is_empty()
         && platform.organization_id == binding.organization_id
@@ -780,15 +788,29 @@ fn status_profile_ready(
 }
 
 fn issuer_configuration_ready(credential: &Map<String, Value>) -> bool {
+    readiness_issuer_configuration(credential).is_some()
+}
+
+pub(crate) fn readiness_issuer_configuration(
+    credential: &Map<String, Value>,
+) -> Option<CanvasReadinessIssuerConfiguration> {
     let payload_format = payload_format(credential)
         .to_ascii_lowercase()
         .replace('-', "_");
-    text(credential.get("issuer_did")).starts_with("did:")
-        && SUPPORTED_ISSUER_ALGORITHMS.contains(&text(credential.get("issuer_algorithm")).as_str())
+    let issuer_did = text(credential.get("issuer_did"));
+    let algorithm = text(credential.get("issuer_algorithm"));
+    (issuer_did.starts_with("did:")
+        && SUPPORTED_ISSUER_ALGORITHMS.contains(&algorithm.as_str())
         && matches!(
             payload_format.as_str(),
             "w3c_vcdm_v2_sd_jwt" | "ietf_sd_jwt" | "sd_jwt_vc" | "vc+sd_jwt" | "dc+sd_jwt"
-        )
+        ))
+    .then_some(CanvasReadinessIssuerConfiguration {
+        issuer_did,
+        algorithm,
+        credential_format: "dc+sd-jwt",
+        key_purpose: "vc_jwt_issuer",
+    })
 }
 
 fn payload_format(credential: &Map<String, Value>) -> String {
@@ -867,7 +889,7 @@ fn string_set(value: Option<&Value>) -> BTreeSet<String> {
         .collect()
 }
 
-fn timestamp(value: DateTime<Utc>) -> String {
+pub(crate) fn readiness_timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false)
 }
 

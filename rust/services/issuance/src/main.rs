@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
@@ -49,6 +49,10 @@ use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
+    canvas_readiness_runtime::{
+        CanvasReadinessRuntime, HttpCanvasReadinessDocumentProvider,
+        LiveCanvasReadinessChallengeProvider, PostgresCanvasReadinessStateProvider,
+    },
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -192,28 +196,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         allow_private_networks: config.canvas_allow_private_base_urls,
         allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
     };
-    let canvas_management = CanvasPlatformManagementHttpService::with_catalog_options(
-        CanvasPlatformManagementService::new(
-            Arc::new(PostgresCanvasManagementRepository::new(pool.clone())),
-            config.issuance_api_key.as_deref(),
-            CanvasOriginPolicy {
-                allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-                private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                self_managed_origin_allowlist: config.canvas_self_managed_origins.clone(),
-            },
-            &config.issuer_base_url,
-            canvas_lti_jwks_refresh_config.clone(),
-        )
-        .with_canvas_credentials_origins(config.canvas_credentials_api_origins.clone()),
-        Arc::new(canvas_oauth.clone()),
-        Arc::new(HttpCanvasCatalogProvider::new(
-            std::time::Duration::from_secs(10),
-            config.canvas_private_origin_allowlist.clone(),
-            config.canvas_allow_private_base_urls,
-            config.canvas_allow_http_localhost_base_urls,
-        )),
-        config.canvas_local_admin_token.clone(),
-    );
+    let canvas_management = CanvasPlatformManagementService::new(
+        Arc::new(PostgresCanvasManagementRepository::new(pool.clone())),
+        config.issuance_api_key.as_deref(),
+        CanvasOriginPolicy {
+            allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+            private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+            self_managed_origin_allowlist: config.canvas_self_managed_origins.clone(),
+        },
+        &config.issuer_base_url,
+        canvas_lti_jwks_refresh_config.clone(),
+    )
+    .with_canvas_credentials_origins(config.canvas_credentials_api_origins.clone());
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,
@@ -312,6 +306,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.dependency_timeout,
         )?),
     ));
+    let canvas_readiness = Arc::new(CanvasReadinessRuntime::new(
+        Arc::new(PostgresCanvasReadinessStateProvider::new(
+            pool.clone(),
+            Duration::from_secs(120),
+        )),
+        Arc::new(HttpCanvasReadinessDocumentProvider::new(
+            &config.credential_template_service_url,
+            config.revocation_profile_service_url.clone(),
+            config.dependency_timeout,
+        )?),
+        Arc::new(LiveCanvasReadinessChallengeProvider::new(
+            canvas_lti_tool_signer.clone(),
+            config.signing_keys_internal_url.clone(),
+            config.signing_keys_internal_api_key.as_deref(),
+            config.dependency_timeout,
+        )?),
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+        config.canvas_self_managed_origins.clone(),
+        config.canvas_evidence_max_age,
+    ));
+    let canvas_management = CanvasPlatformManagementHttpService::with_catalog_options(
+        canvas_management.with_readiness_input_provider(canvas_readiness),
+        Arc::new(canvas_oauth.clone()),
+        Arc::new(HttpCanvasCatalogProvider::new(
+            Duration::from_secs(10),
+            config.canvas_private_origin_allowlist.clone(),
+            config.canvas_allow_private_base_urls,
+            config.canvas_allow_http_localhost_base_urls,
+        )),
+        config.canvas_local_admin_token.clone(),
+    );
     let canvas_lti_deep_linking = CanvasLtiDeepLinkingService::new(
         canvas_lti_experience_session.clone(),
         Arc::new(PostgresCanvasLtiDeepLinkingRepository::new(pool.clone())),

@@ -28,8 +28,8 @@ use crate::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
     },
     canvas_readiness::{
-        apply_canvas_readiness_result, evaluate_canvas_binding_readiness, CanvasBindingReadiness,
-        CanvasReadinessInputs,
+        apply_canvas_readiness_result, evaluate_canvas_binding_readiness, readiness_timestamp,
+        CanvasBindingReadiness, CanvasReadinessCheck, CanvasReadinessInputs,
     },
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
@@ -249,6 +249,21 @@ pub struct CanvasPlatformProbeResult {
 pub struct CanvasBindingValidationResult {
     pub binding: CanvasProgramBindingRecord,
     pub readiness: CanvasBindingReadiness,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasPlatformReadinessResult {
+    pub platform_id: String,
+    pub checks: Vec<CanvasReadinessCheck>,
+}
+
+impl CanvasPlatformReadinessResult {
+    #[must_use]
+    pub fn ready(&self) -> bool {
+        self.checks
+            .iter()
+            .all(|check| !check.blocking || check.passed())
+    }
 }
 
 #[derive(Clone)]
@@ -611,26 +626,75 @@ impl CanvasPlatformManagementService {
         trusted_organization_id: Option<&str>,
     ) -> Result<CanvasBindingValidationResult, CanvasPlatformManagementError> {
         let organization_id = self.authorize(api_key, trusted_organization_id)?;
-        let mut binding = self.active_binding(organization_id, binding_id).await?;
+        let binding = self.active_binding(organization_id, binding_id).await?;
         let platform = self
             .active_platform(organization_id, &binding.platform_id)
             .await?;
+        self.validate_loaded_binding(&platform, binding, Utc::now())
+            .await
+    }
+
+    pub async fn platform_readiness(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasPlatformReadinessResult, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let platform = self.active_platform(organization_id, platform_id).await?;
+        let bindings = self
+            .repository
+            .list_active_bindings(organization_id, Some(platform_id), None)
+            .await
+            .map_err(map_binding_repository_error)?;
+        let mut checks = Vec::new();
+        if bindings.is_empty() {
+            checks.push(CanvasReadinessCheck {
+                code: "program_binding".to_owned(),
+                component: "bindings".to_owned(),
+                status: "failed".to_owned(),
+                blocking: true,
+                remediation: "Create and validate at least one portable Canvas program binding."
+                    .to_owned(),
+                timestamp: readiness_timestamp(Utc::now()),
+            });
+        } else {
+            for binding in bindings {
+                checks.extend(
+                    self.validate_loaded_binding(&platform, binding, Utc::now())
+                        .await?
+                        .readiness
+                        .checks,
+                );
+            }
+        }
+        Ok(CanvasPlatformReadinessResult {
+            platform_id: platform.id,
+            checks,
+        })
+    }
+
+    async fn validate_loaded_binding(
+        &self,
+        platform: &CanvasPlatformRecord,
+        mut binding: CanvasProgramBindingRecord,
+        evaluated_at: DateTime<Utc>,
+    ) -> Result<CanvasBindingValidationResult, CanvasPlatformManagementError> {
         let application_template = self
             .repository
             .application_template(&binding.application_template_id)
             .await
             .map_err(map_binding_repository_error)?;
-        let evaluated_at = Utc::now();
         let readiness_input_provider = self
             .readiness_input_provider
             .as_ref()
             .ok_or(CanvasPlatformManagementError::ReadinessUnavailable)?;
         let mut inputs = readiness_input_provider
-            .inputs(&platform, &binding, evaluated_at)
+            .inputs(platform, &binding, evaluated_at)
             .await;
         inputs.application_template = application_template;
         let readiness =
-            evaluate_canvas_binding_readiness(&platform, &binding, &inputs, evaluated_at);
+            evaluate_canvas_binding_readiness(platform, &binding, &inputs, evaluated_at);
         let expected_config_version = binding.config_version;
         let expected_updated_at = binding.updated_at;
         apply_canvas_readiness_result(&mut binding, &readiness)
@@ -1963,6 +2027,19 @@ mod tests {
         );
         assert_eq!(validation.binding.updated_at, binding.updated_at);
         assert_eq!(repository.bindings.lock().await[0], validation.binding);
+        let platform_readiness = service
+            .platform_readiness(&platform.id, Some("management-secret"), Some("org-1"))
+            .await
+            .unwrap();
+        assert_eq!(platform_readiness.platform_id, platform.id);
+        assert!(platform_readiness.ready());
+        assert_eq!(platform_readiness.checks.len(), 23);
+        assert_eq!(
+            service
+                .platform_readiness(&platform.id, Some("management-secret"), Some("org-2"))
+                .await,
+            Err(CanvasPlatformManagementError::PlatformNotFound)
+        );
         assert_eq!(
             service
                 .validate_binding(&binding.id, Some("management-secret"), Some("org-2"))

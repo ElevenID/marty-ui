@@ -24,9 +24,10 @@ use crate::{
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
         CanvasLtiRegistrationResponse, CanvasPlatformManagementError,
-        CanvasPlatformManagementService, CanvasPlatformProbeResult,
+        CanvasPlatformManagementService, CanvasPlatformProbeResult, CanvasPlatformReadinessResult,
     },
     canvas_oauth::CanvasOAuthError,
+    canvas_readiness::CanvasReadinessCheck,
     transaction_reads::TransactionReadError,
 };
 
@@ -158,6 +159,22 @@ impl CanvasPlatformManagementHttpService {
             )
             .await
             .map(CanvasPlatformResponse::from)
+            .map_err(Into::into)
+    }
+
+    pub async fn platform_readiness(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+    ) -> Result<CanvasPlatformReadinessResponse, CanvasManagementHttpError> {
+        self.management
+            .platform_readiness(
+                platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(CanvasPlatformReadinessResponse::from)
             .map_err(Into::into)
     }
 
@@ -478,6 +495,24 @@ impl From<CanvasPlatformProbeResult> for CanvasPlatformJwksRefreshResponse {
             platform: CanvasPlatformResponse::from(result.platform),
             refreshed: true,
             probe: result.probe,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasPlatformReadinessResponse {
+    pub platform_id: String,
+    pub ready: bool,
+    pub checks: Vec<CanvasReadinessCheck>,
+}
+
+impl From<CanvasPlatformReadinessResult> for CanvasPlatformReadinessResponse {
+    fn from(result: CanvasPlatformReadinessResult) -> Self {
+        let ready = result.ready();
+        Self {
+            platform_id: result.platform_id,
+            ready,
+            checks: result.checks,
         }
     }
 }

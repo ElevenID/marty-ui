@@ -691,6 +691,48 @@ fn binding_request(course_id: &str) -> Value {
 }
 
 #[tokio::test]
+async fn platform_readiness_requires_a_binding_and_preserves_tenant_hiding() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/readiness"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("readiness response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["platform_id"], platform_id);
+    assert_eq!(body["ready"], false);
+    assert_eq!(body["checks"].as_array().expect("checks").len(), 1);
+    assert_eq!(body["checks"][0]["code"], "program_binding");
+    assert_eq!(body["checks"][0]["blocking"], true);
+
+    let hidden = app
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/readiness"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-2")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("hidden response");
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn platform_routes_authenticate_before_parsing_and_hide_tenant_mismatches() {
     let repository = Arc::new(MemoryRepository::default());
     let app = app(repository.clone());

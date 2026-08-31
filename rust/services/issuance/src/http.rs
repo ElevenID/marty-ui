@@ -47,7 +47,7 @@ use crate::{
         organization_id_from_query, parse_lti_installation_request, parse_platform_request,
         parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
         program_binding_query, CanvasManagementHttpError, CanvasPlatformManagementHttpService,
-        CanvasPlatformResponse, CanvasProgramBindingResponse,
+        CanvasPlatformReadinessResponse, CanvasPlatformResponse, CanvasProgramBindingResponse,
     },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
@@ -829,6 +829,10 @@ fn router_with_optional_services(
                 put(update_canvas_lti_installation),
             )
             .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/readiness",
+                get(get_canvas_platform_readiness),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
                 post(probe_canvas_platform_sandbox),
             )
@@ -1058,6 +1062,17 @@ async fn update_canvas_lti_installation(
         .update_lti_installation(&headers, &platform_id, installation)
         .await
         .map(|response| Json(response).into_response())
+}
+
+async fn get_canvas_platform_readiness(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasPlatformReadinessResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .platform_readiness(&headers, &platform_id)
+        .await
+        .map(Json)
 }
 
 async fn probe_canvas_platform_sandbox(

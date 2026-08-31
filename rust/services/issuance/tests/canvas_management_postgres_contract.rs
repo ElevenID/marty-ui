@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
@@ -11,6 +11,9 @@ use marty_issuance_service::{
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_postgres::PostgresCanvasManagementRepository,
     canvas_management_service::CanvasManagementRepositoryError,
+    canvas_readiness_runtime::{
+        CanvasReadinessStateProvider, PostgresCanvasReadinessStateProvider,
+    },
 };
 use marty_oid4vci::lti::CanvasLtiPlatformProbe;
 use serde_json::{json, Map};
@@ -732,6 +735,92 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         "credential-template-native"
     );
     assert_eq!(readiness_binding.updated_at, updated_binding.updated_at);
+
+    let evaluated_at = now + chrono::Duration::minutes(30);
+    sqlx::query(
+        "UPDATE issuance_service.canvas_oauth_connections
+         SET status = 'connected', reauthorization_required = false,
+             access_token_secret_ref = 'org_secret://org-management/oauth-access',
+             capabilities = '[\"course_completion\"]'::jsonb,
+             scopes = '[\"url:GET|/api/v1/courses/:course_id\"]'::jsonb
+         WHERE id = 'oauth-conflict'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_worker_heartbeats
+             (worker_id, role, last_heartbeat_at, metadata)
+         VALUES ('worker-contract', 'canvas_sync', $1,
+                 '{\"processor_configured\":true}'::jsonb)",
+    )
+    .bind(evaluated_at - chrono::Duration::seconds(30))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_evidence_sync_targets
+             (id, organization_id, platform_id, binding_id, enabled,
+              schedule_seconds, next_run_at)
+         VALUES ('target-contract', 'org-management', $1, $2, true, 300, $3)",
+    )
+    .bind(&conflicting.id)
+    .bind(&readiness_binding.id)
+    .bind(evaluated_at + chrono::Duration::seconds(300))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let readiness_state =
+        PostgresCanvasReadinessStateProvider::new(pool.clone(), Duration::from_secs(120));
+    let oauth = readiness_state
+        .oauth_connection("org-management", &conflicting.id)
+        .await
+        .unwrap()
+        .expect("connected OAuth projection");
+    assert!(oauth.connected);
+    assert!(oauth.access_token_secret_configured);
+    assert_eq!(
+        oauth.capabilities,
+        ["course_completion".to_owned()].into_iter().collect()
+    );
+    assert!(readiness_state
+        .worker_heartbeat_configured(evaluated_at)
+        .await
+        .unwrap());
+    assert_eq!(
+        readiness_state
+            .sync_readiness(
+                "org-management",
+                &conflicting.id,
+                &readiness_binding.id,
+                evaluated_at,
+            )
+            .await
+            .unwrap(),
+        Default::default()
+    );
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_evidence_sync_jobs
+             (id, target_id, organization_id, status, created_at)
+         VALUES ('job-dead-letter', 'target-contract', 'org-management',
+                 'dead_letter', $1)",
+    )
+    .bind(evaluated_at)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let failed_sync = readiness_state
+        .sync_readiness(
+            "org-management",
+            &conflicting.id,
+            &readiness_binding.id,
+            evaluated_at,
+        )
+        .await
+        .unwrap();
+    assert!(failed_sync.dead_lettered);
+    assert!(!failed_sync.stale_backlog);
+
     sqlx::query(
         "UPDATE issuance_service.canvas_program_bindings
          SET updated_at = $2 WHERE id = $1",
@@ -871,6 +960,9 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             platform_id text NOT NULL REFERENCES issuance_service.canvas_platforms(id),
             status varchar(40) NOT NULL,
             reauthorization_required boolean NOT NULL DEFAULT false,
+            access_token_secret_ref text,
+            capabilities jsonb NOT NULL DEFAULT '[]'::jsonb,
+            scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
             refresh_lease_owner text,
             refresh_lease_expires_at timestamptz,
             revoke_retry_count integer NOT NULL DEFAULT 0,
@@ -878,6 +970,40 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             revoke_last_error_code varchar(120),
             updated_at timestamptz NOT NULL,
             UNIQUE (organization_id, platform_id))",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_worker_heartbeats (
+            worker_id text NOT NULL,
+            role text NOT NULL,
+            last_heartbeat_at timestamptz NOT NULL,
+            metadata jsonb NOT NULL DEFAULT '{}'::jsonb)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_evidence_sync_targets (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            platform_id text NOT NULL,
+            binding_id text NOT NULL,
+            enabled boolean NOT NULL,
+            schedule_seconds integer NOT NULL,
+            next_run_at timestamptz NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_evidence_sync_jobs (
+            id text PRIMARY KEY,
+            target_id text NOT NULL,
+            organization_id text NOT NULL,
+            status text NOT NULL,
+            created_at timestamptz NOT NULL)",
     )
     .execute(pool)
     .await
