@@ -53,12 +53,21 @@ def test_beta_uses_the_same_native_image_for_schema_and_compatibility_runtime() 
 
 def test_ci_smokes_migration_start_readiness_and_a_real_operation_from_one_image() -> None:
     workflow = text(".github/workflows/ci.yml")
+    release = text(".github/workflows/cd.yml")
+    smoke = text("scripts/smoke-verification-image.sh")
     assert "Smoke-test verification migration and compatibility runtime from one image" in workflow
-    smoke = workflow.split(
-        "Smoke-test verification migration and compatibility runtime from one image", 1
-    )[1].split("- name: Build deployment-profile image", 1)[0]
-    assert smoke.count("marty-verification-service:ci") >= 2
-    assert "marty-verification-service:ci migrate" in smoke
+    assert (
+        "bash scripts/smoke-verification-image.sh marty-verification-service:ci dedicated"
+        in workflow
+    )
+    assert "Smoke-test the published shared services verification artifact" in release
+    assert '"${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"' in release
+    assert "scripts/smoke-verification-image.sh" in release
+    assert "shared" in release
+    assert "--entrypoint /app/services/entrypoint.sh" in smoke
+    assert "--env SERVICE_NAME=verification" in smoke
+    assert 'for _ in 1 2; do' in smoke
+    assert '"$image" migrate' in smoke
     assert "202608091200" in smoke
     assert 'http://127.0.0.1:${port}/ready' in smoke
     assert 'http://127.0.0.1:${port}/health' in smoke
