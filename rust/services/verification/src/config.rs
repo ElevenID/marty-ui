@@ -343,8 +343,6 @@ mod tests {
 
     #[test]
     fn complete_beta_configuration_is_accepted_and_inbound_grpc_is_closed() {
-        let governance = marty_verification::governance::behavior_fixture_json();
-        let governance: serde_json::Value = serde_json::from_str(governance).unwrap();
         let config = VerificationServiceConfig::from_values([
             ("ENVIRONMENT".into(), "beta".into()),
             ("PUBLIC_BASE_URL".into(), "https://beta.example".into()),
@@ -354,16 +352,12 @@ mod tests {
             ("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "client.key".into()),
             ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "ca.crt".into()),
             ("VERIF_GRPC_ENABLED".into(), "false".into()),
-            (
-                "VERIFICATION_GOVERNANCE_JSON".into(),
-                governance["governance"].to_string(),
-            ),
         ])
         .unwrap();
         assert_eq!(config.environment, Environment::Beta);
         assert!(!config.grpc_enabled);
         assert!(config.providers.workload_tls.is_some());
-        assert!(config.credentials_governance.is_some());
+        assert!(config.credentials_governance.is_none());
         assert!(!config.credentials_compat_enabled);
 
         let error = VerificationServiceConfig::from_values([
@@ -427,5 +421,22 @@ mod tests {
                 name: "VERIFICATION_GOVERNANCE_JSON"
             }
         );
+
+        let fixture: serde_json::Value =
+            serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        let config = VerificationServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "test".into()),
+            (
+                "VERIFICATION_CREDENTIALS_COMPAT_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "VERIFICATION_GOVERNANCE_JSON".into(),
+                fixture["governance"].to_string(),
+            ),
+        ])
+        .unwrap();
+        assert!(config.credentials_compat_enabled);
+        assert!(config.credentials_governance.is_some());
     }
 }
