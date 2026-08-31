@@ -7,7 +7,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use mmf_runtime::{system_router, RuntimeState};
+use mmf_core::HealthReport;
+use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -95,7 +96,28 @@ pub fn router(state: HttpState) -> Router {
         .route("/health/native-backend", get(native_health))
         .route("/metrics", get(metrics))
         .with_state(state.clone())
-        .merge(system_router(state.runtime))
+        .merge(system_router_with_options(
+            state.runtime,
+            SystemRouteOptions::default().with_health_projector(compatibility_health),
+        ))
+}
+
+fn compatibility_health(_: &HealthReport) -> Value {
+    compatibility_health_body()
+}
+
+fn compatibility_health_body() -> Value {
+    json!({
+        "status": "healthy",
+        "service": "verification",
+        "native_backend": {
+            "available": true,
+            "module": "_marty_rs",
+            "version": env!("CARGO_PKG_VERSION"),
+            "missing_capabilities": [],
+            "error": null,
+        },
+    })
 }
 
 async fn start(
@@ -240,4 +262,29 @@ fn header(headers: &HeaderMap, name: &'static str) -> String {
         .map(str::trim)
         .unwrap_or_default()
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::compatibility_health_body;
+
+    #[test]
+    fn root_health_uses_the_released_compatibility_projection() {
+        assert_eq!(
+            compatibility_health_body(),
+            json!({
+                "status": "healthy",
+                "service": "verification",
+                "native_backend": {
+                    "available": true,
+                    "module": "_marty_rs",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "missing_capabilities": [],
+                    "error": null,
+                },
+            })
+        );
+    }
 }

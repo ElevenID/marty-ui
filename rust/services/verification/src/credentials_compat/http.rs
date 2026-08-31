@@ -60,7 +60,7 @@ pub enum CompatibilityError {
     UnsupportedPresentation,
     InvalidPresentation,
     PolicyMismatch,
-    Unprocessable(&'static str),
+    UnusableIssuerDid,
     Internal,
 }
 
@@ -119,9 +119,10 @@ impl CompatibilityError {
             (Operation::Submit, Self::InvalidPresentation) => {
                 (StatusCode::BAD_REQUEST, "Invalid presentation data")
             }
-            (Operation::VdsNc, Self::Unprocessable(detail)) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, detail)
-            }
+            (Operation::VdsNc, Self::UnusableIssuerDid) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "issuer_did did not resolve to a usable public JWK",
+            ),
             (Operation::Create, Self::Internal) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to create verification session",
@@ -252,15 +253,17 @@ fn authorize(
     headers: &HeaderMap,
     purpose: GovernancePurpose,
 ) -> Result<GovernanceSnapshot, AuthorizationFailure> {
+    let api_key = match headers.get("x-api-key") {
+        None => return Err(AuthorizationFailure::Missing),
+        Some(value) => value
+            .to_str()
+            .map_err(|_| AuthorizationFailure::Unauthorized)?,
+    };
+    if api_key.is_empty() {
+        return Err(AuthorizationFailure::Missing);
+    }
     let Some(governance) = &state.governance else {
         return Err(AuthorizationFailure::Unavailable);
-    };
-    let Some(api_key) = headers
-        .get("x-api-key")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
-    else {
-        return Err(AuthorizationFailure::Missing);
     };
     governance.authorize(api_key, purpose).map_err(|error| {
         if error == GovernanceError::Configuration {
@@ -281,15 +284,25 @@ fn validation_response() -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use axum::{
         body::{to_bytes, Body},
-        http::Request,
+        http::{HeaderValue, Request},
     };
     use tower::ServiceExt;
 
     use super::*;
 
     struct MockUseCases;
+
+    struct RecordingUseCases {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct ErrorUseCases {
+        error: CompatibilityError,
+    }
 
     fn session() -> SessionResponse {
         SessionResponse {
@@ -343,13 +356,117 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl CompatibilityUseCases for RecordingUseCases {
+        async fn create_session(
+            &self,
+            _: CreateSessionRequest,
+            governance: GovernanceSnapshot,
+        ) -> Result<SessionResponse, CompatibilityError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("create:{}", governance.purpose()));
+            Ok(session())
+        }
+
+        async fn submit_presentation(
+            &self,
+            session_id: &str,
+            _: SubmitPresentationRequest,
+        ) -> Result<VerificationResult, CompatibilityError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("submit:{session_id}"));
+            Ok(VerificationResult::from_canonical(None, None, None))
+        }
+
+        async fn get_session(
+            &self,
+            session_id: &str,
+        ) -> Result<SessionResponse, CompatibilityError> {
+            self.calls.lock().unwrap().push(format!("get:{session_id}"));
+            Ok(session())
+        }
+
+        async fn verify_direct(
+            &self,
+            _: VerifyDirectRequest,
+            governance: GovernanceSnapshot,
+        ) -> Result<VerificationResult, CompatibilityError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("direct:{}", governance.purpose()));
+            Ok(VerificationResult::from_canonical(None, None, None))
+        }
+
+        async fn verify_vds_nc(
+            &self,
+            _: VerifyVdsNcRequest,
+            governance: GovernanceSnapshot,
+        ) -> Result<VerificationResult, CompatibilityError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("vds:{}", governance.purpose()));
+            Ok(VerificationResult::from_canonical(None, None, None))
+        }
+    }
+
+    #[async_trait]
+    impl CompatibilityUseCases for ErrorUseCases {
+        async fn create_session(
+            &self,
+            _: CreateSessionRequest,
+            _: GovernanceSnapshot,
+        ) -> Result<SessionResponse, CompatibilityError> {
+            Err(self.error.clone())
+        }
+
+        async fn submit_presentation(
+            &self,
+            _: &str,
+            _: SubmitPresentationRequest,
+        ) -> Result<VerificationResult, CompatibilityError> {
+            Err(self.error.clone())
+        }
+
+        async fn get_session(&self, _: &str) -> Result<SessionResponse, CompatibilityError> {
+            Err(self.error.clone())
+        }
+
+        async fn verify_direct(
+            &self,
+            _: VerifyDirectRequest,
+            _: GovernanceSnapshot,
+        ) -> Result<VerificationResult, CompatibilityError> {
+            Err(self.error.clone())
+        }
+
+        async fn verify_vds_nc(
+            &self,
+            _: VerifyVdsNcRequest,
+            _: GovernanceSnapshot,
+        ) -> Result<VerificationResult, CompatibilityError> {
+            Err(self.error.clone())
+        }
+    }
+
     fn app(governance: bool) -> Router {
-        let fixture: serde_json::Value =
+        app_with(Arc::new(MockUseCases), governance)
+    }
+
+    fn app_with(use_cases: Arc<dyn CompatibilityUseCases>, governance: bool) -> Router {
+        let mut fixture: serde_json::Value =
             serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        let direct = fixture["governance"]["clients"][0]["purposes"]["verification.direct"].clone();
+        fixture["governance"]["clients"][0]["purposes"]["verification.vds-nc"] = direct;
         let engine =
             governance.then(|| GovernanceEngine::new(&fixture["governance"].to_string()).unwrap());
         router(CompatibilityState {
-            use_cases: Arc::new(MockUseCases),
+            use_cases,
             governance: engine,
         })
     }
@@ -371,6 +488,39 @@ mod tests {
                 .insert("x-api-key", api_key.parse().unwrap());
         }
         request
+    }
+
+    fn json_request(
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+        auth: bool,
+    ) -> Request<Body> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        if auth {
+            request.headers_mut().insert(
+                "x-api-key",
+                HeaderValue::from_static("purpose-scoped-test-key"),
+            );
+        }
+        request
+    }
+
+    fn direct_body() -> serde_json::Value {
+        json!({
+            "presentation": "vp.jwt",
+            "presentation_definition": {"id":"pd-1","input_descriptors":[]},
+            "verifier_did": "did:web:verifier.example"
+        })
+    }
+
+    fn vds_body() -> serde_json::Value {
+        json!({"barcode":"header~payload~signature","issuer_did":"did:web:issuer.example"})
     }
 
     async fn response_json(response: Response) -> serde_json::Value {
@@ -406,6 +556,24 @@ mod tests {
             response_json(response).await["detail"],
             "Verification governance is unavailable"
         );
+
+        let response = app(false).oneshot(create_request(None)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response_json(response).await["detail"],
+            "X-API-Key header is missing"
+        );
+
+        let mut request = create_request(None);
+        request
+            .headers_mut()
+            .insert("x-api-key", HeaderValue::from_bytes(&[0xff]).unwrap());
+        let response = app(false).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response_json(response).await["detail"],
+            "Invalid or unauthorized API key"
+        );
     }
 
     #[tokio::test]
@@ -427,6 +595,221 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response_json(response).await, json!({"status":"healthy"}));
+    }
+
+    #[tokio::test]
+    async fn every_route_preserves_auth_mode_forwarding_and_governed_purpose() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let use_cases = Arc::new(RecordingUseCases {
+            calls: calls.clone(),
+        });
+        let requests = [
+            create_request(Some("purpose-scoped-test-key")),
+            json_request(
+                "POST",
+                "/v1/verification/sessions/session-submit/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+            ),
+            json_request(
+                "GET",
+                "/v1/verification/sessions/session-get",
+                json!(null),
+                false,
+            ),
+            json_request("POST", "/v1/verification/verify", direct_body(), true),
+            json_request("POST", "/v1/verification/verify/vds-nc", vds_body(), true),
+        ];
+        for request in requests {
+            let response = app_with(use_cases.clone(), true)
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                "create:verification.session.create",
+                "submit:session-submit",
+                "get:session-get",
+                "direct:verification.direct",
+                "vds:verification.vds-nc",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn every_json_route_rejects_malformed_or_unknown_fields() {
+        let cases = [
+            ("/v1/verification/sessions", true),
+            ("/v1/verification/sessions/session-1/submit", false),
+            ("/v1/verification/verify", true),
+            ("/v1/verification/verify/vds-nc", true),
+        ];
+        for (path, auth) in cases {
+            for body in [json!({"unexpected":true}), json!("not-an-object")] {
+                let response = app(true)
+                    .oneshot(json_request("POST", path, body, auth))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(
+                    response_json(response).await,
+                    json!({"detail":"Request validation failed"})
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn declared_errors_are_stable_at_the_route_boundary() {
+        let cases = [
+            (
+                "POST",
+                "/v1/verification/sessions",
+                json!({
+                    "verifier_did":"did:web:verifier.example",
+                    "presentation_definition":{"id":"pd-1","input_descriptors":[]}
+                }),
+                true,
+                CompatibilityError::PolicyMismatch,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Verification request does not match its governed policy",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions",
+                json!({
+                    "verifier_did":"did:web:verifier.example",
+                    "presentation_definition":{"id":"pd-1","input_descriptors":[]}
+                }),
+                true,
+                CompatibilityError::Internal,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create verification session",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::NotFound,
+                StatusCode::NOT_FOUND,
+                "Verification session not found",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::Expired,
+                StatusCode::GONE,
+                "Verification session has expired",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::Busy,
+                StatusCode::CONFLICT,
+                "Verification session submission conflicts",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::Conflict,
+                StatusCode::CONFLICT,
+                "Verification session submission conflicts",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::UnsupportedPresentation,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Session presentation cannot be bound to the verifier nonce",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::InvalidPresentation,
+                StatusCode::BAD_REQUEST,
+                "Invalid presentation data",
+            ),
+            (
+                "POST",
+                "/v1/verification/sessions/id/submit",
+                json!({"presentation":"vp.jwt"}),
+                false,
+                CompatibilityError::Internal,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Presentation submission failed",
+            ),
+            (
+                "GET",
+                "/v1/verification/sessions/id",
+                json!(null),
+                false,
+                CompatibilityError::NotFound,
+                StatusCode::NOT_FOUND,
+                "Session not found",
+            ),
+            (
+                "POST",
+                "/v1/verification/verify",
+                direct_body(),
+                true,
+                CompatibilityError::PolicyMismatch,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Verification request does not match its governed policy",
+            ),
+            (
+                "POST",
+                "/v1/verification/verify",
+                direct_body(),
+                true,
+                CompatibilityError::Internal,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Verification failed",
+            ),
+            (
+                "POST",
+                "/v1/verification/verify/vds-nc",
+                vds_body(),
+                true,
+                CompatibilityError::UnusableIssuerDid,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "issuer_did did not resolve to a usable public JWK",
+            ),
+            (
+                "POST",
+                "/v1/verification/verify/vds-nc",
+                vds_body(),
+                true,
+                CompatibilityError::Internal,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "VDS-NC verification failed",
+            ),
+        ];
+        for (method, path, body, auth, error, status, detail) in cases {
+            let response = app_with(Arc::new(ErrorUseCases { error }), true)
+                .oneshot(json_request(method, path, body, auth))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{method} {path}");
+            assert_eq!(
+                response_json(response).await["detail"],
+                detail,
+                "{method} {path}"
+            );
+        }
     }
 
     #[test]
