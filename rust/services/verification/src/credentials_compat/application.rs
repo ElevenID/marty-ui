@@ -3,10 +3,11 @@ use std::sync::Arc;
 use super::{
     build_canonical_decision, ClaimState, CompatibilityError, CompatibilityUseCases,
     CreateSessionRequest, CredentialVerificationKernel, EvidenceFailureReason, GovernanceEngine,
-    GovernancePurpose, GovernanceSnapshot, IssuerKeyRequest, IssuerKeyResolver, PersistedEvidence,
-    PresentationPayload, Presented, ProcessingLease, ProcessingToken, SessionDraft, SessionRecord,
-    SessionRepository, SessionResponse, SubmitPresentationRequest, TerminalDecision,
-    VerificationMethod, VerificationResult, VerifierNonce, VerifyDirectRequest, VerifyVdsNcRequest,
+    GovernancePurpose, GovernanceSnapshot, IssuerKeyRequest, IssuerKeyResolver,
+    IssuerResolutionError, PersistedEvidence, PresentationPayload, Presented, ProcessingLease,
+    ProcessingToken, SessionDraft, SessionRecord, SessionRepository, SessionResponse,
+    SubmitPresentationRequest, TerminalDecision, VerificationMethod, VerificationResult,
+    VerifierNonce, VerifyDirectRequest, VerifyVdsNcRequest,
 };
 use async_trait::async_trait;
 
@@ -302,7 +303,12 @@ impl CompatibilityUseCases for CredentialsCompatibilityService {
                 },
             )
             .await
-            .map_err(|_| CompatibilityError::Internal)?;
+            .map_err(|error| match error {
+                IssuerResolutionError::UnusablePublicKey => CompatibilityError::UnusableIssuerDid,
+                IssuerResolutionError::Untrusted
+                | IssuerResolutionError::Unavailable
+                | IssuerResolutionError::Invalid => CompatibilityError::Internal,
+            })?;
         let facts = self
             .kernel
             .verify_vds_nc(&request.barcode, issuer.public_jwk())
@@ -343,7 +349,7 @@ fn session_response(session: &SessionRecord) -> SessionResponse {
         id: session.id.clone(),
         organization_id: session.organization_id.clone(),
         verifier_did: session.verifier_did.clone(),
-        status: session.status.as_database_str().into(),
+        status: session.status.as_public_str().into(),
         request_uri: session.request_uri.clone().unwrap_or_default(),
         nonce: session
             .nonce
@@ -359,7 +365,7 @@ fn verification_result(session: &SessionRecord) -> VerificationResult {
         session.verification_evidence.canonical_result(),
         session
             .verification_method
-            .map(|method| method.as_database_str().into()),
+            .map(|method| method.as_public_str().into()),
         session.error_message.clone(),
     )
 }

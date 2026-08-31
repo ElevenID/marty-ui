@@ -312,8 +312,14 @@ fn has_json_media_type(headers: &HeaderMap) -> bool {
         .and_then(|value| value.split(';').next())
         .map(str::trim)
         .is_some_and(|media_type| {
-            media_type.eq_ignore_ascii_case("application/json")
-                || media_type.to_ascii_lowercase().ends_with("+json")
+            let media_type = media_type.to_ascii_lowercase();
+            media_type
+                .split_once('/')
+                .is_some_and(|(top_level, subtype)| {
+                    top_level == "application"
+                        && !subtype.contains('/')
+                        && (subtype == "json" || subtype.ends_with("+json"))
+                })
         })
 }
 
@@ -344,7 +350,7 @@ mod tests {
             id: "session-1".into(),
             organization_id: "123e4567-e89b-42d3-a456-426614174000".into(),
             verifier_did: "did:web:verifier.example".into(),
-            status: "PENDING".into(),
+            status: "pending".into(),
             request_uri: "https://verifier.example/request/session-1".into(),
             nonce: "nonce".into(),
             expires_at: "2026-08-30T12:10:00Z".into(),
@@ -660,6 +666,17 @@ mod tests {
                     .unwrap();
                 assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
             }
+
+            let response = app(true)
+                .oneshot(
+                    Request::post(path)
+                        .header("content-type", "text/problem+json")
+                        .body(Body::from(r#"{"well_formed_but_invalid":true}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
 
             let response = app(true)
                 .oneshot(

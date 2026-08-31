@@ -162,6 +162,17 @@ impl SessionStatus {
         }
     }
 
+    #[must_use]
+    pub const fn as_public_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Verified => "verified",
+            Self::Failed => "failed",
+            Self::Expired => "expired",
+        }
+    }
+
     pub(crate) fn parse_database(value: &str) -> Option<Self> {
         match value.to_ascii_uppercase().as_str() {
             "PENDING" => Some(Self::Pending),
@@ -192,6 +203,17 @@ impl VerificationMethod {
             Self::Mdoc => "MDOC",
             Self::ZkProof => "ZK_PROOF",
             Self::JwtVp => "JWT_VP",
+        }
+    }
+
+    #[must_use]
+    pub const fn as_public_str(self) -> &'static str {
+        match self {
+            Self::W3cVc => "w3c_vc",
+            Self::SdJwt => "sd_jwt",
+            Self::Mdoc => "mdoc",
+            Self::ZkProof => "zk_proof",
+            Self::JwtVp => "jwt_vp",
         }
     }
 

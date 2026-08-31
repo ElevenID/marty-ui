@@ -89,7 +89,7 @@ impl IssuerKeyResolver for UnusedResolver {
         _: &marty_verification_service::credentials_compat::GovernanceSnapshot,
         _: IssuerKeyRequest<'_>,
     ) -> Result<ResolvedIssuerKey, IssuerResolutionError> {
-        Err(IssuerResolutionError::Unavailable)
+        Err(IssuerResolutionError::UnusablePublicKey)
     }
 }
 
@@ -197,8 +197,10 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
     let lifetime = SessionDurationSeconds::new(600).unwrap();
     let lease = ProcessingLease::from_seconds(60).unwrap();
 
-    let fixture: Value =
+    let mut fixture: Value =
         serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+    let direct = fixture["governance"]["clients"][0]["purposes"]["verification.direct"].clone();
+    fixture["governance"]["clients"][0]["purposes"]["verification.vds-nc"] = direct;
     let governance_engine = GovernanceEngine::new(&fixture["governance"].to_string()).unwrap();
     let application = CredentialsCompatibilityService::new(
         Arc::new(repository.clone()),
@@ -222,6 +224,7 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
         )
         .await
         .unwrap();
+    assert_eq!(created.status, "pending");
     let passing_presentation = "header.payload.signature";
     let verified = application
         .submit_presentation(
@@ -234,6 +237,31 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
         .unwrap();
     assert!(verified.is_valid());
     assert_eq!(verified.decision(), "PASS");
+    assert_eq!(
+        serde_json::to_value(&verified).unwrap()["verification_method"],
+        "jwt_vp"
+    );
+    assert_eq!(
+        application.get_session(&created.id).await.unwrap().status,
+        "verified"
+    );
+    let vds_governance = governance_engine
+        .authorize("purpose-scoped-test-key", GovernancePurpose::VdsNc)
+        .unwrap();
+    assert_eq!(
+        application
+            .verify_vds_nc(
+                marty_verification_service::credentials_compat::VerifyVdsNcRequest {
+                    barcode: "header~payload~signature".into(),
+                    issuer_did: "did:web:issuer.example".into(),
+                    verification_method_id: None,
+                    algorithm: None,
+                },
+                vds_governance,
+            )
+            .await,
+        Err(marty_verification_service::credentials_compat::CompatibilityError::UnusableIssuerDid)
+    );
     assert!(application
         .submit_presentation(
             &created.id,

@@ -52,6 +52,8 @@ pub enum IssuerResolutionError {
     Unavailable,
     #[error("organization-scoped issuer resolution returned unusable provenance")]
     Invalid,
+    #[error("issuer DID did not resolve to a usable public JWK")]
+    UnusablePublicKey,
 }
 
 #[async_trait]
@@ -110,7 +112,7 @@ struct ResolverResponse {
     organization_id: String,
     issuer_did: String,
     verification_method_id: String,
-    public_jwk: Value,
+    public_jwk: Option<Value>,
     did_document: Value,
     verification_method: Value,
     resolver: Value,
@@ -203,6 +205,9 @@ fn select_public_key(
         .filter_map(|method| public_method_jwk(document, method, &authorized, request.algorithm))
         .filter(|(method_id, _)| requested.as_ref().is_none_or(|value| value == method_id))
         .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(IssuerResolutionError::UnusablePublicKey);
+    }
     if candidates.len() != 1 {
         return Err(IssuerResolutionError::Invalid);
     }
@@ -270,7 +275,6 @@ fn validate_response(
         || requested_method
             .as_deref()
             .is_some_and(|requested| requested != method_id)
-        || !valid_public_jwk(&response.public_jwk, &method_id, request.algorithm)
         || !valid_did_document(&response.did_document, request.issuer_did, &method_id)
         || !valid_method(
             &response.verification_method,
@@ -281,8 +285,14 @@ fn validate_response(
     {
         return Err(IssuerResolutionError::Invalid);
     }
+    let public_jwk = response
+        .public_jwk
+        .ok_or(IssuerResolutionError::UnusablePublicKey)?;
+    if !valid_public_jwk(&public_jwk, &method_id, request.algorithm) {
+        return Err(IssuerResolutionError::UnusablePublicKey);
+    }
     Ok(ResolvedIssuerKey {
-        public_jwk: response.public_jwk,
+        public_jwk,
         verification_method_id: method_id,
     })
 }
@@ -428,9 +438,9 @@ mod tests {
             organization_id: "123e4567-e89b-42d3-a456-426614174000".into(),
             issuer_did: "did:web:issuer.example".into(),
             verification_method_id: method.into(),
-            public_jwk: serde_json::json!({
+            public_jwk: Some(serde_json::json!({
                 "kty":"EC","crv":"P-256","x":"x","y":"y","kid":method,"alg":"ES256"
-            }),
+            })),
             did_document: serde_json::json!({
                 "id":"did:web:issuer.example",
                 "verificationMethod":[{"id":method,"controller":"did:web:issuer.example"}],
@@ -465,9 +475,6 @@ mod tests {
             |response: &mut ResolverResponse| response.organization_id = "other".into(),
             |response: &mut ResolverResponse| response.issuer_did = "did:web:other".into(),
             |response: &mut ResolverResponse| {
-                response.public_jwk["d"] = Value::String("secret".into())
-            },
-            |response: &mut ResolverResponse| {
                 response.resolver["public_fallback_used"] = Value::Bool(true)
             },
         ] {
@@ -476,6 +483,21 @@ mod tests {
             assert_eq!(
                 validate_response(&governance, &request, response),
                 Err(IssuerResolutionError::Invalid)
+            );
+        }
+
+        for public_jwk in [
+            None,
+            Some(serde_json::json!({
+                "kty":"EC","crv":"P-256","x":"x","y":"y",
+                "kid":"did:web:issuer.example#key-1","alg":"ES256","d":"secret"
+            })),
+        ] {
+            let mut response = valid_response();
+            response.public_jwk = public_jwk;
+            assert_eq!(
+                validate_response(&governance, &request, response),
+                Err(IssuerResolutionError::UnusablePublicKey)
             );
         }
     }
