@@ -40,11 +40,14 @@ use crate::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
-    canvas_management::{CanvasPlatformRequest, CanvasScopeDiscoveryRequest},
+    canvas_management::{
+        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
+    },
     canvas_management_http::{
         organization_id_from_query, parse_lti_installation_request, parse_platform_request,
-        parse_scope_discovery_query, parse_scope_discovery_request, CanvasManagementHttpError,
-        CanvasPlatformManagementHttpService, CanvasPlatformResponse,
+        parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
+        program_binding_query, CanvasManagementHttpError, CanvasPlatformManagementHttpService,
+        CanvasPlatformResponse, CanvasProgramBindingResponse,
     },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
@@ -842,6 +845,20 @@ fn router_with_optional_services(
                 get(get_canvas_catalog),
             )
             .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
+                post(create_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings",
+                get(list_canvas_program_bindings),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}",
+                get(get_canvas_program_binding)
+                    .put(update_canvas_program_binding)
+                    .delete(delete_canvas_program_binding),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1094,6 +1111,77 @@ async fn get_canvas_catalog(
         .discover_scope(&headers, &platform_id, request)
         .await
         .map(|response| Json(response).into_response())
+}
+
+async fn create_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasProgramBindingRequest = parse_program_binding_request(request).await?;
+    service
+        .create_binding(&headers, &platform_id, request)
+        .await
+        .map(Json)
+}
+
+async fn list_canvas_program_bindings(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Json<Vec<CanvasProgramBindingResponse>>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let (organization_id, platform_id, application_template_id) =
+        program_binding_query(request.uri().query());
+    service
+        .list_bindings(
+            request.headers(),
+            organization_id.as_deref(),
+            platform_id.as_deref(),
+            application_template_id.as_deref(),
+        )
+        .await
+        .map(Json)
+}
+
+async fn get_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .get_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn update_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request = parse_program_binding_request(request).await?;
+    service
+        .update_binding(&headers, &binding_id, request)
+        .await
+        .map(Json)
+}
+
+async fn delete_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .delete_binding(&headers, &binding_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn canvas_management(

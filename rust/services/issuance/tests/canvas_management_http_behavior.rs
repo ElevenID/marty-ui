@@ -13,6 +13,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
+    canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
     canvas_catalog::{CanvasCatalogOAuth, CanvasCatalogProvider, CanvasCatalogProviderError},
     canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient},
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
@@ -33,6 +34,8 @@ use tower::ServiceExt;
 #[derive(Default)]
 struct MemoryRepository {
     platforms: Mutex<Vec<CanvasPlatformRecord>>,
+    bindings: Mutex<Vec<CanvasProgramBindingRecord>>,
+    templates: Mutex<Vec<CanvasApplicationTemplateProjection>>,
     force_conflict: Mutex<bool>,
     force_oauth_conflict: Mutex<bool>,
     create_calls: Mutex<usize>,
@@ -400,6 +403,133 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         existing.updated_at = platform.updated_at;
         Ok(Some(existing.clone()))
     }
+
+    async fn application_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<CanvasApplicationTemplateProjection>, CanvasManagementRepositoryError> {
+        Ok(self
+            .templates
+            .lock()
+            .expect("templates")
+            .iter()
+            .find(|template| template.id == template_id)
+            .cloned())
+    }
+
+    async fn valid_canvas_credentials_secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<bool, CanvasManagementRepositoryError> {
+        Ok(organization_id == "org-1" && secret_id == "secret-1")
+    }
+
+    async fn active_binding(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        Ok(self
+            .bindings
+            .lock()
+            .expect("bindings")
+            .iter()
+            .find(|binding| {
+                binding.organization_id == organization_id
+                    && binding.id == binding_id
+                    && binding.archived_at.is_none()
+            })
+            .cloned())
+    }
+
+    async fn list_active_bindings(
+        &self,
+        organization_id: &str,
+        platform_id: Option<&str>,
+        application_template_id: Option<&str>,
+    ) -> Result<Vec<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        Ok(self
+            .bindings
+            .lock()
+            .expect("bindings")
+            .iter()
+            .filter(|binding| {
+                binding.organization_id == organization_id
+                    && binding.archived_at.is_none()
+                    && platform_id.is_none_or(|value| binding.platform_id == value)
+                    && application_template_id
+                        .is_none_or(|value| binding.application_template_id == value)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn create_binding(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+    ) -> Result<(), CanvasManagementRepositoryError> {
+        let mut bindings = self.bindings.lock().expect("bindings");
+        if bindings.iter().any(|candidate| {
+            candidate.archived_at.is_none()
+                && candidate.organization_id == binding.organization_id
+                && candidate.platform_id == binding.platform_id
+                && candidate.application_template_id == binding.application_template_id
+                && candidate.canvas_scope == binding.canvas_scope
+        }) {
+            return Err(CanvasManagementRepositoryError::DuplicateBinding);
+        }
+        bindings.push(binding.clone());
+        Ok(())
+    }
+
+    async fn save_binding_configuration(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        expected_config_version: i64,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let mut bindings = self.bindings.lock().expect("bindings");
+        if bindings.iter().any(|candidate| {
+            candidate.id != binding.id
+                && candidate.archived_at.is_none()
+                && candidate.organization_id == binding.organization_id
+                && candidate.platform_id == binding.platform_id
+                && candidate.application_template_id == binding.application_template_id
+                && candidate.canvas_scope == binding.canvas_scope
+        }) {
+            return Err(CanvasManagementRepositoryError::DuplicateBinding);
+        }
+        let Some(existing) = bindings.iter_mut().find(|candidate| {
+            candidate.organization_id == binding.organization_id
+                && candidate.id == binding.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == expected_config_version
+        }) else {
+            return Ok(None);
+        };
+        *existing = binding.clone();
+        Ok(Some(existing.clone()))
+    }
+
+    async fn archive_binding(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+        expected_config_version: i64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let mut bindings = self.bindings.lock().expect("bindings");
+        let Some(binding) = bindings.iter_mut().find(|binding| {
+            binding.organization_id == organization_id
+                && binding.id == binding_id
+                && binding.archived_at.is_none()
+                && binding.config_version == expected_config_version
+        }) else {
+            return Ok(None);
+        };
+        binding.archive(now);
+        Ok(Some(binding.clone()))
+    }
 }
 
 fn app(repository: Arc<MemoryRepository>) -> axum::Router {
@@ -519,6 +649,24 @@ fn platform_request(display_name: &str, client_id: &str) -> Value {
         "lti_client_id": client_id,
         "lti_deployment_id": "deployment-1",
         "enabled": true
+    })
+}
+
+fn binding_request(course_id: &str) -> Value {
+    json!({
+        "application_template_id": "application-template-1",
+        "display_name": format!("Course {course_id}"),
+        "auto_approve_on_evidence": true,
+        "evidence_requirements": [{
+            "source": "canvas_rest",
+            "fact_type": "canvas.course_completion",
+            "scope": {"course_id": course_id},
+            "pass_rule": {"completed": true},
+            "required": true
+        }],
+        "canvas_scope": {"course_id": course_id},
+        "delivery_mode": "wallet_only",
+        "feature_flags": {}
     })
 }
 
@@ -1550,4 +1698,175 @@ async fn endpoint_drift_is_an_exact_conflict_and_never_persists_installation_cha
         response_json(sandbox).await,
         json!({"detail": "Canvas metadata probe returned endpoints outside the persisted trust profile"})
     );
+}
+
+#[tokio::test]
+async fn program_binding_routes_preserve_auth_server_ownership_and_soft_delete() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository
+        .templates
+        .lock()
+        .expect("templates")
+        .push(CanvasApplicationTemplateProjection {
+            id: "application-template-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: Some("credential-template-1".to_owned()),
+            approval_policy_set_id: Some("policy-1".to_owned()),
+            active: true,
+        });
+    let app = app(repository.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+    let create_path = format!("/v1/integrations/canvas/platforms/{platform_id}/program-bindings");
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post(&create_path)
+                .header("content-type", "application/json")
+                .header("x-organization-id", "org-1")
+                .body(Body::from("not-json"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let mut caller_owned = binding_request("course-101");
+    caller_owned["enabled"] = json!(true);
+    let rejected = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(&create_path),
+            caller_owned,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(repository.bindings.lock().expect("bindings").is_empty());
+
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(&create_path),
+            binding_request("course-101"),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    let binding_id = created["id"].as_str().expect("binding id").to_owned();
+    assert_eq!(
+        created["canvas_account_id"],
+        format!("unverified:{platform_id}")
+    );
+    assert_eq!(created["credential_template_id"], "credential-template-1");
+    assert_eq!(
+        created["flow_mode"],
+        "elevenid_orchestrated_canvas_evidence"
+    );
+    assert_eq!(created["issuer_mode"], "org_managed");
+    assert_eq!(created["direct_issue_enabled"], false);
+    assert_eq!(created["enabled"], false);
+    assert_eq!(created["config_version"], 1);
+
+    let duplicate = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(&create_path),
+            binding_request("course-101"),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let missing_query = app
+        .clone()
+        .oneshot(
+            Request::get("/v1/integrations/canvas/program-bindings")
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(missing_query.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/program-bindings?organization_id=forged&organization_id=org-1&platform_id={platform_id}"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(response_json(listed).await.as_array().unwrap().len(), 1);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-2")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+    let updated = app
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}"
+            )),
+            binding_request("course-202"),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = response_json(updated).await;
+    assert_eq!(updated["id"], binding_id);
+    assert_eq!(updated["config_version"], 2);
+    assert_eq!(updated["readiness_checks"], json!([]));
+    assert_eq!(updated["readiness_validated_at"], Value::Null);
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::delete(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let hidden = app
+        .oneshot(
+            Request::get(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    let archived = &repository.bindings.lock().expect("bindings")[0];
+    assert!(archived.archived_at.is_some());
+    assert!(!archived.enabled);
 }

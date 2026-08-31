@@ -54,6 +54,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_oauth_completion_redirect_url: String,
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
+    pub canvas_credentials_api_origins: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
@@ -181,6 +182,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_private_origin_allowlist_count",
                 &self.canvas_private_origin_allowlist.len(),
+            )
+            .field(
+                "canvas_credentials_api_origin_count",
+                &self.canvas_credentials_api_origins.len(),
             )
             .field(
                 "canvas_allow_private_base_urls",
@@ -484,6 +489,16 @@ impl IssuanceServiceConfig {
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
         let canvas_private_origin_allowlist =
             comma_separated_values(&values, "CANVAS_PRIVATE_ORIGIN_ALLOWLIST");
+        let mut canvas_credentials_api_origins =
+            comma_separated_values(&values, "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST");
+        if let Some(base_url) = values
+            .get("CANVAS_CREDENTIALS_API_BASE_URL")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            canvas_credentials_api_origins.push(base_url.to_owned());
+        }
         let canvas_allow_private_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
@@ -550,6 +565,7 @@ impl IssuanceServiceConfig {
             canvas_oauth_completion_redirect_url,
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
+            canvas_credentials_api_origins,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
             canvas_local_admin_token,
@@ -1141,6 +1157,7 @@ mod tests {
         assert!(config.canvas_lti_deep_linking_issuer.is_none());
         assert!(config.canvas_self_managed_origins.is_empty());
         assert!(config.canvas_private_origin_allowlist.is_empty());
+        assert!(config.canvas_credentials_api_origins.is_empty());
         assert!(!config.canvas_allow_private_base_urls);
         assert!(!config.canvas_allow_http_localhost_base_urls);
         assert!(config.canvas_local_admin_token.is_none());

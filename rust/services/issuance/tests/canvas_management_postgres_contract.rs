@@ -1,12 +1,19 @@
+use std::collections::BTreeMap;
+
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
-    canvas_management::{CanvasLtiInstallationRequest, CanvasPlatformRequest},
+    canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
+    canvas_management::{
+        CanvasDeliveryMode, CanvasEvidenceFactType, CanvasEvidencePassRuleInput,
+        CanvasEvidenceRequirementInput, CanvasEvidenceScopeInput, CanvasEvidenceSource,
+        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasProgramBindingRequest,
+    },
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_postgres::PostgresCanvasManagementRepository,
     canvas_management_service::CanvasManagementRepositoryError,
 };
 use marty_oid4vci::lti::CanvasLtiPlatformProbe;
-use serde_json::json;
+use serde_json::{json, Map};
 use sqlx::{postgres::PgPoolOptions, Row};
 
 fn database_url() -> Option<String> {
@@ -22,6 +29,38 @@ fn platform_request(display_name: &str, enabled: bool) -> CanvasPlatformRequest 
         lti_client_id: Some("client-1".to_owned()),
         lti_deployment_id: Some("deployment-1".to_owned()),
         enabled,
+    }
+}
+
+fn binding_request(course_id: &str) -> CanvasProgramBindingRequest {
+    CanvasProgramBindingRequest {
+        application_template_id: "application-template-native".to_owned(),
+        credential_template_id: None,
+        display_name: Some(format!("Course {course_id}")),
+        auto_approve_on_evidence: false,
+        evidence_requirements: vec![CanvasEvidenceRequirementInput {
+            requirement_id: None,
+            source: CanvasEvidenceSource::CanvasRest,
+            fact_type: CanvasEvidenceFactType::CourseCompletion,
+            scope: CanvasEvidenceScopeInput {
+                course_id: course_id.to_owned(),
+                activity_id: None,
+                module_id: None,
+                line_item_url: None,
+                resource_id: None,
+            },
+            pass_rule: CanvasEvidencePassRuleInput {
+                min_score_percent: None,
+                completed: Some(true),
+            },
+            required: true,
+        }],
+        canvas_scope: BTreeMap::from([("course_id".to_owned(), course_id.to_owned())]),
+        delivery_mode: CanvasDeliveryMode::WalletOnly,
+        approval_policy_set_id: None,
+        deployment_profile_id: None,
+        feature_flags: BTreeMap::new(),
+        canvas_credentials: None,
     }
 }
 
@@ -561,6 +600,118 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .try_get::<Option<chrono::DateTime<Utc>>, _>("archived_at")
         .unwrap()
         .is_none());
+
+    sqlx::query(
+        "INSERT INTO issuance_service.application_templates
+             (id, organization_id, credential_template_id, approval_policy_set_id, status)
+         VALUES ('application-template-native', 'org-management',
+                 'credential-template-native', 'policy-native', 'active')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.organization_integration_secrets
+             (id, organization_id, provider, purpose, enabled)
+         VALUES ('secret-native', 'org-management', 'canvas_credentials',
+                 'api_token', true)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let template = repository
+        .application_template("application-template-native")
+        .await
+        .unwrap()
+        .expect("application template projection");
+    assert_eq!(
+        template,
+        CanvasApplicationTemplateProjection {
+            id: "application-template-native".to_owned(),
+            organization_id: "org-management".to_owned(),
+            credential_template_id: Some("credential-template-native".to_owned()),
+            approval_policy_set_id: Some("policy-native".to_owned()),
+            active: true,
+        }
+    );
+    assert!(repository
+        .valid_canvas_credentials_secret("org-management", "secret-native")
+        .await
+        .unwrap());
+    assert!(!repository
+        .valid_canvas_credentials_secret("org-foreign", "secret-native")
+        .await
+        .unwrap());
+
+    let native_binding = CanvasProgramBindingRecord::configure(
+        &conflicting,
+        binding_request("course-101"),
+        &template,
+        Map::new(),
+        None,
+        now + chrono::Duration::seconds(12),
+    )
+    .unwrap();
+    repository.create_binding(&native_binding).await.unwrap();
+    assert_eq!(
+        repository.create_binding(&native_binding).await,
+        Err(CanvasManagementRepositoryError::DuplicateBinding)
+    );
+    assert!(repository
+        .active_binding("org-foreign", &native_binding.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        repository
+            .list_active_bindings(
+                "org-management",
+                Some(&conflicting.id),
+                Some("application-template-native"),
+            )
+            .await
+            .unwrap(),
+        vec![native_binding.clone()]
+    );
+
+    let updated_binding = CanvasProgramBindingRecord::configure(
+        &conflicting,
+        binding_request("course-202"),
+        &template,
+        Map::new(),
+        Some(&native_binding),
+        now + chrono::Duration::seconds(13),
+    )
+    .unwrap();
+    let updated_binding = repository
+        .save_binding_configuration(&updated_binding, native_binding.config_version)
+        .await
+        .unwrap()
+        .expect("binding configuration CAS");
+    assert_eq!(updated_binding.config_version, 2);
+    assert_eq!(updated_binding.canvas_scope["course_id"], "course-202");
+    assert!(repository
+        .save_binding_configuration(&updated_binding, native_binding.config_version)
+        .await
+        .unwrap()
+        .is_none());
+    let archived_binding = repository
+        .archive_binding(
+            "org-management",
+            &updated_binding.id,
+            updated_binding.config_version,
+            now + chrono::Duration::seconds(14),
+        )
+        .await
+        .unwrap()
+        .expect("binding archive CAS");
+    assert!(!archived_binding.enabled);
+    assert!(archived_binding.archived_at.is_some());
+    assert!(repository
+        .active_binding("org-management", &updated_binding.id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {
@@ -604,16 +755,55 @@ async fn setup_schema(pool: &sqlx::PgPool) {
     .await
     .unwrap();
     sqlx::query(
+        "CREATE TABLE issuance_service.application_templates (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            credential_template_id text,
+            approval_policy_set_id text,
+            status text NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.organization_integration_secrets (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            provider text NOT NULL,
+            purpose text NOT NULL,
+            enabled boolean NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "CREATE TABLE issuance_service.canvas_program_bindings (
             id text PRIMARY KEY,
             organization_id text NOT NULL,
             platform_id text NOT NULL REFERENCES issuance_service.canvas_platforms(id),
+            application_template_id text NOT NULL DEFAULT 'application-template-contract',
+            credential_template_id text NOT NULL DEFAULT 'credential-template-contract',
+            display_name text,
+            flow_mode text NOT NULL DEFAULT 'elevenid_orchestrated_canvas_evidence',
+            direct_issue_enabled boolean NOT NULL DEFAULT false,
+            auto_approve_on_evidence boolean NOT NULL DEFAULT false,
+            evidence_requirements jsonb NOT NULL DEFAULT '[]'::jsonb,
+            canvas_scope jsonb NOT NULL DEFAULT '{}'::jsonb,
+            delivery_mode text NOT NULL DEFAULT 'wallet_only',
+            issuer_mode text NOT NULL DEFAULT 'org_managed',
+            approval_policy_set_id text,
+            deployment_profile_id text,
+            feature_flags jsonb NOT NULL DEFAULT '{}'::jsonb,
+            canvas_credentials jsonb NOT NULL DEFAULT '{}'::jsonb,
+            config_version integer NOT NULL DEFAULT 1,
             enabled boolean NOT NULL,
             validated_config_version integer,
             readiness_checks jsonb NOT NULL,
             readiness_validated_at timestamptz,
             activated_at timestamptz,
             archived_at timestamptz,
+            credential_template_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
             updated_at timestamptz NOT NULL)",
     )
     .execute(pool)

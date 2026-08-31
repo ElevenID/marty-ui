@@ -1,6 +1,6 @@
 //! Application service for the Canvas platform-management lifecycle.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -8,17 +8,21 @@ use chrono::{DateTime, Utc};
 use mmf_security::constant_time_secret_eq;
 use rand::RngCore;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
+    canvas_binding_domain::{
+        CanvasApplicationTemplateProjection, CanvasBindingDomainError, CanvasProgramBindingRecord,
+    },
     canvas_lti_probe::{
         probe_canvas_lti_metadata, CanvasLtiJwksRefreshConfig, CanvasLtiMetadataProbeError,
         CanvasLtiProbeClient, CanvasLtiProbeResponse, MartyCanvasLtiProbeClient,
     },
     canvas_management::{
-        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasRequestValidationError,
+        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasProgramBindingRequest,
+        CanvasRequestValidationError,
     },
     canvas_management_domain::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
@@ -39,6 +43,8 @@ pub enum CanvasManagementRepositoryError {
     OAuthConnectionChanged,
     #[error("Canvas platform configuration version is exhausted")]
     VersionExhausted,
+    #[error("Canvas program binding already exists")]
+    DuplicateBinding,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -75,6 +81,22 @@ pub enum CanvasPlatformManagementError {
     Conflict,
     #[error("Canvas platform repository is unavailable")]
     RepositoryUnavailable,
+    #[error("Canvas program binding not found")]
+    BindingNotFound,
+    #[error("Application template not found")]
+    ApplicationTemplateNotFound,
+    #[error("Canvas Credentials configuration requires an organization-owned API token secret")]
+    CanvasCredentialsSecretRequired,
+    #[error("Canvas Credentials API token secret was not found")]
+    CanvasCredentialsSecretNotFound,
+    #[error("Canvas Credentials API base URL must be a trusted HTTPS URL")]
+    CanvasCredentialsUrlUntrusted,
+    #[error("Canvas Credentials API origin is not operator allowlisted")]
+    CanvasCredentialsOriginNotAllowed,
+    #[error("A Canvas program binding already exists for this template and scope")]
+    BindingConflict,
+    #[error(transparent)]
+    BindingDomain(#[from] CanvasBindingDomainError),
 }
 
 #[async_trait]
@@ -142,6 +164,49 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_config_version: i64,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError>;
+
+    async fn application_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<CanvasApplicationTemplateProjection>, CanvasManagementRepositoryError>;
+
+    async fn valid_canvas_credentials_secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<bool, CanvasManagementRepositoryError>;
+
+    async fn active_binding(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+
+    async fn list_active_bindings(
+        &self,
+        organization_id: &str,
+        platform_id: Option<&str>,
+        application_template_id: Option<&str>,
+    ) -> Result<Vec<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+
+    async fn create_binding(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+    ) -> Result<(), CanvasManagementRepositoryError>;
+
+    async fn save_binding_configuration(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        expected_config_version: i64,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+
+    async fn archive_binding(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+        expected_config_version: i64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -165,6 +230,7 @@ pub struct CanvasPlatformManagementService {
     issuer_base_url: String,
     lti_probe_config: CanvasLtiJwksRefreshConfig,
     lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
+    canvas_credentials_origins: Arc<BTreeSet<String>>,
 }
 
 impl std::fmt::Debug for CanvasPlatformManagementService {
@@ -195,6 +261,9 @@ impl CanvasPlatformManagementService {
             issuer_base_url: issuer_base_url.trim_end_matches('/').to_owned(),
             lti_probe_config,
             lti_probe_client: Arc::new(MartyCanvasLtiProbeClient),
+            canvas_credentials_origins: Arc::new(BTreeSet::from([
+                "https://api.badgr.io".to_owned()
+            ])),
         }
     }
 
@@ -214,7 +283,25 @@ impl CanvasPlatformManagementService {
             issuer_base_url: issuer_base_url.trim_end_matches('/').to_owned(),
             lti_probe_config,
             lti_probe_client,
+            canvas_credentials_origins: Arc::new(BTreeSet::from([
+                "https://api.badgr.io".to_owned()
+            ])),
         }
+    }
+
+    #[must_use]
+    pub fn with_canvas_credentials_origins(
+        mut self,
+        origins: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let mut trusted = BTreeSet::from(["https://api.badgr.io".to_owned()]);
+        trusted.extend(
+            origins
+                .into_iter()
+                .filter_map(|value| trusted_https_origin(&value)),
+        );
+        self.canvas_credentials_origins = Arc::new(trusted);
+        self
     }
 
     pub fn authorize_request<'organization>(
@@ -272,6 +359,204 @@ impl CanvasPlatformManagementService {
             .await
             .map_err(map_repository_error)?
             .ok_or(CanvasPlatformManagementError::PlatformNotFound)
+    }
+
+    async fn active_platform(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<CanvasPlatformRecord, CanvasPlatformManagementError> {
+        self.repository
+            .active_platform(organization_id, platform_id)
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::PlatformNotFound)
+    }
+
+    async fn active_binding(
+        &self,
+        organization_id: &str,
+        binding_id: &str,
+    ) -> Result<CanvasProgramBindingRecord, CanvasPlatformManagementError> {
+        self.repository
+            .active_binding(organization_id, binding_id)
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::BindingNotFound)
+    }
+
+    async fn application_template(
+        &self,
+        template_id: &str,
+    ) -> Result<CanvasApplicationTemplateProjection, CanvasPlatformManagementError> {
+        self.repository
+            .application_template(template_id)
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ApplicationTemplateNotFound)
+    }
+
+    async fn validated_canvas_credentials(
+        &self,
+        organization_id: &str,
+        input: Option<&crate::canvas_management::CanvasCredentialsConfigInput>,
+    ) -> Result<Map<String, Value>, CanvasPlatformManagementError> {
+        let Some(input) = input else {
+            return Ok(Map::new());
+        };
+        let secret_id = input
+            .api_token_secret_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or(CanvasPlatformManagementError::CanvasCredentialsSecretRequired)?;
+        if !self
+            .repository
+            .valid_canvas_credentials_secret(organization_id, secret_id)
+            .await
+            .map_err(map_binding_repository_error)?
+        {
+            return Err(CanvasPlatformManagementError::CanvasCredentialsSecretNotFound);
+        }
+        if let Some(api_base_url) = input
+            .api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let parsed = url::Url::parse(api_base_url)
+                .ok()
+                .filter(|url| url.query().is_none() && url.fragment().is_none())
+                .ok_or(CanvasPlatformManagementError::CanvasCredentialsUrlUntrusted)?;
+            let origin = trusted_https_origin(parsed.as_str())
+                .ok_or(CanvasPlatformManagementError::CanvasCredentialsUrlUntrusted)?;
+            if !self.canvas_credentials_origins.contains(&origin) {
+                return Err(CanvasPlatformManagementError::CanvasCredentialsOriginNotAllowed);
+            }
+        }
+        let mut value = serde_json::to_value(input)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .ok_or(CanvasPlatformManagementError::RepositoryUnavailable)?;
+        value.retain(|_, value| !value.is_null());
+        value.insert(
+            "api_token_secret_id".to_owned(),
+            Value::String(secret_id.to_owned()),
+        );
+        if let Some(Value::String(base_url)) = value.get_mut("api_base_url") {
+            *base_url = base_url.trim().trim_end_matches('/').to_owned();
+        }
+        Ok(value)
+    }
+
+    pub async fn create_binding(
+        &self,
+        platform_id: &str,
+        request: CanvasProgramBindingRequest,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasProgramBindingRecord, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let platform = self.active_platform(organization_id, platform_id).await?;
+        let template = self
+            .application_template(&request.application_template_id)
+            .await?;
+        let credentials = self
+            .validated_canvas_credentials(organization_id, request.canvas_credentials.as_ref())
+            .await?;
+        let binding = CanvasProgramBindingRecord::configure(
+            &platform,
+            request,
+            &template,
+            credentials,
+            None,
+            Utc::now(),
+        )?;
+        self.repository
+            .create_binding(&binding)
+            .await
+            .map_err(map_binding_repository_error)?;
+        Ok(binding)
+    }
+
+    pub async fn list_bindings(
+        &self,
+        claimed_organization_id: Option<&str>,
+        platform_id: Option<&str>,
+        application_template_id: Option<&str>,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<Vec<CanvasProgramBindingRecord>, CanvasPlatformManagementError> {
+        let organization_id =
+            self.authorize_claimed(api_key, trusted_organization_id, claimed_organization_id)?;
+        self.repository
+            .list_active_bindings(organization_id, platform_id, application_template_id)
+            .await
+            .map_err(map_binding_repository_error)
+    }
+
+    pub async fn get_binding(
+        &self,
+        binding_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasProgramBindingRecord, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        self.active_binding(organization_id, binding_id).await
+    }
+
+    pub async fn update_binding(
+        &self,
+        binding_id: &str,
+        request: CanvasProgramBindingRequest,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasProgramBindingRecord, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let existing = self.active_binding(organization_id, binding_id).await?;
+        let platform = self
+            .active_platform(organization_id, &existing.platform_id)
+            .await?;
+        let template = self
+            .application_template(&request.application_template_id)
+            .await?;
+        let credentials = self
+            .validated_canvas_credentials(organization_id, request.canvas_credentials.as_ref())
+            .await?;
+        let binding = CanvasProgramBindingRecord::configure(
+            &platform,
+            request,
+            &template,
+            credentials,
+            Some(&existing),
+            Utc::now(),
+        )?;
+        self.repository
+            .save_binding_configuration(&binding, existing.config_version)
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)
+    }
+
+    pub async fn delete_binding(
+        &self,
+        binding_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<(), CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let existing = self.active_binding(organization_id, binding_id).await?;
+        self.repository
+            .archive_binding(
+                organization_id,
+                binding_id,
+                existing.config_version,
+                Utc::now(),
+            )
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(())
     }
 
     pub async fn update(
@@ -703,9 +988,39 @@ fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
+fn trusted_https_origin(value: &str) -> Option<String> {
+    let url = url::Url::parse(value.trim()).ok()?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    Some(match url.port() {
+        Some(port) => format!("https://{host}:{port}"),
+        None => format!("https://{host}"),
+    })
+}
+
+fn map_binding_repository_error(
+    error: CanvasManagementRepositoryError,
+) -> CanvasPlatformManagementError {
+    match error {
+        CanvasManagementRepositoryError::DuplicateBinding => {
+            CanvasPlatformManagementError::BindingConflict
+        }
+        other => map_repository_error(other),
+    }
+}
+
 fn map_repository_error(error: CanvasManagementRepositoryError) -> CanvasPlatformManagementError {
     match error {
         CanvasManagementRepositoryError::Duplicate => CanvasPlatformManagementError::Conflict,
+        CanvasManagementRepositoryError::DuplicateBinding => {
+            CanvasPlatformManagementError::BindingConflict
+        }
         CanvasManagementRepositoryError::ConfigurationChanged => {
             CanvasPlatformManagementError::ConfigurationChanged
         }
@@ -734,15 +1049,21 @@ fn map_archive_repository_error(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use tokio::sync::Mutex;
 
     use super::*;
+    use crate::canvas_management::{
+        CanvasDeliveryMode, CanvasEvidenceFactType, CanvasEvidencePassRuleInput,
+        CanvasEvidenceRequirementInput, CanvasEvidenceScopeInput, CanvasEvidenceSource,
+    };
 
     #[derive(Default)]
     struct MemoryRepository {
         platforms: Mutex<Vec<CanvasPlatformRecord>>,
+        bindings: Mutex<Vec<CanvasProgramBindingRecord>>,
+        templates: Mutex<Vec<CanvasApplicationTemplateProjection>>,
         force_conflict: Mutex<bool>,
         force_oauth_conflict: Mutex<bool>,
     }
@@ -947,6 +1268,134 @@ mod tests {
             existing.updated_at = platform.updated_at;
             Ok(Some(existing.clone()))
         }
+
+        async fn application_template(
+            &self,
+            template_id: &str,
+        ) -> Result<Option<CanvasApplicationTemplateProjection>, CanvasManagementRepositoryError>
+        {
+            Ok(self
+                .templates
+                .lock()
+                .await
+                .iter()
+                .find(|template| template.id == template_id)
+                .cloned())
+        }
+
+        async fn valid_canvas_credentials_secret(
+            &self,
+            organization_id: &str,
+            secret_id: &str,
+        ) -> Result<bool, CanvasManagementRepositoryError> {
+            Ok(organization_id == "org-1" && secret_id == "secret-1")
+        }
+
+        async fn active_binding(
+            &self,
+            organization_id: &str,
+            binding_id: &str,
+        ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            Ok(self
+                .bindings
+                .lock()
+                .await
+                .iter()
+                .find(|binding| {
+                    binding.organization_id == organization_id
+                        && binding.id == binding_id
+                        && binding.archived_at.is_none()
+                })
+                .cloned())
+        }
+
+        async fn list_active_bindings(
+            &self,
+            organization_id: &str,
+            platform_id: Option<&str>,
+            application_template_id: Option<&str>,
+        ) -> Result<Vec<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            Ok(self
+                .bindings
+                .lock()
+                .await
+                .iter()
+                .filter(|binding| {
+                    binding.organization_id == organization_id
+                        && binding.archived_at.is_none()
+                        && platform_id.is_none_or(|value| binding.platform_id == value)
+                        && application_template_id
+                            .is_none_or(|value| binding.application_template_id == value)
+                })
+                .cloned()
+                .collect())
+        }
+
+        async fn create_binding(
+            &self,
+            binding: &CanvasProgramBindingRecord,
+        ) -> Result<(), CanvasManagementRepositoryError> {
+            let mut bindings = self.bindings.lock().await;
+            if bindings.iter().any(|candidate| {
+                candidate.archived_at.is_none()
+                    && candidate.organization_id == binding.organization_id
+                    && candidate.platform_id == binding.platform_id
+                    && candidate.application_template_id == binding.application_template_id
+                    && candidate.canvas_scope == binding.canvas_scope
+            }) {
+                return Err(CanvasManagementRepositoryError::DuplicateBinding);
+            }
+            bindings.push(binding.clone());
+            Ok(())
+        }
+
+        async fn save_binding_configuration(
+            &self,
+            binding: &CanvasProgramBindingRecord,
+            expected_config_version: i64,
+        ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            let mut bindings = self.bindings.lock().await;
+            if bindings.iter().any(|candidate| {
+                candidate.id != binding.id
+                    && candidate.archived_at.is_none()
+                    && candidate.organization_id == binding.organization_id
+                    && candidate.platform_id == binding.platform_id
+                    && candidate.application_template_id == binding.application_template_id
+                    && candidate.canvas_scope == binding.canvas_scope
+            }) {
+                return Err(CanvasManagementRepositoryError::DuplicateBinding);
+            }
+            let Some(existing) = bindings.iter_mut().find(|candidate| {
+                candidate.organization_id == binding.organization_id
+                    && candidate.id == binding.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == expected_config_version
+            }) else {
+                return Ok(None);
+            };
+            *existing = binding.clone();
+            Ok(Some(existing.clone()))
+        }
+
+        async fn archive_binding(
+            &self,
+            organization_id: &str,
+            binding_id: &str,
+            expected_config_version: i64,
+            now: DateTime<Utc>,
+        ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            let mut bindings = self.bindings.lock().await;
+            let Some(binding) = bindings.iter_mut().find(|binding| {
+                binding.organization_id == organization_id
+                    && binding.id == binding_id
+                    && binding.archived_at.is_none()
+                    && binding.config_version == expected_config_version
+            }) else {
+                return Ok(None);
+            };
+            binding.archive(now);
+            Ok(Some(binding.clone()))
+        }
     }
 
     fn request(name: &str, enabled: bool) -> CanvasPlatformRequest {
@@ -956,6 +1405,38 @@ mod tests {
             lti_client_id: Some("client".to_owned()),
             lti_deployment_id: Some("deployment".to_owned()),
             enabled,
+        }
+    }
+
+    fn binding_request(name: &str, course_id: &str) -> CanvasProgramBindingRequest {
+        CanvasProgramBindingRequest {
+            application_template_id: "application-template-1".to_owned(),
+            credential_template_id: None,
+            display_name: Some(name.to_owned()),
+            auto_approve_on_evidence: true,
+            evidence_requirements: vec![CanvasEvidenceRequirementInput {
+                requirement_id: None,
+                source: CanvasEvidenceSource::CanvasRest,
+                fact_type: CanvasEvidenceFactType::CourseCompletion,
+                scope: CanvasEvidenceScopeInput {
+                    course_id: course_id.to_owned(),
+                    activity_id: None,
+                    module_id: None,
+                    line_item_url: None,
+                    resource_id: None,
+                },
+                pass_rule: CanvasEvidencePassRuleInput {
+                    min_score_percent: None,
+                    completed: Some(true),
+                },
+                required: true,
+            }],
+            canvas_scope: BTreeMap::from([("course_id".to_owned(), course_id.to_owned())]),
+            delivery_mode: CanvasDeliveryMode::WalletOnly,
+            approval_policy_set_id: None,
+            deployment_profile_id: None,
+            feature_flags: BTreeMap::new(),
+            canvas_credentials: None,
         }
     }
 
@@ -1145,5 +1626,205 @@ mod tests {
             ))
         ));
         assert!(repository.platforms.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn binding_crud_preserves_server_owned_fields_and_tenant_boundary() {
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .templates
+            .lock()
+            .await
+            .push(CanvasApplicationTemplateProjection {
+                id: "application-template-1".to_owned(),
+                organization_id: "org-1".to_owned(),
+                credential_template_id: Some("credential-template-1".to_owned()),
+                approval_policy_set_id: Some("policy-1".to_owned()),
+                active: true,
+            });
+        let service = service(repository.clone());
+        let platform = service
+            .create(
+                request("Canvas", false),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        let created = service
+            .create_binding(
+                &platform.id,
+                binding_request("Course 101", "course-101"),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.credential_template_id, "credential-template-1");
+        assert_eq!(created.flow_mode, "elevenid_orchestrated_canvas_evidence");
+        assert_eq!(created.issuer_mode, "org_managed");
+        assert!(!created.direct_issue_enabled);
+        assert!(!created.enabled);
+        assert_eq!(created.config_version, 1);
+        assert!(created.evidence_requirements[0]["requirement_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("canvas_req_"));
+        assert_eq!(
+            service
+                .get_binding(&created.id, Some("management-secret"), Some("org-2"))
+                .await,
+            Err(CanvasPlatformManagementError::BindingNotFound)
+        );
+        assert_eq!(
+            service
+                .list_bindings(
+                    Some("org-1"),
+                    Some(&platform.id),
+                    Some("application-template-1"),
+                    Some("management-secret"),
+                    Some("org-1"),
+                )
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .create_binding(
+                    &platform.id,
+                    binding_request("Duplicate", "course-101"),
+                    Some("management-secret"),
+                    Some("org-1"),
+                )
+                .await,
+            Err(CanvasPlatformManagementError::BindingConflict)
+        );
+
+        let updated = service
+            .update_binding(
+                &created.id,
+                binding_request("Course 202", "course-202"),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(updated.config_version, 2);
+        assert!(updated.readiness_checks.is_empty());
+        assert!(updated.readiness_validated_at.is_none());
+
+        service
+            .delete_binding(&created.id, Some("management-secret"), Some("org-1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .get_binding(&created.id, Some("management-secret"), Some("org-1"))
+                .await,
+            Err(CanvasPlatformManagementError::BindingNotFound)
+        );
+        let archived = &repository.bindings.lock().await[0];
+        assert!(archived.archived_at.is_some());
+        assert!(!archived.enabled);
+    }
+
+    #[tokio::test]
+    async fn binding_rejects_foreign_inactive_templates_and_bad_secret_references() {
+        for (organization_id, active, expected) in [
+            (
+                "org-2",
+                true,
+                CanvasPlatformManagementError::BindingDomain(
+                    CanvasBindingDomainError::ForeignApplicationTemplate,
+                ),
+            ),
+            (
+                "org-1",
+                false,
+                CanvasPlatformManagementError::BindingDomain(
+                    CanvasBindingDomainError::ApplicationTemplateInactive,
+                ),
+            ),
+        ] {
+            let repository = Arc::new(MemoryRepository::default());
+            repository
+                .templates
+                .lock()
+                .await
+                .push(CanvasApplicationTemplateProjection {
+                    id: "application-template-1".to_owned(),
+                    organization_id: organization_id.to_owned(),
+                    credential_template_id: Some("credential-template-1".to_owned()),
+                    approval_policy_set_id: None,
+                    active,
+                });
+            let service = service(repository);
+            let platform = service
+                .create(
+                    request("Canvas", false),
+                    Some("management-secret"),
+                    Some("org-1"),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                service
+                    .create_binding(
+                        &platform.id,
+                        binding_request("Course", "course-101"),
+                        Some("management-secret"),
+                        Some("org-1"),
+                    )
+                    .await,
+                Err(expected)
+            );
+        }
+
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .templates
+            .lock()
+            .await
+            .push(CanvasApplicationTemplateProjection {
+                id: "application-template-1".to_owned(),
+                organization_id: "org-1".to_owned(),
+                credential_template_id: Some("credential-template-1".to_owned()),
+                approval_policy_set_id: None,
+                active: true,
+            });
+        let service = service(repository);
+        let platform = service
+            .create(
+                request("Canvas", false),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        let mut request = binding_request("Course", "course-101");
+        request.canvas_credentials = Some(crate::canvas_management::CanvasCredentialsConfigInput {
+            provider: None,
+            api_base_url: Some("https://api.badgr.io/v2".to_owned()),
+            issuer_id: None,
+            badgeclass_id: None,
+            assertion_scope: None,
+            api_token_secret_id: Some("missing".to_owned()),
+            credential_template_id: None,
+        });
+        assert_eq!(
+            service
+                .create_binding(
+                    &platform.id,
+                    request,
+                    Some("management-secret"),
+                    Some("org-1"),
+                )
+                .await,
+            Err(CanvasPlatformManagementError::CanvasCredentialsSecretNotFound)
+        );
     }
 }

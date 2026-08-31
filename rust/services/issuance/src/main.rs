@@ -203,7 +203,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
             &config.issuer_base_url,
             canvas_lti_jwks_refresh_config.clone(),
-        ),
+        )
+        .with_canvas_credentials_origins(config.canvas_credentials_api_origins.clone()),
         Arc::new(canvas_oauth.clone()),
         Arc::new(HttpCanvasCatalogProvider::new(
             std::time::Duration::from_secs(10),

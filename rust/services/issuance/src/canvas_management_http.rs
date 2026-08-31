@@ -12,12 +12,14 @@ use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
 use crate::{
+    canvas_binding_domain::{CanvasBindingDomainError, CanvasProgramBindingRecord},
     canvas_catalog::{
         discover_canvas_scope, CanvasCatalogOAuth, CanvasCatalogProvider,
         CanvasCatalogProviderError, CanvasScopeDiscoveryResponse,
     },
     canvas_management::{
-        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasScopeDiscoveryRequest,
+        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasProgramBindingRequest,
+        CanvasScopeDiscoveryRequest, ValidateCanvasRequest,
     },
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
@@ -157,6 +159,116 @@ impl CanvasPlatformManagementHttpService {
             .await
             .map(CanvasPlatformResponse::from)
             .map_err(Into::into)
+    }
+
+    pub async fn create_binding(
+        &self,
+        headers: &HeaderMap,
+        platform_id: &str,
+        request: CanvasProgramBindingRequest,
+    ) -> Result<CanvasProgramBindingResponse, CanvasManagementHttpError> {
+        let binding = self
+            .management
+            .create_binding(
+                platform_id,
+                request,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await?;
+        self.binding_response(headers, binding).await
+    }
+
+    pub async fn list_bindings(
+        &self,
+        headers: &HeaderMap,
+        claimed_organization_id: Option<&str>,
+        platform_id: Option<&str>,
+        application_template_id: Option<&str>,
+    ) -> Result<Vec<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+        let bindings = self
+            .management
+            .list_bindings(
+                claimed_organization_id,
+                platform_id,
+                application_template_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await?;
+        let mut responses = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            responses.push(self.binding_response(headers, binding).await?);
+        }
+        Ok(responses)
+    }
+
+    pub async fn get_binding(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+    ) -> Result<CanvasProgramBindingResponse, CanvasManagementHttpError> {
+        let binding = self
+            .management
+            .get_binding(
+                binding_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await?;
+        self.binding_response(headers, binding).await
+    }
+
+    pub async fn update_binding(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+        request: CanvasProgramBindingRequest,
+    ) -> Result<CanvasProgramBindingResponse, CanvasManagementHttpError> {
+        let binding = self
+            .management
+            .update_binding(
+                binding_id,
+                request,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await?;
+        self.binding_response(headers, binding).await
+    }
+
+    pub async fn delete_binding(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+    ) -> Result<(), CanvasManagementHttpError> {
+        self.management
+            .delete_binding(
+                binding_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn binding_response(
+        &self,
+        headers: &HeaderMap,
+        binding: CanvasProgramBindingRecord,
+    ) -> Result<CanvasProgramBindingResponse, CanvasManagementHttpError> {
+        let platform = self
+            .management
+            .get(
+                &binding.platform_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await?;
+        Ok(CanvasProgramBindingResponse::new(
+            binding,
+            platform.canvas_account_id,
+        ))
     }
 
     pub async fn update(
@@ -371,6 +483,71 @@ impl From<CanvasPlatformProbeResult> for CanvasPlatformJwksRefreshResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasProgramBindingResponse {
+    pub id: String,
+    pub organization_id: String,
+    pub platform_id: String,
+    pub canvas_account_id: String,
+    pub application_template_id: String,
+    pub credential_template_id: String,
+    pub display_name: Option<String>,
+    pub flow_mode: String,
+    pub direct_issue_enabled: bool,
+    pub auto_approve_on_evidence: bool,
+    pub evidence_requirements: Vec<Value>,
+    pub canvas_scope: std::collections::BTreeMap<String, String>,
+    pub delivery_mode: String,
+    pub issuer_mode: String,
+    pub approval_policy_set_id: Option<String>,
+    pub deployment_profile_id: Option<String>,
+    pub feature_flags: std::collections::BTreeMap<String, bool>,
+    pub canvas_credentials: Map<String, Value>,
+    pub config_version: i64,
+    pub validated_config_version: Option<i64>,
+    pub readiness_checks: Vec<Value>,
+    pub readiness_validated_at: Option<String>,
+    pub activated_at: Option<String>,
+    pub archived_at: Option<String>,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl CanvasProgramBindingResponse {
+    fn new(binding: CanvasProgramBindingRecord, canvas_account_id: String) -> Self {
+        Self {
+            id: binding.id,
+            organization_id: binding.organization_id,
+            platform_id: binding.platform_id,
+            canvas_account_id,
+            application_template_id: binding.application_template_id,
+            credential_template_id: binding.credential_template_id,
+            display_name: binding.display_name,
+            flow_mode: binding.flow_mode,
+            direct_issue_enabled: binding.direct_issue_enabled,
+            auto_approve_on_evidence: binding.auto_approve_on_evidence,
+            evidence_requirements: binding.evidence_requirements,
+            canvas_scope: binding.canvas_scope,
+            delivery_mode: binding.delivery_mode,
+            issuer_mode: binding.issuer_mode,
+            approval_policy_set_id: binding.approval_policy_set_id,
+            deployment_profile_id: binding.deployment_profile_id,
+            feature_flags: binding.feature_flags,
+            canvas_credentials: binding.canvas_credentials,
+            config_version: binding.config_version,
+            validated_config_version: binding.validated_config_version,
+            readiness_checks: binding.readiness_checks,
+            readiness_validated_at: optional_timestamp(binding.readiness_validated_at),
+            activated_at: optional_timestamp(binding.activated_at),
+            archived_at: optional_timestamp(binding.archived_at),
+            enabled: binding.enabled,
+            created_at: timestamp(binding.created_at),
+            updated_at: timestamp(binding.updated_at),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasPlatformResponse {
     pub id: String,
     pub organization_id: String,
@@ -575,6 +752,31 @@ pub async fn parse_lti_installation_request(
     })
 }
 
+pub async fn parse_program_binding_request(
+    request: axum::extract::Request,
+) -> Result<CanvasProgramBindingRequest, CanvasManagementHttpError> {
+    let mut value = parse_management_json(request).await?;
+    validate_program_binding_request_value(&mut value)?;
+    let parsed: CanvasProgramBindingRequest =
+        serde_json::from_value(value.clone()).map_err(|_| {
+            CanvasManagementHttpError::Validation(vec![json!({
+                "type": "model_attributes_type",
+                "loc": ["body"],
+                "msg": "Input should be a valid Canvas program binding request",
+                "input": value,
+            })])
+        })?;
+    parsed.validate().map_err(|error| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "value_error",
+            "loc": ["body"],
+            "msg": error.to_string(),
+            "input": value,
+        })])
+    })?;
+    Ok(parsed)
+}
+
 pub async fn parse_scope_discovery_request(
     request: axum::extract::Request,
 ) -> Result<CanvasScopeDiscoveryRequest, CanvasManagementHttpError> {
@@ -651,9 +853,23 @@ async fn parse_management_json(
 }
 
 pub fn organization_id_from_query(query: Option<&str>) -> Option<String> {
+    query_value(query, "organization_id")
+}
+
+pub fn program_binding_query(
+    query: Option<&str>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        query_value(query, "organization_id"),
+        query_value(query, "platform_id"),
+        query_value(query, "application_template_id"),
+    )
+}
+
+fn query_value(query: Option<&str>, expected: &str) -> Option<String> {
     query.and_then(|query| {
         url::form_urlencoded::parse(query.as_bytes())
-            .filter(|(name, _)| name == "organization_id")
+            .filter(|(name, _)| name == expected)
             .map(|(_, value)| value.into_owned())
             .last()
     })
@@ -704,6 +920,129 @@ fn validate_platform_request_value(value: &mut Value) -> Result<(), CanvasManage
             "input": input,
         }));
     }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanvasManagementHttpError::Validation(errors))
+    }
+}
+
+fn validate_program_binding_request_value(
+    value: &mut Value,
+) -> Result<(), CanvasManagementHttpError> {
+    let invalid_input = value.clone();
+    let Some(object) = value.as_object_mut() else {
+        return Err(CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": invalid_input,
+        })]));
+    };
+    let mut errors = Vec::new();
+    validate_required_string(object, "application_template_id", 512, &mut errors);
+    validate_optional_string(object, "credential_template_id", 512, &mut errors);
+    validate_optional_string(object, "display_name", 200, &mut errors);
+
+    let allowed = [
+        "application_template_id",
+        "credential_template_id",
+        "display_name",
+        "auto_approve_on_evidence",
+        "evidence_requirements",
+        "canvas_scope",
+        "delivery_mode",
+        "approval_policy_set_id",
+        "deployment_profile_id",
+        "feature_flags",
+        "canvas_credentials",
+    ];
+    for (name, input) in object.iter() {
+        if !allowed.contains(&name.as_str()) {
+            errors.push(json!({
+                "type": "extra_forbidden",
+                "loc": ["body", name],
+                "msg": "Extra inputs are not permitted",
+                "input": input,
+            }));
+        }
+    }
+
+    let approve = object
+        .entry("auto_approve_on_evidence")
+        .or_insert(Value::Bool(false));
+    match pydantic_bool(approve) {
+        Some(value) => *approve = Value::Bool(value),
+        None => errors.push(json!({
+            "type": if approve.is_array() || approve.is_object() || approve.is_null() {
+                "bool_type"
+            } else {
+                "bool_parsing"
+            },
+            "loc": ["body", "auto_approve_on_evidence"],
+            "msg": "Input should be a valid boolean",
+            "input": approve,
+        })),
+    }
+
+    match object.get_mut("evidence_requirements") {
+        None => errors.push(json!({
+            "type": "missing",
+            "loc": ["body", "evidence_requirements"],
+            "msg": "Field required",
+            "input": object,
+        })),
+        Some(Value::Array(requirements)) if requirements.is_empty() => errors.push(json!({
+            "type": "too_short",
+            "loc": ["body", "evidence_requirements"],
+            "msg": "List should have at least 1 item after validation, not 0",
+            "input": requirements,
+        })),
+        Some(Value::Array(requirements)) => {
+            for (index, requirement) in requirements.iter_mut().enumerate() {
+                let Some(requirement) = requirement.as_object_mut() else {
+                    continue;
+                };
+                let required = requirement.entry("required").or_insert(Value::Bool(true));
+                match pydantic_bool(required) {
+                    Some(value) => *required = Value::Bool(value),
+                    None => errors.push(json!({
+                        "type": if required.is_array() || required.is_object() || required.is_null() {
+                            "bool_type"
+                        } else {
+                            "bool_parsing"
+                        },
+                        "loc": ["body", "evidence_requirements", index, "required"],
+                        "msg": "Input should be a valid boolean",
+                        "input": required,
+                    })),
+                }
+            }
+        }
+        Some(input) => errors.push(json!({
+            "type": "list_type",
+            "loc": ["body", "evidence_requirements"],
+            "msg": "Input should be a valid list",
+            "input": input,
+        })),
+    }
+
+    if let Some(input) = object.get_mut("feature_flags") {
+        if let Some(flags) = input.as_object_mut() {
+            for (name, value) in flags.iter_mut() {
+                match pydantic_bool(value) {
+                    Some(coerced) => *value = Value::Bool(coerced),
+                    None => errors.push(json!({
+                        "type": "bool_parsing",
+                        "loc": ["body", "feature_flags", name],
+                        "msg": "Input should be a valid boolean",
+                        "input": value,
+                    })),
+                }
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -1088,6 +1427,50 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
             StatusCode::SERVICE_UNAVAILABLE,
             "Canvas platform repository is unavailable".to_owned(),
         ),
+        CanvasPlatformManagementError::BindingNotFound => (
+            StatusCode::NOT_FOUND,
+            "Canvas program binding not found".to_owned(),
+        ),
+        CanvasPlatformManagementError::ApplicationTemplateNotFound => (
+            StatusCode::NOT_FOUND,
+            "Application template not found".to_owned(),
+        ),
+        CanvasPlatformManagementError::CanvasCredentialsSecretRequired => (
+            StatusCode::BAD_REQUEST,
+            "Canvas Credentials configuration requires an organization-owned API token secret"
+                .to_owned(),
+        ),
+        CanvasPlatformManagementError::CanvasCredentialsSecretNotFound => (
+            StatusCode::NOT_FOUND,
+            "Canvas Credentials API token secret was not found".to_owned(),
+        ),
+        CanvasPlatformManagementError::CanvasCredentialsUrlUntrusted => (
+            StatusCode::BAD_REQUEST,
+            "Canvas Credentials API base URL must be a trusted HTTPS URL".to_owned(),
+        ),
+        CanvasPlatformManagementError::CanvasCredentialsOriginNotAllowed => (
+            StatusCode::BAD_REQUEST,
+            "Canvas Credentials API origin is not operator allowlisted".to_owned(),
+        ),
+        CanvasPlatformManagementError::BindingConflict => (
+            StatusCode::CONFLICT,
+            "A Canvas program binding already exists for this template and scope".to_owned(),
+        ),
+        CanvasPlatformManagementError::BindingDomain(error) => match error {
+            CanvasBindingDomainError::InvalidRequest(error) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+            }
+            CanvasBindingDomainError::CredentialTemplateRequired => (
+                StatusCode::BAD_REQUEST,
+                "Program binding requires a credential template ID".to_owned(),
+            ),
+            CanvasBindingDomainError::DuplicateRequirementId
+            | CanvasBindingDomainError::InvalidEvidence(_) => {
+                (StatusCode::BAD_REQUEST, error.to_string())
+            }
+            CanvasBindingDomainError::VersionExhausted => (StatusCode::CONFLICT, error.to_string()),
+            _ => (StatusCode::CONFLICT, error.to_string()),
+        },
     };
     (status, Json(json!({"detail": detail}))).into_response()
 }
@@ -1187,6 +1570,31 @@ mod tests {
             validate_platform_request_value(&mut request).unwrap();
             assert_eq!(request["enabled"], expected);
         }
+    }
+
+    #[test]
+    fn binding_validation_preserves_nested_pydantic_boolean_coercion() {
+        let mut request = json!({
+            "application_template_id": "application-template-1",
+            "auto_approve_on_evidence": "yes",
+            "evidence_requirements": [{
+                "source": "canvas_rest",
+                "fact_type": "canvas.course_completion",
+                "scope": {"course_id": "course-1"},
+                "pass_rule": {"completed": true},
+                "required": "off"
+            }],
+            "feature_flags": {
+                "enable_canvas_evidence": 1,
+                "enable_background_awards": "false"
+            }
+        });
+        validate_program_binding_request_value(&mut request).unwrap();
+        assert_eq!(request["auto_approve_on_evidence"], true);
+        assert_eq!(request["evidence_requirements"][0]["required"], false);
+        assert_eq!(request["feature_flags"]["enable_canvas_evidence"], true);
+        assert_eq!(request["feature_flags"]["enable_background_awards"], false);
+        serde_json::from_value::<CanvasProgramBindingRequest>(request).unwrap();
     }
 
     #[test]
