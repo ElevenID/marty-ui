@@ -67,7 +67,11 @@ Counts describe local migration progress, not merged `main` coverage.
    detached `v1.1.206`/`v1.1.207` beta release worktrees: those were verified
    against their upstream squash merges and removed on 2026-08-30. Preserve and
    land the still-unique verification-consolidation worktrees and the open core
-   proof-boundary dependency PR; no unlanded feature work may be discarded.
+   proof-boundary dependency PR; no unlanded feature work may be discarded. The
+   separately authorized UI/MMF history rewrites, release/tag retirement and
+   protection restoration were already completed and verified; their lingering
+   tracking issue `ElevenID/.github#22` was closed after reconciling the merged
+   evidence, so no additional destructive history operation remains.
 4. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
    release-demo recordings plus acceptance/soak checks, and leave production
    unchanged.
