@@ -373,7 +373,7 @@ pub enum CanvasSecretProvider {
 }
 
 impl CanvasSecretProvider {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Canvas => "canvas",
             Self::CanvasCredentials => "canvas_credentials",
@@ -397,7 +397,7 @@ pub enum CanvasSecretPurpose {
 }
 
 impl CanvasSecretPurpose {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::OauthClientSecret => "oauth_client_secret",
             Self::ApiToken => "api_token",

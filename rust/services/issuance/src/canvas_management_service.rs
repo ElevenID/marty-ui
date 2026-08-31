@@ -22,8 +22,9 @@ use crate::{
         CanvasLtiProbeClient, CanvasLtiProbeResponse, MartyCanvasLtiProbeClient,
     },
     canvas_management::{
-        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasProgramBindingRequest,
-        CanvasRequestValidationError,
+        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest,
+        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasRequestValidationError,
+        ValidateCanvasRequest,
     },
     canvas_management_domain::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
@@ -34,6 +35,7 @@ use crate::{
         verified_canvas_binding_capabilities, CanvasBindingReadiness, CanvasReadinessCheck,
         CanvasReadinessInputs,
     },
+    integration_secret::{integration_secret_hint, ManagedIntegrationSecret},
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
 };
@@ -108,6 +110,8 @@ pub enum CanvasPlatformManagementError {
     PilotDisabled,
     #[error("Canvas program binding has blocking readiness checks")]
     ActivationBlocked(Vec<CanvasReadinessCheck>),
+    #[error("Integration secret not found")]
+    IntegrationSecretNotFound,
     #[error(transparent)]
     BindingDomain(#[from] CanvasBindingDomainError),
 }
@@ -250,6 +254,40 @@ pub trait CanvasReadinessInputProvider: Send + Sync {
     ) -> CanvasReadinessInputs;
 }
 
+#[async_trait]
+pub trait CanvasIntegrationSecretRepository: Send + Sync {
+    async fn create_secret(
+        &self,
+        secret: &ManagedIntegrationSecret,
+        plaintext: &str,
+    ) -> Result<ManagedIntegrationSecret, CanvasManagementRepositoryError>;
+
+    async fn secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError>;
+
+    async fn list_secrets(
+        &self,
+        organization_id: &str,
+        provider: Option<&str>,
+    ) -> Result<Vec<ManagedIntegrationSecret>, CanvasManagementRepositoryError>;
+
+    async fn update_secret(
+        &self,
+        secret: &ManagedIntegrationSecret,
+        plaintext: Option<&str>,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError>;
+
+    async fn delete_secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<bool, CanvasManagementRepositoryError>;
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasLtiRegistrationResponse {
     pub platform_id: String,
@@ -302,6 +340,7 @@ pub struct CanvasPlatformManagementService {
     lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
     canvas_credentials_origins: Arc<BTreeSet<String>>,
     readiness_input_provider: Option<Arc<dyn CanvasReadinessInputProvider>>,
+    integration_secrets: Option<Arc<dyn CanvasIntegrationSecretRepository>>,
     portable_enabled: bool,
     pilot_organizations: Arc<BTreeSet<String>>,
     readiness_max_age: Duration,
@@ -318,6 +357,10 @@ impl std::fmt::Debug for CanvasPlatformManagementService {
             .field(
                 "readiness_input_provider_configured",
                 &self.readiness_input_provider.is_some(),
+            )
+            .field(
+                "integration_secret_management_configured",
+                &self.integration_secrets.is_some(),
             )
             .field("portable_enabled", &self.portable_enabled)
             .field("pilot_organization_count", &self.pilot_organizations.len())
@@ -346,6 +389,7 @@ impl CanvasPlatformManagementService {
                 "https://api.badgr.io".to_owned()
             ])),
             readiness_input_provider: None,
+            integration_secrets: None,
             portable_enabled: false,
             pilot_organizations: Arc::new(BTreeSet::new()),
             readiness_max_age: Duration::from_secs(900),
@@ -372,6 +416,7 @@ impl CanvasPlatformManagementService {
                 "https://api.badgr.io".to_owned()
             ])),
             readiness_input_provider: None,
+            integration_secrets: None,
             portable_enabled: false,
             pilot_organizations: Arc::new(BTreeSet::new()),
             readiness_max_age: Duration::from_secs(900),
@@ -412,6 +457,15 @@ impl CanvasPlatformManagementService {
         self.portable_enabled = portable_enabled;
         self.pilot_organizations = Arc::new(pilot_organizations);
         self.readiness_max_age = readiness_max_age;
+        self
+    }
+
+    #[must_use]
+    pub fn with_integration_secret_repository(
+        mut self,
+        repository: Arc<dyn CanvasIntegrationSecretRepository>,
+    ) -> Self {
+        self.integration_secrets = Some(repository);
         self
     }
 
@@ -667,6 +721,116 @@ impl CanvasPlatformManagementService {
             .await
             .map_err(map_binding_repository_error)?
             .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(())
+    }
+
+    pub async fn create_integration_secret(
+        &self,
+        request: CanvasIntegrationSecretCreate,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<ManagedIntegrationSecret, CanvasPlatformManagementError> {
+        request
+            .validate()
+            .map_err(CanvasManagementDomainError::InvalidRequest)?;
+        let organization_id = self.authorize_claimed(
+            api_key,
+            trusted_organization_id,
+            Some(&request.organization_id),
+        )?;
+        let now = Utc::now();
+        let secret = ManagedIntegrationSecret {
+            id: uuid::Uuid::new_v4().to_string(),
+            organization_id: organization_id.to_owned(),
+            name: request.name.trim().to_owned(),
+            provider: request.provider.as_str().to_owned(),
+            purpose: request.purpose.as_str().to_owned(),
+            secret_hint: integration_secret_hint(request.secret_value.expose()),
+            metadata: request.metadata,
+            enabled: request.enabled,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        };
+        self.integration_secret_repository()?
+            .create_secret(&secret, request.secret_value.expose())
+            .await
+            .map_err(map_repository_error)
+    }
+
+    pub async fn list_integration_secrets(
+        &self,
+        claimed_organization_id: Option<&str>,
+        provider: Option<&str>,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<Vec<ManagedIntegrationSecret>, CanvasPlatformManagementError> {
+        let organization_id =
+            self.authorize_claimed(api_key, trusted_organization_id, claimed_organization_id)?;
+        self.integration_secret_repository()?
+            .list_secrets(organization_id, provider)
+            .await
+            .map_err(map_repository_error)
+    }
+
+    pub async fn update_integration_secret(
+        &self,
+        secret_id: &str,
+        request: CanvasIntegrationSecretUpdate,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<ManagedIntegrationSecret, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let repository = self.integration_secret_repository()?;
+        let mut secret = repository
+            .secret(organization_id, secret_id)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::IntegrationSecretNotFound)?;
+        let expected_updated_at = secret.updated_at;
+        if let Some(name) = request.name {
+            secret.name = name.trim().to_owned();
+        }
+        if let Some(metadata) = request.metadata {
+            secret.metadata = metadata;
+        }
+        if let Some(enabled) = request.enabled {
+            secret.enabled = enabled;
+        }
+        // The Python repository treated an empty update value as "keep the
+        // existing ciphertext". Preserve that observable behavior while a
+        // non-empty value remains an explicit rotation.
+        let plaintext = request
+            .secret_value
+            .as_ref()
+            .map(|value| value.expose())
+            .filter(|value| !value.is_empty());
+        if let Some(hint) = plaintext.and_then(integration_secret_hint) {
+            secret.secret_hint = Some(hint);
+        }
+        secret.updated_at = Utc::now();
+        repository
+            .update_secret(&secret, plaintext, expected_updated_at)
+            .await
+            .map_err(map_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)
+    }
+
+    pub async fn delete_integration_secret(
+        &self,
+        secret_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<(), CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let deleted = self
+            .integration_secret_repository()?
+            .delete_secret(organization_id, secret_id)
+            .await
+            .map_err(map_repository_error)?;
+        if !deleted {
+            return Err(CanvasPlatformManagementError::IntegrationSecretNotFound);
+        }
         Ok(())
     }
 
@@ -1250,6 +1414,14 @@ impl CanvasPlatformManagementService {
                     TransactionReadError::TrustedOrganizationRequired,
                 )
             })
+    }
+
+    fn integration_secret_repository(
+        &self,
+    ) -> Result<&Arc<dyn CanvasIntegrationSecretRepository>, CanvasPlatformManagementError> {
+        self.integration_secrets
+            .as_ref()
+            .ok_or(CanvasPlatformManagementError::RepositoryUnavailable)
     }
 
     fn authorize_claimed<'organization>(

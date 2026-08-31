@@ -3,7 +3,8 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde_json::Value;
+use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
 use std::fmt;
 use thiserror::Error;
 
@@ -17,6 +18,28 @@ pub struct IntegrationSecretMetadata {
     pub provider: String,
     pub purpose: String,
     pub enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ManagedIntegrationSecret {
+    pub id: String,
+    pub organization_id: String,
+    pub name: String,
+    pub provider: String,
+    pub purpose: String,
+    pub secret_hint: Option<String>,
+    pub metadata: Map<String, Value>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+impl ManagedIntegrationSecret {
+    #[must_use]
+    pub fn secret_ref(&self) -> String {
+        integration_secret_ref(&self.organization_id, &self.id)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -128,6 +151,23 @@ impl IntegrationSecretCipher {
 #[must_use]
 pub fn integration_secret_ref(organization_id: &str, secret_id: &str) -> String {
     format!("org_secret://{organization_id}/{secret_id}")
+}
+
+#[must_use]
+pub fn integration_secret_hint(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| {
+        format!(
+            "...{}",
+            value
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>()
+        )
+    })
 }
 
 #[must_use]

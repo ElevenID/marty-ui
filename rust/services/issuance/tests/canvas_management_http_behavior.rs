@@ -20,15 +20,16 @@ use marty_issuance_service::{
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
     canvas_management_service::{
-        CanvasBindingActivation, CanvasManagementRepositoryError,
-        CanvasPlatformManagementRepository, CanvasPlatformManagementService,
-        CanvasReadinessInputProvider,
+        CanvasBindingActivation, CanvasIntegrationSecretRepository,
+        CanvasManagementRepositoryError, CanvasPlatformManagementRepository,
+        CanvasPlatformManagementService, CanvasReadinessInputProvider,
     },
     canvas_oauth::CanvasOAuthError,
     canvas_readiness::{
         CanvasOAuthReadinessConnection, CanvasReadinessInputs, CanvasSyncReadiness,
     },
     http::router_with_canvas_management,
+    integration_secret::ManagedIntegrationSecret,
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
 };
@@ -47,6 +48,8 @@ struct MemoryRepository {
     installation_invalidations: Mutex<Vec<bool>>,
     activations: Mutex<Vec<CanvasBindingActivation>>,
     deactivation_count: Mutex<usize>,
+    secrets: Mutex<Vec<ManagedIntegrationSecret>>,
+    secret_update_plaintexts: Mutex<Vec<Option<String>>>,
 }
 
 struct SuccessfulProbe;
@@ -674,6 +677,84 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
     }
 }
 
+#[async_trait]
+impl CanvasIntegrationSecretRepository for MemoryRepository {
+    async fn create_secret(
+        &self,
+        secret: &ManagedIntegrationSecret,
+        _plaintext: &str,
+    ) -> Result<ManagedIntegrationSecret, CanvasManagementRepositoryError> {
+        self.secrets.lock().expect("secrets").push(secret.clone());
+        Ok(secret.clone())
+    }
+
+    async fn secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        Ok(self
+            .secrets
+            .lock()
+            .expect("secrets")
+            .iter()
+            .find(|secret| secret.organization_id == organization_id && secret.id == secret_id)
+            .cloned())
+    }
+
+    async fn list_secrets(
+        &self,
+        organization_id: &str,
+        provider: Option<&str>,
+    ) -> Result<Vec<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        Ok(self
+            .secrets
+            .lock()
+            .expect("secrets")
+            .iter()
+            .filter(|secret| {
+                secret.organization_id == organization_id
+                    && provider.is_none_or(|provider| secret.provider == provider)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn update_secret(
+        &self,
+        secret: &ManagedIntegrationSecret,
+        plaintext: Option<&str>,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        self.secret_update_plaintexts
+            .lock()
+            .expect("secret update plaintexts")
+            .push(plaintext.map(str::to_owned));
+        let mut secrets = self.secrets.lock().expect("secrets");
+        let Some(existing) = secrets.iter_mut().find(|candidate| {
+            candidate.organization_id == secret.organization_id
+                && candidate.id == secret.id
+                && candidate.updated_at == expected_updated_at
+        }) else {
+            return Ok(None);
+        };
+        *existing = secret.clone();
+        Ok(Some(existing.clone()))
+    }
+
+    async fn delete_secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<bool, CanvasManagementRepositoryError> {
+        let mut secrets = self.secrets.lock().expect("secrets");
+        let before = secrets.len();
+        secrets
+            .retain(|secret| secret.organization_id != organization_id || secret.id != secret_id);
+        Ok(secrets.len() + 1 == before)
+    }
+}
+
 fn app(repository: Arc<MemoryRepository>) -> axum::Router {
     app_with_probe(repository, Arc::new(SuccessfulProbe))
 }
@@ -687,7 +768,7 @@ fn app_with_probe(
     let runtime = IssuanceRuntime::new(&config).expect("runtime");
     let service = CanvasPlatformManagementHttpService::new(
         CanvasPlatformManagementService::with_probe_client(
-            repository,
+            repository.clone(),
             Some("management-key"),
             CanvasOriginPolicy::default(),
             "https://issuer.example.edu",
@@ -699,7 +780,8 @@ fn app_with_probe(
                 allow_http_localhost: false,
             },
             probe_client,
-        ),
+        )
+        .with_integration_secret_repository(repository),
     );
     router_with_canvas_management(
         runtime.state(),
@@ -2398,4 +2480,243 @@ async fn program_binding_routes_preserve_auth_server_ownership_and_soft_delete()
     let archived = &repository.bindings.lock().expect("bindings")[0];
     assert!(archived.archived_at.is_some());
     assert!(!archived.enabled);
+}
+
+#[tokio::test]
+async fn integration_secret_routes_are_tenant_bound_and_never_disclose_plaintext() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let collection = "/v1/integrations/canvas/integration-secrets";
+
+    let unknown_field = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(collection),
+            json!({
+                "organization_id": "org-1",
+                "name": "Canvas Credentials token",
+                "provider": "canvas_credentials",
+                "purpose": "api_token",
+                "secret_value": "plaintext-secret-1234",
+                "caller_owned": true
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(unknown_field.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(repository.secrets.lock().expect("secrets").is_empty());
+
+    let invalid_pair = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(collection),
+            json!({
+                "organization_id": "org-1",
+                "name": "Canvas Credentials token",
+                "provider": "canvas_credentials",
+                "purpose": "oauth_client_secret",
+                "secret_value": "plaintext-secret-1234"
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid_pair.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(repository.secrets.lock().expect("secrets").is_empty());
+
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(collection),
+            json!({
+                "organization_id": "org-1",
+                "name": "Canvas Credentials token",
+                "provider": "canvas_credentials",
+                "purpose": "api_token",
+                "secret_value": "plaintext-secret-1234",
+                "metadata": {"owner": "admin"},
+                "enabled": "off"
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = response_json(created).await;
+    let created_fields = created.as_object().expect("secret response");
+    assert_eq!(created_fields.len(), 12);
+    assert_eq!(created["organization_id"], "org-1");
+    assert_eq!(created["name"], "Canvas Credentials token");
+    assert_eq!(created["provider"], "canvas_credentials");
+    assert_eq!(created["purpose"], "api_token");
+    assert_eq!(created["secret_hint"], "...1234");
+    assert_eq!(created["metadata"], json!({"owner": "admin"}));
+    assert_eq!(created["enabled"], false);
+    assert_eq!(created["last_used_at"], Value::Null);
+    let secret_id = created["id"].as_str().expect("secret id").to_owned();
+    assert_eq!(
+        created["secret_ref"],
+        format!("org_secret://org-1/{secret_id}")
+    );
+    assert!(!created_fields.contains_key("secret_value"));
+    assert!(!created_fields.contains_key("ciphertext"));
+    assert!(!created.to_string().contains("plaintext-secret-1234"));
+
+    let missing_claim = app
+        .clone()
+        .oneshot(
+            Request::get(collection)
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(missing_claim.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let foreign_claim = app
+        .clone()
+        .oneshot(
+            Request::get(format!("{collection}?organization_id=org-2"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(foreign_claim.status(), StatusCode::NOT_FOUND);
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::get(format!("{collection}?organization_id=org-1"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = response_json(listed).await;
+    assert_eq!(listed.as_array().expect("secret list").len(), 1);
+    assert_eq!(listed[0]["id"], secret_id);
+    assert!(!listed.to_string().contains("plaintext-secret-1234"));
+
+    let foreign_update = app
+        .clone()
+        .oneshot(
+            Request::put(format!("{collection}/{secret_id}"))
+                .header("content-type", "application/json")
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-2")
+                .body(Body::from(json!({"enabled": true}).to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(foreign_update.status(), StatusCode::NOT_FOUND);
+    assert!(!repository.secrets.lock().expect("secrets")[0].enabled);
+
+    let updated = app
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!("{collection}/{secret_id}")),
+            json!({
+                "name": "Rotated Canvas token",
+                "secret_value": "rotated-secret-9876",
+                "metadata": {"rotated_by": "admin"},
+                "enabled": "yes"
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = response_json(updated).await;
+    assert_eq!(updated["id"], secret_id);
+    assert_eq!(updated["name"], "Rotated Canvas token");
+    assert_eq!(updated["secret_hint"], "...9876");
+    assert_eq!(updated["metadata"], json!({"rotated_by": "admin"}));
+    assert_eq!(updated["enabled"], true);
+    assert!(!updated.to_string().contains("rotated-secret-9876"));
+
+    let emptied = app
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!("{collection}/{secret_id}")),
+            json!({"secret_value": ""}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(emptied.status(), StatusCode::OK);
+    let emptied = response_json(emptied).await;
+    assert_eq!(emptied["secret_hint"], "...9876");
+    assert!(!emptied.to_string().contains("rotated-secret-9876"));
+    assert_eq!(
+        repository
+            .secret_update_plaintexts
+            .lock()
+            .expect("secret update plaintexts")
+            .as_slice(),
+        &[Some("rotated-secret-9876".to_owned()), None]
+    );
+
+    let null_update = app
+        .clone()
+        .oneshot(management_request(
+            Request::put(format!("{collection}/{secret_id}")),
+            json!({
+                "name": null,
+                "secret_value": null,
+                "metadata": null,
+                "enabled": null
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(null_update.status(), StatusCode::OK);
+    let null_update = response_json(null_update).await;
+    assert_eq!(null_update["name"], "Rotated Canvas token");
+    assert_eq!(null_update["secret_hint"], "...9876");
+    assert_eq!(null_update["enabled"], true);
+
+    let foreign_delete = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("{collection}/{secret_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-2")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(foreign_delete.status(), StatusCode::NOT_FOUND);
+    assert_eq!(repository.secrets.lock().expect("secrets").len(), 1);
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("{collection}/{secret_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert!(repository.secrets.lock().expect("secrets").is_empty());
+
+    let repeated = app
+        .oneshot(
+            Request::delete(format!("{collection}/{secret_id}"))
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(repeated.status(), StatusCode::NOT_FOUND);
 }

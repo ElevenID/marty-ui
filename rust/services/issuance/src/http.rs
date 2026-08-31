@@ -41,13 +41,16 @@ use crate::{
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
     canvas_management::{
-        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
+        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasPlatformRequest,
+        CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
     },
     canvas_management_http::{
-        organization_id_from_query, parse_lti_installation_request, parse_platform_request,
+        integration_secret_query, organization_id_from_query, parse_integration_secret_create,
+        parse_integration_secret_update, parse_lti_installation_request, parse_platform_request,
         parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
-        program_binding_query, CanvasManagementHttpError, CanvasPlatformManagementHttpService,
-        CanvasPlatformReadinessResponse, CanvasPlatformResponse, CanvasProgramBindingResponse,
+        program_binding_query, CanvasIntegrationSecretResponse, CanvasManagementHttpError,
+        CanvasPlatformManagementHttpService, CanvasPlatformReadinessResponse,
+        CanvasPlatformResponse, CanvasProgramBindingResponse,
         CanvasProgramBindingValidationResponse,
     },
     canvas_oauth::{
@@ -876,6 +879,14 @@ fn router_with_optional_services(
                 post(deactivate_canvas_program_binding),
             )
             .route(
+                "/v1/integrations/canvas/integration-secrets",
+                get(list_canvas_integration_secrets).post(create_canvas_integration_secret),
+            )
+            .route(
+                "/v1/integrations/canvas/integration-secrets/{secret_id}",
+                put(update_canvas_integration_secret).delete(delete_canvas_integration_secret),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1243,6 +1254,54 @@ async fn deactivate_canvas_program_binding(
         .deactivate_binding(&headers, &binding_id)
         .await
         .map(Json)
+}
+
+async fn create_canvas_integration_secret(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<(StatusCode, Json<CanvasIntegrationSecretResponse>), CanvasManagementHttpError> {
+    let request: CanvasIntegrationSecretCreate = parse_integration_secret_create(request).await?;
+    canvas_management(&state)?
+        .create_integration_secret(&headers, request)
+        .await
+        .map(|secret| (StatusCode::CREATED, Json(secret)))
+}
+
+async fn list_canvas_integration_secrets(
+    State(state): State<IssuanceState>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Vec<CanvasIntegrationSecretResponse>>, CanvasManagementHttpError> {
+    let (organization_id, provider) = integration_secret_query(query.as_deref());
+    canvas_management(&state)?
+        .list_integration_secrets(&headers, organization_id.as_deref(), provider.as_deref())
+        .await
+        .map(Json)
+}
+
+async fn update_canvas_integration_secret(
+    State(state): State<IssuanceState>,
+    Path(secret_id): Path<String>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<Json<CanvasIntegrationSecretResponse>, CanvasManagementHttpError> {
+    let request: CanvasIntegrationSecretUpdate = parse_integration_secret_update(request).await?;
+    canvas_management(&state)?
+        .update_integration_secret(&headers, &secret_id, request)
+        .await
+        .map(Json)
+}
+
+async fn delete_canvas_integration_secret(
+    State(state): State<IssuanceState>,
+    Path(secret_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .delete_integration_secret(&headers, &secret_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn canvas_management(

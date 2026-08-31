@@ -167,12 +167,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .as_deref()
             .expect("from_env requires INTEGRATION_SECRET_MASTER_KEY"),
     )?;
+    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new(
+        pool.clone(),
+        integration_secret_cipher,
+    ));
     let canvas_oauth = CanvasOAuthService::new(
         Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
-        Arc::new(PostgresIntegrationSecretVault::new(
-            pool.clone(),
-            integration_secret_cipher,
-        )),
+        integration_secret_vault.clone(),
         Arc::new(HttpCanvasOAuthProvider::new_with_policy(
             std::time::Duration::from_secs(15),
             config.canvas_private_origin_allowlist.clone(),
@@ -212,7 +213,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
         config.canvas_readiness_max_age,
-    );
+    )
+    .with_integration_secret_repository(integration_secret_vault);
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,

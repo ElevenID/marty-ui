@@ -18,8 +18,9 @@ use crate::{
         CanvasCatalogProviderError, CanvasScopeDiscoveryResponse,
     },
     canvas_management::{
-        CanvasLtiInstallationRequest, CanvasPlatformRequest, CanvasProgramBindingRequest,
-        CanvasScopeDiscoveryRequest, ValidateCanvasRequest,
+        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest,
+        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
+        ValidateCanvasRequest,
     },
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
@@ -29,6 +30,7 @@ use crate::{
     },
     canvas_oauth::CanvasOAuthError,
     canvas_readiness::CanvasReadinessCheck,
+    integration_secret::ManagedIntegrationSecret,
     transaction_reads::TransactionReadError,
 };
 
@@ -318,6 +320,73 @@ impl CanvasPlatformManagementHttpService {
             .map_err(Into::into)
     }
 
+    pub async fn create_integration_secret(
+        &self,
+        headers: &HeaderMap,
+        request: CanvasIntegrationSecretCreate,
+    ) -> Result<CanvasIntegrationSecretResponse, CanvasManagementHttpError> {
+        self.management
+            .create_integration_secret(
+                request,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    pub async fn list_integration_secrets(
+        &self,
+        headers: &HeaderMap,
+        organization_id: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<Vec<CanvasIntegrationSecretResponse>, CanvasManagementHttpError> {
+        self.management
+            .list_integration_secrets(
+                organization_id,
+                provider,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(|secrets| secrets.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
+    pub async fn update_integration_secret(
+        &self,
+        headers: &HeaderMap,
+        secret_id: &str,
+        request: CanvasIntegrationSecretUpdate,
+    ) -> Result<CanvasIntegrationSecretResponse, CanvasManagementHttpError> {
+        self.management
+            .update_integration_secret(
+                secret_id,
+                request,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    pub async fn delete_integration_secret(
+        &self,
+        headers: &HeaderMap,
+        secret_id: &str,
+    ) -> Result<(), CanvasManagementHttpError> {
+        self.management
+            .delete_integration_secret(
+                secret_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     async fn binding_response(
         &self,
         headers: &HeaderMap,
@@ -575,6 +644,41 @@ pub struct CanvasProgramBindingValidationResponse {
     pub config_version: i64,
     pub evaluated_at: Option<String>,
     pub checks: Vec<CanvasReadinessCheck>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CanvasIntegrationSecretResponse {
+    pub id: String,
+    pub organization_id: String,
+    pub name: String,
+    pub provider: String,
+    pub purpose: String,
+    pub secret_ref: String,
+    pub secret_hint: Option<String>,
+    pub metadata: Map<String, Value>,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_used_at: Option<String>,
+}
+
+impl From<ManagedIntegrationSecret> for CanvasIntegrationSecretResponse {
+    fn from(secret: ManagedIntegrationSecret) -> Self {
+        Self {
+            secret_ref: secret.secret_ref(),
+            id: secret.id,
+            organization_id: secret.organization_id,
+            name: secret.name,
+            provider: secret.provider,
+            purpose: secret.purpose,
+            secret_hint: secret.secret_hint,
+            metadata: secret.metadata,
+            enabled: secret.enabled,
+            created_at: timestamp(secret.created_at),
+            updated_at: timestamp(secret.updated_at),
+            last_used_at: optional_timestamp(secret.last_used_at),
+        }
+    }
 }
 
 impl From<CanvasBindingValidationResult> for CanvasProgramBindingValidationResponse {
@@ -884,6 +988,83 @@ pub async fn parse_program_binding_request(
         })])
     })?;
     Ok(parsed)
+}
+
+pub async fn parse_integration_secret_create(
+    request: axum::extract::Request,
+) -> Result<CanvasIntegrationSecretCreate, CanvasManagementHttpError> {
+    let mut value = parse_management_json(request).await?;
+    normalize_optional_pydantic_bool_field(&mut value, "enabled", false)?;
+    let parsed: CanvasIntegrationSecretCreate =
+        serde_json::from_value(value.clone()).map_err(|_| {
+            CanvasManagementHttpError::Validation(vec![json!({
+                "type": "model_attributes_type", "loc": ["body"],
+                "msg": "Input should be a valid Canvas integration secret", "input": value,
+            })])
+        })?;
+    parsed.validate().map_err(|error| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "value_error", "loc": ["body"], "msg": error.to_string(), "input": value,
+        })])
+    })?;
+    Ok(parsed)
+}
+
+pub async fn parse_integration_secret_update(
+    request: axum::extract::Request,
+) -> Result<CanvasIntegrationSecretUpdate, CanvasManagementHttpError> {
+    let mut value = parse_management_json(request).await?;
+    normalize_optional_pydantic_bool_field(&mut value, "enabled", true)?;
+    serde_json::from_value(value.clone()).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type", "loc": ["body"],
+            "msg": "Input should be a valid Canvas integration secret update", "input": value,
+        })])
+    })
+}
+
+pub fn integration_secret_query(query: Option<&str>) -> (Option<String>, Option<String>) {
+    let mut organization_id = None;
+    let mut provider = Some("canvas_credentials".to_owned());
+    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        match name.as_ref() {
+            "organization_id" => organization_id = Some(value.into_owned()),
+            "provider" => provider = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    (organization_id, provider)
+}
+
+fn normalize_optional_pydantic_bool_field(
+    value: &mut Value,
+    field: &str,
+    allow_null: bool,
+) -> Result<(), CanvasManagementHttpError> {
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(input) = object.get(field).cloned() else {
+        return Ok(());
+    };
+    if allow_null && input.is_null() {
+        return Ok(());
+    }
+    if let Some(normalized) = pydantic_bool(&input) {
+        object.insert(field.to_owned(), Value::Bool(normalized));
+        return Ok(());
+    }
+    let structured = input.is_array() || input.is_object() || input.is_null();
+    Err(CanvasManagementHttpError::Validation(vec![json!({
+        "type": if structured { "bool_type" } else { "bool_parsing" },
+        "loc": ["body", field],
+        "msg": if structured {
+            "Input should be a valid boolean"
+        } else {
+            "Input should be a valid boolean, unable to interpret input"
+        },
+        "input": input,
+    })]))
 }
 
 pub async fn parse_scope_discovery_request(
@@ -1584,6 +1765,10 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
         CanvasPlatformManagementError::PilotDisabled => (
             StatusCode::NOT_FOUND,
             "Portable Canvas integration is not enabled for this organization".to_owned(),
+        ),
+        CanvasPlatformManagementError::IntegrationSecretNotFound => (
+            StatusCode::NOT_FOUND,
+            "Integration secret not found".to_owned(),
         ),
         CanvasPlatformManagementError::ActivationBlocked(_) => {
             unreachable!("activation failures are projected before scalar service errors")

@@ -1,11 +1,12 @@
 use chrono::{Duration, Timelike, Utc};
 use marty_issuance_service::{
+    canvas_management_service::CanvasIntegrationSecretRepository,
     canvas_oauth::{
         CanvasOAuthAuthorization, CanvasOAuthConnection, CanvasOAuthPlatformPatch,
         CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
+    integration_secret::{IntegrationSecretCipher, ManagedIntegrationSecret, NewIntegrationSecret},
 };
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
@@ -71,13 +72,182 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
         .await
         .unwrap()
         .is_none());
-    vault
-        .delete("org-other", "client-secret-1")
+    CanvasOAuthSecretVault::delete(&vault, "org-other", "client-secret-1")
         .await
         .expect("foreign delete is a tenant-bound no-op");
     assert_eq!(
         vault.value("org-1", "client-secret-1").await.unwrap(),
         Some("plaintext-client-secret".to_owned())
+    );
+
+    let managed_now = Utc::now();
+    let managed_now = managed_now
+        .with_nanosecond(managed_now.timestamp_subsec_micros() * 1_000)
+        .expect("microsecond timestamp");
+    let managed_secret = ManagedIntegrationSecret {
+        id: "managed-token-1".to_owned(),
+        organization_id: "org-1".to_owned(),
+        name: "Canvas Credentials token".to_owned(),
+        provider: "canvas_credentials".to_owned(),
+        purpose: "api_token".to_owned(),
+        secret_hint: Some("...1234".to_owned()),
+        metadata: json!({"owner": "admin"})
+            .as_object()
+            .expect("metadata")
+            .clone(),
+        enabled: false,
+        created_at: managed_now,
+        updated_at: managed_now,
+        last_used_at: None,
+    };
+    let created = CanvasIntegrationSecretRepository::create_secret(
+        &vault,
+        &managed_secret,
+        "managed-plaintext-1234",
+    )
+    .await
+    .expect("create managed secret");
+    assert_eq!(created, managed_secret);
+    let managed_ciphertext: String = sqlx::query_scalar(
+        "SELECT encrypted_secret_value
+         FROM issuance_service.organization_integration_secrets
+         WHERE id = 'managed-token-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("managed ciphertext");
+    assert!(!managed_ciphertext.contains("managed-plaintext-1234"));
+    assert_eq!(vault.value("org-1", "managed-token-1").await.unwrap(), None);
+    assert!(
+        !vault
+            .metadata("org-1", "managed-token-1")
+            .await
+            .unwrap()
+            .expect("managed metadata")
+            .enabled
+    );
+    assert!(
+        CanvasIntegrationSecretRepository::secret(&vault, "org-other", "managed-token-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(CanvasIntegrationSecretRepository::list_secrets(
+        &vault,
+        "org-other",
+        Some("canvas_credentials")
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    assert_eq!(
+        CanvasIntegrationSecretRepository::list_secrets(
+            &vault,
+            "org-1",
+            Some("canvas_credentials")
+        )
+        .await
+        .unwrap(),
+        vec![created.clone()]
+    );
+
+    let mut rotated = created.clone();
+    rotated.name = "Rotated Canvas token".to_owned();
+    rotated.secret_hint = Some("...9876".to_owned());
+    rotated.metadata = json!({"rotated_by": "admin"})
+        .as_object()
+        .expect("metadata")
+        .clone();
+    rotated.enabled = true;
+    rotated.updated_at = created.updated_at + Duration::seconds(1);
+    assert!(CanvasIntegrationSecretRepository::update_secret(
+        &vault,
+        &rotated,
+        Some("managed-rotated-9876"),
+        created.updated_at - Duration::seconds(1),
+    )
+    .await
+    .unwrap()
+    .is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT encrypted_secret_value
+             FROM issuance_service.organization_integration_secrets
+             WHERE id = 'managed-token-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        managed_ciphertext
+    );
+    let rotated = CanvasIntegrationSecretRepository::update_secret(
+        &vault,
+        &rotated,
+        Some("managed-rotated-9876"),
+        created.updated_at,
+    )
+    .await
+    .expect("rotate managed secret")
+    .expect("current version");
+    assert_eq!(rotated.secret_hint.as_deref(), Some("...9876"));
+    assert_eq!(
+        vault.value("org-1", "managed-token-1").await.unwrap(),
+        Some("managed-rotated-9876".to_owned())
+    );
+    let rotated_ciphertext: String = sqlx::query_scalar(
+        "SELECT encrypted_secret_value
+         FROM issuance_service.organization_integration_secrets
+         WHERE id = 'managed-token-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_ne!(rotated_ciphertext, managed_ciphertext);
+    assert!(!rotated_ciphertext.contains("managed-rotated-9876"));
+
+    let mut emptied = rotated.clone();
+    emptied.updated_at = rotated.updated_at + Duration::seconds(1);
+    let emptied = CanvasIntegrationSecretRepository::update_secret(
+        &vault,
+        &emptied,
+        None,
+        rotated.updated_at,
+    )
+    .await
+    .expect("empty managed secret")
+    .expect("current version");
+    assert_eq!(emptied.secret_hint.as_deref(), Some("...9876"));
+    assert_eq!(
+        vault.value("org-1", "managed-token-1").await.unwrap(),
+        Some("managed-rotated-9876".to_owned())
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT encrypted_secret_value
+             FROM issuance_service.organization_integration_secrets
+             WHERE id = 'managed-token-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        rotated_ciphertext
+    );
+    assert!(!CanvasIntegrationSecretRepository::delete_secret(
+        &vault,
+        "org-other",
+        "managed-token-1"
+    )
+    .await
+    .unwrap());
+    assert!(
+        CanvasIntegrationSecretRepository::delete_secret(&vault, "org-1", "managed-token-1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !CanvasIntegrationSecretRepository::delete_secret(&vault, "org-1", "managed-token-1")
+            .await
+            .unwrap()
     );
 
     let now = Utc::now();
