@@ -32,21 +32,23 @@ reusing a coordinate after any versioned image has been published.
   environment disallows administrator bypass and admits only the inert
   `release-hold-disabled` tag policy. Protected PR `#727` separately requires
   exact `release_state=eligible` in both tag preparation and publication.
-- `marty-credentials@v0.1.72` is not a failed verifier artifact. It intentionally
-  published only the issuance image, at
+- `marty-credentials@v0.1.72` published only the issuance image, at
   `sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176`,
   with provenance bound to commit
-  `85b128a85426b3f5aeaf6f948ba5dfa2836e95d8`. The stack consumes that issuance
-  component; skipped PyPI publication is not a stack input. The release remains
-  usable unless a concrete component gate fails.
+  `85b128a85426b3f5aeaf6f948ba5dfa2836e95d8`. It published no verification
+  image, skipped PyPI, and followed the verifier deletion before the corrected
+  consumer order was proven. It is therefore incomplete and ineligible for the
+  repaired aggregate even though its issuance image is immutable. The retained
+  safe Credentials anchor is `v0.1.71`; PR `#253` does not promote `v0.1.72`.
 
 ## Containment decision
 
 Versions `v1.1.209` and `v1.1.210` are permanently quarantined and must never be
-retargeted, completed, or deployed. A local `v1.1.211` lock candidate exists,
-but no tag, registry coordinate, or release reserves that version. It must not
-be published through the current direct-tag workflow while the release lock is
-held.
+retargeted, completed, or deployed. An unpushed local worktree used a later
+version label during overlapping work, but it is not an approved candidate or
+selected release and reserves no tag, registry coordinate, or version. No
+replacement version may be selected or published while the release lock is
+held or before every gate below passes.
 
 Before the next versioned write, implement and test:
 
@@ -74,6 +76,9 @@ Before the next versioned write, implement and test:
    terminal release, and mismatched existing coordinates.
 
 The candidate lane reduces prepublication risk but cannot replace the final
-test against the exact released services digest. The public integration pin is
-published only after that immutable digest exists. Production and persistent
-self-host remain unchanged.
+test against the exact released services digest. A preliminary corrected
+harness release may precede that digest, but it is not an aggregate pin. The
+distinct corrected-Rust-pinned integration tree must pass the full matrix,
+merge through protection, and become an independently verified immutable
+release after that digest exists. Production and persistent self-host remain
+unchanged.
