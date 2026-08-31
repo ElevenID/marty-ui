@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod credentials_compat;
 pub mod domain;
 pub mod grpc;
 pub mod http;

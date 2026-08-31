@@ -20,6 +20,7 @@ base64.workspace = true
 chrono.workspace = true
 http.workspace = true
 marty-flow = { path = "../flow" }
+marty-verification.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true

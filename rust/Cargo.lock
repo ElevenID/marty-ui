@@ -4934,6 +4934,7 @@ dependencies = [
  "chrono",
  "http 1.5.0",
  "marty-flow",
+ "marty-verification",
  "mmf-core",
  "mmf-platform",
  "mmf-runtime",
