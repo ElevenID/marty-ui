@@ -50,6 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         error
     })?;
     let runtime = VerificationRuntime::new(&config)?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let store: Arc<dyn SessionStore> = match config.redis_url.as_deref() {
         Some(url) => Arc::new(RedisSessionStore::connect(url).await?),
         None if matches!(
@@ -80,6 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.public_base_url.clone(),
         false,
     ));
+    let mut compatibility_database_pool = None;
     let credentials_compat = if config.credentials_compat_enabled {
         let database_url = config
             .credentials_database_url
@@ -90,6 +92,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .connect(database_url)
             .await?;
         validate_session_schema(&pool).await?;
+        runtime.mark_healthy(VerificationDependency::CompatibilityDatabase)?;
+        compatibility_database_pool = Some(pool.clone());
         let resolver = config
             .credentials_resolver
             .as_ref()
@@ -134,12 +138,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         credentials_compat,
     })
     .layer(TraceLayer::new_for_http());
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut http_shutdown = shutdown_rx.clone();
     let http = axum::serve(http_listener, http_app).with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let mut grpc_shutdown = shutdown_rx;
+    let mut grpc_shutdown = shutdown_rx.clone();
     let grpc = grpc_listener.map(|listener| async move {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         let server = VerificationServiceServer::new(VerificationGrpcService::new(grpc_service));
@@ -155,6 +158,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await
     });
     runtime.activate()?;
+    let compatibility_database_monitor = compatibility_database_pool.map(|pool| {
+        let runtime = runtime.clone();
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move { runtime.monitor_compatibility_database(pool, shutdown).await })
+    });
     info!(
         http_address = %config.http_addr,
         grpc_address = config.grpc_enabled.then(|| config.grpc_addr.to_string()),
@@ -177,6 +185,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     runtime.drain()?;
     let _ = shutdown_tx.send(true);
+    if let Some(monitor) = compatibility_database_monitor {
+        monitor.await??;
+    }
     runtime.stop()?;
     result
 }
