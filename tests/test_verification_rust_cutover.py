@@ -42,11 +42,13 @@ def test_native_images_forward_the_same_migration_command_to_the_binary() -> Non
 def test_beta_uses_the_same_native_image_for_schema_and_compatibility_runtime() -> None:
     base = text("docker-compose.base.yml")
     beta = text("docker-compose.beta.yml")
+    workflow = text(".github/workflows/ci.yml")
     assert "verification-migrations:" in base
     assert 'command: ["migrate"]' in base
     assert "verification-migrations:\n        condition: service_completed_successfully" in base
     assert 'VERIFICATION_CREDENTIALS_COMPAT_ENABLED: "true"' in beta
     assert "VERIFICATION_GOVERNANCE_JSON must be set for beta" in beta
+    assert "VERIFICATION_GOVERNANCE_JSON: '{\"ci_compose_render_only\":true}'" in workflow
 
 
 def test_only_native_verification_runtime_sources_remain() -> None:

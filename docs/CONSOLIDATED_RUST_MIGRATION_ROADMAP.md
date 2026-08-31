@@ -112,10 +112,11 @@ service cutover: it preserves and absorbs the extra seven-operation Credentials
 image compatibility surface instead of deleting it or creating a second Rust
 verifier.
 
-The stream is active and rebased cleanly. The Credentials branch has eight
-committed source-surface, governance and migration-dispatch slices in protected
-PR `ElevenID/marty-credentials#249`; its 124-test Python parity-oracle suite and
-40 focused contract/migration tests pass. The UI branch has 38 committed slices
+The stream is active and rebased cleanly. The Credentials source-surface,
+governance and migration-dispatch work merged through protected PR
+`ElevenID/marty-credentials#249` at `f802d45a0eea6d3b36cf423fd722f30c967b03ad`;
+its 124-test Python parity-oracle suite and 40 focused contract/migration tests
+pass. The UI branch is in protected PR `ElevenID/marty-ui#718`, with 38 slices
 covering governed startup, typed compatibility DTOs and HTTP behavior, durable
 PostgreSQL session state, migration ownership, canonical decisions, native use
 cases, runtime activation, beta-only packaging, bounded readiness, secret
