@@ -1,0 +1,707 @@
+{
+  "schema": "marty.issuance-canvas-sync-worker/v1",
+  "purpose": "Language-neutral behavior and persistence floor for replacing the standalone Python Canvas synchronization worker without feature loss.",
+  "provenance": {
+    "repository": "ElevenID/marty-credentials",
+    "snapshot_commit": "cbda2ac7e3376b858c1e8d5d010a304474c659cf",
+    "sources": {
+      "python/marty_credentials/native_backend.py": "09920eb05f3a10a99cc51edc851158c9a9df5063",
+      "services/issuance/canvas_worker.py": "b516ed3d0855f16e9ec899a452a22df49d2cafe5",
+      "services/issuance/application/canvas_evidence_revisions.py": "01cd648e6e6f034ece50d9f37287ef974493cb37",
+      "services/issuance/application/canvas_feature_flags.py": "0fd22c63f09641f886d6c7c4bad5d16393fabe92",
+      "services/issuance/application/canvas_sync_jobs.py": "646907f6181199a2ea06a5f5477cfc5f729391ac",
+      "services/issuance/application/canvas_sync_service.py": "65252f9b3464e4160969bbc0ef0034192212cd59",
+      "services/issuance/application/canvas_lti_services.py": "6bde953e9be8c01b51e622668a2cf9fc016f581d",
+      "services/issuance/application/canvas_oauth.py": "7b7c17dee4494160f6c75122aa860ccdcd2bbd4f",
+      "services/issuance/application/evidence_policy.py": "710a426bd8fbbf8a9f69bb5f6360b7a69181c5e9",
+      "services/issuance/domain/entities.py": "1b5e2eba90c1ec13c1a38135f4da92813f1d1073",
+      "services/issuance/domain/ports.py": "695a2cdd3f3a5c9d3ce6ef12e282cdca6f086a24",
+      "services/issuance/infrastructure/api/canvas_routes.py": "c8f13de8a604b82f013c92dbccc4978e4496305b",
+      "services/issuance/infrastructure/api/signing_context.py": "a72574c4b4e35690e0cdf2df4ee28a092686069c",
+      "services/issuance/infrastructure/adapters/postgres_repository.py": "ed0edd644fe74d0f7b3566317bad7ba68a3d40ce",
+      "services/issuance/infrastructure/migrations/versions/20260714_1000_portable_canvas_connections.py": "3c7664a5d8222c127b7a6b9ff66c7601b582bfaa",
+      "services/issuance/infrastructure/models.py": "291a6b4e48d7ec75988cbfe6da0b3d61e917a684",
+      "services/issuance/infrastructure/security/encryption.py": "d681b3562e04f3a673685b26c2a0fe5b25d9bf65"
+    },
+    "oracle_tests": {
+      "tests/unit/test_canvas_worker.py": "58a0b457bb13d1c94a1fc339adc01f23ef5e2bcd",
+      "tests/unit/test_canvas_authoritative_sync.py": "e4baca5c97dcc9121b27f0f92036b17d86c6ad07",
+      "tests/unit/test_canvas_evidence_atomicity.py": "adcbd30b2ef5f45cf515410e850b9ad147b4105d",
+      "tests/unit/test_canvas_feature_flags.py": "f5df9eddd22322cdd548f77b1147b9583cdfc682",
+      "tests/unit/test_canvas_oauth.py": "7db3b6e2c376d03184f3f87d98e7a1ebe50dfbf2",
+      "tests/unit/test_canvas_sync_service.py": "09b18d676bdbd54a0fea841820371bfc8092bc02",
+      "tests/unit/test_canvas_production_persistence.py": "3c558d2ef85de5fc421c5f848b76e2d425dafb91",
+      "tests/unit/test_integration_secret_encryption.py": "1d4eb4c25bb70e38df18a983a521246748934040"
+    },
+    "object_ids": "git-sha1"
+  },
+  "semantic_boundary": {
+    "role": "canvas_sync",
+    "separate_from_http_lifespan": true,
+    "headless": true,
+    "database": "shared issuance PostgreSQL schema",
+    "health_signal": "database heartbeat",
+    "replacement_rule": "The Rust executable may use any internal module or command layout; only the state, provider, persistence, privacy, liveness, and shutdown semantics in this contract are normative."
+  },
+  "legacy_python_wiring": {
+    "normative_for_replacement": false,
+    "entrypoint": ["python", "-m", "issuance.canvas_worker"],
+    "processor_import": "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target",
+    "processor_loader": {
+      "syntax": "module:function",
+      "legacy_failure": "Python startup failure for malformed path, import failure, missing attribute, or non-callable attribute",
+      "replacement_rule": "The Rust worker links its processor directly; it does not preserve Python import syntax or dynamic module loading. Cutover removes CANVAS_SYNC_PROCESSOR from every deployment consumer."
+    },
+    "database_adapter": {
+      "default_url": "postgresql://marty:marty_dev@postgres:5432/marty_credentials",
+      "postgresql_scheme_rewrite": "postgresql+asyncpg",
+      "sqlalchemy_pool_pre_ping": true,
+      "sqlalchemy_pool_size": 5,
+      "sqlalchemy_max_overflow": 5,
+      "sqlalchemy_hide_parameters": true,
+      "replacement_rule": "These are Python/SQLAlchemy implementation details, not required Rust driver configuration."
+    },
+    "purpose": "Inventory the currently deployed Python consumer so cutover can replace it deliberately; these strings are not a Rust API."
+  },
+  "deployment_wiring": {
+    "compose": {
+      "profiles": ["base", "selfhost-production"],
+      "service": "canvas-sync-worker",
+      "published_image_role": "issuance",
+      "restart_policy": "unless-stopped",
+      "startup_dependencies": ["db-migrate", "issuance-migrations"],
+      "headless_healthcheck": "disabled",
+      "ports": "none"
+    },
+    "kubernetes": {
+      "deployment": "canvas-sync-worker",
+      "published_image_role": "issuance",
+      "legacy_command": ["python"],
+      "legacy_args": ["-m", "issuance.canvas_worker"],
+      "config_source": "marty-config",
+      "secret_environment": {
+        "DATABASE_URL": "DATABASE_URL",
+        "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
+        "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY"
+      },
+      "literal_environment": {
+        "SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys"
+      },
+      "migration_order": ["apply issuance-migrations", "wait issuance-migrations complete", "apply microservices"]
+    }
+  },
+  "configuration": {
+    "worker": {
+      "CANVAS_SYNC_WORKER_ID": {"default": "hostname-pid-random", "normalization": "non-empty configured value or generated unique identity"},
+      "CANVAS_SYNC_WORKER_BATCH_SIZE": {"default": 10, "minimum": 1},
+      "CANVAS_SYNC_WORKER_LEASE_SECONDS": {"default": 120, "minimum": 30},
+      "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": {"default": 600.0, "minimum": 30.0, "maximum": 3600.0},
+      "CANVAS_SYNC_SCHEDULE_LIMIT": {"default": 100, "minimum": 1},
+      "CANVAS_OAUTH_REVOCATION_BATCH_SIZE": {"default": 25, "minimum": 1},
+      "CANVAS_SYNC_WORKER_POLL_SECONDS": {"default": 5.0, "minimum": 0.1, "maximum": 60.0}
+    },
+    "processor": {
+      "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE": {"default": 500, "minimum": 1, "maximum": 2000},
+      "CANVAS_BACKGROUND_ROSTER_MAX_SIZE": {"default": 5000, "minimum": "effective batch size", "maximum": 10000},
+      "CANVAS_PORTABLE_INTEGRATION_ENABLED": {"default": false, "effect_when_false": "complete without provider reads using no_change=true"},
+      "CANVAS_PILOT_ORGANIZATION_IDS": {"default": "", "effect_when_missing_org": "same closed-rollout behavior"}
+    },
+    "invalid_numeric_value": "startup-or-processing-failure; never silently accept an invalid operator value",
+    "database": {
+      "input": "DATABASE_URL",
+      "deployed_url_acceptance": "accept the PostgreSQL URL forms supplied by Compose and Kubernetes without requiring an ORM-specific scheme",
+      "pooling": "bounded; never create an unbounded number of connections",
+      "connectivity": "detect unusable connections and fail safely without losing durable job state",
+      "parameter_redaction": "connection parameters and SQL bind values never appear in logs or errors"
+    }
+  },
+  "cycle": {
+    "ordering": [
+      "write scheduling heartbeat",
+      "process due OAuth revocations",
+      "enqueue due sync targets",
+      "lease ready jobs",
+      "write processing-or-idle heartbeat",
+      "start all leased jobs concurrently",
+      "await all outcomes without sibling cancellation",
+      "write idle heartbeat",
+      "return bounded counters"
+    ],
+    "counters": [
+      "scheduled",
+      "leased",
+      "succeeded",
+      "retried",
+      "dead_lettered",
+      "oauth_revocations_succeeded",
+      "oauth_revocations_retried"
+    ],
+    "escaped_job_exception": "log type only; retain durable lease for expiry recovery",
+    "cycle_exception": "log and continue loop after bounded poll wait"
+  },
+  "scheduling_and_leasing": {
+    "due_target_order": "next_run_at ascending",
+    "scheduler_lock": "FOR UPDATE SKIP LOCKED",
+    "schedule_floor_seconds": 60,
+    "due_schedule_transition": {
+      "last_enqueued_at": "now for every locked due target, including an active-job insert conflict",
+      "next_run_at": "now + max(60 seconds, target.schedule_seconds) for every locked due target, including an active-job insert conflict",
+      "scheduled_counter": "count only newly inserted jobs; an active-job conflict contributes zero"
+    },
+    "one_active_job_per_target": ["queued", "leased", "retry"],
+    "ready_job_order": ["available_at ascending", "created_at ascending"],
+    "lease_lock": "FOR UPDATE SKIP LOCKED",
+    "lease_attempt_increment": 1,
+    "started_at": "first lease only",
+    "lease_minimum_seconds": 30,
+    "lease_renewal_interval_seconds": {"formula": "max(10, min(30, lease_seconds / 3))"},
+    "lease_fence": ["job id", "organization id", "leased status", "worker id", "unexpired lease", "attempt count"],
+    "expired_nonfinal_lease": "retry with canvas_worker_lease_expired and normal job backoff",
+    "expired_final_lease": "dead_letter with canvas_worker_lease_expired and disable target",
+    "stale_outcome": "discard; leave current owner/generation unchanged"
+  },
+  "heartbeats": {
+    "worker_key": "worker_id",
+    "worker_fields": ["role", "started_at", "last_heartbeat_at", "metadata"],
+    "worker_metadata": ["phase", "leased_jobs", "process", "processor_configured"],
+    "worker_phases": ["scheduling", "oauth_revocation", "processing", "idle"],
+    "target_metadata": ["worker_id", "worker_heartbeat_at"],
+    "target_cas": ["organization_id", "target_id", "config_version", "enabled=true"],
+    "target_cas_loss": "reload canonical target before validation",
+    "readiness_freshness": "latest heartbeat for role within caller-provided maximum age"
+  },
+  "shutdown": {
+    "stop_event_checked_before_each_cycle": true,
+    "poll_wait_interruptible_by_stop_event": true,
+    "cancellation_propagates": true,
+    "in_flight_cycle": "allowed to finish unless task cancellation is requested",
+    "lease_maintenance_task": "cancel and await after every terminal or fenced outcome",
+    "database_engine": "dispose in main finally block"
+  },
+  "target_validation": {
+    "required_identifiers": ["organization_id", "platform_id", "binding_id", "logical_key"],
+    "forbidden_metadata_key_fragments": ["access_token", "refresh_token", "bearer", "authorization", "cookie", "api_key", "client_secret"],
+    "forbidden_metadata_value": "case-insensitive bearer prefix",
+    "tenant_scope": "platform and binding must belong to target organization and binding must reference platform",
+    "active_scope": "target, platform, and binding enabled and not archived",
+    "configuration_scope": "target config_version equals binding config_version",
+    "inactive_or_stale_action": "disable target before non-retryable failure",
+    "typed_identity": {
+      "learner_application": "tenant-owned application required",
+      "issued_drift": "tenant-owned application required",
+      "award_candidate": "tenant-owned candidate required",
+      "background_roster": "no application or candidate required"
+    },
+    "errors": [
+      {"code": "canvas_sync_target_incomplete", "retryable": false},
+      {"code": "canvas_sync_target_contains_secret", "retryable": false},
+      {"code": "canvas_sync_target_scope_invalid", "retryable": false},
+      {"code": "canvas_sync_target_inactive", "retryable": false},
+      {"code": "canvas_sync_target_config_stale", "retryable": false},
+      {"code": "canvas_sync_target_application_missing", "retryable": false},
+      {"code": "canvas_sync_target_application_invalid", "retryable": false},
+      {"code": "canvas_sync_target_candidate_missing", "retryable": false},
+      {"code": "canvas_sync_target_candidate_invalid", "retryable": false}
+    ]
+  },
+  "processor_dispatch": {
+    "rollout_closed_result": {"no_change": true},
+    "rollout_closed_provider_calls": 0,
+    "missing_processor": {"code": "canvas_sync_processor_unavailable", "retryable": true},
+    "processor_shape": "async (repository, target) -> mapping",
+    "invalid_shape": {"code": "canvas_sync_processor_contract_invalid", "retryable": false},
+    "forbidden_outcome_keys": ["credential_id", "issued_credential_id", "signed_credential", "credential_jwt"],
+    "forbidden_outcome": {"code": "canvas_background_signing_forbidden", "retryable": false},
+    "supported_target_types": ["learner_application", "issued_drift", "background_roster"],
+    "unsupported_target_types": ["award_candidate"],
+    "stable_outcomes": [
+      {"code": "canvas_sync_processor_unavailable", "retryable": true, "source": "dispatch"},
+      {"code": "canvas_sync_processor_contract_invalid", "retryable": false, "source": "dispatch"},
+      {"code": "canvas_background_signing_forbidden", "retryable": false, "source": "dispatch"},
+      {"code": "canvas_requirements_invalid", "retryable": false, "source": "application"},
+      {"code": "canvas_application_template_unavailable", "retryable": false, "source": "application"},
+      {"code": "canvas_lti_identity_missing", "retryable": false, "source": "application"},
+      {"code": "canvas_platform_reconfigured", "retryable": true, "source": "application"},
+      {"code": "canvas_application_unavailable", "retryable": false, "source": "application"},
+      {"code": "canvas_rate_limited", "retryable": true, "source": "application-or-roster"},
+      {"code": "canvas_roster_configuration_invalid", "retryable": false, "source": "roster"},
+      {"code": "canvas_roster_oauth_unavailable", "retryable": true, "source": "roster"},
+      {"code": "canvas_nrps_roster_unavailable", "retryable": true, "source": "roster"},
+      {"code": "canvas_roster_collection_too_large", "retryable": false, "source": "roster"},
+      {"code": "canvas_sync_resources_unavailable", "retryable": false, "source": "processor"},
+      {"code": "canvas_authoritative_read_failed", "retryable": "provider-defined", "source": "roster-provider"},
+      {"code": "canvas_sync_target_type_unsupported", "retryable": false, "source": "processor"},
+      {"code": "canvas_authoritative_reads_failed", "retryable": true, "source": "application"}
+    ]
+  },
+  "job_outcomes": {
+    "states": ["queued", "leased", "retry", "succeeded", "dead_letter", "cancelled"],
+    "max_attempts": 8,
+    "missing_target": {"code": "canvas_sync_target_not_found", "state": "dead_letter"},
+    "deadline": {"code": "canvas_sync_deadline_exceeded", "state": "retry-or-dead-letter-by-attempt"},
+    "processing_error": "preserve stable code, bounded safe summary, retryability, and Retry-After",
+    "unexpected_http_429": {"code": "canvas_rate_limited", "summary": "exception type only"},
+    "unexpected_other": {"code": "canvas_sync_unexpected_error", "summary": "exception type only"},
+    "success": {
+      "job_state": "succeeded",
+      "clears_error_and_lease": true,
+      "marks_target_success": "CAS by organization, target, config version, enabled=true",
+      "target_success_cas_loss": "job remains succeeded; do not overwrite reconfigured target"
+    },
+    "dead_letter": "disable target",
+    "manual_retry": "dead-letter only, rollout gate open, reset durable job through repository transition",
+    "manual_resolve": "dead-letter only, acknowledge while target remains stopped"
+  },
+  "retry_and_backoff": {
+    "job": {
+      "base_seconds": 15,
+      "exponent": "min(max(attempt_count - 1, 0), 10)",
+      "base_cap_seconds": 3600,
+      "jitter_inclusive": "0..floor(base_delay / 3)",
+      "retry_after": "maximum of computed delay and Retry-After",
+      "retry_after_clamp_seconds": [0, 86400]
+    },
+    "oauth_revocation": {
+      "base_seconds": 30,
+      "exponent": "min(max(revoke_retry_count, 0), 11)",
+      "base_cap_seconds": 21600,
+      "jitter_inclusive": "0..floor(base_delay / 4)",
+      "retry_after": "maximum of computed delay and Retry-After",
+      "total_cap_seconds": 86400
+    },
+    "retry_after_formats": ["delta-seconds", "HTTP-date"],
+    "invalid_retry_after": "ignored",
+    "negative_retry_after": 0,
+    "maximum_retry_after_seconds": 86400
+  },
+  "provider_io": {
+    "client": {"redirects": false, "environment_proxy": false, "dns_pinned_per_origin": true},
+    "https_and_origin_validation": true,
+    "token_response_max_bytes": 65536,
+    "collection_page_max_bytes": 8388608,
+    "collection_max_pages": 200,
+    "pagination": {
+      "repeated_page": "non-retryable failure",
+      "cross_origin_next": "failure",
+      "partial_collection_at_limit": "failure when completeness required",
+      "malformed_item": "failure when completeness required"
+    },
+    "http_mapping": {
+      "redirect": "failure without following",
+      "429": "retryable rate limit with bounded Retry-After",
+      "401_with_www_authenticate": "mark the still-current OAuth connection for reauthorization using CAS",
+      "401_or_403": "authentication-or-scope read failure",
+      "transport": "retryable authoritative read failure",
+      "malformed_success": "unavailable observation; never a verified negative"
+    },
+    "sources": {
+      "ags_result": {"scope": "result.readonly", "identity": "verified LTI subject", "method": "LTI_AGS_RESULT_READ"},
+      "canvas_rest": {"identity": "linked numeric Canvas user", "method": "CANVAS_OAUTH_API_READ"},
+      "nrps": {"scope": "contextmembership.readonly", "use": "roster discovery only; never issuance evidence"}
+    },
+    "rest_fact_types": {
+      "canvas.assignment_score": "assignment submission with assignment projection",
+      "canvas.quiz_score": "assignment submission with assignment projection",
+      "canvas.module_completion": "module with student_id",
+      "canvas.course_completion": "user progress or bulk_user_progress"
+    }
+  },
+  "origin_and_network_security": {
+    "scheme": "HTTPS only without embedded credentials",
+    "normalized_origin": "lower-case hostname, no trailing dot, omit port 443",
+    "private_origin_allowlist": {
+      "environment": "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
+      "matching": "exact normalized origin",
+      "invalid_operator_entry": "ignored and never broadens trust",
+      "required_for": ["private hostname", "private address", "loopback", "link-local", "reserved", "multicast", "unspecified", "mixed public/private DNS"]
+    },
+    "self_managed_origin_allowlist": {
+      "environment": "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
+      "matching": "exact normalized origin",
+      "independent_from_private_allowlist": true,
+      "effect": "authorizes same-origin LTI trust only"
+    },
+    "production_dns_failure": "fail closed before request",
+    "runtime_dns_failure_or_empty_answer": "fail closed before request in every environment",
+    "dns_rebinding_control": "connect to a validated resolved IP while retaining original Host and TLS SNI; use a separate pool per original origin",
+    "proxy_environment": "ignored",
+    "redirects": "never followed"
+  },
+  "lti_signing": {
+    "selection": "organization-scoped issuer DID only",
+    "required_environment": [
+      "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+      "CANVAS_LTI_TOOL_ISSUER_DID",
+      "SIGNING_KEYS_INTERNAL_URL",
+      "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY"
+    ],
+    "signing_service_access": {
+      "base_url_default": "http://gateway:8000/internal/signing-keys",
+      "authentication_header": "X-API-Key",
+      "direct_or_file_secret": true,
+      "timeouts_seconds": {"resolve": 10.0, "sign": 15.0},
+      "unauthorized": "fail closed",
+      "current_python_response_detail": "text detail is sliced to 500 characters; JSON string or object detail is not bounded",
+      "required_security_hardening": "bound serialized JSON and text response detail before propagating, persisting, or logging it; prove this first in the Python oracle and then share the fixture with Rust"
+    },
+    "resolution": {
+      "credential_format": "lti_tool_jwt",
+      "key_purpose": "lti_tool_signing",
+      "algorithm": "RS256",
+      "verification_method": "exact child of configured issuer DID",
+      "public_key": "RSA public JWK only; reject every private JWK parameter"
+    },
+    "client_assertion": {
+      "issuer_and_subject": "LTI client id",
+      "audience": "validated token endpoint",
+      "ttl_seconds": 300,
+      "unique_jti": true,
+      "header": ["alg=RS256", "typ=JWT", "kid=resolved verification method"]
+    },
+    "sign_request": "DID-mediated; never send profile id, signing service id, or provider key reference",
+    "sign_response": "issuer DID, algorithm, and verification method must exactly match; reject private routing identifiers; require raw signature",
+    "readiness": "sign and locally verify a challenge against exactly one matching published public JWK"
+  },
+  "integration_secret_compatibility": {
+    "master_key": "standard base64 encoding of exactly 32 bytes",
+    "master_key_sources": ["INTEGRATION_SECRET_MASTER_KEY", "INTEGRATION_SECRET_MASTER_KEY_FILE", "operator-selected *_ENV equivalent"],
+    "cipher": "AES-256-GCM",
+    "associated_data": "empty",
+    "stored_format": "standard-base64(nonce[12] || ciphertext || tag[16])",
+    "cross_language": "Rust must decrypt existing Python ciphertext and Python-compatible Rust ciphertext without re-encryption",
+    "lookup": "organization id + secret id + enabled=true",
+    "reference": "org_secret://{organization_id}/{single-segment-secret-id}",
+    "read_projection": "plaintext returned only to the provider adapter; update last_used_at",
+    "logs_and_debug": "never expose master key, plaintext, ciphertext, or secret-bearing metadata",
+    "invalid_key_or_ciphertext": "fail closed"
+  },
+  "application_reconciliation": {
+    "requirements": "validate every typed binding evidence requirement",
+    "application_template": "tenant-owned and present",
+    "identity": "verified LTI subject required; Canvas REST additionally requires linked numeric identity",
+    "read_all_requirements": true,
+    "failed_read": "retain previous evidence head and warning; do not synthesize a negative",
+    "rate_limit": "finish safe local patches then return canvas_rate_limited using maximum Retry-After",
+    "evidence_identity": "deterministic logical key from platform, binding, application, requirement, and subject",
+    "evidence_revision": "sha-256 of canonical normalized requirement/assertion/payload",
+    "idempotency": "reuse an identical current evidence revision; create only changed revisions",
+    "policy": "re-evaluate through authoritative evidence revision service",
+    "platform_projection": ["last_validated_at", "last_connection_error"],
+    "application_projection": ["last_evidence_sync_at", "last_evidence_policy_allowed", "last_evidence_requirements_checked"],
+    "platform_config_cas_loss": {"code": "canvas_platform_reconfigured", "retryable": true},
+    "application_loss": {"code": "canvas_application_unavailable", "retryable": false},
+    "no_sources_checked": {"code": "canvas_authoritative_reads_failed", "retryable": true},
+    "result_projection": ["application_id", "config_version", "requirements_checked", "facts_created", "facts_reused", "policy_allowed"]
+  },
+  "atomic_evidence_and_correction_review": {
+    "evidence_preconditions": [
+      "fact organization and application equal the locked application",
+      "verification.status is VERIFIED",
+      "requirement_id is non-empty"
+    ],
+    "transaction_lock": "tenant-owned application row FOR UPDATE",
+    "single_transaction": [
+      "read previous current heads",
+      "append or reuse immutable evidence revision",
+      "advance head only when the observation is newer",
+      "read current heads",
+      "lock the one open correction review",
+      "evaluate previous and current policy in the canonical Rust policy kernel",
+      "create, update, recover, or mark the review",
+      "append audit events"
+    ],
+    "revision_identity": "source revision and immutable fact identity make replay idempotent",
+    "out_of_order_revision": "retain immutable history but never replace a newer current head",
+    "one_open_review": {
+      "scope": "application_id",
+      "database_rule": "unique partial index where status=open",
+      "statuses": ["open", "dismissed", "suspended", "revoked", "resolved"]
+    },
+    "review_creation": {
+      "condition": "a changed head moves an issued application from allowed to denied and no open review exists",
+      "preserve": ["prior_decision", "current_decision", "credential_id", "binding_id", "triggering_fact_id"],
+      "event": "evidence_policy_review_created"
+    },
+    "review_denial_update": "update current decision and triggering fact while retaining original prior-decision baseline",
+    "automatic_recovery": {
+      "condition": "an unclaimed open review observes an allowed current decision",
+      "status": "resolved",
+      "action": "evidence_recovered",
+      "resolved_by": "canvas-evidence-sync",
+      "credential_lifecycle_change": "none",
+      "event": "evidence_policy_review_resolved"
+    },
+    "manual_resolution": {
+      "actions": ["dismiss", "suspend", "revoke"],
+      "tenant_scope": true,
+      "claim": "application-row lock plus compare-and-set open + unclaimed -> random claim token/action/timestamp",
+      "single_side_effect": "only the winning claim may invoke suspend or revoke",
+      "lifecycle_before_finalize": true,
+      "finalize_fence": ["organization", "review", "open status", "claim token", "claim action"],
+      "final_status": {"dismiss": "dismissed", "suspend": "suspended", "revoke": "revoked"},
+      "event": "evidence_policy_review_resolved",
+      "handler_failure": "owner releases claim back to open"
+    },
+    "recovery_during_manual_claim": {
+      "evidence_commit": "still append evidence and its audit event",
+      "review_update": "update current decision and set resolution_recovery_pending when policy is allowed",
+      "successful_manual_handler": "manual action remains authoritative and clears recovery marker on finalize",
+      "failed_manual_handler": "release claim, then claim as evidence_recovered and atomically resolve with audit event"
+    },
+    "audit_events": {
+      "evidence_revision_insert": "evidence_fact_created",
+      "review_created": "evidence_policy_review_created",
+      "review_resolved": "evidence_policy_review_resolved",
+      "application_scope_required": true
+    },
+    "rollback": "any persistence, transition, review, or audit failure rolls back the complete evidence transaction"
+  },
+  "background_roster_reconciliation": {
+    "complete_rest_roster": true,
+    "complete_nrps_roster": true,
+    "retained_roster_identity": "numeric Canvas id or opaque LTI subject only; never name or email",
+    "mixed_source_join": "linked identity must join numeric user and active NRPS subject or state is identity_link_required",
+    "candidate_key": "sha-256(platform_id:binding_id:canvas_user-or-lti-subject:identifier)",
+    "terminal_candidate_states_preserved": ["claimed", "dismissed"],
+    "eligible_transition": "all required current observations satisfy their typed pass rules -> pending_claim",
+    "observation_identity": "candidate and requirement",
+    "observation_revision": "sha-256 of canonical assertion and bounded source payload",
+    "failed_observation_read": "preserve prior current observation",
+    "cursor": {
+      "field": "roster_cursor",
+      "invalid_or_out_of_range": 0,
+      "order": "sorted stable provider identity",
+      "advance": "number of candidates processed",
+      "wrap": 0,
+      "nonzero_next_run_delay_seconds": 60,
+      "completion_field": "roster_cycle_completed_at"
+    },
+    "result_projection": ["candidates_seen", "pending_claim", "identity_link_required", "observations_written"],
+    "internal_nonpersistent_result": ["roster_remaining"],
+    "signing": "forbidden; candidate preparation ends at pending_claim"
+  },
+  "issued_drift": {
+    "default_cadence_seconds": 21600,
+    "default_window_days": 90,
+    "expired_window": "disable target and succeed with no_change=true",
+    "correction_behavior": "authoritative evidence and policy may create lifecycle review; never directly sign"
+  },
+  "oauth_revocation": {
+    "selection": "revocation_pending, due, and unleased-or-expired",
+    "selection_order": "revoke_retry_at ascending",
+    "selection_limit_cap": 500,
+    "lease_seconds": {"minimum": 30, "maximum": 300},
+    "secret_reference": "exact org_secret://{organization_id}/{single-segment-id}",
+    "request_timeout_seconds": 10.0,
+    "error_codes": {
+      "rate_limit": "canvas_oauth_revoke_rate_limited",
+      "provider_rejection": "canvas_oauth_revoke_rejected",
+      "timeout": "canvas_oauth_revoke_timeout",
+      "other": "canvas_oauth_revoke_unavailable"
+    },
+    "failure": "owner-fenced reschedule; increment retry count; retain connection and secrets",
+    "success_order": [
+      "remote revoke",
+      "owner-fenced delete connection",
+      "best-effort platform disconnected projection",
+      "delete access and refresh secrets"
+    ],
+    "platform_patch_failure": "log and still delete secrets because remote revoke and connection deletion are complete",
+    "owner_fence_loss": "do not count or delete secrets"
+  },
+  "persistence": {
+    "schema": "issuance_service",
+    "targets": {
+      "table": "canvas_evidence_sync_targets",
+      "tenant_key": ["organization_id", "id"],
+      "logical_key": ["organization_id", "logical_key"],
+      "types": ["learner_application", "background_roster", "award_candidate", "issued_drift"],
+      "schedule_minimum_seconds": 60,
+      "config_version_minimum": 1,
+      "foreign_keys_tenant_scoped": ["platform", "binding", "application", "candidate"]
+    },
+    "jobs": {
+      "table": "canvas_evidence_sync_jobs",
+      "tenant_target_foreign_key": true,
+      "attempt_constraint": "0 <= attempt_count <= max_attempts and max_attempts >= 1",
+      "lease_constraint": "leased iff owner and expiry are non-null",
+      "active_unique_index": "one target_id where status in queued, leased, retry"
+    },
+    "heartbeats": {
+      "table": "canvas_worker_heartbeats",
+      "primary_key": "worker_id",
+      "freshness_index": ["role", "last_heartbeat_at"]
+    },
+    "required_existing_tables": [
+      "canvas_platforms",
+      "canvas_program_bindings",
+      "canvas_oauth_connections",
+      "organization_integration_secrets",
+      "applications",
+      "application_templates",
+      "canvas_learner_identities",
+      "evidence_facts",
+      "canvas_award_candidates",
+      "canvas_candidate_observations",
+      "evidence_policy_reviews"
+    ]
+  },
+  "durable_result_privacy": {
+    "allowed_keys": [
+      "application_id", "candidate_id", "candidate_state", "config_version",
+      "requirements_checked", "facts_observed", "facts_changed", "negative_observations",
+      "review_created", "identity_link_required", "candidates_seen", "pending_claim",
+      "observations_written", "facts_created", "facts_reused", "policy_allowed", "no_change"
+    ],
+    "accepted_values": ["boolean", "null", "integer", "string"],
+    "negative_integer": "clamp to zero",
+    "string_max_characters": 200,
+    "other_value": "omit",
+    "provider_payload": "omit",
+    "error_code_max_characters": 120,
+    "error_summary": "collapse whitespace and truncate to 500 characters",
+    "unexpected_error_summary": "exception class only; never exception text or response body",
+    "current_python_logging_gap": "logger.exception emits exception messages and tracebacks on worker failure paths and can leak provider or secret-bearing detail",
+    "required_security_hardening": "replace or sanitize exception logging so only allowlisted structured fields and exception class are emitted; establish Python oracle coverage before using shared redaction fixtures",
+    "log_allowlist": ["job_id", "worker_id", "attempt_count", "organization_id", "platform_id", "stable_error_code", "exception_class"],
+    "log_forbidden": ["OAuth token", "client secret", "integration-secret plaintext", "integration-secret ciphertext", "provider response body", "provider payload", "exception message from an unexpected provider failure"]
+  },
+  "executable_fixtures": {
+    "job_backoff": [
+      {"attempt_count": 1, "base_seconds": 15, "maximum_jitter_seconds": 5},
+      {"attempt_count": 2, "base_seconds": 30, "maximum_jitter_seconds": 10},
+      {"attempt_count": 8, "base_seconds": 1920, "maximum_jitter_seconds": 640},
+      {"attempt_count": 999, "base_seconds": 3600, "maximum_jitter_seconds": 1200}
+    ],
+    "lease_renewal_interval": [
+      {"lease_seconds": 30, "interval_seconds": 10.0},
+      {"lease_seconds": 60, "interval_seconds": 20.0},
+      {"lease_seconds": 120, "interval_seconds": 30.0},
+      {"lease_seconds": 900, "interval_seconds": 30.0}
+    ],
+    "cursor": [
+      {"cursor": -1, "size": 4, "batch_size": 2, "normalized_cursor": 0, "next_cursor": 2},
+      {"cursor": 2, "size": 4, "batch_size": 2, "normalized_cursor": 2, "next_cursor": 0},
+      {"cursor": 99, "size": 4, "batch_size": 2, "normalized_cursor": 0, "next_cursor": 2},
+      {"cursor": 0, "size": 0, "batch_size": 2, "normalized_cursor": 0, "next_cursor": 0}
+    ],
+    "result_sanitization": {
+      "input": {
+        "application_id": "app-1",
+        "facts_changed": -2,
+        "policy_allowed": true,
+        "candidate_state": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "provider_payload": {"secret": "must-not-survive"},
+        "requirements_checked": ["must-not-survive"]
+      },
+      "output": {
+        "application_id": "app-1",
+        "facts_changed": 0,
+        "policy_allowed": true,
+        "candidate_state": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    "provider_error_mapping": [
+      {"kind": "processing", "status": null, "retryable": true, "code": "stable-code", "persisted_code": "stable-code"},
+      {"kind": "unexpected", "status": 429, "retryable": true, "code": null, "persisted_code": "canvas_rate_limited"},
+      {"kind": "unexpected", "status": 503, "retryable": true, "code": null, "persisted_code": "canvas_sync_unexpected_error"},
+      {"kind": "timeout", "status": null, "retryable": true, "code": null, "persisted_code": "canvas_sync_deadline_exceeded"},
+      {"kind": "missing_target", "status": null, "retryable": false, "code": null, "persisted_code": "canvas_sync_target_not_found"}
+    ],
+    "scheduler_conflict": [
+      {"name": "due_without_active_job", "due": true, "enabled": true, "active_job": false, "schedule_seconds": 15, "inserted_jobs": 1, "scheduled_counter": 1, "last_enqueued_at_effect": "set to now", "next_run_offset_seconds": 60},
+      {"name": "due_with_active_job", "due": true, "enabled": true, "active_job": true, "schedule_seconds": 900, "inserted_jobs": 0, "scheduled_counter": 0, "last_enqueued_at_effect": "set to now", "next_run_offset_seconds": 900},
+      {"name": "not_due", "due": false, "enabled": true, "active_job": false, "schedule_seconds": 900, "inserted_jobs": 0, "scheduled_counter": 0, "last_enqueued_at_effect": "unchanged", "next_run_offset_seconds": null},
+      {"name": "disabled", "due": true, "enabled": false, "active_job": false, "schedule_seconds": 900, "inserted_jobs": 0, "scheduled_counter": 0, "last_enqueued_at_effect": "unchanged", "next_run_offset_seconds": null}
+    ],
+    "postgres_lease_recovery": [
+      {"name": "expired_nonfinal", "attempt_count": 7, "max_attempts": 8, "state": "retry", "target_enabled": true, "code": "canvas_worker_lease_expired"},
+      {"name": "expired_final", "attempt_count": 8, "max_attempts": 8, "state": "dead_letter", "target_enabled": false, "code": "canvas_worker_lease_expired"},
+      {"name": "concurrent_reclaimer_skip_locked", "attempt_count": 7, "max_attempts": 8, "winners": 1, "next_attempt_count": 8},
+      {"name": "final_attempt_completion_race", "attempt_count": 8, "max_attempts": 8, "terminal_winners": 1, "stale_writes": 0, "rule": "completion and expiry-recovery are fenced by one row lock and current lease generation; the loser observes terminal or stale state and cannot overwrite it"}
+    ],
+    "renewal_fence": [
+      {"name": "current_generation", "status": "leased", "owner_matches": true, "lease_unexpired": true, "attempt_matches": true, "updated": true},
+      {"name": "wrong_owner", "status": "leased", "owner_matches": false, "lease_unexpired": true, "attempt_matches": true, "updated": false},
+      {"name": "expired", "status": "leased", "owner_matches": true, "lease_unexpired": false, "attempt_matches": true, "updated": false},
+      {"name": "reclaimed_generation", "status": "leased", "owner_matches": true, "lease_unexpired": true, "attempt_matches": false, "updated": false},
+      {"name": "terminal", "status": "succeeded", "owner_matches": true, "lease_unexpired": true, "attempt_matches": true, "updated": false}
+    ],
+    "shutdown": [
+      {"event": "stop_before_cycle", "new_cycles": 0, "propagate_cancellation": false, "dispose_engine": true},
+      {"event": "stop_during_poll", "poll_interrupted": true, "propagate_cancellation": false, "dispose_engine": true},
+      {"event": "task_cancelled", "lease_task_cancelled_and_awaited": true, "propagate_cancellation": true, "dispose_engine": true},
+      {"event": "cycle_exception", "log_fields": ["exception_class"], "next_cycle": true, "dispose_engine": true}
+    ],
+    "retry_after": [
+      {"value": "120", "now": "2026-08-31T12:00:00Z", "seconds": 120},
+      {"value": "-4", "now": "2026-08-31T12:00:00Z", "seconds": 0},
+      {"value": "999999", "now": "2026-08-31T12:00:00Z", "seconds": 86400},
+      {"value": "Mon, 31 Aug 2026 12:02:00 GMT", "now": "2026-08-31T12:00:00Z", "seconds": 120},
+      {"value": "malformed", "now": "2026-08-31T12:00:00Z", "seconds": null}
+    ],
+    "log_redaction": [
+      {"event": "unexpected_provider_error", "input_secret": "Bearer provider-token", "persisted_summary": "Canvas synchronization failed (ProviderFailure)", "log_fields": ["job_id", "exception_class"], "forbidden_substrings": ["provider-token", "Bearer", "response-body"]},
+      {"event": "oauth_revocation_retry", "input_secret": "oauth-access-token", "persisted_summary": null, "log_fields": ["organization_id", "platform_id", "stable_error_code"], "forbidden_substrings": ["oauth-access-token", "client-secret", "provider-body"]}
+    ]
+  },
+  "existing_rust_components": {
+    "snapshot_commit": "72501bb0832c61eb6c4f34e0a58bc00bcc9c2255",
+    "reuse_required": {
+      "rust/services/issuance/src/canvas_oauth.rs": "03417d922c64e8f2cb81f279b5b4a5fb556896cb",
+      "rust/services/issuance/src/canvas_oauth_http.rs": "b64f2b0a603de1176d2ee3abc182f26fffb491b2",
+      "rust/services/issuance/src/canvas_oauth_postgres.rs": "b877c792d0f2a5ef4036a99b1fff69e3135021c1",
+      "rust/services/issuance/src/integration_secret.rs": "aa39a37843ac8ded26fea89cc58da3adab71d7e3",
+      "rust/services/issuance/src/canvas_readiness.rs": "2c2f8250704fcd4def8c32af5c37a4c1934d0999",
+      "rust/services/issuance/src/canvas_readiness_runtime.rs": "2c34f5b2c1f1a22ffe9c09fb3c99237926bbf0c8"
+    },
+    "test_evidence": {
+      "rust/services/issuance/tests/canvas_oauth_behavior.rs": "7fd17e5d2a15266d65c4979ed704b4277e588019",
+      "rust/services/issuance/tests/canvas_oauth_postgres_contract.rs": "dcb8cba53140cc156e9fd5334c10bf2377a7dff2",
+      "rust/services/issuance/tests/canvas_management_postgres_contract.rs": "682e4e9b52c6163fe11ff4b30d9a9eea43f6b312"
+    },
+    "rule": "Refactor or extend these shared components; do not introduce a second OAuth, integration-secret cipher/vault, or readiness implementation for the worker.",
+    "oauth_differences_to_resolve": {
+      "legacy_python_retry": "pending-revocation polling, typed error codes, exponent cap 11, base cap 21600 seconds, random jitter through 25 percent, total cap 86400 seconds",
+      "current_rust_disconnect_retry": "request-path attempt only, generic canvas_oauth_revoke_failed, exponent cap 7, base cap 3600 seconds, no jitter, no pending-queue worker",
+      "legacy_python_cleanup": "owner-fenced connection delete, best-effort platform patch, then per-secret deletion outside that transaction",
+      "current_rust_postgres_cleanup": "owner-fenced connection and tenant-scoped secret deletion in one transaction, followed by platform patch",
+      "required_resolution": "Use the existing Rust repository/vault and keep its stronger atomic tenant-scoped cleanup, while adding worker-owned due selection, lease/retry/error parity and preserving the externally observed platform projection. Differential tests must explicitly approve any ordering improvement."
+    }
+  },
+  "migration_gates": {
+    "rust_start_requires": [
+      "contract approved as the complete behavior and persistence boundary",
+      "all legacy oracle gaps below implemented against the Python source",
+      "fresh PostgreSQL fixtures for leases, recovery, target CAS, OAuth revocation, and heartbeat projection",
+      "provider simulators for REST, AGS, NRPS, OAuth refresh, and OAuth revocation",
+      "language-neutral fixtures consumable by both Python oracle and Rust candidate",
+      "exact provenance pins verified against the protected Python snapshot and the Rust base snapshot",
+      "existing Rust canvas_oauth, canvas_oauth_postgres, integration_secret, and readiness components selected for reuse or refactor"
+    ],
+    "python_deletion_requires": [
+      "whole-worker differential parity including mutation and failure cases",
+      "same database migration ownership and rollback evidence",
+      "all Compose, self-host, and Kubernetes consumers routed to Rust",
+      "readiness heartbeat parity",
+      "beta-only acceptance and soak",
+      "no production or persistent self-host change without separate approval"
+    ],
+    "legacy_oracle_gaps": [
+      "worker environment parsing, clamping, and malformed-number startup behavior",
+      "legacy Python processor loader malformed path/import/non-callable behavior before cutover; Rust must instead remove CANVAS_SYNC_PROCESSOR from every consumer",
+      "loop stop-event, cancellation, cycle-exception recovery, and engine disposal",
+      "lease renewal heartbeat and renewal-fence loss",
+      "PostgreSQL concurrent scheduler, lease reclaim, and final-attempt crash recovery",
+      "target-not-found and unexpected 429/non-429 privacy projections",
+      "safe-result exhaustive type, truncation, and negative-integer projection",
+      "Retry-After HTTP-date, malformed, negative, and clamp edges",
+      "all target validation codes and processor async/result-shape failures",
+      "OAuth revocation rate-limit/timeout classification, Retry-After, patch failure, and owner-fence loss",
+      "background cursor resume/wrap plus terminal candidate-state preservation across cycles",
+      "complete per-fact assertion parity for assignment, quiz, module, and course evidence",
+      "bound JSON string/object signing-service error detail in Python (text is currently the only 500-character bounded case) before sharing the security fixture with Rust",
+      "replace Python worker logger.exception message/traceback leakage with allowlisted structured logging and add redaction oracle coverage before sharing fixtures with Rust"
+    ]
+  }
+}
