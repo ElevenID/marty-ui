@@ -106,7 +106,13 @@ impl PersistedEvidence {
         presentation_digest: &Sha256Digest,
         result: &VerificationDecisionResult,
     ) -> Result<Self, PersistedEvidenceError> {
-        validate_typed_binding(governance, session_id, presentation_digest, result)?;
+        validate_typed_binding(
+            governance,
+            session_id,
+            presentation_digest,
+            result,
+            TransactionIdBinding::ScopedOnly,
+        )?;
         let records = evidence_records(result);
         validate_evidence_digest(&records, result.evidence_digest())?;
         let passed = canonical_passed(result);
@@ -298,7 +304,14 @@ fn parse_canonical(value: Value) -> Option<PersistedEvidence> {
         .strip_prefix("verification:")?
         .to_owned();
     let digest = Sha256Digest::parse(result.input_digest().strip_prefix("sha256:")?).ok()?;
-    validate_typed_binding(&governance, &session_id, &digest, &result).ok()?;
+    validate_typed_binding(
+        &governance,
+        &session_id,
+        &digest,
+        &result,
+        TransactionIdBinding::LegacyOrScoped,
+    )
+    .ok()?;
     let records = evidence_records(&result);
     if object.get("evidence_records") != Some(&Value::Array(records.clone())) {
         return None;
@@ -373,11 +386,18 @@ fn invalid_evidence() -> PersistedEvidence {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TransactionIdBinding {
+    ScopedOnly,
+    LegacyOrScoped,
+}
+
 fn validate_typed_binding(
     governance: &GovernanceSnapshot,
     session_id: &str,
     presentation_digest: &Sha256Digest,
     result: &VerificationDecisionResult,
+    transaction_binding: TransactionIdBinding,
 ) -> Result<(), PersistedEvidenceError> {
     let context = result.context();
     let component = governance.component();
@@ -418,9 +438,16 @@ fn validate_typed_binding(
     {
         return Err(PersistedEvidenceError::AuthorityMismatch);
     }
-    if result.verification_id() != format!("verification:{session_id}")
-        || context.transaction_id.as_deref() != Some(session_id)
-    {
+    let scoped_transaction_id = format!("transaction:{session_id}");
+    let transaction_is_bound = context
+        .transaction_id
+        .as_deref()
+        .is_some_and(|transaction_id| {
+            transaction_id == scoped_transaction_id
+                || (matches!(transaction_binding, TransactionIdBinding::LegacyOrScoped)
+                    && transaction_id == session_id)
+        });
+    if result.verification_id() != format!("verification:{session_id}") || !transaction_is_bound {
         return Err(PersistedEvidenceError::SessionMismatch);
     }
     if result.input_digest() != format!("sha256:{}", presentation_digest.as_str()) {
@@ -552,7 +579,7 @@ mod tests {
                 mode: VerificationContextMode::Online,
                 verifier_id: governance.policy().verifier_id().into(),
                 organization_id: Some(governance.organization_id().into()),
-                transaction_id: Some(SESSION_ID.into()),
+                transaction_id: Some(format!("transaction:{SESSION_ID}")),
                 audience: Some(governance.policy().verifier_id().into()),
                 offline_profile_id: None,
             },
@@ -661,6 +688,35 @@ mod tests {
         assert_eq!(
             failed.require_verified(),
             Err(PersistedEvidenceError::CanonicalPassRequired)
+        );
+
+        let mut scoped = canonical_input(&governance, &digest, false);
+        scoped.context.transaction_id = Some(format!("transaction:{SESSION_ID}"));
+        PersistedEvidence::canonical(&governance, SESSION_ID, &digest, &build_result(scoped))
+            .unwrap();
+
+        let mut raw = canonical_input(&governance, &digest, false);
+        raw.context.transaction_id = Some(SESSION_ID.into());
+        assert_eq!(
+            PersistedEvidence::canonical(&governance, SESSION_ID, &digest, &build_result(raw),),
+            Err(PersistedEvidenceError::SessionMismatch)
+        );
+
+        let mut legacy_database_value = passed.as_value().clone();
+        legacy_database_value["canonical_result"]["context"]["transaction_id"] = json!(SESSION_ID);
+        let reloaded_legacy = PersistedEvidence::from_database(legacy_database_value);
+        assert!(reloaded_legacy.canonical_result().is_some());
+
+        let mut wrong_scope = canonical_input(&governance, &digest, false);
+        wrong_scope.context.transaction_id = Some("transaction:other-session".into());
+        assert_eq!(
+            PersistedEvidence::canonical(
+                &governance,
+                SESSION_ID,
+                &digest,
+                &build_result(wrong_scope),
+            ),
+            Err(PersistedEvidenceError::SessionMismatch)
         );
     }
 

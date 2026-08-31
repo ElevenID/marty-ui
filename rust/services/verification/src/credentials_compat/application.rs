@@ -19,6 +19,30 @@ pub struct CredentialsCompatibilityService {
     processing_lease: ProcessingLease,
 }
 
+struct CanonicalDecisionIds {
+    verification: String,
+    transaction: String,
+}
+
+impl CanonicalDecisionIds {
+    fn for_session(session_id: &str) -> Self {
+        Self::from_tokens(session_id, session_id)
+    }
+
+    fn generate() -> Self {
+        let verification = VerifierNonce::generate();
+        let transaction = VerifierNonce::generate();
+        Self::from_tokens(verification.as_str(), transaction.as_str())
+    }
+
+    fn from_tokens(verification: &str, transaction: &str) -> Self {
+        Self {
+            verification: format!("verification:{verification}"),
+            transaction: format!("transaction:{transaction}"),
+        }
+    }
+}
+
 impl std::fmt::Debug for CredentialsCompatibilityService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -139,10 +163,11 @@ impl CredentialsCompatibilityService {
             .kernel
             .verify_jwt_vp(presentation, &session.verifier_did, Some(nonce.as_str()))
             .await;
+        let ids = CanonicalDecisionIds::for_session(&session.id);
         let result = build_canonical_decision(
             &governance,
-            &format!("verification:{}", session.id),
-            &session.id,
+            &ids.verification,
+            &ids.transaction,
             Presented::String(presentation),
             &facts,
         );
@@ -270,11 +295,15 @@ impl CompatibilityUseCases for CredentialsCompatibilityService {
                 "w3c_vc",
             ),
         };
-        let transaction = format!("transaction:{}", VerifierNonce::generate().as_str());
-        let verification = format!("verification:{}", VerifierNonce::generate().as_str());
-        let canonical =
-            build_canonical_decision(&governance, &verification, &transaction, presented, &facts)
-                .map_err(|_| CompatibilityError::Internal)?;
+        let ids = CanonicalDecisionIds::generate();
+        let canonical = build_canonical_decision(
+            &governance,
+            &ids.verification,
+            &ids.transaction,
+            presented,
+            &facts,
+        )
+        .map_err(|_| CompatibilityError::Internal)?;
         Ok(VerificationResult::from_canonical(
             Some(&canonical),
             Some(method.into()),
@@ -314,12 +343,11 @@ impl CompatibilityUseCases for CredentialsCompatibilityService {
             .verify_vds_nc(&request.barcode, issuer.public_jwk())
             .await;
         let proof_verified = facts.credential_proofs_valid == Some(true);
-        let transaction = format!("transaction:{}", VerifierNonce::generate().as_str());
-        let verification = format!("verification:{}", VerifierNonce::generate().as_str());
+        let ids = CanonicalDecisionIds::generate();
         let canonical = build_canonical_decision(
             &governance,
-            &verification,
-            &transaction,
+            &ids.verification,
+            &ids.transaction,
             Presented::String(&request.barcode),
             &facts,
         )
@@ -398,6 +426,47 @@ mod tests {
         let unavailable = VerificationResult::from_canonical(None, Some("jwt_vp".into()), None);
         assert!(!unavailable.is_valid());
         assert!(unavailable.error().is_some());
+    }
+
+    #[test]
+    fn canonical_ids_scope_urlsafe_tokens_that_start_with_punctuation() {
+        let session_id = "-session-token";
+        let ids = CanonicalDecisionIds::for_session(session_id);
+        assert_eq!(ids.verification, "verification:-session-token");
+        assert_eq!(ids.transaction, "transaction:-session-token");
+
+        let fixture: serde_json::Value =
+            serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        let governance = GovernanceEngine::new(&fixture["governance"].to_string())
+            .unwrap()
+            .authorize("purpose-scoped-test-key", GovernancePurpose::SessionCreate)
+            .unwrap();
+        let facts = AdapterFacts {
+            processing_status: VerificationProcessingStatus::Completed,
+            presentation_structure_valid: Some(true),
+            presentation_proof_valid: Some(true),
+            credential_proofs_valid: Some(true),
+            trust_chain_valid: Some(true),
+            holder_binding_valid: Some(true),
+            transaction_binding_valid: Some(true),
+            presentation_constraints_valid: Some(true),
+            revocation_checked: Some(true),
+            revocation_status: Some(CredentialStatus::Valid),
+        };
+
+        let presentation = "header.payload.signature";
+        let canonical = build_canonical_decision(
+            &governance,
+            &ids.verification,
+            &ids.transaction,
+            Presented::String(presentation),
+            &facts,
+        )
+        .unwrap();
+        let digest = Presented::String(presentation).digest();
+        assert!(
+            PersistedEvidence::canonical(&governance, session_id, &digest, &canonical,).is_ok()
+        );
     }
 
     #[test]

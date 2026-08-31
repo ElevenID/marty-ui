@@ -297,6 +297,12 @@ jobs:
             MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
           provenance: mode=max
           sbom: true
+      - name: Smoke-test the published shared services verification artifact
+        shell: bash
+        run: >-
+          bash scripts/smoke-verification-image.sh
+          "${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"
+          shared
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ env.SERVICES_IMAGE }}

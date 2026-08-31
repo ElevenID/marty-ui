@@ -51,6 +51,35 @@ def test_beta_uses_the_same_native_image_for_schema_and_compatibility_runtime() 
     assert "VERIFICATION_GOVERNANCE_JSON: '{\"ci_compose_render_only\":true}'" in workflow
 
 
+def test_ci_smokes_migration_start_readiness_and_a_real_operation_from_one_image() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    release = text(".github/workflows/cd.yml")
+    smoke = text("scripts/smoke-verification-image.sh")
+    assert "Smoke-test verification migration and compatibility runtime from one image" in workflow
+    assert (
+        "bash scripts/smoke-verification-image.sh marty-verification-service:ci dedicated"
+        in workflow
+    )
+    assert "Smoke-test the published shared services verification artifact" in release
+    assert '"${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"' in release
+    assert "scripts/smoke-verification-image.sh" in release
+    assert "shared" in release
+    assert "--entrypoint /app/services/entrypoint.sh" in smoke
+    assert "--env SERVICE_NAME=verification" in smoke
+    assert 'for _ in 1 2; do' in smoke
+    assert '"$image" migrate' in smoke
+    assert "202608091200" in smoke
+    assert 'http://127.0.0.1:${port}/ready' in smoke
+    assert 'http://127.0.0.1:${port}/health' in smoke
+    assert 'http://127.0.0.1:${port}/v1/verification/health' in smoke
+    assert 'http://127.0.0.1:${port}/v1/verification/sessions' in smoke
+    assert "purpose-scoped-test-key" in smoke
+    assert 'v1/verification/sessions/${session_id}/submit' in smoke
+    assert '.canonical_result.verification_id == ("verification:" + $session_id)' in smoke
+    assert '.canonical_result.context.transaction_id == ("transaction:" + $session_id)' in smoke
+    assert '.status == "failed" and .nonce == ""' in smoke
+
+
 def test_only_native_verification_runtime_sources_remain() -> None:
     service = ROOT / "services" / "verification"
     assert not list(service.rglob("*.py"))

@@ -689,4 +689,16 @@ mod tests {
         assert!(debug.contains("[CONFIGURED]"));
         assert!(!debug.contains("verification:secret"));
     }
+
+    #[test]
+    fn deployment_governance_fixture_stays_identical_to_the_canonical_core_vector() {
+        let deployment: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/verification-governance-behavior.json"
+        ))
+        .unwrap();
+        let canonical: serde_json::Value =
+            serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        assert_eq!(deployment, canonical);
+        GovernanceEngine::new(&deployment["governance"].to_string()).unwrap();
+    }
 }

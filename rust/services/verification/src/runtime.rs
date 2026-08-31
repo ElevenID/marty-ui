@@ -120,25 +120,52 @@ impl VerificationRuntime {
         pool: PgPool,
         shutdown: watch::Receiver<bool>,
     ) -> Result<(), MmfError> {
-        self.monitor_compatibility_database_with_interval(
-            &pool,
+        self.monitor_compatibility_database_checks(
+            move || {
+                let pool = pool.clone();
+                async move {
+                    sqlx::query_scalar::<_, i32>("SELECT 1")
+                        .fetch_one(&pool)
+                        .await
+                        .is_ok()
+                }
+            },
             shutdown,
             COMPATIBILITY_DATABASE_CHECK_INTERVAL,
+            COMPATIBILITY_DATABASE_CHECK_TIMEOUT,
         )
         .await
     }
 
-    async fn monitor_compatibility_database_with_interval(
+    async fn monitor_compatibility_database_checks<Check, CheckFuture>(
         &self,
-        pool: &PgPool,
+        mut check: Check,
         mut shutdown: watch::Receiver<bool>,
-        interval: std::time::Duration,
-    ) -> Result<(), MmfError> {
+        interval: Duration,
+        check_timeout: Duration,
+    ) -> Result<(), MmfError>
+    where
+        Check: FnMut() -> CheckFuture,
+        CheckFuture: Future<Output = bool>,
+    {
         let mut checks = tokio::time::interval(interval);
         checks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                _ = checks.tick() => self.refresh_compatibility_database_health(pool).await?,
+                _ = checks.tick() => {
+                    let healthy = tokio::select! {
+                        result = tokio::time::timeout(check_timeout, check()) => {
+                            result.unwrap_or(false)
+                        }
+                        changed = shutdown.changed() => {
+                            if changed.is_err() || *shutdown.borrow() {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                    };
+                    self.set_compatibility_database_health(healthy)?;
+                }
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         return Ok(());
@@ -148,13 +175,8 @@ impl VerificationRuntime {
         }
     }
 
-    async fn refresh_compatibility_database_health(&self, pool: &PgPool) -> Result<(), MmfError> {
-        if bounded_database_check(
-            sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool),
-            COMPATIBILITY_DATABASE_CHECK_TIMEOUT,
-        )
-        .await
-        {
+    fn set_compatibility_database_health(&self, healthy: bool) -> Result<(), MmfError> {
+        if healthy {
             self.mark_healthy(VerificationDependency::CompatibilityDatabase)
         } else {
             self.mark_degraded(
@@ -177,42 +199,24 @@ impl VerificationRuntime {
     }
 }
 
-async fn bounded_database_check<F, T, E>(check: F, timeout: Duration) -> bool
-where
-    F: Future<Output = Result<T, E>>,
-{
-    tokio::time::timeout(timeout, check)
-        .await
-        .is_ok_and(|result| result.is_ok())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        future::pending,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
 
     use axum::{body::Body, http::Request};
     use mmf_core::HealthStatus;
     use mmf_runtime::system_router;
-    use sqlx::postgres::PgPoolOptions;
-    use tokio::sync::watch;
+    use tokio::sync::{mpsc, watch};
     use tower::ServiceExt;
 
     use super::*;
-
-    #[tokio::test]
-    async fn compatibility_database_checks_are_success_sensitive_and_bounded() {
-        assert!(bounded_database_check(async { Ok::<_, ()>(()) }, Duration::from_millis(10)).await);
-        assert!(
-            !bounded_database_check(async { Err::<(), _>(()) }, Duration::from_millis(10)).await
-        );
-        assert!(
-            !bounded_database_check(
-                std::future::pending::<Result<(), ()>>(),
-                Duration::from_millis(1),
-            )
-            .await
-        );
-    }
 
     fn config(credentials_compat_enabled: bool) -> VerificationServiceConfig {
         let fixture: serde_json::Value =
@@ -276,7 +280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn database_monitor_removes_readiness_without_failing_liveness_and_stops_cleanly() {
+    async fn database_monitor_degrades_recovers_and_preserves_liveness() {
         let runtime = VerificationRuntime::new(&config(true)).unwrap();
         mark_static_dependencies_healthy(&runtime);
         runtime
@@ -284,19 +288,20 @@ mod tests {
             .unwrap();
         runtime.activate().unwrap();
 
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://verification:secret@127.0.0.1/verification")
-            .unwrap();
-        pool.close().await;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let monitor_runtime = runtime.clone();
-        let monitor_pool = pool.clone();
+        let database_available = Arc::new(AtomicBool::new(false));
+        let monitor_available = database_available.clone();
         let monitor = tokio::spawn(async move {
             monitor_runtime
-                .monitor_compatibility_database_with_interval(
-                    &monitor_pool,
+                .monitor_compatibility_database_checks(
+                    move || {
+                        let available = monitor_available.load(Ordering::SeqCst);
+                        async move { available }
+                    },
                     shutdown_rx,
                     Duration::from_millis(1),
+                    Duration::from_millis(50),
                 )
                 .await
         });
@@ -337,8 +342,79 @@ mod tests {
             .unwrap();
         assert_eq!(readiness.status(), 503);
 
+        database_available.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if runtime.state().readiness().unwrap().ready {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let recovered = system_router(runtime.state())
+            .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(recovered.status(), 200);
+
         shutdown_tx.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(1), monitor)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_database_probe_is_bounded_and_shutdown_interrupts_the_next_probe() {
+        let runtime = VerificationRuntime::new(&config(true)).unwrap();
+        mark_static_dependencies_healthy(&runtime);
+        runtime
+            .mark_healthy(VerificationDependency::CompatibilityDatabase)
+            .unwrap();
+        runtime.activate().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let monitor_attempts = attempts.clone();
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let monitor_runtime = runtime.clone();
+        let monitor = tokio::spawn(async move {
+            monitor_runtime
+                .monitor_compatibility_database_checks(
+                    move || {
+                        let attempt = monitor_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                        started_tx.send(attempt).unwrap();
+                        pending::<bool>()
+                    },
+                    shutdown_rx,
+                    Duration::from_millis(1),
+                    Duration::from_millis(10),
+                )
+                .await
+        });
+        assert_eq!(started_rx.recv().await, Some(1));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !runtime.state().readiness().unwrap().ready {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime.state().health().unwrap().status,
+            HealthStatus::Degraded
+        );
+
+        assert_eq!(started_rx.recv().await, Some(2));
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_millis(100), monitor)
             .await
             .unwrap()
             .unwrap()
