@@ -10,7 +10,6 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import NoReturn
 
-
 EXPECTED_DOCKER = "29.7.2"
 EXPECTED_BUILDX = "v0.36.1"
 EXPECTED_BUILDKIT = "v0.32.2"
