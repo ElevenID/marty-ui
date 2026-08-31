@@ -6,7 +6,7 @@ use axum::{
     http::{header as http_header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use marty_oid4vci::discovery::{
@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    canvas_event_status::CanvasEvidenceEventStatusResponse,
+    canvas_legacy_ingest::{
+        CanvasLegacyEventKind, CanvasLegacyIngestError, CanvasLegacyIngestService, EVIDENCE_LINK,
+        SUNSET,
+    },
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
         CanvasLtiBootstrapServiceError,
@@ -40,6 +45,21 @@ use crate::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
+    canvas_management::{
+        CanvasApplicationApprovalRequest, CanvasCredentialsValidationRequest,
+        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasPlatformRequest,
+        CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
+    },
+    canvas_management_http::{
+        integration_secret_query, organization_id_from_query, parse_application_approval,
+        parse_canvas_credentials_validation_request, parse_integration_secret_create,
+        parse_integration_secret_update, parse_lti_installation_request, parse_platform_request,
+        parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
+        program_binding_query, CanvasApplicationApprovalResponse, CanvasIntegrationSecretResponse,
+        CanvasManagementHttpError, CanvasPlatformManagementHttpService,
+        CanvasPlatformReadinessResponse, CanvasPlatformResponse, CanvasProgramBindingResponse,
+        CanvasProgramBindingValidationResponse,
+    },
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
     },
@@ -86,6 +106,8 @@ struct IssuanceState {
     canvas_lti_evidence_sync: Option<CanvasLtiEvidenceSyncService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     canvas_oauth: Option<CanvasOAuthService>,
+    canvas_management: Option<CanvasPlatformManagementHttpService>,
+    canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
 }
 
 pub struct IssuanceServices {
@@ -137,13 +159,25 @@ impl IssuanceCoreServices {
 #[derive(Clone, Debug)]
 pub struct CanvasServices {
     oauth: CanvasOAuthService,
+    management: CanvasPlatformManagementHttpService,
+    legacy_ingest: CanvasLegacyIngestService,
     lti: CanvasLtiServices,
 }
 
 impl CanvasServices {
     #[must_use]
-    pub fn new(oauth: CanvasOAuthService, lti: CanvasLtiServices) -> Self {
-        Self { oauth, lti }
+    pub fn new(
+        oauth: CanvasOAuthService,
+        management: CanvasPlatformManagementHttpService,
+        legacy_ingest: CanvasLegacyIngestService,
+        lti: CanvasLtiServices,
+    ) -> Self {
+        Self {
+            oauth,
+            management,
+            legacy_ingest,
+            lti,
+        }
     }
 }
 
@@ -258,6 +292,8 @@ struct OptionalServices {
     canvas_lti_evidence_sync: Option<CanvasLtiEvidenceSyncService>,
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     canvas_oauth: Option<CanvasOAuthService>,
+    canvas_management: Option<CanvasPlatformManagementHttpService>,
+    canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -329,6 +365,8 @@ pub fn router_with_all_services(
             didcomm_delivery: Some(services.didcomm_delivery),
             credential_management: Some(services.credential_management),
             canvas_oauth: Some(services.canvas.oauth),
+            canvas_management: Some(services.canvas.management),
+            canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
             canvas_lti_experience: Some(services.canvas.lti.experience),
@@ -497,6 +535,40 @@ pub fn router_with_canvas_oauth(
         transport,
         OptionalServices {
             canvas_oauth: Some(canvas_oauth),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_canvas_management(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_management: CanvasPlatformManagementHttpService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_management: Some(canvas_management),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_canvas_legacy_ingest(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_legacy_ingest: CanvasLegacyIngestService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_legacy_ingest: Some(canvas_legacy_ingest),
             ..OptionalServices::default()
         },
     )
@@ -772,6 +844,97 @@ fn router_with_optional_services(
                 delete(disconnect_canvas_oauth_connection),
             );
     }
+    if services.canvas_management.is_some() {
+        api = api
+            .route(
+                "/v1/integrations/canvas/applications/{application_id}/approve",
+                post(approve_canvas_application),
+            )
+            .route(
+                "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
+                get(get_canvas_evidence_event_status),
+            )
+            .route(
+                "/v1/integrations/canvas/lti/config/{token}",
+                get(get_public_canvas_lti_config),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms",
+                get(list_canvas_platforms).post(create_canvas_platform),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
+                get(get_canvas_lti_registration_config),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+                put(update_canvas_lti_installation),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/readiness",
+                get(get_canvas_platform_readiness),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
+                post(probe_canvas_platform_sandbox),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
+                post(refresh_canvas_platform_jwks),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+                post(discover_canvas_scope),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/catalog",
+                get(get_canvas_catalog),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
+                post(create_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings",
+                get(list_canvas_program_bindings),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}",
+                get(get_canvas_program_binding)
+                    .put(update_canvas_program_binding)
+                    .delete(delete_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
+                post(validate_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
+                post(activate_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
+                post(deactivate_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/integration-secrets",
+                get(list_canvas_integration_secrets).post(create_canvas_integration_secret),
+            )
+            .route(
+                "/v1/integrations/canvas/integration-secrets/{secret_id}",
+                put(update_canvas_integration_secret).delete(delete_canvas_integration_secret),
+            )
+            .route(
+                "/v1/integrations/canvas/canvas-credentials/validate",
+                post(validate_canvas_credentials_provider),
+            )
+            .route(
+                "/v1/integrations/canvas/platforms/{platform_id}",
+                get(get_canvas_platform)
+                    .put(update_canvas_platform)
+                    .delete(delete_canvas_platform),
+            );
+    }
     if services.canvas_lti_login.is_some() {
         api = api
             .route(
@@ -837,6 +1000,21 @@ fn router_with_optional_services(
             post(sync_canvas_lti_evidence),
         );
     }
+    if services.canvas_legacy_ingest.is_some() {
+        api = api
+            .route(
+                "/v1/integrations/canvas/evidence-events",
+                post(process_canvas_evidence_event),
+            )
+            .route(
+                "/v1/integrations/canvas/ags/score-events",
+                post(process_canvas_ags_score_event),
+            )
+            .route(
+                "/v1/integrations/canvas/nrps/membership-events",
+                post(process_canvas_nrps_membership_event),
+            );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -848,6 +1026,8 @@ fn router_with_optional_services(
         didcomm_delivery: services.didcomm_delivery,
         credential_management: services.credential_management,
         canvas_oauth: services.canvas_oauth,
+        canvas_management: services.canvas_management,
+        canvas_legacy_ingest: services.canvas_legacy_ingest,
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
         canvas_lti_experience: services.canvas_lti_experience,
@@ -862,6 +1042,455 @@ fn router_with_optional_services(
     system
         .merge(api)
         .layer(middleware::from_fn_with_state(transport, legacy_transport))
+}
+
+async fn create_canvas_platform(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Json<CanvasPlatformResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request = parse_platform_request(request).await?;
+    service.create(&headers, request).await.map(Json)
+}
+
+async fn approve_canvas_application(
+    State(state): State<IssuanceState>,
+    Path(application_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasApplicationApprovalResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasApplicationApprovalRequest = parse_application_approval(request).await?;
+    service
+        .approve_application(&headers, &application_id, request)
+        .await
+        .map(Json)
+}
+
+async fn process_canvas_evidence_event(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Response {
+    process_canvas_legacy_event(state, request, CanvasLegacyEventKind::Evidence).await
+}
+
+async fn process_canvas_ags_score_event(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Response {
+    process_canvas_legacy_event(state, request, CanvasLegacyEventKind::AgsScore).await
+}
+
+async fn process_canvas_nrps_membership_event(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Response {
+    process_canvas_legacy_event(state, request, CanvasLegacyEventKind::NrpsMembership).await
+}
+
+async fn process_canvas_legacy_event(
+    state: IssuanceState,
+    request: Request,
+    kind: CanvasLegacyEventKind,
+) -> Response {
+    let Some(service) = state.canvas_legacy_ingest.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Preserve the Python route's fail-closed switch ordering. In particular,
+    // malformed or oversized bodies must not preempt the default-disabled 410.
+    if !service.enabled() {
+        return CanvasLegacyIngestHttpError(CanvasLegacyIngestError::Gone(kind.disabled_detail()))
+            .into_response();
+    }
+    let (parts, body) = request.into_parts();
+    let headers = parts
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_owned()))
+        })
+        .collect();
+    // Match the established gateway request-body ceiling; the Python route had
+    // no narrower per-route cap and large NRPS extension sets must keep working.
+    const MAX_CANVAS_LEGACY_BODY_BYTES: usize = 10 * 1024 * 1024;
+    let raw_body = match to_bytes(body, MAX_CANVAS_LEGACY_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "Canvas event payload is too large"})),
+            )
+                .into_response();
+        }
+    };
+    match service.process(kind, &raw_body, &headers).await {
+        Ok(response) => {
+            let mut response = Json(response).into_response();
+            response
+                .headers_mut()
+                .insert("deprecation", HeaderValue::from_static("true"));
+            response
+                .headers_mut()
+                .insert("sunset", HeaderValue::from_static(SUNSET));
+            if kind == CanvasLegacyEventKind::Evidence {
+                response
+                    .headers_mut()
+                    .insert("link", HeaderValue::from_static(EVIDENCE_LINK));
+            }
+            response
+        }
+        Err(error) => CanvasLegacyIngestHttpError(error).into_response(),
+    }
+}
+
+async fn get_canvas_evidence_event_status(
+    State(state): State<IssuanceState>,
+    Path((canvas_account_id, provider_event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasEvidenceEventStatusResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .get_event_status(&headers, &canvas_account_id, &provider_event_id)
+        .await
+        .map(Json)
+}
+
+async fn list_canvas_platforms(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Json<Vec<CanvasPlatformResponse>>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let organization_id = organization_id_from_query(request.uri().query());
+    service
+        .list(request.headers(), organization_id.as_deref())
+        .await
+        .map(Json)
+}
+
+async fn get_canvas_platform(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasPlatformResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .get(&headers, &platform_id)
+        .await
+        .map(Json)
+}
+
+async fn update_canvas_platform(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasPlatformResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasPlatformRequest = parse_platform_request(request).await?;
+    service
+        .update(&headers, &platform_id, request)
+        .await
+        .map(Json)
+}
+
+async fn delete_canvas_platform(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .delete(&headers, &platform_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_canvas_lti_registration_config(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .registration_config(&headers, &platform_id)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn get_public_canvas_lti_config(
+    State(state): State<IssuanceState>,
+    Path(token): Path<String>,
+) -> Result<Response, CanvasManagementHttpError> {
+    let configuration = canvas_management(&state)?
+        .public_registration_config(&token)
+        .await?;
+    let mut response = Json(configuration).into_response();
+    response.headers_mut().insert(
+        http_header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn update_canvas_lti_installation(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let installation = parse_lti_installation_request(request).await?;
+    service
+        .update_lti_installation(&headers, &platform_id, installation)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn get_canvas_platform_readiness(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasPlatformReadinessResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .platform_readiness(&headers, &platform_id)
+        .await
+        .map(Json)
+}
+
+async fn probe_canvas_platform_sandbox(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .sandbox_probe(&headers, &platform_id)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn refresh_canvas_platform_jwks(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .refresh_jwks(&headers, &platform_id)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn discover_canvas_scope(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasScopeDiscoveryRequest = parse_scope_discovery_request(request).await?;
+    service
+        .discover_scope(&headers, &platform_id, request)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn get_canvas_catalog(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let query = request.uri().query().map(str::to_owned);
+    let request = parse_scope_discovery_query(query.as_deref())?;
+    service
+        .discover_scope(&headers, &platform_id, request)
+        .await
+        .map(|response| Json(response).into_response())
+}
+
+async fn create_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasProgramBindingRequest = parse_program_binding_request(request).await?;
+    service
+        .create_binding(&headers, &platform_id, request)
+        .await
+        .map(Json)
+}
+
+async fn list_canvas_program_bindings(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Json<Vec<CanvasProgramBindingResponse>>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let (organization_id, platform_id, application_template_id) =
+        program_binding_query(request.uri().query());
+    service
+        .list_bindings(
+            request.headers(),
+            organization_id.as_deref(),
+            platform_id.as_deref(),
+            application_template_id.as_deref(),
+        )
+        .await
+        .map(Json)
+}
+
+async fn get_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .get_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn update_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasProgramBindingResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request = parse_program_binding_request(request).await?;
+    service
+        .update_binding(&headers, &binding_id, request)
+        .await
+        .map(Json)
+}
+
+async fn delete_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .delete_binding(&headers, &binding_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn validate_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .validate_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn activate_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .activate_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn deactivate_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .deactivate_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn create_canvas_integration_secret(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<(StatusCode, Json<CanvasIntegrationSecretResponse>), CanvasManagementHttpError> {
+    let request: CanvasIntegrationSecretCreate = parse_integration_secret_create(request).await?;
+    canvas_management(&state)?
+        .create_integration_secret(&headers, request)
+        .await
+        .map(|secret| (StatusCode::CREATED, Json(secret)))
+}
+
+async fn validate_canvas_credentials_provider(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<
+    Json<crate::canvas_credentials_validation::CanvasCredentialsValidationResult>,
+    CanvasManagementHttpError,
+> {
+    let request: CanvasCredentialsValidationRequest =
+        parse_canvas_credentials_validation_request(request).await?;
+    canvas_management(&state)?
+        .validate_canvas_credentials_provider(&headers, request)
+        .await
+        .map(Json)
+}
+
+async fn list_canvas_integration_secrets(
+    State(state): State<IssuanceState>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Result<Json<Vec<CanvasIntegrationSecretResponse>>, CanvasManagementHttpError> {
+    let (organization_id, provider) = integration_secret_query(query.as_deref());
+    canvas_management(&state)?
+        .list_integration_secrets(&headers, organization_id.as_deref(), provider.as_deref())
+        .await
+        .map(Json)
+}
+
+async fn update_canvas_integration_secret(
+    State(state): State<IssuanceState>,
+    Path(secret_id): Path<String>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<Json<CanvasIntegrationSecretResponse>, CanvasManagementHttpError> {
+    let request: CanvasIntegrationSecretUpdate = parse_integration_secret_update(request).await?;
+    canvas_management(&state)?
+        .update_integration_secret(&headers, &secret_id, request)
+        .await
+        .map(Json)
+}
+
+async fn delete_canvas_integration_secret(
+    State(state): State<IssuanceState>,
+    Path(secret_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .delete_integration_secret(&headers, &secret_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn canvas_management(
+    state: &IssuanceState,
+) -> Result<&CanvasPlatformManagementHttpService, CanvasManagementHttpError> {
+    state.canvas_management.as_ref().ok_or_else(|| {
+        CanvasManagementHttpError::Service(
+            crate::canvas_management_service::CanvasPlatformManagementError::RepositoryUnavailable,
+        )
+    })
 }
 
 async fn start_canvas_oauth_connection(
@@ -2188,6 +2817,21 @@ impl IntoResponse for CanvasOAuthHttpError {
                 | Error::SecretUnavailable
                 | Error::InvalidConfiguration,
             ) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+            Self::Service(Error::RefreshRateLimited {
+                retry_after_seconds,
+            }) => {
+                let mut response = (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"detail": "Canvas OAuth refresh was rate limited"})),
+                )
+                    .into_response();
+                if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+                    response
+                        .headers_mut()
+                        .insert(http_header::RETRY_AFTER, value);
+                }
+                response
+            }
             Self::Service(error) => {
                 let (status, detail) = match error {
                     Error::PlatformNotFound => (StatusCode::NOT_FOUND, error.to_string()),
@@ -2205,7 +2849,8 @@ impl IntoResponse for CanvasOAuthHttpError {
                     }
                     Error::RepositoryUnavailable
                     | Error::SecretUnavailable
-                    | Error::InvalidConfiguration => unreachable!("handled above"),
+                    | Error::InvalidConfiguration
+                    | Error::RefreshRateLimited { .. } => unreachable!("handled above"),
                     Error::Security(_) => unreachable!("handled above"),
                 };
                 (status, Json(json!({"detail": detail}))).into_response()
@@ -2936,6 +3581,53 @@ impl IntoResponse for TenantDiscoveryHttpError {
             TenantDiscoveryError::RepositoryUnavailable => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Tenant credential metadata is temporarily unavailable",
+            ),
+        };
+        (status, Json(json!({"detail": detail}))).into_response()
+    }
+}
+
+struct CanvasLegacyIngestHttpError(CanvasLegacyIngestError);
+
+impl IntoResponse for CanvasLegacyIngestHttpError {
+    fn into_response(self) -> Response {
+        let (status, detail) = match &self.0 {
+            CanvasLegacyIngestError::Gone(detail) => (StatusCode::GONE, json!(detail)),
+            CanvasLegacyIngestError::InvalidSignature => {
+                (StatusCode::FORBIDDEN, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::MalformedPayload
+            | CanvasLegacyIngestError::ObjectRequired
+            | CanvasLegacyIngestError::InvalidApplicationStatus(_) => {
+                (StatusCode::BAD_REQUEST, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::Validation(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Value::Array(errors.clone()),
+            ),
+            CanvasLegacyIngestError::ApplicationNotFound
+            | CanvasLegacyIngestError::ProgramBindingNotFound => {
+                (StatusCode::NOT_FOUND, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::FeatureDisabled(_)
+            | CanvasLegacyIngestError::OrganizationMismatch
+            | CanvasLegacyIngestError::ApplicationTemplateMismatch
+            | CanvasLegacyIngestError::BindingCredentialTemplateMismatch
+            | CanvasLegacyIngestError::ApplicationCredentialTemplateMismatch
+            | CanvasLegacyIngestError::EvidenceNotRequired
+            | CanvasLegacyIngestError::ReplayPayloadConflict
+            | CanvasLegacyIngestError::ReplayFlowConflict => {
+                (StatusCode::CONFLICT, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::AutoApprovalUnavailable => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!("Internal Server Error"),
+            ),
+            CanvasLegacyIngestError::SnapshotChanged
+            | CanvasLegacyIngestError::RepositoryUnavailable
+            | CanvasLegacyIngestError::MalformedStoredResponse => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!("Canvas evidence processing is temporarily unavailable"),
             ),
         };
         (status, Json(json!({"detail": detail}))).into_response()

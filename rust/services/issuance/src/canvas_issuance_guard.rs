@@ -268,15 +268,17 @@ pub fn evaluate_canvas_guard_snapshot(
     now: DateTime<Utc>,
 ) -> Result<(), &'static str> {
     let application = object(&snapshot.application, "canvas_transaction_context_mismatch")?;
-    let canvas = application
+    let Some(canvas) = application
         .get("integration_context")
         .and_then(Value::as_object)
         .and_then(|integration| integration.get("canvas"))
-        .and_then(Value::as_object);
-    if !canvas.is_some_and(has_canvas_marker) {
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    if !has_canvas_marker(canvas) {
         return Ok(());
     }
-    let canvas = canvas.expect("checked Canvas context");
     if !config.enabled
         || !config
             .pilot_organizations
@@ -359,6 +361,80 @@ pub fn evaluate_canvas_guard_snapshot(
     )?;
     if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
         return Err("current_evidence_policy_denied");
+    }
+    Ok(())
+}
+
+/// Evaluate the same persisted Canvas ownership, readiness and credential
+/// snapshot used by the pre-signing guard before a management approval is
+/// allowed to reserve an issuance transaction.
+///
+/// Evidence and policy are deliberately evaluated by the canonical
+/// pre-signing guard after approval. Manual approval only establishes the
+/// claimable transaction; it does not bypass the later issuance decision.
+pub fn evaluate_canvas_approval_snapshot(
+    organization_id: &str,
+    application_id: &str,
+    snapshot: &CanvasGuardSnapshot,
+    config: &CanvasGuardConfig,
+    now: DateTime<Utc>,
+) -> Result<(), &'static str> {
+    let application = object(&snapshot.application, "canvas_application_not_found")?;
+    let canvas = application
+        .get("integration_context")
+        .and_then(Value::as_object)
+        .and_then(|integration| integration.get("canvas"))
+        .and_then(Value::as_object)
+        .ok_or("canvas_application_not_found")?;
+    if !config.enabled || !config.pilot_organizations.contains(organization_id) {
+        return Err("canvas_rollout_disabled");
+    }
+    if text(application.get("id")) != application_id
+        || text(application.get("organization_id")) != organization_id
+    {
+        return Err("canvas_application_not_found");
+    }
+    if !text(application.get("status")).eq_ignore_ascii_case("pending") {
+        return Err("canvas_application_invalid_status");
+    }
+    let platform_id = text(canvas.get("canvas_platform_id"));
+    let binding_id = text(canvas.get("canvas_program_binding_id"));
+    if platform_id.is_empty() || binding_id.is_empty() || organization_id.is_empty() {
+        return Err("canvas_application_not_ready");
+    }
+    let platform = object(&snapshot.platform, "canvas_application_not_found")?;
+    let binding = object(&snapshot.binding, "canvas_application_not_found")?;
+    if text(platform.get("id")) != platform_id
+        || text(binding.get("id")) != binding_id
+        || text(platform.get("organization_id")) != organization_id
+        || text(binding.get("organization_id")) != organization_id
+    {
+        return Err("canvas_application_not_found");
+    }
+    if !canvas_resources_active(platform, binding)
+        || !binding_readiness_is_current(binding, config.readiness_max_age, now)
+    {
+        return Err("canvas_application_not_ready");
+    }
+    let template = object(
+        &snapshot.application_template,
+        "canvas_application_not_found",
+    )?;
+    if text(template.get("id")) != text(application.get("application_template_id"))
+        || text(template.get("id")) != text(binding.get("application_template_id"))
+        || text(template.get("organization_id")) != organization_id
+        || !text(template.get("status")).eq_ignore_ascii_case("active")
+        || text(template.get("credential_template_id"))
+            != text(binding.get("credential_template_id"))
+        || text(binding.get("platform_id")) != text(platform.get("id"))
+        || text(canvas.get("canvas_account_id")) != text(platform.get("canvas_account_id"))
+        || text(canvas.get("application_template_id"))
+            != text(binding.get("application_template_id"))
+        || text(canvas.get("credential_template_id")) != text(binding.get("credential_template_id"))
+        || text(canvas.get("lti_subject")).is_empty()
+        || credential_snapshot(binding, organization_id).is_err()
+    {
+        return Err("canvas_application_not_ready");
     }
     Ok(())
 }
@@ -853,17 +929,19 @@ fn fact_is_verified_and_fresh(fact: &Value, now: DateTime<Utc>, max_age: Duratio
 }
 
 pub(crate) fn policy_fact_payload(fact: &Value) -> Value {
+    let id = text(fact.get("id"));
+    let logical_key = optional_text(fact.get("logical_key")).unwrap_or_else(|| id.clone());
     json!({
-        "id": fact.get("id"),
-        "logical_key": fact.get("logical_key"),
-        "provider": fact.get("provider"),
-        "fact_type": fact.get("fact_type"),
-        "subject_id": fact.get("subject_id"),
-        "requirement_id": fact.get("requirement_id"),
-        "scope": fact.get("scope"),
-        "assertion": fact.get("assertion"),
-        "verification": fact.get("verification"),
-        "source": fact.get("source"),
+        "id": id,
+        "logical_key": logical_key,
+        "provider": text(fact.get("provider")),
+        "fact_type": text(fact.get("fact_type")),
+        "subject_id": text(fact.get("subject_id")),
+        "requirement_id": text(fact.get("requirement_id")),
+        "scope": fact.get("scope").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
+        "assertion": fact.get("assertion").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
+        "verification": fact.get("verification").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
+        "source": fact.get("source").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
         "effective_at": fact.get("effective_at"),
         "observed_at": fact.get("observed_at"),
         "created_at": fact.get("created_at"),
@@ -1052,6 +1130,71 @@ mod tests {
 
     #[test]
     fn current_canvas_snapshot_is_authorized_by_the_native_policy() {
+        assert_eq!(
+            evaluate_canvas_guard_snapshot(
+                &transaction(),
+                &issuer(),
+                &snapshot(),
+                &config(),
+                now()
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn legacy_fact_projection_matches_python_null_and_object_fallbacks() {
+        let projected = policy_fact_payload(&json!({
+            "id":"legacy-fact-1",
+            "organization_id":"org-1",
+            "logical_key":null,
+            "provider":"canvas",
+            "fact_type":"canvas.course_completion",
+            "subject_id":"learner-1",
+            "requirement_id":null,
+            "scope":["malformed"],
+            "assertion":null,
+            "verification":"malformed",
+            "source":false,
+            "effective_at":"2026-07-15T12:00:00+00:00",
+            "observed_at":"2026-07-15T12:00:00+00:00",
+            "created_at":"2026-07-15T12:00:00+00:00"
+        }));
+        assert_eq!(projected["logical_key"], "legacy-fact-1");
+        assert_eq!(projected["requirement_id"], "");
+        for field in ["scope", "assertion", "verification", "source"] {
+            assert_eq!(projected[field], json!({}), "{field}");
+        }
+    }
+
+    #[test]
+    fn legacy_reservation_requires_preserved_verified_identity_and_typed_fact_binding_to_claim() {
+        let mut missing_identity = snapshot();
+        missing_identity.application["integration_context"]["canvas"]
+            .as_object_mut()
+            .expect("Canvas context")
+            .remove("lti_subject");
+        assert_denied(
+            &transaction(),
+            &issuer(),
+            &missing_identity,
+            &config(),
+            "canvas_transaction_context_mismatch",
+        );
+
+        let mut unbound_legacy_fact = snapshot();
+        unbound_legacy_fact.evidence_facts[0]["requirement_id"] = Value::Null;
+        assert_denied(
+            &transaction(),
+            &issuer(),
+            &unbound_legacy_fact,
+            &config(),
+            "required_evidence_head_missing_or_ambiguous",
+        );
+
+        // A legacy update that preserves the verified LTI context and later
+        // receives a typed requirement binding remains claimable without any
+        // guard relaxation.
         assert_eq!(
             evaluate_canvas_guard_snapshot(
                 &transaction(),

@@ -301,40 +301,86 @@ async fn record_fact_and_policy(
     {
         return Err(CanvasAwardCandidateRepositoryError::Unavailable);
     }
+    let requirements = validated_requirements(binding)
+        .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)?;
     let mut database = pool.begin().await.map_err(repository_error)?;
+    let decision = record_fact_and_policy_in_transaction(
+        &mut database,
+        application,
+        binding,
+        application_template,
+        fact,
+        &requirements,
+        true,
+        None,
+    )
+    .await?
+    .ok_or(CanvasAwardCandidateRepositoryError::Unavailable)?;
+    database.commit().await.map_err(repository_error)?;
+    Ok(decision.get("allowed").and_then(Value::as_bool) == Some(true))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_fact_and_policy_in_transaction(
+    database: &mut Transaction<'_, Postgres>,
+    application: &CanvasLtiBootstrapApplication,
+    binding: &Map<String, Value>,
+    application_template: &Map<String, Value>,
+    fact: &Map<String, Value>,
+    requirements: &[Value],
+    evaluate_policy: bool,
+    fact_event_metadata: Option<Value>,
+) -> Result<Option<Value>, CanvasAwardCandidateRepositoryError> {
+    if text(fact.get("organization_id")) != application.organization_id
+        || text(fact.get("application_id")) != application.id
+        || !text(
+            fact.get("verification")
+                .and_then(|value| value.get("status")),
+        )
+        .eq_ignore_ascii_case("VERIFIED")
+        || text(fact.get("logical_key")).is_empty()
+    {
+        return Err(CanvasAwardCandidateRepositoryError::Unavailable);
+    }
     let locked_application = sqlx::query_scalar::<_, Value>(LOCK_APPLICATION)
         .bind(&application.id)
         .bind(&application.organization_id)
-        .fetch_optional(&mut *database)
+        .fetch_optional(&mut **database)
         .await
         .map_err(repository_error)?
         .and_then(|value| value.as_object().cloned())
         .ok_or(CanvasAwardCandidateRepositoryError::Unavailable)?;
-    let previous_facts = current_facts(&mut database, application).await?;
-    let policy_set = load_policy_set(
-        &mut database,
-        &application.organization_id,
-        binding,
-        application_template,
-    )
-    .await?;
-    let requirements = validated_requirements(binding)
-        .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)?;
-    let previous_decision = evaluate_canvas_evidence_policy(
-        &locked_application,
-        Some(application_template),
-        Some(binding),
-        &requirements,
-        &previous_facts,
-        policy_set.as_ref(),
-    )
-    .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)?;
+    let previous_facts = current_facts(database, application).await?;
+    let policy_set = if evaluate_policy {
+        load_policy_set(
+            database,
+            &application.organization_id,
+            binding,
+            application_template,
+        )
+        .await?
+    } else {
+        None
+    };
+    let previous_decision = evaluate_policy
+        .then(|| {
+            evaluate_canvas_evidence_policy(
+                &locked_application,
+                Some(application_template),
+                Some(binding),
+                requirements,
+                &previous_facts,
+                policy_set.as_ref(),
+            )
+            .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)
+        })
+        .transpose()?;
     let logical_key = text(fact.get("logical_key"));
     let current = sqlx::query(LOAD_CURRENT_FACT)
         .bind(&application.organization_id)
         .bind(&application.id)
         .bind(&logical_key)
-        .fetch_optional(&mut *database)
+        .fetch_optional(&mut **database)
         .await
         .map_err(repository_error)?;
     let payload_hash = text(fact.get("payload_hash"));
@@ -374,7 +420,7 @@ async fn record_fact_and_policy(
         .bind(value(fact, "assertion"))
         .bind(value(fact, "verification"))
         .bind(value(fact, "source"))
-        .bind(text(fact.get("requirement_id")))
+        .bind(optional_text(fact.get("requirement_id")))
         .bind(&logical_key)
         .bind(text(fact.get("source_revision")))
         .bind(&payload_hash)
@@ -382,7 +428,7 @@ async fn record_fact_and_policy(
         .bind(timestamp(fact, "effective_at")?)
         .bind(superseded)
         .bind(timestamp(fact, "created_at")?)
-        .execute(&mut *database)
+        .execute(&mut **database)
         .await
         .map_err(repository_error)?;
         inserted = result.rows_affected() == 1;
@@ -404,49 +450,58 @@ async fn record_fact_and_policy(
             .bind(&application.id)
             .bind(&logical_key)
             .bind(text(fact.get("id")))
-            .execute(&mut *database)
+            .execute(&mut **database)
             .await
             .map_err(repository_error)?;
         }
     }
-    let current_facts = current_facts(&mut database, application).await?;
-    let current_decision = evaluate_canvas_evidence_policy(
-        &locked_application,
-        Some(application_template),
-        Some(binding),
-        &requirements,
-        &current_facts,
-        policy_set.as_ref(),
-    )
-    .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)?;
+    let current_facts = current_facts(database, application).await?;
+    let current_decision = evaluate_policy
+        .then(|| {
+            evaluate_canvas_evidence_policy(
+                &locked_application,
+                Some(application_template),
+                Some(binding),
+                requirements,
+                &current_facts,
+                policy_set.as_ref(),
+            )
+            .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)
+        })
+        .transpose()?;
     if inserted {
         insert_event(
-            &mut database,
+            database,
             &application.id,
             "evidence_fact_created",
-            json!({
-                "organization_id": application.organization_id,
-                "provider": text(fact.get("provider")),
-                "requirement_id": text(fact.get("requirement_id")),
-                "fact_id": text(fact.get("id")),
-                "source_revision": text(fact.get("source_revision")),
+            fact_event_metadata.unwrap_or_else(|| {
+                json!({
+                    "organization_id": application.organization_id,
+                    "provider": text(fact.get("provider")),
+                    "requirement_id": text(fact.get("requirement_id")),
+                    "fact_id": text(fact.get("id")),
+                    "source_revision": text(fact.get("source_revision")),
+                })
             }),
         )
         .await?;
     }
-    apply_review_transition(
-        &mut database,
-        application,
-        binding,
-        fact,
-        changed,
-        &previous_decision,
-        &current_decision,
-        &locked_application,
-    )
-    .await?;
-    database.commit().await.map_err(repository_error)?;
-    Ok(current_decision.get("allowed").and_then(Value::as_bool) == Some(true))
+    if let (Some(previous_decision), Some(current_decision)) =
+        (previous_decision.as_ref(), current_decision.as_ref())
+    {
+        apply_review_transition(
+            database,
+            application,
+            binding,
+            fact,
+            changed,
+            previous_decision,
+            current_decision,
+            &locked_application,
+        )
+        .await?;
+    }
+    Ok(current_decision)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -543,24 +598,22 @@ async fn apply_review_transition(
             )
             .await?;
         }
-    } else if changed && review.is_some() && !current_allowed {
-        let review_id: String = review
-            .as_ref()
-            .expect("checked review")
-            .try_get("id")
+    } else if changed && !current_allowed {
+        if let Some(review) = review.as_ref() {
+            let review_id: String = review.try_get("id").map_err(repository_error)?;
+            sqlx::query(
+                "UPDATE issuance_service.evidence_policy_reviews
+                 SET current_decision = $2, triggering_fact_id = $3,
+                     resolution_recovery_pending = false, updated_at = clock_timestamp()
+                 WHERE id = $1",
+            )
+            .bind(review_id)
+            .bind(current_decision)
+            .bind(text(fact.get("id")))
+            .execute(&mut **database)
+            .await
             .map_err(repository_error)?;
-        sqlx::query(
-            "UPDATE issuance_service.evidence_policy_reviews
-             SET current_decision = $2, triggering_fact_id = $3,
-                 resolution_recovery_pending = false, updated_at = clock_timestamp()
-             WHERE id = $1",
-        )
-        .bind(review_id)
-        .bind(current_decision)
-        .bind(text(fact.get("id")))
-        .execute(&mut **database)
-        .await
-        .map_err(repository_error)?;
+        }
     } else if let Some(review) = review.filter(|_| current_allowed) {
         let review_id: String = review.try_get("id").map_err(repository_error)?;
         let review_credential: String =

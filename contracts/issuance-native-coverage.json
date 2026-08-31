@@ -60,6 +60,12 @@
     "commit": "84af1b15dfb1dcd84d5ecb70b3bd061b92081b91",
     "sha256": "ee705cfeb7a281f6a1586fa3d17b0fdaf98e96a34f700e05b24950fab0769949"
   },
+  "canvas_management_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-canvas-management.json",
+    "commit": "7f09c1e5a767f1401dff3b22adae9f8ae8cc1465",
+    "sha256": "2ff8a6df60c2d79b305a36cea8d38619106e9057d9a196471ff2898d5a340c9c"
+  },
   "credential_lifecycle_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-credential-lifecycle.json",
@@ -267,6 +273,192 @@
       "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
       "operation": "disconnect_canvas_oauth_connection",
       "canvas_oauth_behavior_case": "disconnect"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/{application_id}/approve",
+      "operation": "approve_canvas_application",
+      "canvas_management_behavior_case": "approve_canvas_application"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/config/{token}",
+      "operation": "get_public_canvas_lti_config",
+      "canvas_management_behavior_case": "get_public_canvas_lti_config"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
+      "operation": "get_canvas_lti_registration_config",
+      "canvas_management_behavior_case": "get_canvas_lti_registration_config"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+      "operation": "update_canvas_lti_installation",
+      "canvas_management_behavior_case": "update_canvas_lti_installation"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness",
+      "operation": "get_canvas_platform_readiness",
+      "canvas_management_behavior_case": "get_canvas_platform_readiness"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms",
+      "operation": "create_canvas_platform",
+      "canvas_management_behavior_case": "create_canvas_platform"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms",
+      "operation": "list_canvas_platforms",
+      "canvas_management_behavior_case": "list_canvas_platforms"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}",
+      "operation": "get_canvas_platform",
+      "canvas_management_behavior_case": "get_canvas_platform"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}",
+      "operation": "update_canvas_platform",
+      "canvas_management_behavior_case": "update_canvas_platform"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}",
+      "operation": "delete_canvas_platform",
+      "canvas_management_behavior_case": "delete_canvas_platform"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
+      "operation": "probe_canvas_platform_sandbox",
+      "canvas_management_behavior_case": "probe_canvas_platform_sandbox"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
+      "operation": "refresh_canvas_platform_jwks",
+      "canvas_management_behavior_case": "refresh_canvas_platform_jwks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+      "operation": "discover_canvas_scope",
+      "canvas_management_behavior_case": "discover_canvas_scope"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog",
+      "operation": "get_canvas_catalog",
+      "canvas_management_behavior_case": "get_canvas_catalog"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
+      "operation": "create_canvas_program_binding",
+      "canvas_management_behavior_case": "create_canvas_program_binding"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/program-bindings",
+      "operation": "list_canvas_program_bindings",
+      "canvas_management_behavior_case": "list_canvas_program_bindings"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+      "operation": "get_canvas_program_binding",
+      "canvas_management_behavior_case": "get_canvas_program_binding"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+      "operation": "update_canvas_program_binding",
+      "canvas_management_behavior_case": "update_canvas_program_binding"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+      "operation": "delete_canvas_program_binding",
+      "canvas_management_behavior_case": "delete_canvas_program_binding"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
+      "operation": "validate_canvas_program_binding",
+      "canvas_management_behavior_case": "validate_canvas_program_binding"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
+      "operation": "activate_canvas_program_binding",
+      "canvas_management_behavior_case": "activate_canvas_program_binding"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
+      "operation": "deactivate_canvas_program_binding",
+      "canvas_management_behavior_case": "deactivate_canvas_program_binding"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-credentials/validate",
+      "operation": "validate_canvas_credentials_provider",
+      "canvas_management_behavior_case": "validate_canvas_credentials_provider"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/integration-secrets",
+      "operation": "create_canvas_integration_secret",
+      "canvas_management_behavior_case": "create_canvas_integration_secret"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/integration-secrets",
+      "operation": "list_canvas_integration_secrets",
+      "canvas_management_behavior_case": "list_canvas_integration_secrets"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+      "operation": "update_canvas_integration_secret",
+      "canvas_management_behavior_case": "update_canvas_integration_secret"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+      "operation": "delete_canvas_integration_secret",
+      "canvas_management_behavior_case": "delete_canvas_integration_secret"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-events",
+      "operation": "process_canvas_evidence_event_route",
+      "canvas_management_behavior_case": "process_canvas_evidence_event_route"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/ags/score-events",
+      "operation": "process_canvas_ags_score_event_route",
+      "canvas_management_behavior_case": "process_canvas_ags_score_event_route"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/nrps/membership-events",
+      "operation": "process_canvas_nrps_membership_event_route",
+      "canvas_management_behavior_case": "process_canvas_nrps_membership_event_route"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
+      "operation": "get_canvas_evidence_event_status",
+      "canvas_management_behavior_case": "get_canvas_evidence_event_status"
     }
   ],
   "native_grpc": [
@@ -288,7 +480,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 99,
+    "http": 68,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,

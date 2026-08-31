@@ -870,7 +870,9 @@ fn validate_idempotent_recovery(
     Ok(Some(existing))
 }
 
-fn transaction_row(row: PgRow) -> Result<CredentialTransaction, CredentialIssuanceError> {
+pub(crate) fn transaction_row(
+    row: PgRow,
+) -> Result<CredentialTransaction, CredentialIssuanceError> {
     let status = get::<String>(&row, "status")?;
     Ok(CredentialTransaction {
         id: get(&row, "id")?,

@@ -31,6 +31,7 @@ marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-verification.workspace = true
 p256.workspace = true
+percent-encoding.workspace = true
 prost.workspace = true
 rand.workspace = true
 reqwest.workspace = true

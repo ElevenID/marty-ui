@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
 use marty_oid4vci::lti::normalize_canvas_base_url;
+use mmf_security::constant_time_secret_eq;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -24,6 +25,8 @@ use crate::{
 
 const AUTHORIZATION_TTL_SECONDS: i64 = 600;
 const REVOCATION_LEASE_SECONDS: i64 = 60;
+const REFRESH_LEASE_SECONDS: i64 = 60;
+const ACCESS_TOKEN_EXPIRY_SKEW_SECONDS: i64 = 60;
 
 const CAPABILITY_SCOPES: &[(&str, &[&str])] = &[
     (
@@ -273,6 +276,8 @@ pub enum CanvasOAuthPlatformPatch {
 pub enum CanvasOAuthProviderError {
     #[error("Canvas OAuth provider request failed")]
     Failed { retry_after_seconds: Option<u64> },
+    #[error("Canvas OAuth provider rejected the refresh grant")]
+    RefreshRejected,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -307,6 +312,8 @@ pub enum CanvasOAuthError {
     SecretUnavailable,
     #[error("Canvas OAuth configuration is invalid")]
     InvalidConfiguration,
+    #[error("Canvas OAuth refresh was rate limited")]
+    RefreshRateLimited { retry_after_seconds: u64 },
 }
 
 impl From<IntegrationSecretError> for CanvasOAuthError {
@@ -365,6 +372,36 @@ pub trait CanvasOAuthRepository: Send + Sync {
         platform_id: &str,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<bool, CanvasOAuthError>;
+    async fn acquire_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        lease_seconds: i64,
+    ) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError>;
+    async fn complete_refresh(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        access_token_secret_ref: &str,
+        refresh_token_secret_ref: Option<&str>,
+        token_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<DateTime<Utc>>, CanvasOAuthError>;
+    async fn release_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        reauthorization_required: bool,
+    ) -> Result<bool, CanvasOAuthError>;
+    async fn patch_validation_error(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        expected_config_version: i64,
+        error_code: Option<&str>,
+    ) -> Result<bool, CanvasOAuthError>;
     async fn begin_revocation(
         &self,
         organization_id: &str,
@@ -415,6 +452,13 @@ pub trait CanvasOAuthProvider: Send + Sync {
         client_secret: &str,
         code: &str,
         redirect_uri: &str,
+    ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError>;
+    async fn refresh(
+        &self,
+        canvas_base_url: &str,
+        client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
     ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError>;
     async fn revoke(
         &self,
@@ -653,8 +697,14 @@ impl CanvasOAuthService {
         } else {
             None
         };
-        if client_secret.is_none()
-            || platform.canvas_base_url.as_deref() != Some(&authorization.canvas_base_url)
+        let Some(client_secret) = client_secret else {
+            return self.callback_response(
+                Some(&platform.id),
+                "error",
+                Some("oauth_configuration_changed"),
+            );
+        };
+        if platform.canvas_base_url.as_deref() != Some(&authorization.canvas_base_url)
             || platform.config_version != authorization.platform_config_version
             || authorization.redirect_uri != self.redirect_uri
         {
@@ -681,7 +731,7 @@ impl CanvasOAuthService {
             .exchange(
                 &authorization.canvas_base_url,
                 &authorization.client_id,
-                client_secret.as_deref().expect("checked above"),
+                &client_secret,
                 code,
                 &authorization.redirect_uri,
             )
@@ -913,6 +963,444 @@ impl CanvasOAuthService {
                 .await;
         }
         self.best_effort_revoke(canvas_base_url, access_token).await;
+    }
+
+    /// Resolves a usable organization-owned Canvas OAuth token, refreshing it
+    /// under a repository lease when it is absent or within the expiry skew.
+    /// The returned secret is deliberately not wrapped in a `Debug` type and
+    /// must only be passed directly to a bounded Canvas provider adapter.
+    pub async fn access_token(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<Option<String>, CanvasOAuthError> {
+        self.security.authorize(api_key)?;
+        let organization_id = trusted_organization(trusted_organization_id)?;
+        let platform = self
+            .repository
+            .management_platform(organization_id, platform_id)
+            .await?
+            .filter(|platform| !platform.archived)
+            .ok_or(CanvasOAuthError::PlatformNotFound)?;
+        self.require_pilot(&platform.organization_id)?;
+        let canvas_base_url = platform
+            .canvas_base_url
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or(CanvasOAuthError::BaseUrlRequired)?;
+        let Some(connection) = self
+            .repository
+            .connection(&platform.organization_id, &platform.id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if connection.status != "connected" {
+            return Ok(None);
+        }
+        if connection.canvas_base_url != canvas_base_url
+            || connection.platform_config_version != platform.config_version
+        {
+            if self
+                .repository
+                .mark_reauthorization_required(
+                    &platform.organization_id,
+                    &platform.id,
+                    connection.updated_at,
+                )
+                .await?
+            {
+                self.repository
+                    .patch_validation_error(
+                        &platform.organization_id,
+                        &platform.id,
+                        platform.config_version,
+                        Some("oauth_reauthorization_required"),
+                    )
+                    .await?;
+            }
+            return Ok(None);
+        }
+
+        let now = Utc::now();
+        let usable_until = now + Duration::seconds(ACCESS_TOKEN_EXPIRY_SKEW_SECONDS);
+        let current_access_secret_id =
+            connection
+                .access_token_secret_ref
+                .as_deref()
+                .and_then(|reference| {
+                    integration_secret_id_from_ref(&platform.organization_id, reference)
+                });
+        let current_access_token = if let Some(secret_id) = current_access_secret_id {
+            self.vault
+                .value(&platform.organization_id, secret_id)
+                .await?
+        } else {
+            None
+        };
+        if current_access_token.is_some()
+            && connection
+                .token_expires_at
+                .is_none_or(|expires_at| expires_at > usable_until)
+        {
+            return Ok(current_access_token);
+        }
+
+        let lease_owner = format!("oauth-refresh:{}", Uuid::new_v4());
+        let Some(leased) = self
+            .repository
+            .acquire_refresh_lease(
+                &platform.organization_id,
+                &platform.id,
+                &lease_owner,
+                REFRESH_LEASE_SECONDS,
+            )
+            .await?
+        else {
+            let current = self
+                .repository
+                .connection(&platform.organization_id, &platform.id)
+                .await?;
+            let Some(current) = current.filter(|current| {
+                current.status == "connected"
+                    && current.canvas_base_url == canvas_base_url
+                    && current.platform_config_version == platform.config_version
+                    && current
+                        .token_expires_at
+                        .is_some_and(|expires_at| expires_at > usable_until)
+            }) else {
+                return Ok(None);
+            };
+            let Some(secret_id) =
+                current
+                    .access_token_secret_ref
+                    .as_deref()
+                    .and_then(|reference| {
+                        integration_secret_id_from_ref(&platform.organization_id, reference)
+                    })
+            else {
+                return Ok(None);
+            };
+            return self.vault.value(&platform.organization_id, secret_id).await;
+        };
+
+        let refresh_secret_id = leased
+            .refresh_token_secret_ref
+            .as_deref()
+            .and_then(|reference| {
+                integration_secret_id_from_ref(&platform.organization_id, reference)
+            });
+        let client_secret_id =
+            integration_secret_id_from_ref(&platform.organization_id, &leased.client_secret_ref);
+        let refresh_token = if let Some(secret_id) = refresh_secret_id {
+            self.vault
+                .value(&platform.organization_id, secret_id)
+                .await?
+        } else {
+            None
+        };
+        let client_secret = if let Some(secret_id) = client_secret_id {
+            self.vault
+                .value(&platform.organization_id, secret_id)
+                .await?
+        } else {
+            None
+        };
+        let (Some(refresh_token), Some(client_secret)) = (refresh_token, client_secret) else {
+            self.release_refresh(
+                &platform,
+                &lease_owner,
+                true,
+                Some("oauth_reauthorization_required"),
+            )
+            .await?;
+            return Ok(None);
+        };
+
+        let token_bundle = match self
+            .provider
+            .refresh(
+                &leased.canvas_base_url,
+                &leased.client_id,
+                &client_secret,
+                &refresh_token,
+            )
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(CanvasOAuthProviderError::RefreshRejected) => {
+                self.release_refresh(
+                    &platform,
+                    &lease_owner,
+                    true,
+                    Some("oauth_reauthorization_required"),
+                )
+                .await?;
+                return Ok(None);
+            }
+            Err(CanvasOAuthProviderError::Failed {
+                retry_after_seconds,
+            }) => {
+                self.release_refresh(&platform, &lease_owner, false, Some("oauth_refresh_failed"))
+                    .await?;
+                if let Some(retry_after_seconds) = retry_after_seconds {
+                    return Err(CanvasOAuthError::RefreshRateLimited {
+                        retry_after_seconds,
+                    });
+                }
+                return Ok(None);
+            }
+        };
+
+        let token_expires_at =
+            match checked_token_expiration(Utc::now(), token_bundle.expires_in_seconds) {
+                Ok(value) => value,
+                Err(()) => {
+                    let _ = self
+                        .repository
+                        .release_refresh_lease(
+                            &platform.organization_id,
+                            &platform.id,
+                            &lease_owner,
+                            false,
+                        )
+                        .await;
+                    return Err(CanvasOAuthError::InvalidConfiguration);
+                }
+            };
+        let access_secret = NewIntegrationSecret {
+            id: Uuid::new_v4().to_string(),
+            organization_id: platform.organization_id.clone(),
+            name: format!("Canvas OAuth access token - {}", platform.id),
+            provider: "canvas".to_owned(),
+            purpose: "oauth_access_token".to_owned(),
+            value: token_bundle.access_token.clone(),
+            metadata: json!({"platform_id": platform.id}),
+        };
+        if let Err(error) = self.vault.save(access_secret.clone()).await {
+            let _ = self
+                .repository
+                .release_refresh_lease(&platform.organization_id, &platform.id, &lease_owner, false)
+                .await;
+            return Err(error);
+        }
+        let refreshed_refresh_secret =
+            token_bundle
+                .refresh_token
+                .as_ref()
+                .map(|value| NewIntegrationSecret {
+                    id: Uuid::new_v4().to_string(),
+                    organization_id: platform.organization_id.clone(),
+                    name: format!("Canvas OAuth refresh token - {}", platform.id),
+                    provider: "canvas".to_owned(),
+                    purpose: "oauth_refresh_token".to_owned(),
+                    value: value.clone(),
+                    metadata: json!({"platform_id": platform.id}),
+                });
+        if let Some(secret) = refreshed_refresh_secret.as_ref() {
+            if let Err(error) = self.vault.save(secret.clone()).await {
+                let _ = self
+                    .vault
+                    .delete(&access_secret.organization_id, &access_secret.id)
+                    .await;
+                let _ = self
+                    .repository
+                    .release_refresh_lease(
+                        &platform.organization_id,
+                        &platform.id,
+                        &lease_owner,
+                        false,
+                    )
+                    .await;
+                return Err(error);
+            }
+        }
+        let refresh_secret_ref = refreshed_refresh_secret
+            .as_ref()
+            .map(NewIntegrationSecret::secret_ref)
+            .or_else(|| leased.refresh_token_secret_ref.clone());
+        let completed = match self
+            .repository
+            .complete_refresh(
+                &platform.organization_id,
+                &platform.id,
+                &lease_owner,
+                &access_secret.secret_ref(),
+                refresh_secret_ref.as_deref(),
+                token_expires_at,
+            )
+            .await
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                self.delete_rotated_secrets(&access_secret, refreshed_refresh_secret.as_ref())
+                    .await;
+                let _ = self
+                    .repository
+                    .release_refresh_lease(
+                        &platform.organization_id,
+                        &platform.id,
+                        &lease_owner,
+                        false,
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
+        let Some(completed_at) = completed else {
+            self.delete_rotated_secrets(&access_secret, refreshed_refresh_secret.as_ref())
+                .await;
+            return Ok(None);
+        };
+        for stale_secret_id in [current_access_secret_id, refresh_secret_id]
+            .into_iter()
+            .flatten()
+        {
+            if stale_secret_id != access_secret.id
+                && refreshed_refresh_secret
+                    .as_ref()
+                    .is_none_or(|secret| stale_secret_id != secret.id)
+            {
+                let _ = self
+                    .vault
+                    .delete(&platform.organization_id, stale_secret_id)
+                    .await;
+            }
+        }
+        let platform_current = self
+            .repository
+            .patch_validation_error(
+                &platform.organization_id,
+                &platform.id,
+                platform.config_version,
+                None,
+            )
+            .await?;
+        if !platform_current {
+            self.repository
+                .mark_reauthorization_required(
+                    &platform.organization_id,
+                    &platform.id,
+                    completed_at,
+                )
+                .await?;
+            return Ok(None);
+        }
+        Ok(Some(token_bundle.access_token))
+    }
+
+    /// Marks only the connection that still owns a provider-rejected access
+    /// token. A concurrent refresh or reconnect therefore cannot be poisoned
+    /// by an older in-flight catalog request.
+    pub async fn mark_rejected_access_token(
+        &self,
+        platform_id: &str,
+        rejected_access_token: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<bool, CanvasOAuthError> {
+        self.security.authorize(api_key)?;
+        let organization_id = trusted_organization(trusted_organization_id)?;
+        let platform = self
+            .repository
+            .management_platform(organization_id, platform_id)
+            .await?
+            .filter(|platform| !platform.archived)
+            .ok_or(CanvasOAuthError::PlatformNotFound)?;
+        let Some(connection) = self
+            .repository
+            .connection(&platform.organization_id, &platform.id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if connection.status == "reauthorization_required" {
+            return Ok(true);
+        }
+        let Some(secret_id) = connection
+            .access_token_secret_ref
+            .as_deref()
+            .and_then(|reference| {
+                integration_secret_id_from_ref(&platform.organization_id, reference)
+            })
+        else {
+            return Ok(false);
+        };
+        let Some(current_access_token) = self
+            .vault
+            .value(&platform.organization_id, secret_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if rejected_access_token.is_empty()
+            || !constant_time_secret_eq(
+                current_access_token.as_bytes(),
+                rejected_access_token.as_bytes(),
+            )
+        {
+            return Ok(false);
+        }
+        let marked = self
+            .repository
+            .mark_reauthorization_required(
+                &platform.organization_id,
+                &platform.id,
+                connection.updated_at,
+            )
+            .await?;
+        if marked {
+            self.repository
+                .patch_validation_error(
+                    &platform.organization_id,
+                    &platform.id,
+                    platform.config_version,
+                    Some("oauth_reauthorization_required"),
+                )
+                .await?;
+        }
+        Ok(marked)
+    }
+
+    async fn release_refresh(
+        &self,
+        platform: &CanvasOAuthPlatform,
+        lease_owner: &str,
+        reauthorization_required: bool,
+        error_code: Option<&str>,
+    ) -> Result<(), CanvasOAuthError> {
+        self.repository
+            .release_refresh_lease(
+                &platform.organization_id,
+                &platform.id,
+                lease_owner,
+                reauthorization_required,
+            )
+            .await?;
+        self.repository
+            .patch_validation_error(
+                &platform.organization_id,
+                &platform.id,
+                platform.config_version,
+                error_code,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_rotated_secrets(
+        &self,
+        access: &NewIntegrationSecret,
+        refresh: Option<&NewIntegrationSecret>,
+    ) {
+        let _ = self.vault.delete(&access.organization_id, &access.id).await;
+        if let Some(refresh) = refresh {
+            let _ = self
+                .vault
+                .delete(&refresh.organization_id, &refresh.id)
+                .await;
+        }
     }
 
     pub async fn disconnect(
@@ -1147,7 +1635,7 @@ fn normalize_capabilities(values: &[String]) -> Result<Vec<String>, CanvasOAuthE
     Ok(normalized)
 }
 
-fn scopes_for_capabilities(capabilities: &[String]) -> Vec<String> {
+pub(crate) fn scopes_for_capabilities(capabilities: &[String]) -> Vec<String> {
     let mut scopes = Vec::new();
     for capability in capabilities {
         if let Some((_, capability_scopes)) = CAPABILITY_SCOPES

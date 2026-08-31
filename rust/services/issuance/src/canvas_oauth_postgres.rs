@@ -1,18 +1,36 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
 use crate::{
+    canvas_credentials_validation::CanvasCredentialsSecretResolver,
+    canvas_management_service::{
+        CanvasIntegrationSecretRepository, CanvasManagementRepositoryError,
+    },
     canvas_oauth::{
         CanvasOAuthAuthorization, CanvasOAuthConnection, CanvasOAuthError, CanvasOAuthPlatform,
         CanvasOAuthPlatformPatch, CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
     integration_secret::{
-        IntegrationSecretCipher, IntegrationSecretMetadata, NewIntegrationSecret,
+        integration_secret_hint, IntegrationSecretCipher, IntegrationSecretMetadata,
+        ManagedIntegrationSecret, NewIntegrationSecret,
     },
 };
+
+#[async_trait]
+impl CanvasCredentialsSecretResolver for PostgresIntegrationSecretVault {
+    async fn secret_value(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<Option<String>, ()> {
+        CanvasOAuthSecretVault::value(self, organization_id, secret_id)
+            .await
+            .map_err(|_| ())
+    }
+}
 
 #[derive(Clone)]
 pub struct PostgresCanvasOAuthRepository {
@@ -31,6 +49,64 @@ impl PostgresCanvasOAuthRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CanvasOAuthRevocationQueueOutcome {
+    Absent,
+    AlreadyPending,
+    Queued,
+    Disconnected,
+}
+
+/// Move a Canvas OAuth grant into the worker-owned durable revocation queue
+/// inside the caller's transaction. Platform archival and any future atomic
+/// lifecycle transition share this one persistence implementation.
+pub(crate) async fn queue_canvas_oauth_revocation_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: &str,
+    platform_id: &str,
+    retry_at: DateTime<Utc>,
+    reason_code: &str,
+) -> Result<CanvasOAuthRevocationQueueOutcome, CanvasOAuthError> {
+    let status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM issuance_service.canvas_oauth_connections
+         WHERE organization_id = $1 AND platform_id = $2 FOR UPDATE",
+    )
+    .bind(organization_id)
+    .bind(platform_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(repository_error)?;
+    match status.as_deref() {
+        None => Ok(CanvasOAuthRevocationQueueOutcome::Absent),
+        Some("revocation_pending") => Ok(CanvasOAuthRevocationQueueOutcome::AlreadyPending),
+        Some("disconnected") => Ok(CanvasOAuthRevocationQueueOutcome::Disconnected),
+        Some(_) => {
+            let result = sqlx::query(
+                "UPDATE issuance_service.canvas_oauth_connections
+                 SET status = 'revocation_pending', reauthorization_required = false,
+                     revoke_retry_count = revoke_retry_count + 1, revoke_retry_at = $3,
+                     revoke_last_error_code = left($4, 120),
+                     refresh_lease_owner = NULL, refresh_lease_expires_at = NULL,
+                     updated_at = clock_timestamp()
+                 WHERE organization_id = $1 AND platform_id = $2
+                   AND status <> 'disconnected'",
+            )
+            .bind(organization_id)
+            .bind(platform_id)
+            .bind(retry_at)
+            .bind(reason_code)
+            .execute(&mut **transaction)
+            .await
+            .map_err(repository_error)?;
+            if result.rows_affected() == 1 {
+                Ok(CanvasOAuthRevocationQueueOutcome::Queued)
+            } else {
+                Ok(CanvasOAuthRevocationQueueOutcome::Disconnected)
+            }
+        }
     }
 }
 
@@ -327,6 +403,123 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    async fn acquire_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        lease_seconds: i64,
+    ) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError> {
+        sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET refresh_lease_owner = $3,
+                 refresh_lease_expires_at = clock_timestamp() + make_interval(secs => $4),
+                 updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND status = 'connected' AND reauthorization_required = false
+               AND (refresh_lease_owner IS NULL OR refresh_lease_expires_at IS NULL
+                    OR refresh_lease_expires_at <= clock_timestamp()
+                    OR refresh_lease_owner = $3)
+             RETURNING id, organization_id, platform_id, canvas_base_url,
+                       platform_config_version, client_id, client_secret_ref,
+                       capabilities, scopes, access_token_secret_ref,
+                       refresh_token_secret_ref, token_expires_at, status,
+                       revoke_retry_count, updated_at",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(lease_seconds.max(30))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repository_error)?
+        .map(connection_from_row)
+        .transpose()
+    }
+
+    async fn complete_refresh(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        access_token_secret_ref: &str,
+        refresh_token_secret_ref: Option<&str>,
+        token_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<Option<DateTime<Utc>>, CanvasOAuthError> {
+        sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET access_token_secret_ref = $4,
+                 refresh_token_secret_ref = COALESCE($5, refresh_token_secret_ref),
+                 token_expires_at = $6, status = 'connected',
+                 reauthorization_required = false,
+                 refresh_lease_owner = NULL, refresh_lease_expires_at = NULL,
+                 last_refreshed_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND refresh_lease_owner = $3
+               AND refresh_lease_expires_at > clock_timestamp()
+             RETURNING updated_at",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(access_token_secret_ref)
+        .bind(refresh_token_secret_ref)
+        .bind(token_expires_at)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repository_error)?
+        .map(|row| row.try_get("updated_at").map_err(repository_error))
+        .transpose()
+    }
+
+    async fn release_refresh_lease(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        reauthorization_required: bool,
+    ) -> Result<bool, CanvasOAuthError> {
+        let result = sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET refresh_lease_owner = NULL, refresh_lease_expires_at = NULL,
+                 status = CASE WHEN $4 THEN 'reauthorization_required' ELSE status END,
+                 reauthorization_required = CASE WHEN $4 THEN true ELSE reauthorization_required END,
+                 updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND refresh_lease_owner = $3",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(reauthorization_required)
+        .execute(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn patch_validation_error(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        expected_config_version: i64,
+        error_code: Option<&str>,
+    ) -> Result<bool, CanvasOAuthError> {
+        let result = sqlx::query(
+            "UPDATE issuance_service.canvas_platforms
+             SET last_connection_error = $4, updated_at = clock_timestamp()
+             WHERE id = $1 AND organization_id = $2 AND config_version = $3",
+        )
+        .bind(platform_id)
+        .bind(organization_id)
+        .bind(i32::try_from(expected_config_version).map_err(|_| repository_failure())?)
+        .bind(error_code)
+        .execute(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn begin_revocation(
         &self,
         organization_id: &str,
@@ -510,18 +703,7 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
 
     async fn save(&self, secret: NewIntegrationSecret) -> Result<(), CanvasOAuthError> {
         let encrypted = self.cipher.encrypt(&secret.value)?;
-        let hint = format!(
-            "...{}",
-            secret
-                .value
-                .chars()
-                .rev()
-                .take(4)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<String>()
-        );
+        let hint = integration_secret_hint(&secret.value).unwrap_or_else(|| "...".to_owned());
         sqlx::query(
             "INSERT INTO issuance_service.organization_integration_secrets
                 (id, organization_id, name, provider, purpose,
@@ -556,6 +738,186 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
         .map_err(repository_error)?;
         Ok(())
     }
+}
+
+#[async_trait]
+impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
+    async fn create_secret(
+        &self,
+        secret: &ManagedIntegrationSecret,
+        plaintext: &str,
+    ) -> Result<ManagedIntegrationSecret, CanvasManagementRepositoryError> {
+        let encrypted = self
+            .cipher
+            .encrypt(plaintext)
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+        let row = sqlx::query(
+            "INSERT INTO issuance_service.organization_integration_secrets
+                (id, organization_id, name, provider, purpose,
+                 encrypted_secret_value, secret_hint, metadata, enabled,
+                 created_at, updated_at, last_used_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)
+             RETURNING id, organization_id, name, provider, purpose,
+                 secret_hint, metadata, enabled, created_at, updated_at, last_used_at",
+        )
+        .bind(&secret.id)
+        .bind(&secret.organization_id)
+        .bind(&secret.name)
+        .bind(&secret.provider)
+        .bind(&secret.purpose)
+        .bind(encrypted)
+        .bind(&secret.secret_hint)
+        .bind(Value::Object(secret.metadata.clone()))
+        .bind(secret.enabled)
+        .bind(secret.created_at)
+        .bind(secret.updated_at)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(management_repository_error)?;
+        managed_secret_from_row(row)
+    }
+
+    async fn secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        sqlx::query(
+            "SELECT id, organization_id, name, provider, purpose,
+                    secret_hint, metadata, enabled, created_at, updated_at, last_used_at
+             FROM issuance_service.organization_integration_secrets
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(organization_id)
+        .bind(secret_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(management_repository_error)?
+        .map(managed_secret_from_row)
+        .transpose()
+    }
+
+    async fn list_secrets(
+        &self,
+        organization_id: &str,
+        provider: Option<&str>,
+    ) -> Result<Vec<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        sqlx::query(
+            "SELECT id, organization_id, name, provider, purpose,
+                    secret_hint, metadata, enabled, created_at, updated_at, last_used_at
+             FROM issuance_service.organization_integration_secrets
+             WHERE organization_id = $1 AND ($2::text IS NULL OR provider = $2)
+             ORDER BY created_at",
+        )
+        .bind(organization_id)
+        .bind(provider)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(management_repository_error)?
+        .into_iter()
+        .map(managed_secret_from_row)
+        .collect()
+    }
+
+    async fn update_secret(
+        &self,
+        secret: &ManagedIntegrationSecret,
+        plaintext: Option<&str>,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        let encrypted = plaintext
+            .map(|value| self.cipher.encrypt(value))
+            .transpose()
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+        sqlx::query(
+            "UPDATE issuance_service.organization_integration_secrets
+             SET name = $4, encrypted_secret_value = COALESCE($5, encrypted_secret_value),
+                 secret_hint = $6, metadata = $7, enabled = $8, updated_at = $9
+             WHERE organization_id = $1 AND id = $2 AND updated_at = $3
+             RETURNING id, organization_id, name, provider, purpose,
+                 secret_hint, metadata, enabled, created_at, updated_at, last_used_at",
+        )
+        .bind(&secret.organization_id)
+        .bind(&secret.id)
+        .bind(expected_updated_at)
+        .bind(&secret.name)
+        .bind(encrypted)
+        .bind(&secret.secret_hint)
+        .bind(Value::Object(secret.metadata.clone()))
+        .bind(secret.enabled)
+        .bind(secret.updated_at)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(management_repository_error)?
+        .map(managed_secret_from_row)
+        .transpose()
+    }
+
+    async fn delete_secret(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<bool, CanvasManagementRepositoryError> {
+        sqlx::query(
+            "DELETE FROM issuance_service.organization_integration_secrets
+             WHERE organization_id = $1 AND id = $2",
+        )
+        .bind(organization_id)
+        .bind(secret_id)
+        .execute(&self.pool)
+        .await
+        .map(|result| result.rows_affected() == 1)
+        .map_err(management_repository_error)
+    }
+}
+
+fn managed_secret_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<ManagedIntegrationSecret, CanvasManagementRepositoryError> {
+    let metadata = row
+        .try_get::<Value, _>("metadata")
+        .map_err(|_| CanvasManagementRepositoryError::Unavailable)?
+        .as_object()
+        .cloned()
+        .ok_or(CanvasManagementRepositoryError::Unavailable)?;
+    Ok(ManagedIntegrationSecret {
+        id: row
+            .try_get("id")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        name: row
+            .try_get("name")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        provider: row
+            .try_get("provider")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        purpose: row
+            .try_get("purpose")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        secret_hint: row
+            .try_get("secret_hint")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        metadata,
+        enabled: row
+            .try_get("enabled")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+        last_used_at: row
+            .try_get("last_used_at")
+            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+    })
+}
+
+fn management_repository_error(error: sqlx::Error) -> CanvasManagementRepositoryError {
+    error!(error = %error, "Canvas integration-secret repository operation failed");
+    CanvasManagementRepositoryError::Unavailable
 }
 
 fn platform_from_row(row: sqlx::postgres::PgRow) -> Result<CanvasOAuthPlatform, CanvasOAuthError> {

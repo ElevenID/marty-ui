@@ -23,6 +23,8 @@ const CANVAS_LTI: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-lti-foundation.json");
 const CANVAS_OAUTH: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
+const CANVAS_MANAGEMENT: &[u8] =
+    include_bytes!("../../../../contracts/issuance-canvas-management.json");
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
@@ -47,6 +49,7 @@ struct Coverage {
     credential_signing_behavior_contract: Upstream,
     canvas_lti_behavior_contract: Upstream,
     canvas_oauth_behavior_contract: Upstream,
+    canvas_management_behavior_contract: Upstream,
     credential_lifecycle_behavior_contract: Upstream,
     initiation_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
@@ -88,6 +91,8 @@ struct HttpOperation {
     canvas_lti_behavior_case: Option<String>,
     #[serde(default)]
     canvas_oauth_behavior_case: Option<String>,
+    #[serde(default)]
+    canvas_management_behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -246,6 +251,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid Canvas LTI contract", error))?;
     let canvas_oauth: Value = serde_json::from_slice(CANVAS_OAUTH)
         .map_err(|error| contract_error("invalid Canvas OAuth contract", error))?;
+    let canvas_management: Value = serde_json::from_slice(CANVAS_MANAGEMENT)
+        .map_err(|error| contract_error("invalid Canvas management contract", error))?;
     let credential_lifecycle: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE)
         .map_err(|error| contract_error("invalid credential lifecycle contract", error))?;
     require(
@@ -487,6 +494,24 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected Canvas OAuth behavior contract",
     )?;
     require(
+        canvas_management["schema"] == "marty.issuance-canvas-management/v1"
+            && canvas_management["scope"]["route_count"] == 31
+            && canvas_management["scope"]["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 31)
+            && canvas_management["legacy_ingest"]["default_enabled"] == false
+            && canvas_management["legacy_ingest"]["disabled_before_body_or_repository_processing"]
+                == true
+            && canvas_management["application_approval"]["uses_canonical_issuance_guard"] == true
+            && canvas_management["canvas_credentials_provider_validation"]
+                ["never_publishes_a_credential"]
+                == true
+            && canvas_management["security_invariants"]
+                .as_array()
+                .is_some_and(|invariants| invariants.len() == 11),
+        "unexpected Canvas management behavior contract",
+    )?;
+    require(
         credential_lifecycle["schema"] == "marty.issuance-credential-lifecycle/v1"
             && credential_lifecycle["scope"]["http"]
                 .as_array()
@@ -627,6 +652,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid Canvas OAuth provenance",
     )?;
     require(
+        coverage.canvas_management_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.canvas_management_behavior_contract.path
+                == "contracts/issuance-canvas-management.json"
+            && coverage.canvas_management_behavior_contract.commit.len() == 40
+            && coverage
+                .canvas_management_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid Canvas management provenance",
+    )?;
+    require(
         coverage.credential_lifecycle_behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.credential_lifecycle_behavior_contract.path
                 == "contracts/issuance-credential-lifecycle.json"
@@ -725,6 +762,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_canvas_oauth == coverage.canvas_oauth_behavior_contract.sha256,
         "Canvas OAuth hash does not match provenance",
     )?;
+    let canonical_canvas_management = canonical_lf(CANVAS_MANAGEMENT);
+    let actual_canvas_management = format!("{:x}", Sha256::digest(&canonical_canvas_management));
+    require(
+        actual_canvas_management == coverage.canvas_management_behavior_contract.sha256,
+        "Canvas management hash does not match provenance",
+    )?;
     let canonical_credential_lifecycle = canonical_lf(CREDENTIAL_LIFECYCLE);
     let actual_credential_lifecycle =
         format!("{:x}", Sha256::digest(&canonical_credential_lifecycle));
@@ -783,6 +826,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_credential_contract = false;
     let mut native_canvas_lti_cases = BTreeSet::new();
     let mut native_canvas_oauth_cases = BTreeSet::new();
+    let mut native_canvas_management_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -804,7 +848,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             + usize::from(operation.proof_nonce_behavior_case.is_some())
             + usize::from(operation.credential_behavior_contract)
             + usize::from(operation.canvas_lti_behavior_case.is_some())
-            + usize::from(operation.canvas_oauth_behavior_case.is_some());
+            + usize::from(operation.canvas_oauth_behavior_case.is_some())
+            + usize::from(operation.canvas_management_behavior_case.is_some());
         require(
             behavior_selector_count == 1,
             "native issuance operation must select exactly one behavior contract",
@@ -1035,6 +1080,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                         }),
                 "native Canvas OAuth operation diverges from its behavior contract",
             )?;
+        } else if let Some(behavior_case) = operation.canvas_management_behavior_case.as_deref() {
+            require(
+                behavior_case == operation.operation
+                    && native_canvas_management_cases.insert(behavior_case)
+                    && canvas_management["scope"]["routes"]
+                        .as_array()
+                        .is_some_and(|routes| {
+                            routes.iter().any(|route| {
+                                route["method"] == operation.method
+                                    && route["path"] == operation.path
+                                    && route["operation"] == operation.operation
+                            })
+                        }),
+                "native Canvas management operation diverges from its behavior contract",
+            )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
         }
@@ -1077,6 +1137,17 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_canvas_oauth_cases == BTreeSet::from(["callback", "disconnect", "start"]),
         "native Canvas OAuth behavior coverage is incomplete",
+    )?;
+    let frozen_canvas_management_routes = canvas_management["scope"]["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("Canvas management routes are missing"))?;
+    let frozen_canvas_management_cases = frozen_canvas_management_routes
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_canvas_management_cases == frozen_canvas_management_cases,
+        "native Canvas management behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -1241,8 +1312,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, COVERAGE,
-        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, INITIATION,
+        canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, CANVAS_MANAGEMENT,
+        COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, INITIATION,
     };
 
     #[test]
@@ -1263,6 +1334,10 @@ mod tests {
             coverage.canvas_lti_behavior_contract.sha256
         );
         assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CANVAS_MANAGEMENT))),
+            coverage.canvas_management_behavior_contract.sha256
+        );
+        assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_LIFECYCLE))),
             coverage.credential_lifecycle_behavior_contract.sha256
         );
@@ -1275,8 +1350,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 32);
-        assert_eq!(summary.remaining_http, 99);
+        assert_eq!(summary.native_http, 63);
+        assert_eq!(summary.remaining_http, 68);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

@@ -445,6 +445,29 @@ jobs:
             exit 1
           fi
           issuance_credential_relative="${issuance_credential_executable#"$PWD/"}"
+          mapfile -t canvas_issuance_contract_executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(
+                ((.target.name | startswith("canvas_")) and
+                 (.target.name | endswith("_postgres_contract"))) or
+                .target.name == "proof_nonce_postgres_contract"
+              )
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          if (( ${#canvas_issuance_contract_executables[@]} != 9 )); then
+            printf 'Expected nine Canvas Issuance PostgreSQL contracts, found %s.\n' "${#canvas_issuance_contract_executables[@]}" >&2
+            exit 1
+          fi
+          canvas_issuance_contract_relatives=()
+          for contract_executable in "${canvas_issuance_contract_executables[@]}"; do
+            if [[ ! -x "$contract_executable" ]]; then
+              printf 'Canvas Issuance PostgreSQL contract is not executable: %s.\n' "$contract_executable" >&2
+              exit 1
+            fi
+            canvas_issuance_contract_relatives+=("${contract_executable#"$PWD/"}")
+          done
           trust_profile_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "migration_contract")
@@ -505,6 +528,7 @@ jobs:
             "$presentation_policy_relative" \
             "$issuance_transaction_relative" \
             "$issuance_credential_relative" \
+            "${canvas_issuance_contract_relatives[@]}" \
             "$trust_profile_relative" \
             target/debug/organization-migration-contract \
             target/debug/organization-application-postgres-contract \
@@ -574,6 +598,7 @@ jobs:
       CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       ISSUANCE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       ORGANIZATION_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
     steps:
@@ -640,6 +665,18 @@ jobs:
             exit 1
           fi
           "${issuance_credential_contracts[0]}" --test-threads=1
+          mapfile -t canvas_issuance_contracts < <(
+            find target/debug/deps -maxdepth 1 -type f -perm -u+x \
+              \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
+              | sort
+          )
+          if (( ${#canvas_issuance_contracts[@]} != 9 )); then
+            printf 'Expected nine Canvas Issuance PostgreSQL contract executables, found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
+            exit 1
+          fi
+          for contract in "${canvas_issuance_contracts[@]}"; do
+            "$contract" --test-threads=1
+          done
           test -x target/debug/credential-template-migration-contract
           target/debug/credential-template-migration-contract --test-threads=1
           mapfile -t trust_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'migration_contract-*' -perm -u+x)

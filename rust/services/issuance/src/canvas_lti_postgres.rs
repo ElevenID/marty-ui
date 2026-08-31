@@ -1,11 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Duration as ChronoDuration;
-use marty_oid4vci::lti::{
-    canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
-    validate_canvas_lti_service_url, CanvasLtiPlatformProbe,
-};
+use marty_oid4vci::lti::validate_canvas_lti_service_url;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
@@ -35,6 +32,8 @@ use crate::canvas_lti_launch::{
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
 };
+use crate::canvas_lti_probe::{probe_canvas_lti_metadata, MartyCanvasLtiProbeClient};
+pub use crate::canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient};
 
 const GET_PLATFORM: &str = "SELECT id, organization_id, canvas_account_id, canvas_base_url,
         lti_client_id, lti_deployment_id, lti_trust_profile, lti_issuer, lti_jwks_url,
@@ -256,45 +255,6 @@ impl CanvasLtiAgsServiceUrlValidator for MartyCanvasLtiAgsServiceUrlValidator {
         validate_canvas_lti_service_url(service_url, &self.private_origin_allowlist)
             .await
             .map_err(|error| error.to_string())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CanvasLtiJwksRefreshConfig {
-    pub timeout: Duration,
-    pub ttl: Duration,
-    pub self_managed_origins: Vec<String>,
-    pub allow_private_networks: bool,
-    pub allow_http_localhost: bool,
-}
-
-#[async_trait]
-pub trait CanvasLtiProbeClient: Send + Sync {
-    async fn probe(
-        &self,
-        canvas_base_url: &str,
-        config: &CanvasLtiJwksRefreshConfig,
-    ) -> Result<CanvasLtiPlatformProbe, String>;
-}
-
-#[derive(Debug)]
-struct MartyCanvasLtiProbeClient;
-
-#[async_trait]
-impl CanvasLtiProbeClient for MartyCanvasLtiProbeClient {
-    async fn probe(
-        &self,
-        canvas_base_url: &str,
-        config: &CanvasLtiJwksRefreshConfig,
-    ) -> Result<CanvasLtiPlatformProbe, String> {
-        probe_canvas_lti_platform(
-            canvas_base_url,
-            config.timeout.as_secs().max(1),
-            config.allow_private_networks,
-            config.allow_http_localhost,
-        )
-        .await
-        .map_err(|error| error.to_string())
     }
 }
 
@@ -1044,35 +1004,15 @@ impl CanvasLtiJwksRefresher for PostgresCanvasLtiJwksRefresher {
             .ok_or(CanvasLtiLaunchPlanError::Invalid(
                 "Canvas platform requires canvas_base_url before refreshing JWKS",
             ))?;
-        let normalized_origin = normalize_canvas_base_url(
+        let probe = probe_canvas_lti_metadata(
             canvas_base_url,
-            self.config.allow_private_networks,
-            self.config.allow_http_localhost,
-        )
-        .map_err(|error| CanvasLtiLaunchPlanError::JwksRefresh(error.to_string()))?;
-        let expected = canvas_lti_trust_profile(
-            &normalized_origin,
             &platform.lti_trust_profile,
-            &self.config.self_managed_origins,
+            &self.config,
+            self.probe_client.as_ref(),
         )
+        .await
         .map_err(|error| CanvasLtiLaunchPlanError::JwksRefresh(error.to_string()))?;
-        let probe = self
-            .probe_client
-            .probe(&normalized_origin, &self.config)
-            .await
-            .map_err(CanvasLtiLaunchPlanError::JwksRefresh)?;
-        if probe.canvas_base_url != normalized_origin
-            || probe.issuer != expected.issuer
-            || probe.authorization_endpoint.as_deref()
-                != Some(expected.authorization_endpoint.as_str())
-            || probe.token_endpoint.as_deref() != Some(expected.token_endpoint.as_str())
-            || probe.jwks_uri != expected.jwks_uri
-        {
-            return Err(CanvasLtiLaunchPlanError::JwksRefresh(
-                "Canvas metadata probe returned endpoints outside the persisted trust profile"
-                    .to_owned(),
-            ));
-        }
+        let normalized_origin = probe.canvas_base_url.clone();
         let ttl_seconds = self.config.ttl.as_secs();
         if ttl_seconds == 0 || ttl_seconds > i64::MAX as u64 {
             return Err(CanvasLtiLaunchPlanError::JwksRefresh(
