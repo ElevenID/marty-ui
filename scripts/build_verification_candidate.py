@@ -7,7 +7,9 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import re
+import stat
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -35,6 +37,46 @@ OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 OCI_INDEX = "application/vnd.oci.image.index.v1+json"
 OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
 OCI_GZIP_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
+# Calibrated against the immutable v1.1.208 amd64 services image at
+# sha256:ec38eda3dacb3e2f86238f6dd35e3485dd3689a5c76ec13fe896136826db3ff5:
+# 176 MiB archive, 23 layers, 173 MiB compressed / 484 MiB expanded, 33 outer
+# files, and 5,016 layer members. These ceilings retain at least a 2x margin
+# for the shared Rust services image while limiting this validator's archive
+# plus largest compressed/expanded temporaries to 896 MiB on a standard
+# GitHub runner whose hosted-runner reference documents a 14 GiB SSD.
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 512
+MAX_ARCHIVE_REGULAR_MEMBERS = 256
+MAX_LAYERS = 64
+MAX_COMPRESSED_LAYER_BYTES = 128 * 1024 * 1024
+MAX_TOTAL_COMPRESSED_LAYER_BYTES = 512 * 1024 * 1024
+MAX_EXPANDED_LAYER_BYTES = 256 * 1024 * 1024
+MAX_TOTAL_EXPANDED_LAYER_BYTES = 1024 * 1024 * 1024
+MAX_LAYER_MEMBERS = 20_000
+MAX_TOTAL_LAYER_MEMBERS = 50_000
+MAX_TAR_SPECIAL_HEADER_BYTES = 64 * 1024
+MAX_TOTAL_TAR_SPECIAL_HEADER_BYTES = 4 * 1024 * 1024
+MAX_TAR_SPECIAL_HEADERS = 256
+# The 128 MiB input cap allows more than 2.5 KiB of CycloneDX JSON for every
+# permitted layer member. Component count is twice the layer-member ceiling;
+# the remaining collection limits are far above Syft's calibrated output while
+# still bounding all attacker-controlled collection walks.
+MAX_RAW_SBOM_BYTES = 128 * 1024 * 1024
+MAX_SBOM_TOP_LEVEL_KEYS = 64
+MAX_SBOM_COMPONENTS = 100_000
+MAX_SBOM_DEPENDENCIES = 100_000
+MAX_SBOM_PROPERTIES = 4_096
+MAX_SBOM_SCANNER_COMPONENTS = 64
+TAR_BLOCK_BYTES = 512
+TAR_SPECIAL_HEADER_TYPES = frozenset(
+    {
+        tarfile.XHDTYPE,
+        tarfile.XGLTYPE,
+        tarfile.GNUTYPE_LONGNAME,
+        tarfile.GNUTYPE_LONGLINK,
+        tarfile.SOLARIS_XHDTYPE,
+    }
+)
 CYCLONEDX_COMPONENT_TYPES = {
     "application",
     "container",
@@ -82,7 +124,154 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
     )
 
 
+def _tar_number(field: bytes, *, label: str) -> int:
+    try:
+        value = tarfile.nti(field)
+    except tarfile.InvalidHeaderError as exc:
+        raise ValueError(f"{label} contains a malformed tar size") from exc
+    require(value >= 0, f"{label} contains a negative tar size")
+    return value
+
+
+def _pax_size_override(payload: bytes, *, label: str) -> int | None:
+    position = 0
+    size_override: int | None = None
+    while position < len(payload):
+        if payload[position:] == bytes(len(payload) - position):
+            break
+        separator = payload.find(b" ", position)
+        require(separator > position, f"{label} contains malformed PAX metadata")
+        length_bytes = payload[position:separator]
+        require(length_bytes.isdigit(), f"{label} contains malformed PAX metadata")
+        length = int(length_bytes)
+        end = position + length
+        require(
+            length >= 5 and end <= len(payload),
+            f"{label} contains malformed PAX metadata",
+        )
+        record = payload[separator + 1 : end]
+        require(
+            record.endswith(b"\n") and b"=" in record,
+            f"{label} contains malformed PAX metadata",
+        )
+        key, value = record[:-1].split(b"=", 1)
+        require(bool(key), f"{label} contains malformed PAX metadata")
+        require(
+            not key.startswith(b"GNU.sparse."),
+            f"{label} contains unsupported sparse PAX metadata",
+        )
+        if key == b"size":
+            require(value.isdigit(), f"{label} contains malformed PAX size metadata")
+            size_override = int(value)
+        position = end
+    return size_override
+
+
+def _scan_tar_headers(
+    source: BinaryIO,
+    *,
+    stream_bytes: int,
+    maximum_members: int,
+    label: str,
+) -> None:
+    """Bound extended tar metadata before tarfile can allocate it."""
+    require(
+        stream_bytes % TAR_BLOCK_BYTES == 0,
+        f"{label} contains a truncated tar block",
+    )
+    source.seek(0)
+    offset = 0
+    member_count = 0
+    special_count = 0
+    special_bytes = 0
+    global_size_override: int | None = None
+    next_size_override: int | None = None
+    while offset + TAR_BLOCK_BYTES <= stream_bytes:
+        source.seek(offset)
+        header = source.read(TAR_BLOCK_BYTES)
+        require(
+            len(header) == TAR_BLOCK_BYTES,
+            f"{label} contains a truncated tar header",
+        )
+        if header == bytes(TAR_BLOCK_BYTES):
+            remaining = stream_bytes - offset - TAR_BLOCK_BYTES
+            require(
+                remaining >= TAR_BLOCK_BYTES,
+                f"{label} is missing the canonical tar end-of-archive",
+            )
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                require(
+                    bool(chunk) and not any(chunk),
+                    f"{label} contains non-zero data after its end-of-archive",
+                )
+                remaining -= len(chunk)
+            return
+        member_count += 1
+        require(
+            member_count <= maximum_members + MAX_TAR_SPECIAL_HEADERS,
+            f"{label} contains too many raw tar headers",
+        )
+        raw_size = _tar_number(header[124:136], label=label)
+        typeflag = header[156:157] or tarfile.REGTYPE
+        require(
+            typeflag != tarfile.GNUTYPE_SPARSE,
+            f"{label} contains unsupported GNU sparse metadata",
+        )
+        if typeflag in TAR_SPECIAL_HEADER_TYPES:
+            special_count += 1
+            special_bytes += raw_size
+            require(
+                special_count <= MAX_TAR_SPECIAL_HEADERS,
+                f"{label} contains too many special tar headers",
+            )
+            require(
+                raw_size <= MAX_TAR_SPECIAL_HEADER_BYTES,
+                f"{label} special tar header is too large",
+            )
+            require(
+                special_bytes <= MAX_TOTAL_TAR_SPECIAL_HEADER_BYTES,
+                f"{label} aggregate special tar headers are too large",
+            )
+            payload_size = raw_size
+        else:
+            payload_size = (
+                next_size_override
+                if next_size_override is not None
+                else global_size_override
+                if global_size_override is not None
+                else raw_size
+            )
+            next_size_override = None
+        padded_size = (
+            (payload_size + TAR_BLOCK_BYTES - 1) // TAR_BLOCK_BYTES
+        ) * TAR_BLOCK_BYTES
+        next_offset = offset + TAR_BLOCK_BYTES + padded_size
+        require(next_offset <= stream_bytes, f"{label} contains a truncated tar member")
+        if typeflag in {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE}:
+            payload = source.read(raw_size)
+            require(
+                len(payload) == raw_size,
+                f"{label} contains truncated PAX metadata",
+            )
+            override = _pax_size_override(payload, label=label)
+            if typeflag == tarfile.XGLTYPE:
+                if override is not None:
+                    global_size_override = override
+            elif override is not None:
+                next_size_override = override
+        offset = next_offset
+    raise ValueError(f"{label} is missing the canonical tar end-of-archive")
+
+
 def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, Any]:
+    metadata = path.lstat()
+    require(stat.S_ISREG(metadata.st_mode), "candidate archive is not a regular file")
+    require(
+        0 < metadata.st_size <= MAX_ARCHIVE_BYTES, "OCI archive is too large or empty"
+    )
+    reachable_members = {"oci-layout", "index.json"}
+
     def normalize(member: tarfile.TarInfo) -> str:
         name = member.name.removeprefix("./")
         parts = PurePosixPath(name).parts
@@ -130,11 +319,20 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             member is not None and member.isfile(),
             f"OCI archive member is missing: {name}",
         )
+        require(
+            member.size == size_value, "OCI descriptor size does not match its blob"
+        )
         if metadata:
             require(
                 member.size <= 16 * 1024 * 1024,
                 f"OCI metadata member is too large: {name}",
             )
+        else:
+            require(
+                member.size <= MAX_COMPRESSED_LAYER_BYTES,
+                "OCI compressed layer is too large",
+            )
+        reachable_members.add(name)
         extracted = archive.extractfile(member)
         require(extracted is not None, f"OCI archive member could not be read: {name}")
         digest_state = hashlib.sha256()
@@ -167,19 +365,43 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
     @contextmanager
     def open_archive() -> Iterator[tarfile.TarFile]:
         try:
-            with tarfile.open(path, mode="r:*") as archive:
+            with tarfile.open(path, mode="r:") as archive:
                 yield archive
         except (OSError, tarfile.TarError) as exc:
             raise ValueError("candidate archive is not a readable OCI archive") from exc
 
+    with path.open("rb") as raw_archive:
+        _scan_tar_headers(
+            raw_archive,
+            stream_bytes=metadata.st_size,
+            maximum_members=MAX_ARCHIVE_MEMBERS,
+            label="OCI archive",
+        )
+
     with open_archive() as archive:
         members: dict[str, tarfile.TarInfo] = {}
-        for member in archive.getmembers():
+        directories: set[str] = set()
+        member_names: set[str] = set()
+        member_count = 0
+        regular_member_count = 0
+        for member in archive:
+            member_count += 1
+            require(
+                member_count <= MAX_ARCHIVE_MEMBERS,
+                "OCI archive contains too many members",
+            )
             name = normalize(member)
+            require(name not in member_names, "OCI archive contains duplicate members")
+            member_names.add(name)
             if member.isdir():
+                directories.add(name)
                 continue
             require(member.isfile(), "OCI archive contains a non-regular member")
-            require(name not in members, "OCI archive contains duplicate members")
+            regular_member_count += 1
+            require(
+                regular_member_count <= MAX_ARCHIVE_REGULAR_MEMBERS,
+                "OCI archive contains too many regular members",
+            )
             members[name] = member
 
         layout = json.loads(metadata_member(archive, members, "oci-layout"))
@@ -281,6 +503,7 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
 
         layers = value.get("layers")
         require(isinstance(layers, list) and layers, "OCI image layers are missing")
+        require(len(layers) <= MAX_LAYERS, "OCI image contains too many layers")
         rootfs = config.get("rootfs")
         require(
             isinstance(rootfs, dict) and rootfs.get("type") == "layers",
@@ -295,6 +518,23 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             ),
             "OCI rootfs diff IDs changed",
         )
+        compressed_sizes = [
+            layer.get("size") for layer in layers if isinstance(layer, dict)
+        ]
+        require(
+            len(compressed_sizes) == len(layers)
+            and all(
+                type(size) is int and 0 <= size <= MAX_COMPRESSED_LAYER_BYTES
+                for size in compressed_sizes
+            ),
+            "OCI compressed layer is too large",
+        )
+        require(
+            sum(compressed_sizes) <= MAX_TOTAL_COMPRESSED_LAYER_BYTES,
+            "OCI aggregate compressed layers are too large",
+        )
+        total_expanded = 0
+        total_layer_members = 0
         for layer, diff_id in zip(layers, diff_ids, strict=True):
             require(isinstance(layer, dict), "OCI layer descriptor changed")
             require(
@@ -310,9 +550,22 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
                 )
                 compressed.seek(0)
                 digest_state = hashlib.sha256()
+                layer_expanded = 0
                 try:
                     with gzip.GzipFile(fileobj=compressed, mode="rb") as source:
                         for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            next_layer_expanded = layer_expanded + len(chunk)
+                            next_total_expanded = total_expanded + len(chunk)
+                            require(
+                                next_layer_expanded <= MAX_EXPANDED_LAYER_BYTES,
+                                "OCI expanded layer is too large",
+                            )
+                            require(
+                                next_total_expanded <= MAX_TOTAL_EXPANDED_LAYER_BYTES,
+                                "OCI aggregate expanded layers are too large",
+                            )
+                            layer_expanded = next_layer_expanded
+                            total_expanded = next_total_expanded
                             digest_state.update(chunk)
                             uncompressed.write(chunk)
                 except (EOFError, OSError) as exc:
@@ -322,13 +575,44 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
                     "OCI layer does not match its rootfs diff ID",
                 )
                 uncompressed.seek(0)
+                _scan_tar_headers(
+                    uncompressed,
+                    stream_bytes=layer_expanded,
+                    maximum_members=MAX_LAYER_MEMBERS,
+                    label="OCI layer",
+                )
+                uncompressed.seek(0)
                 try:
-                    with tarfile.open(fileobj=uncompressed, mode="r:") as layer_archive:
-                        require(
-                            bool(layer_archive.getmembers()), "OCI layer tar is empty"
-                        )
+                    with tarfile.open(fileobj=uncompressed, mode="r|") as layer_archive:
+                        layer_members = 0
+                        for _member in layer_archive:
+                            layer_members += 1
+                            total_layer_members += 1
+                            require(
+                                layer_members <= MAX_LAYER_MEMBERS,
+                                "OCI layer contains too many members",
+                            )
+                            require(
+                                total_layer_members <= MAX_TOTAL_LAYER_MEMBERS,
+                                "OCI aggregate layer members are too large",
+                            )
+                        require(layer_members > 0, "OCI layer tar is empty")
                 except tarfile.TarError as exc:
                     raise ValueError("OCI layer is not a readable tar archive") from exc
+        require(
+            set(members) == reachable_members,
+            "OCI archive contains an unreferenced regular member",
+        )
+        reachable_directories = {
+            str(parent)
+            for name in reachable_members
+            for parent in PurePosixPath(name).parents
+            if str(parent) != "."
+        }
+        require(
+            directories <= reachable_directories,
+            "OCI archive contains an unreferenced directory member",
+        )
         return {
             "uri": IMAGE_URI,
             "digest": manifest_digest,
@@ -346,13 +630,39 @@ def normalize_sbom(
     commit: str,
     version: str,
 ) -> None:
-    value = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw_metadata = raw_path.lstat()
+    require(stat.S_ISREG(raw_metadata.st_mode), "candidate SBOM is not a regular file")
+    require(
+        0 < raw_metadata.st_size <= MAX_RAW_SBOM_BYTES,
+        "candidate SBOM is too large or empty",
+    )
+    with raw_path.open("rb") as raw_handle:
+        opened_metadata = os.fstat(raw_handle.fileno())
+        require(
+            stat.S_ISREG(opened_metadata.st_mode)
+            and opened_metadata.st_dev == raw_metadata.st_dev
+            and opened_metadata.st_ino == raw_metadata.st_ino
+            and opened_metadata.st_size == raw_metadata.st_size,
+            "candidate SBOM changed before it was read",
+        )
+        raw = raw_handle.read(MAX_RAW_SBOM_BYTES + 1)
+    require(
+        len(raw) == raw_metadata.st_size,
+        "candidate SBOM size changed while it was read",
+    )
+    value = json.loads(raw.decode("utf-8"))
     require(isinstance(value, dict), "candidate SBOM must be a JSON object")
+    require(
+        len(value) <= MAX_SBOM_TOP_LEVEL_KEYS,
+        "candidate SBOM contains too many top-level fields",
+    )
     require(value.get("bomFormat") == "CycloneDX", "candidate SBOM must use CycloneDX")
     require(value.get("specVersion") == "1.6", "candidate SBOM must use CycloneDX 1.6")
     components = value.get("components")
     require(
-        isinstance(components, list) and bool(components),
+        isinstance(components, list)
+        and bool(components)
+        and len(components) <= MAX_SBOM_COMPONENTS,
         "candidate SBOM components are missing",
     )
     component_refs: set[str] = set()
@@ -383,6 +693,7 @@ def normalize_sbom(
     scanner_components = tools.get("components")
     require(
         isinstance(scanner_components, list)
+        and len(scanner_components) <= MAX_SBOM_SCANNER_COMPONENTS
         and any(
             isinstance(tool, dict) and tool.get("name") == "syft"
             for tool in scanner_components
@@ -418,7 +729,10 @@ def normalize_sbom(
     )
     all_references = component_refs | {root_reference}
     dependencies = value.get("dependencies", [])
-    require(isinstance(dependencies, list), "candidate SBOM dependencies changed")
+    require(
+        isinstance(dependencies, list) and len(dependencies) <= MAX_SBOM_DEPENDENCIES,
+        "candidate SBOM dependencies changed",
+    )
     dependency_roots: set[str] = set()
     for dependency in dependencies:
         require(isinstance(dependency, dict), "candidate SBOM dependency changed")
@@ -443,7 +757,10 @@ def normalize_sbom(
         "candidate SBOM root identity is contradictory",
     )
     properties = metadata.get("properties")
-    require(isinstance(properties, list), "candidate SBOM image labels are missing")
+    require(
+        isinstance(properties, list) and len(properties) <= MAX_SBOM_PROPERTIES,
+        "candidate SBOM image labels are missing",
+    )
     property_values: dict[str, str] = {}
     for item in properties:
         require(isinstance(item, dict), "candidate SBOM image property changed")
