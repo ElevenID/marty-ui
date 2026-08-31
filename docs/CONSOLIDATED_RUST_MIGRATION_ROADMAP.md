@@ -140,6 +140,39 @@ longer an active implementation stream: its tested fix merged as
 `ElevenID/marty-credentials#247` at `8e3868b`. Its clean, squash-replaced topic
 branch/worktree can be removed during the approved branch cleanup.
 
+### Parallel verification-image consolidation
+
+The separately published Python verification image in `marty-credentials` is
+claimed by the coordinated `rust-verification/consolidation-v1` worktrees in
+`marty-ui` and `marty-credentials`. This stream proceeds in parallel with the
+Canvas completion work because it owns separate service, contract, migration,
+packaging and deployment paths. Other workers must not start a second verifier
+port or duplicate verification decisions in a new crate.
+
+The workstream first freezes implementation-independent HTTP, configuration,
+governance, persistence, migration, concurrency, failure and release contracts
+from the Python service. It then reconciles those contracts with the existing
+canonical `marty-ui/rust/services/verification` binary and the reusable
+`marty-core` verification kernels. Shared policy, protocol, cryptographic,
+canonical-result and evidence-validation behavior remains at the lowest
+reusable Rust layer; the service crate owns only domain use cases, transport
+adaptation, repositories and provider composition. Generic lifecycle,
+configuration, authorization-context, migration, resilience and observability
+behavior must come from MMF rather than being copied into the service.
+
+No Python route, supported purpose, governed trust decision, processing state,
+storage guarantee, migration path, deployment mode or public error may be
+removed merely because it is difficult to port. The Python runtime and image
+remain the parity oracle until positive, negative, malformed-input, tenancy,
+authorization, replay, idempotency, concurrency, dependency-failure,
+secret-redaction, migration and packaging gates pass against the Rust service.
+Deletion is mandatory only after those gates prove that the canonical Rust
+service preserves the intended contract and every consumer has moved. Each
+focused commit receives a maintainer-style self-review followed by an
+independent reviewer pass; findings are fixed and re-reviewed until no issues
+remain. The resulting image cutover joins a reviewed aggregate beta release;
+production remains unchanged without separate approval.
+
 ## Wave three — Rust service plane and complete MMF replacement
 
 Wave three replaces the remaining deployed Python service plane with Rust and
