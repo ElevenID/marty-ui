@@ -85,6 +85,7 @@ The 31-route language-neutral Canvas management floor is
 |---|---:|---|
 | Implemented and merged in Rust | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. PR `#717` merged at `a6b375bb0` |
 | Provenance-bound native beta routing merged | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; PR `#717` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
+| Standalone synchronization worker | Contract frozen; Rust implementation not started | `contracts/issuance-canvas-sync-worker.json` pins the complete Python worker/processor/oracle boundary and the reusable Rust owners. The remaining Python oracle gaps and two deliberate security hardenings must land before shared differential fixtures can authorize implementation or deletion |
 
 Thus, all 31 routes and their beta routing are merged but not yet deployed.
 The final post-rebase maintainer and protected-queue gates passed 220 Rust
@@ -157,7 +158,10 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    `process_authoritative_canvas_sync_target` processor remain Python in this
    wave: Rust currently owns enqueue/readiness support, but not that processor's
    complete Canvas API polling, lease, retry, heartbeat and reconciliation
-   behavior. They require a separate contract-frozen whole-worker migration.
+   behavior. Their language-neutral whole-worker contract is now frozen in
+   `contracts/issuance-canvas-sync-worker.json`; implementation remains gated
+   on closing the enumerated Python oracle gaps and must extend the existing
+   Rust Canvas OAuth, PostgreSQL OAuth, integration-secret and readiness owners.
 7. The Canvas, mdoc, Canvas Credentials, base verifier implementation and
    verifier contract worktrees have been tree-equivalence checked and removed
    after their protected merges. Integration cleanup is also complete: the
