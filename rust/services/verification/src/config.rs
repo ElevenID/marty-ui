@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt, net::SocketAddr, path::PathBuf, time::Dura
 use thiserror::Error;
 use url::Url;
 
-use crate::{GrpcProviderConfig, WorkloadClientTlsFiles};
+use crate::{credentials_compat::GovernanceEngine, GrpcProviderConfig, WorkloadClientTlsFiles};
 
 const DEFAULT_HTTP_ADDR: &str = "0.0.0.0:8012";
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:9017";
@@ -31,6 +31,7 @@ pub struct VerificationServiceConfig {
     pub grpc_enabled: bool,
     pub public_base_url: String,
     pub redis_url: Option<String>,
+    pub credentials_governance: Option<GovernanceEngine>,
     pub providers: GrpcProviderConfig,
     pub release_version: String,
     pub build_revision: String,
@@ -48,6 +49,13 @@ impl fmt::Debug for VerificationServiceConfig {
             .field(
                 "redis_url",
                 &self.redis_url.as_ref().map(|_| "[CONFIGURED]"),
+            )
+            .field(
+                "credentials_governance",
+                &self
+                    .credentials_governance
+                    .as_ref()
+                    .map(|_| "[VALIDATED AND REDACTED]"),
             )
             .field("providers", &"[CONFIGURED]")
             .field("release_version", &self.release_version)
@@ -122,6 +130,17 @@ impl VerificationServiceConfig {
             return Err(invalid("REDIS_URL"));
         }
         let workload_tls = workload_tls(&values, environment)?;
+        let credentials_governance = match value(&values, "VERIFICATION_GOVERNANCE_JSON") {
+            Some(raw) => Some(
+                GovernanceEngine::new(raw).map_err(|_| invalid("VERIFICATION_GOVERNANCE_JSON"))?,
+            ),
+            None if environment.is_deployed() => {
+                return Err(VerificationConfigError::Missing {
+                    name: "VERIFICATION_GOVERNANCE_JSON",
+                });
+            }
+            None => None,
+        };
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
         if environment.is_deployed() && service_token.as_ref().is_none_or(|v| v.len() < 32) {
             return Err(VerificationConfigError::Missing {
@@ -150,6 +169,7 @@ impl VerificationServiceConfig {
             grpc_enabled,
             public_base_url,
             redis_url,
+            credentials_governance,
             providers: GrpcProviderConfig {
                 organization_target: value(&values, "ORG_GRPC_TARGET")
                     .or_else(|| value(&values, "ORGANIZATION_GRPC_TARGET"))
@@ -313,6 +333,8 @@ mod tests {
 
     #[test]
     fn complete_beta_configuration_is_accepted_and_inbound_grpc_is_closed() {
+        let governance = marty_verification::governance::behavior_fixture_json();
+        let governance: serde_json::Value = serde_json::from_str(governance).unwrap();
         let config = VerificationServiceConfig::from_values([
             ("ENVIRONMENT".into(), "beta".into()),
             ("PUBLIC_BASE_URL".into(), "https://beta.example".into()),
@@ -322,11 +344,16 @@ mod tests {
             ("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "client.key".into()),
             ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "ca.crt".into()),
             ("VERIF_GRPC_ENABLED".into(), "false".into()),
+            (
+                "VERIFICATION_GOVERNANCE_JSON".into(),
+                governance["governance"].to_string(),
+            ),
         ])
         .unwrap();
         assert_eq!(config.environment, Environment::Beta);
         assert!(!config.grpc_enabled);
         assert!(config.providers.workload_tls.is_some());
+        assert!(config.credentials_governance.is_some());
 
         let error = VerificationServiceConfig::from_values([
             ("ENVIRONMENT".into(), "beta".into()),
@@ -339,5 +366,37 @@ mod tests {
                 name: "VERIF_GRPC_ENABLED"
             }
         );
+    }
+
+    #[test]
+    fn governance_is_validated_and_redacted_at_the_configuration_boundary() {
+        let error = VerificationServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "test".into()),
+            ("VERIFICATION_GOVERNANCE_JSON".into(), "{}".into()),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            VerificationConfigError::Invalid {
+                name: "VERIFICATION_GOVERNANCE_JSON"
+            }
+        );
+
+        let fixture: serde_json::Value =
+            serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        let digest = fixture["governance"]["clients"][0]["api_key_sha256"]
+            .as_str()
+            .unwrap();
+        let config = VerificationServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "test".into()),
+            (
+                "VERIFICATION_GOVERNANCE_JSON".into(),
+                fixture["governance"].to_string(),
+            ),
+        ])
+        .unwrap();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("VALIDATED AND REDACTED"));
+        assert!(!debug.contains(digest));
     }
 }
