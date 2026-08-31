@@ -163,8 +163,62 @@
     "secret_hint": "last-four-characters-only",
     "response_forbidden_fields": ["secret_value", "ciphertext", "nonce", "key_id"],
     "list_and_mutation_tenant_scoped": true,
-    "wrong_tenant_status": 404,
-    "provider_validation_never_publishes_a_credential": true
+    "wrong_tenant_status": 404
+  },
+  "canvas_credentials_provider_validation": {
+    "never_publishes_a_credential": true,
+    "allowed_providers": ["bridge", "badgr_api", "canvas_credentials_api"],
+    "provider_default_order": [
+      "CANVAS_CREDENTIALS_PROVIDER",
+      "bridge-when-CANVAS_CREDENTIALS_PUBLISH_URL-is-set",
+      "badgr_api-when-badgeclass-is-configured",
+      "bridge"
+    ],
+    "tenant_secret": {
+      "required": true,
+      "provider": "canvas_credentials",
+      "purpose": "api_token",
+      "enabled": true,
+      "missing_or_foreign_status": 404,
+      "never_returned_or_logged": true
+    },
+    "bridge": {
+      "requires_operator_publish_url": true,
+      "performs_provider_request": false
+    },
+    "real_api": {
+      "default_api_base_url": "https://api.badgr.io",
+      "tenant_base_url_must_be_https_and_operator_allowlisted": true,
+      "allowed_assertion_scopes": ["badgeclasses", "issuers"],
+      "validation_method": "GET",
+      "authentication": "bearer-organization-secret",
+      "redirects_followed": false,
+      "request_is_bounded": true,
+      "success_status": "2xx",
+      "non_success_is_safe-result-not-http-error": true,
+      "response_excerpt_only_on_failure": true
+    },
+    "response_fields": [
+      "ok",
+      "provider",
+      "api_base_url",
+      "assertion_scope",
+      "issuer_id",
+      "badgeclass_id",
+      "token_configured",
+      "validation_url",
+      "status_code",
+      "request_id",
+      "error",
+      "response_excerpt",
+      "validated_at"
+    ],
+    "forbidden_response_fields": [
+      "api_token",
+      "api_token_secret_id",
+      "authorization",
+      "request_headers"
+    ]
   },
   "application_approval": {
     "canvas_application_only": true,

@@ -112,6 +112,24 @@ fn canvas_management_contract_retains_the_feature_and_security_floor() {
         contract["integration_secrets"]["storage"],
         "encrypted-organization-secret"
     );
+    let validation = &contract["canvas_credentials_provider_validation"];
+    assert_eq!(validation["never_publishes_a_credential"], true);
+    assert_eq!(
+        validation["allowed_providers"],
+        serde_json::json!(["bridge", "badgr_api", "canvas_credentials_api"])
+    );
+    assert_eq!(
+        validation["tenant_secret"]["never_returned_or_logged"],
+        true
+    );
+    assert_eq!(validation["real_api"]["redirects_followed"], false);
+    assert_eq!(
+        validation["response_fields"]
+            .as_array()
+            .expect("provider validation response fields")
+            .len(),
+        13
+    );
     assert_eq!(
         contract["application_approval"]["uses_canonical_issuance_guard"],
         true
