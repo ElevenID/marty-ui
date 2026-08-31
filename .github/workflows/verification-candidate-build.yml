@@ -48,8 +48,30 @@ jobs:
         shell: bash
         run: mkdir -p "${{ runner.temp }}/verification-candidate"
 
-      - name: Configure Buildx
+      - name: Configure the pinned containerd image store
+        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
+        with:
+          version: v29.7.2
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+
+      - name: Configure the pinned OCI exporter
+        id: buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v6.2.0
+        with:
+          version: v0.36.1
+          driver: docker-container
+          driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Require the exact supported OCI backend
+        env:
+          MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
+          MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
+        run: python scripts/check_verification_candidate_backend.py
 
       - name: Build one local Linux amd64 OCI archive
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -96,7 +118,19 @@ jobs:
             --provenance "${{ runner.temp }}/verification-candidate/marty-ui-services-provenance.json" \
             --pin "${{ runner.temp }}/verification-candidate/verification-candidate.json"
           rm -f "${{ runner.temp }}/verification-candidate/raw-sbom.cdx.json"
-          test "$(find "${{ runner.temp }}/verification-candidate" -maxdepth 1 -type f | wc -l)" -eq 5
+          mapfile -t candidate_entries < <(
+            find "${{ runner.temp }}/verification-candidate" \
+              -mindepth 1 -maxdepth 1 -printf '%f:%y\n' | LC_ALL=C sort
+          )
+          expected_entries=(
+            "marty-ui-services-build-metadata.json:f"
+            "marty-ui-services-provenance.json:f"
+            "marty-ui-services-sbom.cdx.json:f"
+            "marty-ui-services.oci.tar:f"
+            "verification-candidate.json:f"
+          )
+          test "${#candidate_entries[@]}" -eq "${#expected_entries[@]}"
+          test "${candidate_entries[*]}" = "${expected_entries[*]}"
 
       - name: Attest exact candidate pin
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
