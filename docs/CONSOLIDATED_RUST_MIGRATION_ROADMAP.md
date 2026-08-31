@@ -60,8 +60,11 @@ Counts describe local migration progress, not merged `main` coverage.
    behavior. They require a separate contract-frozen whole-worker migration.
 3. Rebase onto current `origin/main`, self-review as maintainers, open and merge
    clean PRs, then remove merged or superseded local branches/worktrees. This
-   cleanup includes the already-merged CDLA review/test worktrees and detached
-   beta release worktrees; no unlanded feature work may be discarded.
+   cleanup no longer includes the already-merged CDLA review/test worktrees or
+   detached `v1.1.206`/`v1.1.207` beta release worktrees: those were verified
+   against their upstream squash merges and removed on 2026-08-30. Preserve and
+   land the still-unique verification-consolidation worktrees and the open core
+   proof-boundary dependency PR; no unlanded feature work may be discarded.
 4. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
    release-demo recordings plus acceptance/soak checks, and leave production
    unchanged.
