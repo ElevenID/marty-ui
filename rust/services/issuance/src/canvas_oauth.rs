@@ -1629,7 +1629,7 @@ fn normalize_capabilities(values: &[String]) -> Result<Vec<String>, CanvasOAuthE
     Ok(normalized)
 }
 
-fn scopes_for_capabilities(capabilities: &[String]) -> Vec<String> {
+pub(crate) fn scopes_for_capabilities(capabilities: &[String]) -> Vec<String> {
     let mut scopes = Vec::new();
     for capability in capabilities {
         if let Some((_, capability_scopes)) = CAPABILITY_SCOPES

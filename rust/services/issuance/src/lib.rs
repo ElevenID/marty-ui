@@ -37,6 +37,7 @@ pub mod canvas_oauth;
 pub mod canvas_oauth_http;
 pub mod canvas_oauth_postgres;
 pub mod canvas_provider_http;
+pub mod canvas_readiness;
 pub mod client_auth;
 pub mod config;
 pub mod contract;
