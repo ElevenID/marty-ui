@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
+    credentials_compat::{self, CompatibilityState},
     EvaluateRequest, ManagementPrincipal, StartVerificationRequest, SubmitVerificationRequest,
     VerificationError, VerificationService, ZkpSubmitRequest,
 };
@@ -23,7 +24,7 @@ pub struct HttpState {
     pub runtime: RuntimeState,
     pub release_version: String,
     pub build_revision: String,
-    pub credentials_compat_enabled: bool,
+    pub credentials_compat: Option<CompatibilityState>,
 }
 
 #[derive(Debug)]
@@ -83,7 +84,7 @@ const fn default_limit() -> usize {
 }
 
 pub fn router(state: HttpState) -> Router {
-    let system_routes = if state.credentials_compat_enabled {
+    let system_routes = if state.credentials_compat.is_some() {
         system_router_with_options(
             state.runtime.clone(),
             SystemRouteOptions::default().with_health_projector(compatibility_health),
@@ -91,7 +92,8 @@ pub fn router(state: HttpState) -> Router {
     } else {
         system_router(state.runtime.clone())
     };
-    Router::new()
+    let compatibility = state.credentials_compat.clone();
+    let application = Router::new()
         .route("/v1/verify", post(start))
         .route("/v1/verify/sessions", get(list))
         .route("/v1/verify/evaluate", post(evaluate))
@@ -104,8 +106,11 @@ pub fn router(state: HttpState) -> Router {
         .route("/startup", get(startup))
         .route("/health/native-backend", get(native_health))
         .route("/metrics", get(metrics))
-        .with_state(state.clone())
-        .merge(system_routes)
+        .with_state(state);
+    let application = compatibility.map_or(application.clone(), |compatibility| {
+        application.merge(credentials_compat::router(compatibility))
+    });
+    application.merge(system_routes)
 }
 
 fn compatibility_health(_: &HealthReport) -> Value {

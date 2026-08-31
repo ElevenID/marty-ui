@@ -51,6 +51,29 @@ pub struct IssuerResolverConfig {
     pub did_web_allowed_hosts: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationMigrationConfig {
+    pub database_url: String,
+}
+
+impl VerificationMigrationConfig {
+    pub fn from_env() -> Result<Self, VerificationConfigError> {
+        Self::from_values(std::env::vars())
+    }
+
+    pub fn from_values(
+        values: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, VerificationConfigError> {
+        let values = values.into_iter().collect::<BTreeMap<_, _>>();
+        let database_url = value(&values, "DATABASE_URL")
+            .ok_or(VerificationConfigError::Missing {
+                name: "DATABASE_URL",
+            })
+            .and_then(normalize_postgres_url)?;
+        Ok(Self { database_url })
+    }
+}
+
 impl IssuerResolverConfig {
     #[must_use]
     pub fn api_key(&self) -> &str {

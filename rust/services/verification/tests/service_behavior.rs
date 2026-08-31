@@ -11,6 +11,11 @@ use marty_flow::{
     PresentationPolicyProvider, PresentationPolicyReference,
 };
 use marty_verification_service::{
+    credentials_compat::{
+        CompatibilityError, CompatibilityState, CompatibilityUseCases, CreateSessionRequest,
+        GovernanceSnapshot, SessionResponse, SubmitPresentationRequest, VerificationResult,
+        VerifyDirectRequest, VerifyVdsNcRequest,
+    },
     verification_proto::{
         verification_service_server::VerificationService as VerificationGrpc,
         EvaluatePresentationRequest as GrpcEvaluateRequest,
@@ -26,6 +31,47 @@ use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde_json::{json, Value};
 use tonic::Request;
 use tower::ServiceExt;
+
+struct MountedCompatibility;
+
+#[async_trait]
+impl CompatibilityUseCases for MountedCompatibility {
+    async fn create_session(
+        &self,
+        _: CreateSessionRequest,
+        _: GovernanceSnapshot,
+    ) -> Result<SessionResponse, CompatibilityError> {
+        unreachable!()
+    }
+
+    async fn submit_presentation(
+        &self,
+        _: &str,
+        _: SubmitPresentationRequest,
+    ) -> Result<VerificationResult, CompatibilityError> {
+        unreachable!()
+    }
+
+    async fn get_session(&self, _: &str) -> Result<SessionResponse, CompatibilityError> {
+        unreachable!()
+    }
+
+    async fn verify_direct(
+        &self,
+        _: VerifyDirectRequest,
+        _: GovernanceSnapshot,
+    ) -> Result<VerificationResult, CompatibilityError> {
+        unreachable!()
+    }
+
+    async fn verify_vds_nc(
+        &self,
+        _: VerifyVdsNcRequest,
+        _: GovernanceSnapshot,
+    ) -> Result<VerificationResult, CompatibilityError> {
+        unreachable!()
+    }
+}
 
 #[derive(Clone)]
 struct Memberships;
@@ -344,7 +390,7 @@ async fn http_adapter_preserves_management_and_public_wallet_boundaries() {
             }),
             release_version: "test".into(),
             build_revision: "test".into(),
-            credentials_compat_enabled: false,
+            credentials_compat: None,
         });
     let unauthorized = app
         .clone()
@@ -395,6 +441,58 @@ async fn http_adapter_preserves_management_and_public_wallet_boundaries() {
         .await
         .unwrap();
     assert_eq!(wallet_request.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn compatibility_routes_and_root_projection_mount_only_with_operational_state() {
+    let state = |credentials_compat| marty_verification_service::http::HttpState {
+        service: Arc::new(service(true)),
+        runtime: RuntimeState::new(BuildInfo {
+            service: "verification".into(),
+            version: "test".into(),
+            build_revision: "test".into(),
+            enabled_features: vec!["native_oid4vp".into()],
+        }),
+        release_version: "test".into(),
+        build_revision: "test".into(),
+        credentials_compat,
+    };
+    let inactive = marty_verification_service::http::router(state(None));
+    assert_eq!(
+        inactive
+            .oneshot(
+                HttpRequest::get("/v1/verification/health")
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let active = marty_verification_service::http::router(state(Some(CompatibilityState {
+        use_cases: Arc::new(MountedCompatibility),
+        governance: None,
+    })));
+    let compatibility_health = active
+        .clone()
+        .oneshot(
+            HttpRequest::get("/v1/verification/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(compatibility_health.status(), StatusCode::OK);
+    let root = active
+        .oneshot(HttpRequest::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let root: Value =
+        serde_json::from_slice(&to_bytes(root.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert_eq!(root["service"], "verification");
+    assert_eq!(root["native_backend"]["available"], true);
 }
 
 #[test]
