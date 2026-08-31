@@ -596,14 +596,18 @@ impl CanvasSyncWorker {
                     .repository
                     .renew_lease(&job, &self.config.worker_id, self.config.lease_seconds)
                     .await?;
-                if renewed {
-                    let _ = self
-                        .repository
-                        .touch_target_heartbeat(&target, &self.config.worker_id)
-                        .await?;
-                    self.heartbeat("processing", 1).await?;
+                if !renewed {
+                    return Ok(false);
                 }
-                Ok(renewed)
+                let target_is_current = self
+                    .repository
+                    .touch_target_heartbeat(&target, &self.config.worker_id)
+                    .await?;
+                if !target_is_current {
+                    return Ok(false);
+                }
+                self.heartbeat("processing", 1).await?;
+                Ok(true)
             },
         )
         .await?;
@@ -1076,6 +1080,30 @@ mod lease_tests {
         let result =
             await_with_lease_renewal(processing, Duration::from_millis(1), || async { Ok(false) })
                 .await;
+        assert!(matches!(result, Err(EscapedJobError::StaleLease)));
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn target_generation_loss_after_job_renewal_drops_processing_future() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let renewal_succeeded = Arc::new(AtomicBool::new(false));
+        let signal = DropSignal(dropped.clone());
+        let processing = async move {
+            let _signal = signal;
+            std::future::pending::<()>().await;
+        };
+        let result = await_with_lease_renewal(processing, Duration::from_millis(1), || {
+            let renewal_succeeded = renewal_succeeded.clone();
+            async move {
+                // The durable job lease renewed, but the target generation
+                // heartbeat CAS reported that this target is no longer current.
+                renewal_succeeded.store(true, Ordering::SeqCst);
+                Ok(false)
+            }
+        })
+        .await;
+        assert!(renewal_succeeded.load(Ordering::SeqCst));
         assert!(matches!(result, Err(EscapedJobError::StaleLease)));
         assert!(dropped.load(Ordering::SeqCst));
     }

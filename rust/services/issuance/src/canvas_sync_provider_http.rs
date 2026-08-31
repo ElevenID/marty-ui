@@ -415,15 +415,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     &format!("courses/{}/bulk_user_progress", encoded(course)?),
                 )?;
                 let rows = self.collection(resources, url, &token, limit).await?;
-                let by_user = rows
-                    .into_iter()
-                    .filter_map(|row| {
-                        row.get("user_id")
-                            .or_else(|| row.get("userId"))
-                            .and_then(value_identifier)
-                            .map(|user| (user, row))
-                    })
-                    .collect::<std::collections::BTreeMap<_, _>>();
+                let by_user = validated_course_completion_by_user(rows)?;
                 for user in &snapshot.canvas_user_ids {
                     let record = by_user.get(user).cloned().unwrap_or_else(|| json!({}));
                     snapshot.preloaded_observations.insert(
@@ -628,6 +620,24 @@ fn validate_rest_record(fact_type: &str, record: &Value) -> Result<(), CanvasPro
     Ok(())
 }
 
+fn validated_course_completion_by_user(
+    rows: Vec<Value>,
+) -> Result<std::collections::BTreeMap<String, Value>, CanvasProviderReadError> {
+    let mut by_user = std::collections::BTreeMap::new();
+    for row in rows {
+        validate_rest_record("canvas.course_completion", &row)?;
+        let user = row
+            .get("user_id")
+            .or_else(|| row.get("userId"))
+            .and_then(value_identifier)
+            .ok_or(CanvasProviderReadError::Unavailable)?;
+        if by_user.insert(user, row).is_some() {
+            return Err(CanvasProviderReadError::Unavailable);
+        }
+    }
+    Ok(by_user)
+}
+
 fn valid_optional_number(value: Option<&Value>) -> bool {
     value.is_none_or(|value| !value.is_null() && provider_number(value).is_some_and(f64::is_finite))
 }
@@ -826,6 +836,51 @@ mod tests {
             &json!({"requirement_count":2, "requirement_completed_count":0})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn bulk_course_completion_rows_fail_closed_on_null_or_wrong_type_counts() {
+        for malformed in [
+            json!({
+                "user_id":"7",
+                "requirement_count":null,
+                "requirement_completed_count":null
+            }),
+            json!({
+                "user_id":"7",
+                "requirement_count":{"value":3},
+                "requirement_completed_count":[]
+            }),
+        ] {
+            assert_eq!(
+                validated_course_completion_by_user(vec![malformed]),
+                Err(CanvasProviderReadError::Unavailable),
+            );
+        }
+    }
+
+    #[test]
+    fn bulk_course_completion_rows_require_unique_users_and_valid_counts() {
+        let valid = json!({
+            "user_id":"7",
+            "requirement_count":3,
+            "requirement_completed_count":2,
+            "updated_at":"2026-08-31T12:00:00Z"
+        });
+        let indexed = validated_course_completion_by_user(vec![valid.clone()]).unwrap();
+        assert_eq!(indexed.get("7"), Some(&valid));
+        assert_eq!(
+            validated_course_completion_by_user(vec![valid.clone(), valid]),
+            Err(CanvasProviderReadError::Unavailable),
+        );
+        assert_eq!(
+            validated_course_completion_by_user(vec![json!({
+                "id":"not-a-user-id",
+                "requirement_count":1,
+                "requirement_completed_count":1
+            })]),
+            Err(CanvasProviderReadError::Unavailable),
+        );
     }
 
     #[test]
