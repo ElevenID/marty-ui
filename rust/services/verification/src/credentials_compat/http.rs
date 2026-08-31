@@ -73,6 +73,27 @@ enum Operation {
     VdsNc,
 }
 
+#[derive(Clone, Copy)]
+enum AuthorizationFailure {
+    Missing,
+    Unauthorized,
+    Unavailable,
+}
+
+impl AuthorizationFailure {
+    fn into_response(self) -> Response {
+        let (status, detail) = match self {
+            Self::Missing => (StatusCode::UNAUTHORIZED, "X-API-Key header is missing"),
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "Invalid or unauthorized API key"),
+            Self::Unavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Verification governance is unavailable",
+            ),
+        };
+        (status, Json(json!({"detail": detail}))).into_response()
+    }
+}
+
 impl CompatibilityError {
     fn into_response_for(self, operation: Operation) -> Response {
         let (status, detail) = match (operation, self) {
@@ -147,7 +168,7 @@ async fn create_session(
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::SessionCreate) {
         Ok(governance) => governance,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     match state.use_cases.create_session(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -195,7 +216,7 @@ async fn verify_direct(
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::Direct) {
         Ok(governance) => governance,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     match state.use_cases.verify_direct(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -214,7 +235,7 @@ async fn verify_vds_nc(
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::VdsNc) {
         Ok(governance) => governance,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     match state.use_cases.verify_vds_nc(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -230,34 +251,23 @@ fn authorize(
     state: &CompatibilityState,
     headers: &HeaderMap,
     purpose: GovernancePurpose,
-) -> Result<GovernanceSnapshot, Response> {
+) -> Result<GovernanceSnapshot, AuthorizationFailure> {
     let Some(governance) = &state.governance else {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"detail": "Verification governance is unavailable"})),
-        )
-            .into_response());
+        return Err(AuthorizationFailure::Unavailable);
     };
     let Some(api_key) = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
     else {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"detail": "X-API-Key header is missing"})),
-        )
-            .into_response());
+        return Err(AuthorizationFailure::Missing);
     };
     governance.authorize(api_key, purpose).map_err(|error| {
-        let (status, detail) = match error {
-            GovernanceError::Configuration => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Verification governance is unavailable",
-            ),
-            _ => (StatusCode::UNAUTHORIZED, "Invalid or unauthorized API key"),
-        };
-        (status, Json(json!({"detail": detail}))).into_response()
+        if error == GovernanceError::Configuration {
+            AuthorizationFailure::Unavailable
+        } else {
+            AuthorizationFailure::Unauthorized
+        }
     })
 }
 
