@@ -3,7 +3,10 @@ use std::{collections::BTreeMap, fmt, net::SocketAddr, path::PathBuf, time::Dura
 use thiserror::Error;
 use url::Url;
 
-use crate::{credentials_compat::GovernanceEngine, GrpcProviderConfig, WorkloadClientTlsFiles};
+use crate::{
+    credentials_compat::{GovernanceEngine, ProcessingLease},
+    GrpcProviderConfig, WorkloadClientTlsFiles,
+};
 
 const DEFAULT_HTTP_ADDR: &str = "0.0.0.0:8012";
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:9017";
@@ -33,9 +36,37 @@ pub struct VerificationServiceConfig {
     pub redis_url: Option<String>,
     pub credentials_compat_enabled: bool,
     pub credentials_governance: Option<GovernanceEngine>,
+    pub credentials_database_url: Option<String>,
+    pub credentials_processing_lease: ProcessingLease,
+    pub credentials_resolver: Option<IssuerResolverConfig>,
     pub providers: GrpcProviderConfig,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Clone)]
+pub struct IssuerResolverConfig {
+    pub base_url: String,
+    api_key: String,
+    pub did_web_allowed_hosts: Vec<String>,
+}
+
+impl IssuerResolverConfig {
+    #[must_use]
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+}
+
+impl fmt::Debug for IssuerResolverConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IssuerResolverConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("did_web_allowed_hosts", &self.did_web_allowed_hosts)
+            .finish()
+    }
 }
 
 impl fmt::Debug for VerificationServiceConfig {
@@ -62,6 +93,18 @@ impl fmt::Debug for VerificationServiceConfig {
                     .as_ref()
                     .map(|_| "[VALIDATED AND REDACTED]"),
             )
+            .field(
+                "credentials_database_url",
+                &self
+                    .credentials_database_url
+                    .as_ref()
+                    .map(|_| "[CONFIGURED]"),
+            )
+            .field(
+                "credentials_processing_lease",
+                &self.credentials_processing_lease,
+            )
+            .field("credentials_resolver", &self.credentials_resolver)
             .field("providers", &"[CONFIGURED]")
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
@@ -150,6 +193,66 @@ impl VerificationServiceConfig {
             }
             None => None,
         };
+        let credentials_database_url = value(&values, "DATABASE_URL")
+            .map(normalize_postgres_url)
+            .transpose()?;
+        if credentials_compat_enabled && credentials_database_url.is_none() {
+            return Err(VerificationConfigError::Missing {
+                name: "DATABASE_URL",
+            });
+        }
+        let credentials_processing_lease = ProcessingLease::from_seconds(number(
+            value(&values, "VERIFICATION_PROCESSING_LEASE_SECONDS").unwrap_or("60"),
+            "VERIFICATION_PROCESSING_LEASE_SECONDS",
+            5,
+            300,
+        )?)
+        .map_err(|_| invalid("VERIFICATION_PROCESSING_LEASE_SECONDS"))?;
+        let resolver_api_key = value(&values, "SIGNING_KEYS_INTERNAL_API_KEY");
+        let resolver_api_key_file = value(&values, "SIGNING_KEYS_INTERNAL_API_KEY_FILE");
+        let credentials_resolver = if credentials_compat_enabled {
+            let api_key = match (resolver_api_key, resolver_api_key_file) {
+                (Some(secret), _) => secret.to_owned(),
+                (None, Some(path)) => std::fs::read_to_string(path)
+                    .map_err(|_| invalid("SIGNING_KEYS_INTERNAL_API_KEY_FILE"))?
+                    .trim()
+                    .to_owned(),
+                (None, None) => {
+                    return Err(VerificationConfigError::Missing {
+                        name: "SIGNING_KEYS_INTERNAL_API_KEY",
+                    });
+                }
+            };
+            if api_key.is_empty() {
+                return Err(invalid("SIGNING_KEYS_INTERNAL_API_KEY"));
+            }
+            let base_url = value(&values, "SIGNING_KEYS_INTERNAL_URL")
+                .unwrap_or("http://gateway:8000/internal/signing-keys")
+                .trim_end_matches('/')
+                .to_owned();
+            if !valid_http_url_with_path(&base_url) {
+                return Err(invalid("SIGNING_KEYS_INTERNAL_URL"));
+            }
+            let did_web_allowed_hosts = value(&values, "DID_WEB_ALLOWED_HOSTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|host| !host.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>();
+            if environment == Environment::Production && did_web_allowed_hosts.is_empty() {
+                return Err(VerificationConfigError::Missing {
+                    name: "DID_WEB_ALLOWED_HOSTS",
+                });
+            }
+            Some(IssuerResolverConfig {
+                base_url,
+                api_key,
+                did_web_allowed_hosts,
+            })
+        } else {
+            None
+        };
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
         if environment.is_deployed() && service_token.as_ref().is_none_or(|v| v.len() < 32) {
             return Err(VerificationConfigError::Missing {
@@ -180,6 +283,9 @@ impl VerificationServiceConfig {
             redis_url,
             credentials_compat_enabled,
             credentials_governance,
+            credentials_database_url,
+            credentials_processing_lease,
+            credentials_resolver,
             providers: GrpcProviderConfig {
                 organization_target: value(&values, "ORG_GRPC_TARGET")
                     .or_else(|| value(&values, "ORGANIZATION_GRPC_TARGET"))
@@ -281,6 +387,40 @@ fn valid_http_url(value: &str) -> bool {
             && url.query().is_none()
             && url.fragment().is_none()
     })
+}
+
+fn valid_http_url_with_path(value: &str) -> bool {
+    Url::parse(value).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+fn normalize_postgres_url(value: &str) -> Result<String, VerificationConfigError> {
+    let normalized = [
+        "postgresql+psycopg://",
+        "postgresql+psycopg2://",
+        "postgresql+asyncpg://",
+    ]
+    .into_iter()
+    .find_map(|prefix| value.strip_prefix(prefix))
+    .map_or_else(
+        || value.to_owned(),
+        |suffix| format!("postgresql://{suffix}"),
+    );
+    let parsed = Url::parse(&normalized).map_err(|_| invalid("DATABASE_URL"))?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql")
+        || parsed.host_str().is_none()
+        || parsed.username().is_empty()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid("DATABASE_URL"));
+    }
+    Ok(normalized)
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
@@ -434,9 +574,66 @@ mod tests {
                 "VERIFICATION_GOVERNANCE_JSON".into(),
                 fixture["governance"].to_string(),
             ),
+            (
+                "DATABASE_URL".into(),
+                "postgresql+psycopg://verification:secret@postgres/verification".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "resolver-secret".into(),
+            ),
         ])
         .unwrap();
         assert!(config.credentials_compat_enabled);
         assert!(config.credentials_governance.is_some());
+        assert_eq!(
+            config.credentials_database_url.as_deref(),
+            Some("postgresql://verification:secret@postgres/verification")
+        );
+        assert_eq!(config.credentials_processing_lease.seconds(), 60);
+        assert_eq!(
+            config.credentials_resolver.as_ref().unwrap().api_key(),
+            "resolver-secret"
+        );
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("resolver-secret"));
+        assert!(!debug.contains("postgresql://"));
+    }
+
+    #[test]
+    fn compatibility_runtime_configuration_is_bounded_and_fail_closed() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        let base = [
+            (
+                "VERIFICATION_CREDENTIALS_COMPAT_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "VERIFICATION_GOVERNANCE_JSON".into(),
+                fixture["governance"].to_string(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "resolver-secret".into(),
+            ),
+        ];
+        for (name, value) in [
+            ("DATABASE_URL", "sqlite://local"),
+            ("VERIFICATION_PROCESSING_LEASE_SECONDS", "4"),
+            ("VERIFICATION_PROCESSING_LEASE_SECONDS", "301"),
+            (
+                "SIGNING_KEYS_INTERNAL_URL",
+                "http://user:password@gateway/internal",
+            ),
+        ] {
+            let mut values = base.to_vec();
+            values.push((
+                "DATABASE_URL".into(),
+                "postgres://verification:secret@postgres/verification".into(),
+            ));
+            values.push((name.into(), value.into()));
+            assert!(VerificationServiceConfig::from_values(values).is_err());
+        }
     }
 }
