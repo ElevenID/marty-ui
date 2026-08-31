@@ -318,10 +318,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.75"
-    assert integration["commit"] == "60b58b0812b92319ab67129dca22cae733d916d4"
+    assert integration["version"] == "1.2.76"
+    assert integration["commit"] == "85f7d794b28079781e9455be5715e69b8995f9f4"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:426a281c6c19fb0a61b1f0325b3d01cfb24d998df3509f6ef8ef73e8cbd7620e"
+        "sha256:2617792b8499f34d48605f8874567292c2f4c6c050f3d68c002a3f9a94c29c59"
     )
 
     issuance = next(
@@ -329,10 +329,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.71"
-    assert issuance["commit"] == "94f19ad369e7e41883f2aa3d77656ce561bb6534"
+    assert issuance["version"] == "0.1.72"
+    assert issuance["commit"] == "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:3b396ef763f99179a4d6123cc30b8fabd2afaadb200a3d4e6cf1317489a61c5c"
+        "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
     )
 
 
