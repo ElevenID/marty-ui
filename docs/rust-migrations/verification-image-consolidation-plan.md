@@ -268,3 +268,25 @@ fields. Its Python-oracle and rejected-Rust artifact jobs passed. The corrected
 artifact repin must build on that protected-main tree. Both superseded source
 worktrees were removed after tree-equivalence checks; their generated,
 untracked `uv.lock` was absent from both PRs and was not release input.
+
+Protected `ElevenID/marty-integration-tests#402` merged at
+`cfdbebb4def784794aee9f0671e742c90cedffad`. It removes the generic
+canonical-omission retry, resamples incompatible generated session identifiers
+only before submission and only for exact frozen artifacts, bounds that
+selection, and records only a sanitized count. Future Rust artifacts receive
+no allowance and remain fail-closed. The forward harness must build on this
+protected tree.
+
+Protected `ElevenID/marty-integration-tests#403` merged at
+`f0062b4e48ea1a7a489d2576bcea0e5d1fce484b`, adding the remaining migration-
+idempotence, compatibility-mode, exact check-set comparison, and trusted-
+positive projection gates. Its deterministic OID4VP PASS fixture is a
+contract assertion, not runtime evidence: neither retained Python `v0.1.71`
+nor rejected Rust `v1.1.208` can exercise that complete positive path. Release
+clearance therefore remains explicitly blocked on
+`canonical.oid4vp-positive-runtime-not-exercised`. The compatibility inputs do
+not contain enough authenticated holder, transaction-binding,
+presentation-policy, or status-source information to construct those facts
+without a product-policy decision. Implement the frozen decision through the
+existing canonical `marty-verification` policy service; never manufacture a
+PASS in the compatibility adapter.

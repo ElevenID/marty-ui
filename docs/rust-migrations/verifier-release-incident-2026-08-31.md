@@ -24,6 +24,8 @@ reusing a coordinate after any versioned image has been published.
   completed cancelled. Before the last cancellation, `build-ui` pushed,
   attested, and signed `ui:1.1.210` at
   `sha256:28f48e7ed885046ae753c1f4eea8855b8769cd166602741a8783cbc3dba64643`.
+  The same run retained Docker-build artifact `9764517871` at
+  `sha256:85da3af1f128b5fb2784ebba6c22b91cffeeaeee16fd7a205de81e7cb727e3c1`.
   Both that tag and digest remain resolvable. No `services:1.1.210` or
   `migrations:1.1.210` image and no GitHub release exists.
 - OCI image tags omit the Git tag's leading `v`; absence checks must use, for
@@ -39,6 +41,9 @@ reusing a coordinate after any versioned image has been published.
   `85b128a85426b3f5aeaf6f948ba5dfa2836e95d8`. The stack consumes that issuance
   component; skipped PyPI publication is not a stack input. The release remains
   usable unless a concrete component gate fails.
+- Credentials adapter-retirement guard PR `ElevenID/marty-credentials#253`
+  merged at `cbda2ac7e3376b858c1e8d5d010a304474c659cf`; it preserves the separate
+  still-used adapter and does not change the issuance-only `v0.1.72` decision.
 
 ## Containment decision
 
