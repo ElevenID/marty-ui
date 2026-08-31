@@ -1,12 +1,12 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one and two complete and behaviorally accepted at beta; wave three implementation complete and aggregate landing active; production promotion requires separate approval
+**Status:** Waves one through three are complete; the post-wave-three Rust issuance/Canvas completion wave is active; its aggregate beta acceptance is pending and production remains unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-30
 
 ## Objective
 
@@ -15,6 +15,63 @@ Reduce the amount of Python and other non-Rust protocol code in the Marty stack 
 This is not a line-for-line translation project. Rust owns deterministic protocol, policy, validation, cryptographic, and state-machine behavior. Python remains only where it is useful for API composition, persistence adapters, scheduling, OCR, and third-party integrations until a whole service is deliberately replaced. Flutter/Dart remains responsible for application UI and platform integrations.
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
+
+## Current execution snapshot — 2026-08-30
+
+Wave three's MMF replacement and ordered Rust service plane are complete. The
+current work is a follow-on whole-service issuance cutover, not a reactivation
+of unfinished MMF work. The latest prepared stack release is `v1.1.207` at
+source commit `256bcff55c738e2dd90dac303eb0354f90335611`; current `origin/main` is
+`ec87598589fb7df15bac85eb54b254f977846b44`. The next deployment remains one
+aggregate beta-only update after this wave lands. Production is not in scope.
+
+The active `rust-issuance/canvas-management-v1` worktree is intentionally
+isolated from `main`. It contains the unmerged Canvas migration stack and is two
+commits behind current `origin/main`; it must be rebased, reviewed and landed
+through a clean PR after
+the remaining slices pass. The 31-route language-neutral Canvas management
+floor is `contracts/issuance-canvas-management.json`.
+
+| Canvas management state | Routes | Current evidence / owner |
+|---|---:|---|
+| Implemented and committed on the active Rust branch | 26 | Platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, and read-only Canvas Credentials provider validation at `b110e625d` |
+| Parallel isolated worktree | 1 | Application approval at `POST /applications/{application_id}/approve`, owned by `rust-issuance/canvas-approval-v1`; it must preserve canonical approval and issuance guards rather than duplicate them |
+| Not yet ported | 4 | Three default-disabled legacy evidence ingest routes and the tenant-bound evidence-event status route |
+
+Thus, 26 of 31 routes are committed locally, one is being implemented in
+parallel, and four remain after those branches converge. The provider slice's
+gate passed 196 Rust library tests, 22 black-box Canvas HTTP tests, two contract
+tests, strict all-target Clippy, and 90 preserved Python tests.
+Counts describe local migration progress, not merged `main` coverage.
+
+### Remaining work in the active wave
+
+1. Maintainer-review the parallel application-approval branch for feature and
+   test loss, then integrate it without duplicating approval policy logic.
+2. Freeze and port the three compatibility ingest routes and the event-status
+   read, including signature, replay/idempotency, tenant hiding, fail-closed
+   default-disable, evidence-policy and exact response behavior.
+3. Move the remaining Canvas worker/schema ownership needed by those routes,
+   run disposable PostgreSQL, full Rust/Python differential, packaging,
+   ownership, security and demo gates, then delete the superseded Python
+   implementation immediately when the deletion gate passes.
+4. Rebase onto current `origin/main`, self-review as maintainers, open and merge
+   clean PRs, then remove merged or superseded local branches/worktrees. This
+   cleanup includes the already-merged CDLA review/test worktrees and detached
+   beta release worktrees; no unlanded feature work may be discarded.
+5. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
+   release-demo recordings plus acceptance/soak checks, and leave production
+   unchanged.
+
+### Next parallel target after application approval
+
+Do not split the three ingest endpoints among independent implementations:
+they share signature verification, canonical event mapping, replay protection,
+evidence persistence and application-policy transitions. Treat them as one DRY
+Rust event-ingest kernel with three thin HTTP adapters. The evidence-event
+status read may proceed independently only after its persistence projection is
+frozen, making it the safest next parallel work item when another isolated
+worker becomes available.
 
 ## Wave three — Rust service plane and complete MMF replacement
 
