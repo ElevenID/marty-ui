@@ -1,11 +1,13 @@
 # Credentials verification-image consolidation plan
 
-Status: `corrected-artifact-release-and-immutable-cutover-active`. This
-workstream is owned by the `marty-ui@v1.1.209` release binder and the gated
-`rust-verification/delete-python-verifier-v1` worktree in `marty-credentials`.
-It proceeds independently from the active Canvas route work and does not
-change production. Other workers must not switch the public consumer pin or
-delete the Python service while this owner is closing the artifact gates.
+Status: `corrected-artifact-repin-required`; deployment is held. The
+standalone Python verifier source/image deletion is merged in
+`marty-credentials@v0.1.72`, but release audit found that
+`marty-integration-tests@v1.2.76` pinned bootstrap `marty-ui@v1.1.208`, which
+predates the required corrections in `marty-ui#721`. Artifact-only
+`marty-ui@v1.1.210`, a new exact consumer pin, and a later aggregate binder are
+required before beta acceptance. The separate public Python binding and the
+still-used Credentials adapter remain supported. Production is unchanged.
 
 ## Objective
 
@@ -16,10 +18,11 @@ concurrency, deployment or release contract. The replacement extends the
 canonical service with thin compatibility adapters; it does not create a
 second Rust verifier or replace the existing `/v1/verify` product surface.
 
-The Python service remains the parity oracle until the full differential,
-database, migration, packaging and consumer gates pass. The reusable
-`marty-verification-python` binding is a separate public dependency and is not
-removed by retiring the service image.
+The immutable Python service image remains the parity oracle until the
+corrected Rust artifact passes the full differential, database, migration,
+packaging and consumer gates. The reusable `marty-verification-python` binding
+is a separate public dependency and was not removed when the service image was
+retired.
 
 ## Frozen floor
 
@@ -191,7 +194,21 @@ fail-closed scoped identifiers, and confirms terminal nonce minimization. The
 release workflow invokes the same gate against the exact pushed shared
 services digest through its production dispatcher before attestation and
 signing. The deployment, contract and implementation reviews are clean, as are
-the PR-head and protected merge-group gates. Corrected stack `v1.1.209` is
-being prepared; its immutable artifact/provenance, the v2 consumer pin and
-differential lane, and the final Python deletion gate remain open. Activation
-remains beta only.
+the PR-head and protected merge-group gates.
+
+The bootstrap `v1.1.208` services image and provenance were independently
+verified without deployment. The Rust consumer pin merged in
+`ElevenID/marty-integration-tests#396` and was published as immutable
+`v1.2.76`; its ten-gate matrix, checksums, SBOM and provenance passed for that
+bootstrap artifact. The standalone Python verifier deletion merged in
+`ElevenID/marty-credentials#250`, preserving the separate adapter and binding,
+and was published as issuance-only `v0.1.72`; its retained 939-test Python
+lane, cross-platform native matrix, checksums, SBOM and OCI provenance passed.
+
+Those results do not authorize cutover because `v1.1.208` is not a descendant
+of required correction PR `#721`. Annotated `v1.1.209` records the intervening
+correction binder but has no published release. Artifact-only `v1.1.210` binds
+the released consumers and supplies the first corrected immutable Rust image.
+After it is verified, the integration harness must pin that exact image and
+publish a new release; a later aggregate stack then owns the one beta-only
+deployment, demos, acceptance soak and cleanup. Production is unchanged.

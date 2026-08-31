@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, the canonical Rust verification-image implementation, and its clean post-merge correction review are merged; corrected artifact `v1.1.209` is being prepared, after which immutable consumer pinning, superseded Python-image deletion, one aggregate beta deployment, and acceptance remain; production is unchanged
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, but a release audit found that its `v1.2.76` consumer gate pinned bootstrap `marty-ui@v1.1.208`, which predates required verifier corrections in PR `#721`. Cutover is therefore on repair hold pending corrected artifact `v1.1.210`, a new exact consumer pin, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -23,16 +23,22 @@ follow-on 31-route Canvas management cutover merged through protected PR
 `ElevenID/marty-ui#717` at `a6b375bb0ecc649f30db7053ba34e3ac64a23998`.
 Bootstrap stack `v1.1.208` is published at source commit
 `7c8fa31500acd8f2ec589781232c444fe81dd22e` and contains the first immutable
-Rust services artifact with the merged verifier. It is release evidence only
-and will not be deployed or used for the consumer cutover: the continuing
-post-merge review found readiness-supervision and canonical session-ID
-hardening. Those corrections merged through protected PR
+Rust services artifact with the merged verifier. A consumer pin to that image
+merged as `ElevenID/marty-integration-tests#396` and was released as
+`v1.2.76`; the standalone Python verifier deletion then merged as
+`ElevenID/marty-credentials#250` and was released as issuance-only `v0.1.72`.
+The final release audit found that this sequence did not respect the later
+post-merge hold: readiness-supervision and canonical session-ID corrections
+merged through protected PR
 `ElevenID/marty-ui#721` at
-`b2b2953f9fe00d848761830623935773419bdf60`; corrected stack `v1.1.209` is now
-locked for governed preparation and publication. The next deployment remains
-one aggregate beta-only update after that corrected artifact is pinned and the
-superseded Python image is deleted. Production is not in scope and its
-deployment configuration remains unchanged.
+`b2b2953f9fe00d848761830623935773419bdf60`, after the `v1.1.208` source.
+Annotated tag `v1.1.209` records the correction binder at
+`7e9b7faac2bed828e21f7051aadc290224cc46f7`, but no GitHub release was
+published. Corrected `v1.1.210` will be artifact-only and must pass the same
+immutable ten-gate matrix before any deployment. The deleted Python image
+remains available as immutable release evidence; its separate public binding
+and still-used Credentials adapter were not deleted. Production is not in
+scope and its deployment configuration remains unchanged.
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -58,25 +64,28 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 
 ### Remaining work in the active wave
 
-1. Publish corrected `marty-ui@v1.1.209`. Capture its exact services image and
-   services-SBOM digests and independently verify their
-   tag-and-commit-scoped provenance. Retain `v1.1.208` as release evidence
-   only; do not deploy or pin it.
-2. Change the released `marty-integration-tests@v1.2.75` dual-target verifier
-   consumer from its immutable Python oracle pin to that exact newer reviewed
-   Rust services artifact. Re-run the ten-gate artifact matrix, SBOM checks,
-   and provenance checks before protected merge.
-3. Delete the superseded standalone Python verification service, its dedicated
-   image/release machinery, and implementation-specific tests immediately
-   after the Rust pin passes. Preserve the separate legacy
+1. Publish corrected artifact-only `marty-ui@v1.1.210` from the PR `#721`
+   descendant tree. Capture the exact services image and services-SBOM digests,
+   independently verify tag-and-commit-scoped provenance, and do not deploy it.
+2. Pin the released integration harness to the exact `v1.1.210` services image
+   and SBOM, rerun its complete ten-gate matrix, merge through protection, and
+   publish a new immutable integration release. `v1.2.76` remains evidence for
+   the rejected bootstrap candidate, not cutover authorization.
+3. Treat the already-merged standalone Python verifier deletion as provisional
+   until step 2 passes. Preserve the immutable legacy image as the differential
+   oracle and fix Rust if any corrected-artifact comparison fails. Continue to
+   preserve the separate
    `python/marty_credentials/adapters/services/verification_service.py` adapter
-   until its own callers and behavior have a proven Rust cutover; it is not the
-   standalone image covered by this gate.
-4. Publish an exact integration-suite release containing the Rust pin, bind it
-   into the final stack release, and run the one official beta-only deployment,
-   demo recordings, acceptance checks, and soak. Production and persistent
-   self-host deployments remain unchanged.
-5. Keep the Python webhook handlers as the production and self-host parity
+   and public Python binding; neither belongs to the deleted standalone image.
+4. Bind the corrected integration release and issuance-only
+   `marty-credentials@v0.1.72` into the next aggregate `marty-ui` release. Run
+   all stack, provenance, upgrade/rollback and production-boundary gates, then
+   publish and independently verify it before deployment.
+5. Perform exactly one official beta-only deployment of that aggregate, record
+   the release demos (including the ElevenID Keycloak theme), run acceptance
+   checks and complete the governed soak. Production and persistent self-host
+   deployments remain unchanged.
+6. Keep the Python webhook handlers as the production and self-host parity
    oracle during this beta-only canary: those consumers
    still route to the Python issuance image, so deleting the handlers now would
    fail the no-feature-loss gate. Delete them immediately only after every
@@ -86,11 +95,11 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    wave: Rust currently owns enqueue/readiness support, but not that processor's
    complete Canvas API polling, lease, retry, heartbeat and reconciliation
    behavior. They require a separate contract-frozen whole-worker migration.
-6. The Canvas, mdoc, Canvas Credentials, base verifier implementation, verifier
+7. The Canvas, mdoc, Canvas Credentials, base verifier implementation, verifier
    contract, and integration-consumer worktrees have been tree-equivalence
    checked and removed after their protected merges. Retain the owned
-   verifier release-binder stream and gated Credentials deletion worktree
-   until their release/pin/deletion gates complete. Finish
+   verifier release-binder stream and Credentials deletion evidence until the
+   corrected release/pin gates complete. Finish
    with a read-only branch/worktree audit, retain only release evidence still
    required for the final aggregate, and preserve unrelated user-owned files
    such as the untracked `marty-credentials/uv.lock`. The authorized UI/MMF
@@ -102,10 +111,11 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
-The next Canvas boundary is therefore not another route port: it is the final
-aggregate beta-only canary. The immediate critical path is the corrected
-verifier artifact release, exact consumer pin, and standalone Python-image
-deletion.
+The next Canvas boundary is therefore not another route port. The immediate
+critical path is the corrected verifier `v1.1.210` artifact-only release, exact
+consumer re-pin, final aggregate release, and beta-only canary. The Python
+source deletion is already merged but cannot be declared accepted until that
+corrected immutable artifact passes the full differential gate.
 Do not duplicate either the Canvas ingest kernel or verifier decisions while
 wiring consumers, and keep differential tests against preserved Python oracles
 until each distinct all-consumer deletion gate passes.
@@ -153,9 +163,9 @@ fresh native image ran the released migration twice to Alembic head
 `202608091200` and started both ordinary and
 compatibility-enabled runtimes healthy. Beta Compose renders the migration and
 runtime from one immutable image. Production, self-host-production and
-Kubernetes-production manifests have no changes. Differential fixture
-execution now includes the same ten-gate artifact matrix against both the
-released Python oracle and the local Rust image. The dual-target consumer
+Kubernetes-production manifests have no changes. Differential fixtures define
+the same ten-gate artifact matrix for both image contracts. The dual-target
+consumer
 harness merged through `ElevenID/marty-integration-tests#394` at
 `32861513dc4c74b3232975e4e5e6a396a452ab1a` and was published in immutable
 integration release `v1.2.75` from
@@ -170,22 +180,27 @@ two migrations, readiness, governed creation, canonical fail-closed
 submission, terminal persistence and nonce minimization. Its independent
 implementation, contract and deployment reviews and both PR-head and
 merge-group protected gates are clean.
-The release workflow runs that same gate against the exact pushed shared
+The release workflow runs its same-image smoke against the exact pushed shared
 services digest through `/app/services/entrypoint.sh` before signing, so its
 dispatcher and migration override cannot diverge from the dedicated image.
-Other workers must not switch the immutable consumer pin until corrected
-`v1.1.209` is published and its exact image/SBOM provenance is captured.
-Switching that pin, running the immutable differential lane, and deleting the
-Python service remain open.
+
+A release-order audit found that `marty-integration-tests#396` and immutable
+`v1.2.76` pinned bootstrap `marty-ui@v1.1.208`, and
+`marty-credentials#250` then deleted the standalone Python verifier before a
+post-`#721` artifact existed. That sequence is rejected as cutover evidence
+even though its checks passed for the artifact it named. The corrected code is
+merged and no beta or production deployment occurred. The repair gate is to
+publish artifact-only `v1.1.210`, pin and execute the full ten-gate matrix
+against its exact image/SBOM/provenance, publish the corrected integration
+release, and only then bind a later aggregate stack for beta acceptance.
 
 ### Verification consolidation guardrails
 
-The separately published Python verification image in `marty-credentials` is
-claimed by the coordinated verifier release-binder stream and
+The separately published Python verification image in `marty-credentials` was
+retired by the coordinated verifier release-binder stream and
 `rust-verification/delete-python-verifier-v1` Credentials deletion gate. Its
-reviewed implementation has merged; the release/pin/deletion chain proceeds
-in parallel with Canvas completion because it owns separate service, contract,
-migration, packaging and deployment paths.
+reviewed implementation and source deletion have merged, but final acceptance
+is held on the corrected immutable Rust artifact gate described above.
 Other workers must not start a second verifier port or duplicate verification
 decisions in a new crate.
 
