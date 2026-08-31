@@ -17,10 +17,11 @@ use crate::{
         discover_canvas_scope, CanvasCatalogOAuth, CanvasCatalogProvider,
         CanvasCatalogProviderError, CanvasScopeDiscoveryResponse,
     },
+    canvas_credentials_validation::CanvasCredentialsValidationResult,
     canvas_management::{
-        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest,
-        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
-        ValidateCanvasRequest,
+        CanvasCredentialsValidationRequest, CanvasIntegrationSecretCreate,
+        CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest, CanvasPlatformRequest,
+        CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest, ValidateCanvasRequest,
     },
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
@@ -333,6 +334,21 @@ impl CanvasPlatformManagementHttpService {
             )
             .await
             .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    pub async fn validate_canvas_credentials_provider(
+        &self,
+        headers: &HeaderMap,
+        request: CanvasCredentialsValidationRequest,
+    ) -> Result<CanvasCredentialsValidationResult, CanvasManagementHttpError> {
+        self.management
+            .validate_canvas_credentials_provider(
+                request,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
             .map_err(Into::into)
     }
 
@@ -1008,6 +1024,18 @@ pub async fn parse_integration_secret_create(
         })])
     })?;
     Ok(parsed)
+}
+
+pub async fn parse_canvas_credentials_validation_request(
+    request: axum::extract::Request,
+) -> Result<CanvasCredentialsValidationRequest, CanvasManagementHttpError> {
+    let value = parse_management_json(request).await?;
+    serde_json::from_value(value.clone()).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type", "loc": ["body"],
+            "msg": "Input should be a valid Canvas Credentials validation request", "input": value,
+        })])
+    })
 }
 
 pub async fn parse_integration_secret_update(

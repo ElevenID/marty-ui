@@ -41,11 +41,13 @@ use crate::{
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
     canvas_management::{
-        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasPlatformRequest,
-        CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
+        CanvasCredentialsValidationRequest, CanvasIntegrationSecretCreate,
+        CanvasIntegrationSecretUpdate, CanvasPlatformRequest, CanvasProgramBindingRequest,
+        CanvasScopeDiscoveryRequest,
     },
     canvas_management_http::{
-        integration_secret_query, organization_id_from_query, parse_integration_secret_create,
+        integration_secret_query, organization_id_from_query,
+        parse_canvas_credentials_validation_request, parse_integration_secret_create,
         parse_integration_secret_update, parse_lti_installation_request, parse_platform_request,
         parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
         program_binding_query, CanvasIntegrationSecretResponse, CanvasManagementHttpError,
@@ -887,6 +889,10 @@ fn router_with_optional_services(
                 put(update_canvas_integration_secret).delete(delete_canvas_integration_secret),
             )
             .route(
+                "/v1/integrations/canvas/canvas-credentials/validate",
+                post(validate_canvas_credentials_provider),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1266,6 +1272,22 @@ async fn create_canvas_integration_secret(
         .create_integration_secret(&headers, request)
         .await
         .map(|secret| (StatusCode::CREATED, Json(secret)))
+}
+
+async fn validate_canvas_credentials_provider(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Result<
+    Json<crate::canvas_credentials_validation::CanvasCredentialsValidationResult>,
+    CanvasManagementHttpError,
+> {
+    let request: CanvasCredentialsValidationRequest =
+        parse_canvas_credentials_validation_request(request).await?;
+    canvas_management(&state)?
+        .validate_canvas_credentials_provider(&headers, request)
+        .await
+        .map(Json)
 }
 
 async fn list_canvas_integration_secrets(

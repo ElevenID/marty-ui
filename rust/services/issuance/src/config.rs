@@ -9,6 +9,8 @@ use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
@@ -55,6 +57,8 @@ pub struct IssuanceServiceConfig {
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_credentials_api_origins: Vec<String>,
+    pub canvas_credentials_validation: CanvasCredentialsValidationConfig,
+    pub canvas_credentials_validation_timeout: Duration,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
@@ -186,6 +190,14 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_credentials_api_origin_count",
                 &self.canvas_credentials_api_origins.len(),
+            )
+            .field(
+                "canvas_credentials_validation",
+                &self.canvas_credentials_validation,
+            )
+            .field(
+                "canvas_credentials_validation_timeout",
+                &self.canvas_credentials_validation_timeout,
             )
             .field(
                 "canvas_allow_private_base_urls",
@@ -499,6 +511,31 @@ impl IssuanceServiceConfig {
         {
             canvas_credentials_api_origins.push(base_url.to_owned());
         }
+        let canvas_credentials_validation = CanvasCredentialsValidationConfig {
+            operator_api_token: secret_value(&values, "CANVAS_CREDENTIALS_API_TOKEN")?,
+            provider: optional_environment_value(&values, "CANVAS_CREDENTIALS_PROVIDER"),
+            publish_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_PUBLISH_URL"),
+            api_base_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_API_BASE_URL"),
+            assertion_scope: optional_environment_value(
+                &values,
+                "CANVAS_CREDENTIALS_ASSERTION_SCOPE",
+            ),
+            issuer_id: optional_environment_value(&values, "CANVAS_CREDENTIALS_ISSUER_ID"),
+            badgeclass_id: optional_environment_value(&values, "CANVAS_CREDENTIALS_BADGECLASS_ID"),
+            validation_url_template: optional_environment_value(
+                &values,
+                "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
+            ),
+            allowed_api_origins: canvas_credentials_api_origins.clone(),
+        };
+        let canvas_credentials_validation_timeout = positive_float_seconds(
+            &values,
+            "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+            values
+                .get("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS")
+                .map(String::as_str)
+                .unwrap_or("20"),
+        )?;
         let canvas_allow_private_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
@@ -566,6 +603,8 @@ impl IssuanceServiceConfig {
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
             canvas_credentials_api_origins,
+            canvas_credentials_validation,
+            canvas_credentials_validation_timeout,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
             canvas_local_admin_token,
@@ -923,6 +962,32 @@ fn optional_trimmed(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    optional_trimmed(values.get(name).cloned())
+}
+
+fn positive_float_seconds(
+    values: &BTreeMap<String, String>,
+    name: &str,
+    fallback: &str,
+) -> Result<Duration, MmfError> {
+    let raw = values.get(name).map(String::as_str).unwrap_or(fallback);
+    let seconds = raw.parse::<f64>().map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a positive number of seconds"),
+        )
+        .with_detail("cause", error.to_string())
+    })?;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a positive number of seconds"),
+        ));
+    }
+    Ok(Duration::from_secs_f64(seconds))
+}
+
 fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
     let parsed = url::Url::parse(value).map_err(|error| {
         MmfError::new(
@@ -1128,6 +1193,14 @@ mod tests {
         assert_eq!(config.token_rate_limit, 30);
         assert_eq!(config.token_rate_window, std::time::Duration::from_secs(60));
         assert_eq!(
+            config.canvas_credentials_validation_timeout,
+            std::time::Duration::from_secs(20)
+        );
+        assert_eq!(
+            config.canvas_credentials_validation,
+            crate::canvas_credentials_validation::CanvasCredentialsValidationConfig::default()
+        );
+        assert_eq!(
             config.canvas_lti_state_ttl,
             std::time::Duration::from_secs(600)
         );
@@ -1161,6 +1234,63 @@ mod tests {
         assert!(!config.canvas_allow_private_base_urls);
         assert!(!config.canvas_allow_http_localhost_base_urls);
         assert!(config.canvas_local_admin_token.is_none());
+    }
+
+    #[test]
+    fn canvas_credentials_validation_configuration_is_complete_and_redacted() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_PROVIDER", "badgr_api"),
+            ("CANVAS_CREDENTIALS_API_TOKEN", "sensitive-operator-token"),
+            (
+                "CANVAS_CREDENTIALS_PUBLISH_URL",
+                "https://sensitive-bridge.example/publish",
+            ),
+            (
+                "CANVAS_CREDENTIALS_API_BASE_URL",
+                "https://sensitive-api.example/v2",
+            ),
+            ("CANVAS_CREDENTIALS_ASSERTION_SCOPE", "issuers"),
+            ("CANVAS_CREDENTIALS_ISSUER_ID", "sensitive-issuer"),
+            ("CANVAS_CREDENTIALS_BADGECLASS_ID", "sensitive-badgeclass"),
+            (
+                "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
+                "https://sensitive-api.example/check/{issuer_id}",
+            ),
+            (
+                "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+                "https://second-api.example",
+            ),
+            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "2.5"),
+        ]))
+        .expect("Canvas Credentials validation configuration");
+        let provider = &config.canvas_credentials_validation;
+        assert_eq!(provider.provider.as_deref(), Some("badgr_api"));
+        assert_eq!(provider.assertion_scope.as_deref(), Some("issuers"));
+        assert_eq!(provider.allowed_api_origins.len(), 2);
+        assert_eq!(
+            config.canvas_credentials_validation_timeout,
+            std::time::Duration::from_millis(2_500)
+        );
+        let debug = format!("{config:?}");
+        for secret_value in [
+            "sensitive-bridge",
+            "sensitive-operator-token",
+            "sensitive-api",
+            "sensitive-issuer",
+            "sensitive-badgeclass",
+            "second-api",
+        ] {
+            assert!(!debug.contains(secret_value));
+        }
+
+        for value in ["0", "-1", "not-a-number", "NaN", "inf"] {
+            let error = IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+                value,
+            )]))
+            .expect_err("invalid Canvas Credentials timeout");
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
     }
 
     #[test]

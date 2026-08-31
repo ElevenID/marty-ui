@@ -15,6 +15,7 @@ pub mod canvas_award_candidate_postgres;
 pub mod canvas_award_candidate_service;
 pub mod canvas_binding_domain;
 pub mod canvas_catalog;
+pub mod canvas_credentials_validation;
 pub mod canvas_issuance_guard;
 pub mod canvas_lti_bootstrap;
 pub mod canvas_lti_deep_linking;

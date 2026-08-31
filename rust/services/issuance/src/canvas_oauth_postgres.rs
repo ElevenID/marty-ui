@@ -5,6 +5,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
 use crate::{
+    canvas_credentials_validation::CanvasCredentialsSecretResolver,
     canvas_management_service::{
         CanvasIntegrationSecretRepository, CanvasManagementRepositoryError,
     },
@@ -17,6 +18,19 @@ use crate::{
         ManagedIntegrationSecret, NewIntegrationSecret,
     },
 };
+
+#[async_trait]
+impl CanvasCredentialsSecretResolver for PostgresIntegrationSecretVault {
+    async fn secret_value(
+        &self,
+        organization_id: &str,
+        secret_id: &str,
+    ) -> Result<Option<String>, ()> {
+        CanvasOAuthSecretVault::value(self, organization_id, secret_id)
+            .await
+            .map_err(|_| ())
+    }
+}
 
 #[derive(Clone)]
 pub struct PostgresCanvasOAuthRepository {

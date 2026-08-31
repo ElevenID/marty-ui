@@ -16,15 +16,18 @@ use crate::{
     canvas_binding_domain::{
         CanvasApplicationTemplateProjection, CanvasBindingDomainError, CanvasProgramBindingRecord,
     },
+    canvas_credentials_validation::{
+        CanvasCredentialsValidationResult, CanvasCredentialsValidator,
+    },
     canvas_lti_experience::portable_canvas_pilot_enabled,
     canvas_lti_probe::{
         probe_canvas_lti_metadata, CanvasLtiJwksRefreshConfig, CanvasLtiMetadataProbeError,
         CanvasLtiProbeClient, CanvasLtiProbeResponse, MartyCanvasLtiProbeClient,
     },
     canvas_management::{
-        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest,
-        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasRequestValidationError,
-        ValidateCanvasRequest,
+        CanvasCredentialsValidationRequest, CanvasIntegrationSecretCreate,
+        CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest, CanvasPlatformRequest,
+        CanvasProgramBindingRequest, CanvasRequestValidationError, ValidateCanvasRequest,
     },
     canvas_management_domain::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
@@ -341,6 +344,7 @@ pub struct CanvasPlatformManagementService {
     canvas_credentials_origins: Arc<BTreeSet<String>>,
     readiness_input_provider: Option<Arc<dyn CanvasReadinessInputProvider>>,
     integration_secrets: Option<Arc<dyn CanvasIntegrationSecretRepository>>,
+    canvas_credentials_validator: Option<Arc<dyn CanvasCredentialsValidator>>,
     portable_enabled: bool,
     pilot_organizations: Arc<BTreeSet<String>>,
     readiness_max_age: Duration,
@@ -361,6 +365,10 @@ impl std::fmt::Debug for CanvasPlatformManagementService {
             .field(
                 "integration_secret_management_configured",
                 &self.integration_secrets.is_some(),
+            )
+            .field(
+                "canvas_credentials_validator_configured",
+                &self.canvas_credentials_validator.is_some(),
             )
             .field("portable_enabled", &self.portable_enabled)
             .field("pilot_organization_count", &self.pilot_organizations.len())
@@ -390,6 +398,7 @@ impl CanvasPlatformManagementService {
             ])),
             readiness_input_provider: None,
             integration_secrets: None,
+            canvas_credentials_validator: None,
             portable_enabled: false,
             pilot_organizations: Arc::new(BTreeSet::new()),
             readiness_max_age: Duration::from_secs(900),
@@ -417,6 +426,7 @@ impl CanvasPlatformManagementService {
             ])),
             readiness_input_provider: None,
             integration_secrets: None,
+            canvas_credentials_validator: None,
             portable_enabled: false,
             pilot_organizations: Arc::new(BTreeSet::new()),
             readiness_max_age: Duration::from_secs(900),
@@ -466,6 +476,15 @@ impl CanvasPlatformManagementService {
         repository: Arc<dyn CanvasIntegrationSecretRepository>,
     ) -> Self {
         self.integration_secrets = Some(repository);
+        self
+    }
+
+    #[must_use]
+    pub fn with_canvas_credentials_validator(
+        mut self,
+        validator: Arc<dyn CanvasCredentialsValidator>,
+    ) -> Self {
+        self.canvas_credentials_validator = Some(validator);
         self
     }
 
@@ -569,6 +588,14 @@ impl CanvasPlatformManagementService {
         let Some(input) = input else {
             return Ok(Map::new());
         };
+        let mut value = serde_json::to_value(input)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .ok_or(CanvasPlatformManagementError::RepositoryUnavailable)?;
+        value.retain(|_, value| !value.is_null());
+        if value.is_empty() {
+            return Ok(value);
+        }
         let secret_id = input
             .api_token_secret_id
             .as_deref()
@@ -599,11 +626,6 @@ impl CanvasPlatformManagementService {
                 return Err(CanvasPlatformManagementError::CanvasCredentialsOriginNotAllowed);
             }
         }
-        let mut value = serde_json::to_value(input)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .ok_or(CanvasPlatformManagementError::RepositoryUnavailable)?;
-        value.retain(|_, value| !value.is_null());
         value.insert(
             "api_token_secret_id".to_owned(),
             Value::String(secret_id.to_owned()),
@@ -756,6 +778,26 @@ impl CanvasPlatformManagementService {
             .create_secret(&secret, request.secret_value.expose())
             .await
             .map_err(map_repository_error)
+    }
+
+    pub async fn validate_canvas_credentials_provider(
+        &self,
+        request: CanvasCredentialsValidationRequest,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasCredentialsValidationResult, CanvasPlatformManagementError> {
+        let organization_id = self.authorize_claimed(
+            api_key,
+            trusted_organization_id,
+            request.organization_id.as_deref(),
+        )?;
+        let canvas_credentials = self
+            .validated_canvas_credentials(organization_id, Some(&request.canvas_credentials))
+            .await?;
+        Ok(self
+            .canvas_credentials_validator()?
+            .validate(organization_id, &canvas_credentials)
+            .await)
     }
 
     pub async fn list_integration_secrets(
@@ -1420,6 +1462,14 @@ impl CanvasPlatformManagementService {
         &self,
     ) -> Result<&Arc<dyn CanvasIntegrationSecretRepository>, CanvasPlatformManagementError> {
         self.integration_secrets
+            .as_ref()
+            .ok_or(CanvasPlatformManagementError::RepositoryUnavailable)
+    }
+
+    fn canvas_credentials_validator(
+        &self,
+    ) -> Result<&Arc<dyn CanvasCredentialsValidator>, CanvasPlatformManagementError> {
+        self.canvas_credentials_validator
             .as_ref()
             .ok_or(CanvasPlatformManagementError::RepositoryUnavailable)
     }

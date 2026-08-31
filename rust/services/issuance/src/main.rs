@@ -12,6 +12,9 @@ use marty_issuance_service::{
         UuidCanvasEvidenceFactIdGenerator,
     },
     canvas_catalog::HttpCanvasCatalogProvider,
+    canvas_credentials_validation::{
+        CanvasCredentialsValidationService, HttpCanvasCredentialsValidationTransport,
+    },
     canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
@@ -49,6 +52,7 @@ use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
+    canvas_provider_http::CanvasHttpClientPolicy,
     canvas_readiness_runtime::{
         CanvasReadinessRuntime, HttpCanvasReadinessDocumentProvider,
         LiveCanvasReadinessChallengeProvider, PostgresCanvasReadinessStateProvider,
@@ -171,6 +175,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pool.clone(),
         integration_secret_cipher,
     ));
+    let canvas_credentials_validator = Arc::new(CanvasCredentialsValidationService::new(
+        config.canvas_credentials_validation.clone(),
+        integration_secret_vault.clone(),
+        Arc::new(HttpCanvasCredentialsValidationTransport::new(
+            CanvasHttpClientPolicy {
+                timeout: config.canvas_credentials_validation_timeout,
+                private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+                allow_private_networks: config.canvas_allow_private_base_urls,
+                allow_http_localhost: false,
+            },
+        )),
+    ));
     let canvas_oauth = CanvasOAuthService::new(
         Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
         integration_secret_vault.clone(),
@@ -214,7 +230,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_pilot_organizations.clone(),
         config.canvas_readiness_max_age,
     )
-    .with_integration_secret_repository(integration_secret_vault);
+    .with_integration_secret_repository(integration_secret_vault)
+    .with_canvas_credentials_validator(canvas_credentials_validator);
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,

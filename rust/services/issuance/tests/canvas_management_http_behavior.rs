@@ -16,6 +16,9 @@ use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
     canvas_catalog::{CanvasCatalogOAuth, CanvasCatalogProvider, CanvasCatalogProviderError},
+    canvas_credentials_validation::{
+        CanvasCredentialsValidationResult, CanvasCredentialsValidator,
+    },
     canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient},
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
@@ -34,7 +37,7 @@ use marty_issuance_service::{
     IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::{discovery::StaticDiscoveryDocuments, lti::CanvasLtiPlatformProbe};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tower::ServiceExt;
 
 #[derive(Default)]
@@ -50,11 +53,47 @@ struct MemoryRepository {
     deactivation_count: Mutex<usize>,
     secrets: Mutex<Vec<ManagedIntegrationSecret>>,
     secret_update_plaintexts: Mutex<Vec<Option<String>>>,
+    canvas_credentials_secret_checks: AtomicUsize,
 }
 
 struct SuccessfulProbe;
 
 struct ReadyReadinessInputProvider;
+
+struct SuccessfulCanvasCredentialsValidator;
+
+#[async_trait]
+impl CanvasCredentialsValidator for SuccessfulCanvasCredentialsValidator {
+    async fn validate(
+        &self,
+        organization_id: &str,
+        canvas_credentials: &Map<String, Value>,
+    ) -> CanvasCredentialsValidationResult {
+        assert_eq!(organization_id, "org-1");
+        if !canvas_credentials.is_empty() {
+            assert_eq!(canvas_credentials["api_token_secret_id"], "secret-1");
+        }
+        CanvasCredentialsValidationResult {
+            ok: true,
+            provider: canvas_credentials
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("bridge")
+                .to_owned(),
+            api_base_url: None,
+            assertion_scope: None,
+            issuer_id: None,
+            badgeclass_id: None,
+            token_configured: true,
+            validation_url: Some("https://bridge.example/validate".to_owned()),
+            status_code: None,
+            request_id: None,
+            error: None,
+            response_excerpt: None,
+            validated_at: "2026-08-30T00:00:00+00:00".to_owned(),
+        }
+    }
+}
 
 #[async_trait]
 impl CanvasReadinessInputProvider for ReadyReadinessInputProvider {
@@ -488,6 +527,8 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         organization_id: &str,
         secret_id: &str,
     ) -> Result<bool, CanvasManagementRepositoryError> {
+        self.canvas_credentials_secret_checks
+            .fetch_add(1, Ordering::SeqCst);
         Ok(organization_id == "org-1" && secret_id == "secret-1")
     }
 
@@ -781,7 +822,8 @@ fn app_with_probe(
             },
             probe_client,
         )
-        .with_integration_secret_repository(repository),
+        .with_integration_secret_repository(repository)
+        .with_canvas_credentials_validator(Arc::new(SuccessfulCanvasCredentialsValidator)),
     );
     router_with_canvas_management(
         runtime.state(),
@@ -2719,4 +2761,143 @@ async fn integration_secret_routes_are_tenant_bound_and_never_disclose_plaintext
         .await
         .expect("response");
     assert_eq!(repeated.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn canvas_credentials_validation_is_tenant_bound_read_only_and_safely_projected() {
+    let repository = Arc::new(MemoryRepository::default());
+    let app = app(repository.clone());
+    let path = "/v1/integrations/canvas/canvas-credentials/validate";
+
+    let foreign_claim = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(path),
+            json!({
+                "organization_id": "org-2",
+                "canvas_credentials": {
+                    "provider": "bridge",
+                    "api_token_secret_id": "secret-1"
+                }
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(foreign_claim.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        repository
+            .canvas_credentials_secret_checks
+            .load(Ordering::SeqCst),
+        0
+    );
+
+    let missing_secret = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(path),
+            json!({
+                "organization_id": "org-1",
+                "canvas_credentials": {"provider": "bridge"}
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(missing_secret.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(missing_secret).await,
+        json!({"detail": "Canvas Credentials configuration requires an organization-owned API token secret"})
+    );
+    assert_eq!(
+        repository
+            .canvas_credentials_secret_checks
+            .load(Ordering::SeqCst),
+        0
+    );
+
+    let unknown_secret = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(path),
+            json!({
+                "organization_id": "org-1",
+                "canvas_credentials": {
+                    "provider": "bridge",
+                    "api_token_secret_id": "unknown-secret"
+                }
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(unknown_secret.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(unknown_secret).await,
+        json!({"detail": "Canvas Credentials API token secret was not found"})
+    );
+
+    let unknown_field = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(path),
+            json!({
+                "organization_id": "org-1",
+                "canvas_credentials": {
+                    "provider": "bridge",
+                    "api_token_secret_id": "secret-1",
+                    "publish_url": "https://caller-controlled.example"
+                }
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(unknown_field.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let validated = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(path),
+            json!({
+                "organization_id": "org-1",
+                "canvas_credentials": {
+                    "provider": "bridge",
+                    "api_token_secret_id": "secret-1"
+                }
+            }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(validated.status(), StatusCode::OK);
+    let validated = response_json(validated).await;
+    assert_eq!(
+        validated.as_object().expect("validation response").len(),
+        13
+    );
+    assert_eq!(validated["ok"], true);
+    assert_eq!(validated["provider"], "bridge");
+    assert_eq!(validated["token_configured"], true);
+    assert_eq!(
+        validated["validation_url"],
+        "https://bridge.example/validate"
+    );
+    let serialized = validated.to_string();
+    assert!(!serialized.contains("secret-1"));
+    assert!(!serialized.contains("authorization"));
+
+    let operator_validation = app
+        .oneshot(management_request(
+            Request::post(path),
+            json!({"organization_id": "org-1", "canvas_credentials": {}}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(operator_validation.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(operator_validation).await["provider"],
+        "bridge"
+    );
+    assert_eq!(
+        repository
+            .canvas_credentials_secret_checks
+            .load(Ordering::SeqCst),
+        2
+    );
 }
