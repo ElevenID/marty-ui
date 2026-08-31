@@ -164,7 +164,7 @@ async fn create_session(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let value = match parse_json_syntax(&body) {
+    let value = match parse_protected_json_syntax(&headers, &body) {
         Ok(value) => value,
         Err(_) => return validation_response(),
     };
@@ -172,9 +172,9 @@ async fn create_session(
         Ok(governance) => governance,
         Err(error) => return error.into_response(),
     };
-    let request = match serde_json::from_value::<CreateSessionRequest>(value) {
-        Ok(request) => request,
-        Err(_) => return validation_response(),
+    let request = match value.and_then(|value| serde_json::from_value(value).ok()) {
+        Some(request) => request,
+        None => return validation_response(),
     };
     match state.use_cases.create_session(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -216,7 +216,7 @@ async fn verify_direct(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let value = match parse_json_syntax(&body) {
+    let value = match parse_protected_json_syntax(&headers, &body) {
         Ok(value) => value,
         Err(_) => return validation_response(),
     };
@@ -224,9 +224,9 @@ async fn verify_direct(
         Ok(governance) => governance,
         Err(error) => return error.into_response(),
     };
-    let request = match serde_json::from_value::<VerifyDirectRequest>(value) {
-        Ok(request) => request,
-        Err(_) => return validation_response(),
+    let request = match value.and_then(|value| serde_json::from_value(value).ok()) {
+        Some(request) => request,
+        None => return validation_response(),
     };
     match state.use_cases.verify_direct(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -239,7 +239,7 @@ async fn verify_vds_nc(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let value = match parse_json_syntax(&body) {
+    let value = match parse_protected_json_syntax(&headers, &body) {
         Ok(value) => value,
         Err(_) => return validation_response(),
     };
@@ -247,9 +247,9 @@ async fn verify_vds_nc(
         Ok(governance) => governance,
         Err(error) => return error.into_response(),
     };
-    let request = match serde_json::from_value::<VerifyVdsNcRequest>(value) {
-        Ok(request) => request,
-        Err(_) => return validation_response(),
+    let request = match value.and_then(|value| serde_json::from_value(value).ok()) {
+        Some(request) => request,
+        None => return validation_response(),
     };
     match state.use_cases.verify_vds_nc(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -295,8 +295,26 @@ fn validation_response() -> Response {
         .into_response()
 }
 
-fn parse_json_syntax(body: &[u8]) -> serde_json::Result<serde_json::Value> {
-    serde_json::from_slice(body)
+fn parse_protected_json_syntax(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> serde_json::Result<Option<serde_json::Value>> {
+    if body.is_empty() || !has_json_media_type(headers) {
+        return Ok(None);
+    }
+    serde_json::from_slice(body).map(Some)
+}
+
+fn has_json_media_type(headers: &HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|media_type| {
+            media_type.eq_ignore_ascii_case("application/json")
+                || media_type.to_ascii_lowercase().ends_with("+json")
+        })
 }
 
 #[cfg(test)]
@@ -629,6 +647,46 @@ mod tests {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "{path}"
             );
+
+            for body in ["", "{", r#"{"well_formed_but_invalid":true}"#] {
+                let response = app(true)
+                    .oneshot(
+                        Request::post(path)
+                            .header("content-type", "text/plain")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            }
+
+            let response = app(true)
+                .oneshot(
+                    Request::post(path)
+                        .header("content-type", "text/plain")
+                        .header("x-api-key", "purpose-scoped-test-key")
+                        .body(Body::from(r#"{"well_formed_but_invalid":true}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{path}"
+            );
+
+            let response = app(true)
+                .oneshot(
+                    Request::post(path)
+                        .header("content-type", "application/json")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
     }
 
