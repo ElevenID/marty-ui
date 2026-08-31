@@ -189,8 +189,9 @@ impl VerificationResult {
         let Some(canonical_result) = canonical_result else {
             return Self::unavailable(verification_method, error);
         };
-        let canonical = serde_json::to_value(canonical_result)
-            .expect("Core VerificationDecisionResult serialization is infallible");
+        let Ok(canonical) = serde_json::to_value(canonical_result) else {
+            return Self::unavailable(verification_method, error);
+        };
         let processing_status = string_field(&canonical, "processing_status", "UNAVAILABLE");
         let decision = string_field(&canonical, "decision", "INDETERMINATE");
         let decision_code = string_field(&canonical, "decision_code", "PROCESSING_NOT_COMPLETED");

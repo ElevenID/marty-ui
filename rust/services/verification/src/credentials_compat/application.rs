@@ -83,7 +83,7 @@ impl CredentialsCompatibilityService {
             .ok_or(CompatibilityError::Internal)?;
         let decision = self
             .session_decision(&session, presentation, &presentation_digest, nonce)
-            .await;
+            .await?;
         let finalized = self
             .repository
             .finalize(
@@ -112,7 +112,7 @@ impl CredentialsCompatibilityService {
         presentation: &str,
         presentation_digest: &super::Sha256Digest,
         nonce: &VerifierNonce,
-    ) -> TerminalDecision {
+    ) -> Result<TerminalDecision, CompatibilityError> {
         let Some(frozen) = session.verification_evidence.pending_governance() else {
             return fail_closed(
                 presentation_digest,
@@ -154,14 +154,14 @@ impl CredentialsCompatibilityService {
         match evidence {
             Ok((result, evidence)) if result.is_valid() => {
                 TerminalDecision::verified(evidence, VerificationMethod::JwtVp)
-                    .expect("canonical Core PASS constructs verified terminal evidence")
+                    .map_err(|_| CompatibilityError::Internal)
             }
             Ok((_, evidence)) => TerminalDecision::failed(
                 evidence,
                 Some(VerificationMethod::JwtVp),
                 "Verification did not produce a passing canonical decision".into(),
             )
-            .expect("canonical Core non-PASS constructs failed terminal evidence"),
+            .map_err(|_| CompatibilityError::Internal),
             Err(_) => fail_closed(
                 presentation_digest,
                 EvidenceFailureReason::CanonicalResultBuildFailed,
@@ -340,13 +340,13 @@ fn fail_closed(
     digest: &super::Sha256Digest,
     reason: EvidenceFailureReason,
     message: &str,
-) -> TerminalDecision {
+) -> Result<TerminalDecision, CompatibilityError> {
     TerminalDecision::failed(
         PersistedEvidence::fail_closed(digest, reason),
         Some(VerificationMethod::JwtVp),
         message.into(),
     )
-    .expect("fail-closed evidence constructs only a failed terminal decision")
+    .map_err(|_| CompatibilityError::Internal)
 }
 
 fn session_response(session: &SessionRecord) -> SessionResponse {

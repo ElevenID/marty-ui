@@ -203,7 +203,7 @@ fn select_public_key(
         .verification_method_id
         .map(|value| normalize_method_id(&document.id, value))
         .transpose_or_invalid()?;
-    let candidates = document
+    let mut candidates = document
         .verification_method
         .iter()
         .filter_map(|method| public_method_jwk(document, method, &authorized, request.algorithm))
@@ -216,7 +216,7 @@ fn select_public_key(
         return Err(IssuerResolutionError::Invalid);
     }
     let (verification_method_id, public_jwk) =
-        candidates.into_iter().next().expect("length checked");
+        candidates.pop().ok_or(IssuerResolutionError::Invalid)?;
     Ok(ResolvedIssuerKey {
         public_jwk,
         verification_method_id,
