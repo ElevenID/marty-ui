@@ -113,6 +113,7 @@ jobs:
           gh run download "$run_id" --name "stack-tag-evidence-$TAG" \
             --dir prepared-tag-evidence
           python scripts/stack_tag_gate.py validate-release \
+            --repository . \
             --repository-name "$GITHUB_REPOSITORY" \
             --tag "$TAG" \
             --commit "$commit" \

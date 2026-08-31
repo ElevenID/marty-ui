@@ -16,6 +16,7 @@ SPEC.loader.exec_module(stack_tag_gate)
 
 COMMIT = "a" * 40
 TAG_OBJECT = "b" * 40
+MISSING = object()
 POLICY = {
     "schema": stack_tag_gate.SCHEMA,
     "required_workflows": [
@@ -23,6 +24,25 @@ POLICY = {
         {"path": "dynamic/github-code-scanning/codeql", "event": "dynamic"},
     ],
 }
+
+
+def write_stack_lock(
+    repository: Path,
+    *,
+    release_state: object = stack_tag_gate.RELEASE_ELIGIBLE_STATE,
+    release: str = "marty-ui@1.2.3",
+    schema: object = stack_tag_gate.STACK_LOCK_SCHEMA,
+) -> None:
+    document: dict[str, object] = {"release": release}
+    if schema is not MISSING:
+        document["schema"] = schema
+    if release_state is not MISSING:
+        document["release_state"] = release_state
+    release_directory = repository / "release"
+    release_directory.mkdir()
+    (release_directory / "stack-lock.json").write_text(
+        json.dumps(document), encoding="utf-8"
+    )
 
 
 def run(run_id: int, path: str, event: str, **updates: object) -> dict[str, object]:
@@ -74,16 +94,57 @@ def test_pending_failing_or_different_head_workflow_blocks(
 def test_source_requires_exact_main_and_matching_stack_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    release = tmp_path / "release"
-    release.mkdir()
-    (release / "stack-lock.json").write_text(
-        json.dumps({"release": "marty-ui@1.2.3"}), encoding="utf-8"
-    )
+    write_stack_lock(tmp_path)
     monkeypatch.setattr(stack_tag_gate, "_git", lambda *_args: COMMIT)
 
     stack_tag_gate.validate_source(tmp_path, "v1.2.3", COMMIT)
     with pytest.raises(stack_tag_gate.StackTagGateError, match="does not match"):
         stack_tag_gate.validate_source(tmp_path, "v1.2.4", COMMIT)
+
+
+@pytest.mark.parametrize(
+    "release_state",
+    [MISSING, None, False, True, 0, "", "hold", "Eligible", " eligible ", [], {}],
+    ids=[
+        "missing",
+        "null",
+        "false",
+        "true",
+        "zero",
+        "empty",
+        "hold",
+        "wrong-case",
+        "whitespace",
+        "array",
+        "object",
+    ],
+)
+def test_source_fails_closed_without_exact_release_eligibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    release_state: object,
+) -> None:
+    write_stack_lock(tmp_path, release_state=release_state)
+    monkeypatch.setattr(stack_tag_gate, "_git", lambda *_args: COMMIT)
+
+    with pytest.raises(
+        stack_tag_gate.StackTagGateError,
+        match="release_state must be exactly 'eligible'",
+    ):
+        stack_tag_gate.validate_source(tmp_path, "v1.2.3", COMMIT)
+
+
+@pytest.mark.parametrize("schema", [MISSING, None, "marty.stack-lock/v2"])
+def test_source_rejects_missing_or_invalid_stack_lock_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    schema: object,
+) -> None:
+    write_stack_lock(tmp_path, schema=schema)
+    monkeypatch.setattr(stack_tag_gate, "_git", lambda *_args: COMMIT)
+
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="schema is invalid"):
+        stack_tag_gate.validate_source(tmp_path, "v1.2.3", COMMIT)
 
 
 def release_evidence() -> dict[str, object]:
@@ -120,8 +181,10 @@ def tag_message() -> str:
     )
 
 
-def test_exact_annotated_release_proof_passes() -> None:
+def test_exact_annotated_release_proof_passes(tmp_path: Path) -> None:
+    write_stack_lock(tmp_path)
     stack_tag_gate.validate_release_proof(
+        tmp_path,
         "ElevenID/marty-ui",
         "v1.2.3",
         COMMIT,
@@ -142,12 +205,17 @@ def test_exact_annotated_release_proof_passes() -> None:
     ],
 )
 def test_invalid_tag_or_preparation_run_is_rejected(
-    tag_type: str, message: str, run_updates: dict[str, object]
+    tmp_path: Path,
+    tag_type: str,
+    message: str,
+    run_updates: dict[str, object],
 ) -> None:
+    write_stack_lock(tmp_path)
     run_document = preparation_run()
     run_document.update(run_updates)
     with pytest.raises(stack_tag_gate.StackTagGateError, match=message):
         stack_tag_gate.validate_release_proof(
+            tmp_path,
             "ElevenID/marty-ui",
             "v1.2.3",
             COMMIT,
@@ -155,6 +223,45 @@ def test_invalid_tag_or_preparation_run_is_rejected(
             TAG_OBJECT,
             tag_message(),
             run_document,
+            release_evidence(),
+        )
+
+
+@pytest.mark.parametrize(
+    "release_state",
+    [MISSING, None, False, True, 0, "", "hold", "Eligible", " eligible ", [], {}],
+    ids=[
+        "missing",
+        "null",
+        "false",
+        "true",
+        "zero",
+        "empty",
+        "hold",
+        "wrong-case",
+        "whitespace",
+        "array",
+        "object",
+    ],
+)
+def test_release_proof_fails_closed_without_exact_release_eligibility(
+    tmp_path: Path, release_state: object
+) -> None:
+    write_stack_lock(tmp_path, release_state=release_state)
+
+    with pytest.raises(
+        stack_tag_gate.StackTagGateError,
+        match="release_state must be exactly 'eligible'",
+    ):
+        stack_tag_gate.validate_release_proof(
+            tmp_path,
+            "ElevenID/marty-ui",
+            "v1.2.3",
+            COMMIT,
+            "tag",
+            TAG_OBJECT,
+            tag_message(),
+            preparation_run(),
             release_evidence(),
         )
 

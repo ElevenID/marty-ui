@@ -21,6 +21,7 @@ def stack_lock():
     return {
         "schema": "marty.stack-lock/v1",
         "release": "marty-ui@1.2.3",
+        "release_state": "hold",
         "components": [
             {
                 "name": "marty-core",
@@ -45,6 +46,7 @@ def test_builds_public_v1_manifest(stack_lock):
     manifest = MODULE.build_manifest(stack_lock, generated_at="2026-07-16T00:00:00+00:00")
     assert manifest["schema"] == "marty.stack/v1"
     assert manifest["components"][0]["commit"] == "a" * 40
+    assert "release_state" not in manifest
 
 
 @pytest.mark.parametrize("field,value", [("commit", "main"), ("version", ""), ("repository", "marty-core")])
