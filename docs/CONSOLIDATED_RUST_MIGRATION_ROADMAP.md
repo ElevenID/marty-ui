@@ -26,16 +26,17 @@ source commit `256bcff55c738e2dd90dac303eb0354f90335611`; current `origin/main` 
 aggregate beta-only update after this wave lands. Production is not in scope.
 
 The active `rust-issuance/canvas-management-v1` worktree is intentionally
-isolated from `main`. It contains the unmerged Canvas migration stack and is two
-commits behind current `origin/main`; it must be rebased, reviewed and landed
-through a clean PR after the remaining cutover gates pass. The 31-route
+isolated from `main`. Its unmerged Canvas migration stack was rebased
+onto current `origin/main` at `ec8759858` and is now zero commits behind; it
+must pass the post-rebase review and cutover gates before landing through a
+clean PR. The 31-route
 language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
 
 | Canvas management state | Routes | Current evidence / owner |
 |---|---:|---|
-| Implemented and committed on the active Rust branch | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. The final slice is commit `3bdc2d144` |
-| Provenance-bound native beta routing committed locally | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; local commit `f1d4465b3` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
+| Implemented and committed on the active Rust branch | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. The final implementation slice is commit `11a0256c0` after rebase |
+| Provenance-bound native beta routing committed locally | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; rebased local commit `b3bd4b936` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
 
 Thus, all 31 routes and their beta routing are implemented and committed
 locally; this is not yet a merged or deployed native cutover. The final
@@ -49,9 +50,9 @@ describe local migration progress, not merged `main` coverage.
 
 ### Remaining work in the active wave
 
-1. Rebase the complete Canvas stack onto current `origin/main`, then re-run the
-   full Rust/Python differential, disposable-PostgreSQL, packaging, ownership,
-   security and demo gates against the rebased tree. The upstream behavior
+1. Rebase is complete. Re-run the full Rust/Python differential,
+   disposable-PostgreSQL, packaging, ownership, security and demo gates against
+   the rebased tree. The upstream behavior
    contract and Python pending-transaction repair are already merged in
    `marty-credentials` at `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`.
 2. Keep the Python webhook handlers as the production and self-host parity
@@ -72,8 +73,10 @@ describe local migration progress, not merged `main` coverage.
    land the still-unique verification-consolidation worktrees; no unlanded
    feature work may be discarded. The core proof-boundary dependency PR
    `ElevenID/marty-credentials#246` merged through the protected queue on
-   2026-08-31, local `main` was fast-forwarded to `1bc2681`, and its clean
-   worktree and squash-replaced branch were removed. The
+   2026-08-31. The mdoc proof-metadata repair subsequently merged as
+   `ElevenID/marty-credentials#247`, and the Canvas contract/repair merged as
+   `#248`; their clean, squash-replaced topic worktrees remain queued for local
+   and remote branch cleanup after the downstream Canvas PR lands. The
    separately authorized UI/MMF history rewrites, release/tag retirement and
    protection restoration were already completed and verified; their lingering
    tracking issue `ElevenID/.github#22` was closed after reconciling the merged
@@ -113,23 +116,24 @@ service cutover: it preserves and absorbs the extra seven-operation Credentials
 image compatibility surface instead of deleting it or creating a second Rust
 verifier.
 
-The stream is active but unmerged. The Credentials branch has committed
-source-derived HTTP/configuration/governance/persistence/migration/runtime
-surface freezes and continues to strengthen executable behavior fixtures. The
-UI branch has committed the canonical Core governance adapter, governed startup
-configuration and fail-closed DTO boundaries, with further DTO/application
-work still dirty in its isolated worktree. Focused Rust governance/DTO tests and
-the focused Python surface-contract suite passed at their latest reviewed
-checkpoint, but full differential, PostgreSQL migration/race, packaging,
-consumer, deletion and beta acceptance gates remain. Preserve both worktrees
-and land their changes through their own reviewed PRs; they must not be folded
-into or removed during Canvas branch cleanup.
+The stream is active but unmerged. The Credentials branch has eight committed
+contract/governance/dispatch slices and is three commits behind its current
+`origin/main`. The UI branch has 34 committed slices covering governed startup,
+typed compatibility DTOs and HTTP behavior, durable PostgreSQL session state,
+migration ownership, canonical decisions, native use cases and runtime
+activation; its current nine-file dirty slice wires beta packaging and removes
+the obsolete Python verification-image entry point. PostgreSQL
+migration/application/race coverage, strict Rust linting and deployment
+contract tests are green at that checkpoint. Differential fixtures,
+built-image smoke/evidence, consumer/release pins, complete review and the
+Python deletion gate remain open. Preserve both worktrees and land their changes
+through their own reviewed PRs; they must not be folded into or removed during
+Canvas branch cleanup.
 
-A separate `fix/cdla-mdoc-proof-metadata-v1` Credentials worktree was created
-from `1bc2681` and currently contains only an uncommitted OID4VCI proof-metadata
-algorithm regression test. It receives no completed-migration credit yet. Keep
-it isolated, review the behavior it freezes, and either land a tested fix or
-remove it only after proving that it contains no unique required work.
+The separate `fix/cdla-mdoc-proof-metadata-v1` Credentials worktree is no
+longer an active implementation stream: its tested fix merged as
+`ElevenID/marty-credentials#247` at `8e3868b`. Its clean, squash-replaced topic
+branch/worktree can be removed during the approved branch cleanup.
 
 ## Wave three — Rust service plane and complete MMF replacement
 
