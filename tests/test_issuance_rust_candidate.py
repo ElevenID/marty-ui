@@ -38,6 +38,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-canvas-oauth-lifecycle.json"
     ).read_bytes()
     canvas_oauth = json.loads(canvas_oauth_bytes)
+    canvas_management_bytes = (
+        ROOT / "contracts/issuance-canvas-management.json"
+    ).read_bytes()
+    canvas_management = json.loads(canvas_management_bytes)
     credential_lifecycle_bytes = (
         ROOT / "contracts/issuance-credential-lifecycle.json"
     ).read_bytes()
@@ -164,6 +168,16 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert canvas_oauth["callback"]["publication"]["browser_token_disclosure"] is False
     assert canvas_oauth["disconnect"]["retry"]["durable"] is True
     assert (
+        hashlib.sha256(canvas_management_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["canvas_management_behavior_contract"]["sha256"]
+    )
+    assert (
+        coverage["canvas_management_behavior_contract"]["commit"]
+        == "7f09c1e5a767f1401dff3b22adae9f8ae8cc1465"
+    )
+    assert canvas_management["schema"] == "marty.issuance-canvas-management/v1"
+    assert len(canvas_management["scope"]["routes"]) == 31
+    assert (
         hashlib.sha256(credential_lifecycle_bytes.replace(b"\r\n", b"\n")).hexdigest()
         == coverage["credential_lifecycle_behavior_contract"]["sha256"]
     )
@@ -257,10 +271,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     discovery_cases = {case["operation"]: case for case in discovery["cases"]}
     tenant_cases = {case["operation"]: case for case in tenant["variants"]}
     transaction_cases = {case["operation"]: case for case in transaction_reads["cases"]}
+    canvas_management_operations = {
+        route["operation"] for route in canvas_management["scope"]["routes"]
+    }
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
+        | canvas_management_operations
         | {
             "exchange_token",
             "nonce_endpoint",
@@ -389,6 +407,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in canvas_oauth["scope"]["routes"]
             )
             continue
+        if operation in canvas_management_operations:
+            assert coverage_entry["canvas_management_behavior_case"] == operation
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                for route in canvas_management["scope"]["routes"]
+            )
+            continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
             assert coverage_entry["method"] == "GET"
@@ -425,7 +452,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 99,
+        "http": 68,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
@@ -501,6 +528,10 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
     assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:" in beta
+    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED:" in beta
+    assert "CANVAS_CREDENTIALS_SHARED_SECRET:" in beta
+    assert "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:" in beta
+    assert "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS:" in beta
     assert "issuance-native:" not in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose

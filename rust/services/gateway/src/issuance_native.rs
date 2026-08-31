@@ -79,6 +79,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_frozen_canvas_management_route_is_native() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-management.json"
+        ))
+        .expect("Canvas management contract");
+        let routes = contract["scope"]["routes"]
+            .as_array()
+            .expect("Canvas management routes");
+
+        assert_eq!(routes.len(), 31);
+        for route in routes {
+            let method: HttpMethod =
+                serde_json::from_value(route["method"].clone()).expect("Canvas management method");
+            let mut path = route["path"]
+                .as_str()
+                .expect("Canvas management path")
+                .to_owned();
+            for parameter in [
+                "application_id",
+                "token",
+                "platform_id",
+                "binding_id",
+                "secret_id",
+                "canvas_account_id",
+                "provider_event_id",
+            ] {
+                path = path.replace(&format!("{{{parameter}}}"), "sample");
+            }
+            assert!(is_native_http(method, &path), "{method:?} {path}");
+        }
+    }
+
+    #[test]
     fn coverage_is_the_fail_closed_native_allow_list() {
         for (method, path) in [
             (HttpMethod::Post, "/v1/issuance/credential"),

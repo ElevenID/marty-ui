@@ -24,7 +24,7 @@ fn native_coverage() -> Value {
 }
 
 #[test]
-fn canvas_management_contract_freezes_exactly_the_remaining_router_surface() {
+fn canvas_management_contract_freezes_the_complete_native_router_surface() {
     let contract = contract();
     assert_eq!(contract["schema"], "marty.issuance-canvas-management/v1");
     assert_eq!(contract["scope"]["route_count"], 31);
@@ -43,23 +43,28 @@ fn canvas_management_contract_freezes_exactly_the_remaining_router_surface() {
             (
                 route["method"].as_str().expect("method").to_owned(),
                 route["path"].as_str().expect("path").to_owned(),
+                route["operation"].as_str().expect("operation").to_owned(),
             )
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(exact_routes.len(), routes.len(), "routes must be unique");
 
-    let already_native = native_coverage()["native_http"]
+    let native_management = native_coverage()["native_http"]
         .as_array()
         .expect("native routes")
         .iter()
+        .filter(|route| route["canvas_management_behavior_case"].is_string())
         .map(|route| {
             (
                 route["method"].as_str().expect("method").to_owned(),
                 route["path"].as_str().expect("path").to_owned(),
+                route["operation"].as_str().expect("operation").to_owned(),
             )
         })
         .collect::<BTreeSet<_>>();
-    let upstream_routes = runtime_surface()["http"]["routes"]
+    assert_eq!(exact_routes, native_management);
+
+    let upstream_canvas_routes = runtime_surface()["http"]["routes"]
         .as_array()
         .expect("runtime routes")
         .iter()
@@ -68,11 +73,11 @@ fn canvas_management_contract_freezes_exactly_the_remaining_router_surface() {
             (
                 route["method"].as_str().expect("method").to_owned(),
                 route["path"].as_str().expect("path").to_owned(),
+                route["operation"].as_str().expect("operation").to_owned(),
             )
         })
-        .filter(|route| !already_native.contains(route))
         .collect::<BTreeSet<_>>();
-    assert_eq!(exact_routes, upstream_routes);
+    assert!(exact_routes.is_subset(&upstream_canvas_routes));
 
     let management = routes
         .iter()
