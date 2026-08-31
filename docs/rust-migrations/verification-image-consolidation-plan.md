@@ -1,11 +1,18 @@
 # Credentials verification-image consolidation plan
 
-Status: `corrected-artifact-release-and-immutable-cutover-active`. This
-workstream is owned by the `marty-ui@v1.1.209` release binder and the gated
-`rust-verification/delete-python-verifier-v1` worktree in `marty-credentials`.
-It proceeds independently from the active Canvas route work and does not
-change production. Other workers must not switch the public consumer pin or
-delete the Python service while this owner is closing the artifact gates.
+Status: `corrected-artifact-release-and-cutover-repair-active`. This workstream
+is owned by the successor to the quarantined `marty-ui@v1.1.209` binder and
+isolated Credentials and integration forward-repair work. Credentials PR
+`#250` already deleted the
+Python source, integration PR `#396` already pinned ineligible `v1.1.208` and
+published it in integration `v1.2.76`, and Credentials PR `#251` crossed its
+hold before the artifact gates closed. A deferred finalizer published immutable
+Credentials `v0.1.72` and its signed issuance image after the stable run was
+cancelled. PyPI was skipped and no verification image was published. That
+release is quarantined and non-deployable, and all four Credentials release
+workflows are disabled. Integration `v1.2.76` is ineligible release evidence
+only. Those changes do not change production or authorize another release or
+beta activation.
 
 ## Objective
 
@@ -16,8 +23,13 @@ concurrency, deployment or release contract. The replacement extends the
 canonical service with thin compatibility adapters; it does not create a
 second Rust verifier or replace the existing `/v1/verify` product surface.
 
-The Python service remains the parity oracle until the full differential,
-database, migration, packaging and consumer gates pass. The reusable
+Released Credentials `v0.1.71`, integration `v1.2.75`, and the frozen
+pre-deletion source remain the immutable Python parity/rollback oracle until
+the full differential, database, migration, packaging and consumer gates pass.
+Credentials `v0.1.72` is an immutable but ineligible published release; its
+signed issuance image and tag are quarantined, PyPI was skipped, no verification
+image was published, and all four Credentials release workflows are disabled.
+The reusable
 `marty-verification-python` binding is a separate public dependency and is not
 removed by retiring the service image.
 
@@ -191,7 +203,26 @@ fail-closed scoped identifiers, and confirms terminal nonce minimization. The
 release workflow invokes the same gate against the exact pushed shared
 services digest through its production dispatcher before attestation and
 signing. The deployment, contract and implementation reviews are clean, as are
-the PR-head and protected merge-group gates. Corrected stack `v1.1.209` is
-being prepared; its immutable artifact/provenance, the v2 consumer pin and
-differential lane, and the final Python deletion gate remain open. Activation
-remains beta only.
+the PR-head and protected merge-group gates. Release-binder PR `#722` merged
+before its governance corrections, and `v1.1.209` was tagged. Stack run
+`33399076976` was cancelled after only the signed/attested UI image completed;
+the services/migrations images, artifact smoke, manifest, and GitHub release
+did not complete. The tag and partial UI image are quarantined, the stack
+preparation and release workflows are disabled, and the corrected artifact
+must use the next unused release version. Integration PR `#396` prematurely
+pinned `v1.1.208` and
+published it in ineligible integration `v1.2.76`; Credentials PR `#250`
+prematurely deleted the Python source, and Credentials PR `#251` crossed its
+hold through an already-queued merge. Deferred finalizer run `33400486418`
+published immutable Credentials `v0.1.72` and its signed issuance image after
+the stable run was cancelled. PyPI was skipped and no verification image was
+published. The release/tag/image are quarantined and non-deployable, and all
+four Credentials release workflows are disabled. Publish and
+provenance-check the next unused corrected stack release, forward-fix
+integration to its exact digest, and pass
+the immutable v2 differential/artifact matrix against released Credentials
+`v0.1.71` and
+integration `v1.2.75` before any later integration or Credentials release or
+any activation. If a discrepancy appears, restore the exact frozen Python
+service/release path or complete a separately reviewed forward repair.
+Production and beta activation remain blocked.
