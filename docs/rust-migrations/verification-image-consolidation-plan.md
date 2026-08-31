@@ -1,13 +1,17 @@
 # Credentials verification-image consolidation plan
 
-Status: `corrected-artifact-repin-required`; deployment is held. The
+Status: `release-eligibility-and-corrected-artifact-repin-required`; deployment is held. The
 standalone Python verifier source/image deletion is merged in
 `marty-credentials@v0.1.72`, but release audit found that
 `marty-integration-tests@v1.2.76` pinned bootstrap `marty-ui@v1.1.208`, which
-predates the required corrections in `marty-ui#721`. Artifact-only
-`marty-ui@v1.1.210`, a new exact consumer pin, and a later aggregate binder are
-required before beta acceptance. The separate public Python binding and the
-still-used Credentials adapter remain supported. Production is unchanged.
+predates the required corrections in `marty-ui#721`. The expanded immutable
+oracle/negative-control differential merged in `marty-integration-tests#398`.
+Tagged `marty-ui@v1.1.210` is quarantined because it predates the explicit
+release-eligibility interlock and did not publish a GitHub release or services
+artifact. A released differential, the next available eligible corrected
+artifact, a new exact consumer pin, and a later aggregate binder are required
+before beta acceptance. The separate public Python binding and the still-used
+Credentials adapter remain supported. Production is unchanged.
 
 ## Objective
 
@@ -207,8 +211,25 @@ lane, cross-platform native matrix, checksums, SBOM and OCI provenance passed.
 
 Those results do not authorize cutover because `v1.1.208` is not a descendant
 of required correction PR `#721`. Annotated `v1.1.209` records the intervening
-correction binder but has no published release. Artifact-only `v1.1.210` binds
-the released consumers and supplies the first corrected immutable Rust image.
-After it is verified, the integration harness must pin that exact image and
-publish a new release; a later aggregate stack then owns the one beta-only
-deployment, demos, acceptance soak and cleanup. Production is unchanged.
+correction binder but has no published release. Annotated `v1.1.210` points at
+the corrected reviewed tree, but release recovery identified a separate
+governance defect: the lock had no explicit eligibility interlock. Its release
+attempts were canceled before a services artifact or GitHub release existed;
+the tag is quarantined evidence and must not be reused.
+
+`marty-integration-tests#398` now preserves released Python `v0.1.71` as the
+passing oracle and exact Rust `v1.1.208` as a negative control that may fail
+only for `session.transaction-id-unscoped`. The matrix additionally covers
+governed session creation/reload/restart, privacy-minimized persistence,
+same/different-digest replay and concurrent fencing, direct verification,
+purpose authorization, resolver failures and VDS-NC decisions. PR `#726` adds
+one fail-closed `release_state` checked by both exact-main tag preparation and
+tag/dispatch release validation; only exact string `eligible` can publish, and
+the internal state is omitted from the public manifest.
+
+The corrected sequence is to merge the eligibility interlock with the current
+lock held, publish the merged differential, prepare the next available
+corrected artifact version from exact protected main with an explicitly
+eligible lock, pin and pass that artifact through the full differential, then
+publish a later aggregate stack for the one beta-only deployment, demos,
+acceptance soak and cleanup. Production is unchanged.

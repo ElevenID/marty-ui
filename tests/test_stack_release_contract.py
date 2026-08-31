@@ -451,6 +451,8 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
 def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     workflow = _text(".github/workflows/cd.yml")
     prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    roadmap = _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md")
+    verifier_plan = _text("docs/rust-migrations/verification-image-consolidation-plan.md")
     lock = json.loads(_text("release/stack-lock.json"))
     example_lock = json.loads(_text("release/stack-lock.example.json"))
 
@@ -463,6 +465,10 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     assert workflow.index("scripts/stack_tag_gate.py validate-release") < workflow.index(
         "scripts/build_stack_manifest.py"
     )
+    assert "tagged `marty-ui@v1.1.210` is quarantined evidence" in roadmap
+    assert "Tagged `marty-ui@v1.1.210` is quarantined" in verifier_plan
+    assert "next available corrected artifact" in roadmap
+    assert "next available eligible corrected" in verifier_plan
 
 
 def test_python_migration_image_installs_every_required_native_backend() -> None:
