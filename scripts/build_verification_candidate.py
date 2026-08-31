@@ -38,6 +38,7 @@ OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 OCI_INDEX = "application/vnd.oci.image.index.v1+json"
 OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
 OCI_GZIP_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
+OCI_PLATFORM_QUALIFIER_KEYS = frozenset({"variant", "os.version", "os.features"})
 # Calibrated against the immutable v1.1.208 amd64 services image at
 # sha256:ec38eda3dacb3e2f86238f6dd35e3485dd3689a5c76ec13fe896136826db3ff5:
 # 176 MiB archive, 23 layers, 173 MiB compressed / 484 MiB expanded, 33 outer
@@ -486,7 +487,9 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
         )
         config_digest, config = descriptor_json(archive, members, config_descriptor)
         require(
-            config.get("architecture") == "amd64" and config.get("os") == "linux",
+            config.get("architecture") == "amd64"
+            and config.get("os") == "linux"
+            and OCI_PLATFORM_QUALIFIER_KEYS.isdisjoint(config),
             "OCI config platform changed",
         )
         runtime_config = config.get("config")

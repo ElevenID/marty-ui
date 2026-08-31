@@ -110,6 +110,7 @@ def write_oci_archive(
     layer_size_delta: int = 0,
     config_architecture: str = "amd64",
     config_os: str = "linux",
+    config_platform_qualifiers: dict[str, object] | None = None,
     rootfs_type: str = "layers",
     source_label: str = "https://github.com/ElevenID/marty-ui",
     version_label: str | None = None,
@@ -134,34 +135,34 @@ def write_oci_archive(
         else gzip.compress(uncompressed_layer, mtime=0)
     )
     diff_id = f"sha256:{hashlib.sha256(uncompressed_layer).hexdigest()}"
-    config = candidate.canonical_json(
-        {
-            "architecture": config_architecture,
-            "os": config_os,
-            "rootfs": {
-                "type": rootfs_type,
-                "diff_ids": ["sha256:" + "8" * 64 if wrong_diff_id else diff_id],
-            },
-            "config": {
-                "Env": (
-                    environment
-                    if environment is not None
-                    else [
-                        "SERVICE_NAME=verification",
-                        f"MARTY_RELEASE_VERSION={version}",
-                        f"MARTY_UI_SHA={commit}",
-                    ]
+    config_value: dict[str, object] = {
+        "architecture": config_architecture,
+        "os": config_os,
+        "rootfs": {
+            "type": rootfs_type,
+            "diff_ids": ["sha256:" + "8" * 64 if wrong_diff_id else diff_id],
+        },
+        "config": {
+            "Env": (
+                environment
+                if environment is not None
+                else [
+                    "SERVICE_NAME=verification",
+                    f"MARTY_RELEASE_VERSION={version}",
+                    f"MARTY_UI_SHA={commit}",
+                ]
+            ),
+            "Labels": {
+                "org.opencontainers.image.source": source_label,
+                "org.opencontainers.image.revision": revision or commit,
+                "org.opencontainers.image.version": (
+                    version if version_label is None else version_label
                 ),
-                "Labels": {
-                    "org.opencontainers.image.source": source_label,
-                    "org.opencontainers.image.revision": revision or commit,
-                    "org.opencontainers.image.version": (
-                        version if version_label is None else version_label
-                    ),
-                },
             },
-        }
-    )
+        },
+    }
+    config_value.update(config_platform_qualifiers or {})
+    config = candidate.canonical_json(config_value)
     config_descriptor = descriptor(config, config_media_type or candidate.OCI_CONFIG)
     config_descriptor["size"] = int(config_descriptor["size"]) + config_size_delta
     layer_descriptor = descriptor(layer, layer_media_type or candidate.OCI_GZIP_LAYER)
@@ -687,6 +688,57 @@ def test_inspection_accepts_absent_or_exact_oci_payload_media_types(
     version = f"0.0.0-candidate.{commit[:12]}"
     archive = tmp_path / "candidate.tar"
     write_oci_archive(archive, commit=commit, version=version, **options)  # type: ignore[arg-type]
+
+    candidate.inspect_oci_archive(archive, commit=commit, version=version)
+
+
+@pytest.mark.parametrize("nested_index", [False, True], ids=["direct", "nested-index"])
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("variant", "v1"),
+        ("variant", None),
+        ("os.version", "6.8"),
+        ("os.version", ""),
+        ("os.features", ["sse4"]),
+        ("os.features", []),
+    ],
+)
+def test_inspection_rejects_every_oci_config_platform_qualifier(
+    tmp_path: Path,
+    nested_index: bool,
+    key: str,
+    value: object,
+) -> None:
+    commit = "a" * 40
+    version = f"0.0.0-candidate.{commit[:12]}"
+    archive = tmp_path / "candidate.tar"
+    write_oci_archive(
+        archive,
+        commit=commit,
+        version=version,
+        nested_index=nested_index,
+        config_platform_qualifiers={key: value},
+    )
+
+    with pytest.raises(ValueError, match="config platform changed"):
+        candidate.inspect_oci_archive(archive, commit=commit, version=version)
+
+
+@pytest.mark.parametrize("nested_index", [False, True], ids=["direct", "nested-index"])
+def test_inspection_accepts_canonical_unqualified_linux_amd64_config(
+    tmp_path: Path,
+    nested_index: bool,
+) -> None:
+    commit = "a" * 40
+    version = f"0.0.0-candidate.{commit[:12]}"
+    archive = tmp_path / "candidate.tar"
+    write_oci_archive(
+        archive,
+        commit=commit,
+        version=version,
+        nested_index=nested_index,
+    )
 
     candidate.inspect_oci_archive(archive, commit=commit, version=version)
 
