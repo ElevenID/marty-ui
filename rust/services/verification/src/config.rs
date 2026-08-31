@@ -31,6 +31,7 @@ pub struct VerificationServiceConfig {
     pub grpc_enabled: bool,
     pub public_base_url: String,
     pub redis_url: Option<String>,
+    pub credentials_compat_enabled: bool,
     pub credentials_governance: Option<GovernanceEngine>,
     pub providers: GrpcProviderConfig,
     pub release_version: String,
@@ -46,6 +47,10 @@ impl fmt::Debug for VerificationServiceConfig {
             .field("grpc_addr", &self.grpc_addr)
             .field("grpc_enabled", &self.grpc_enabled)
             .field("public_base_url", &self.public_base_url)
+            .field(
+                "credentials_compat_enabled",
+                &self.credentials_compat_enabled,
+            )
             .field(
                 "redis_url",
                 &self.redis_url.as_ref().map(|_| "[CONFIGURED]"),
@@ -130,11 +135,15 @@ impl VerificationServiceConfig {
             return Err(invalid("REDIS_URL"));
         }
         let workload_tls = workload_tls(&values, environment)?;
+        let credentials_compat_enabled = boolean(
+            value(&values, "VERIFICATION_CREDENTIALS_COMPAT_ENABLED").unwrap_or("false"),
+            "VERIFICATION_CREDENTIALS_COMPAT_ENABLED",
+        )?;
         let credentials_governance = match value(&values, "VERIFICATION_GOVERNANCE_JSON") {
             Some(raw) => Some(
                 GovernanceEngine::new(raw).map_err(|_| invalid("VERIFICATION_GOVERNANCE_JSON"))?,
             ),
-            None if environment.is_deployed() => {
+            None if credentials_compat_enabled => {
                 return Err(VerificationConfigError::Missing {
                     name: "VERIFICATION_GOVERNANCE_JSON",
                 });
@@ -169,6 +178,7 @@ impl VerificationServiceConfig {
             grpc_enabled,
             public_base_url,
             redis_url,
+            credentials_compat_enabled,
             credentials_governance,
             providers: GrpcProviderConfig {
                 organization_target: value(&values, "ORG_GRPC_TARGET")
@@ -354,6 +364,7 @@ mod tests {
         assert!(!config.grpc_enabled);
         assert!(config.providers.workload_tls.is_some());
         assert!(config.credentials_governance.is_some());
+        assert!(!config.credentials_compat_enabled);
 
         let error = VerificationServiceConfig::from_values([
             ("ENVIRONMENT".into(), "beta".into()),
@@ -398,5 +409,23 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(debug.contains("VALIDATED AND REDACTED"));
         assert!(!debug.contains(digest));
+    }
+
+    #[test]
+    fn compatibility_activation_requires_governance_in_every_environment() {
+        let error = VerificationServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "test".into()),
+            (
+                "VERIFICATION_CREDENTIALS_COMPAT_ENABLED".into(),
+                "true".into(),
+            ),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            VerificationConfigError::Missing {
+                name: "VERIFICATION_GOVERNANCE_JSON"
+            }
+        );
     }
 }
