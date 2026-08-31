@@ -113,8 +113,19 @@ async fn ensure_history(transaction: &mut Transaction<'_, Postgres>) -> Result<(
     sqlx::raw_sql(
         "CREATE SCHEMA IF NOT EXISTS verification_service;
          CREATE TABLE IF NOT EXISTS verification_service.alembic_version (
-             version_num VARCHAR(32) NOT NULL
-         );",
+             version_num VARCHAR(32) NOT NULL,
+             CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+         );
+         DO $$ BEGIN
+             IF NOT EXISTS (
+                 SELECT 1 FROM pg_constraint
+                 WHERE conrelid='verification_service.alembic_version'::regclass
+                   AND conname='alembic_version_pkc' AND contype='p'
+             ) THEN
+                 ALTER TABLE verification_service.alembic_version
+                     ADD CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num);
+             END IF;
+         END $$;",
     )
     .execute(&mut **transaction)
     .await?;
@@ -185,27 +196,200 @@ async fn validate_connection(
     .collect::<Result<BTreeMap<String, String>, sqlx::Error>>()?;
     validate_constraint_definitions(&definitions)?;
 
-    let index_definition: Option<String> = sqlx::query_scalar(
-        "SELECT indexdef FROM pg_indexes
-         WHERE schemaname='public' AND tablename='verification_sessions'
-           AND indexname='ux_verification_sessions_live_nonce'",
+    let index = sqlx::query(
+        "SELECT i.indisunique, i.indisvalid, i.indisready,
+                pg_get_expr(i.indpred, i.indrelid) AS predicate,
+                ARRAY(
+                    SELECT attribute.attname
+                    FROM unnest(i.indkey) WITH ORDINALITY AS key(attnum, position)
+                    JOIN pg_attribute AS attribute
+                      ON attribute.attrelid=i.indrelid AND attribute.attnum=key.attnum
+                    ORDER BY key.position
+                ) AS keys
+         FROM pg_index AS i
+         WHERE i.indexrelid=to_regclass('public.ux_verification_sessions_live_nonce')",
     )
     .fetch_optional(&mut **transaction)
     .await?;
-    if index_definition.as_deref().is_none_or(|definition| {
-        let definition = normalized(definition);
-        !definition.contains("create unique index")
-            || !definition.contains("where (nonce is not null)")
-    }) {
+    let valid_index = index.is_some_and(|row| {
+        row.try_get::<bool, _>("indisunique").unwrap_or(false)
+            && row.try_get::<bool, _>("indisvalid").unwrap_or(false)
+            && row.try_get::<bool, _>("indisready").unwrap_or(false)
+            && row.try_get::<Vec<String>, _>("keys").ok().as_deref() == Some(&["nonce".into()])
+            && row
+                .try_get::<Option<String>, _>("predicate")
+                .ok()
+                .flatten()
+                .is_some_and(|predicate| normalized(&predicate) == "(nonce is not null)")
+    });
+    if !valid_index {
         return Err(SessionMigrationError::Incompatible(
             "live nonce unique index is missing or incompatible".into(),
         ));
     }
 
+    let history_primary_key: Option<Vec<String>> = sqlx::query_scalar(
+        "SELECT ARRAY(
+             SELECT attribute.attname
+             FROM unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, position)
+             JOIN pg_attribute AS attribute
+               ON attribute.attrelid=constraint_row.conrelid
+              AND attribute.attnum=key.attnum
+             ORDER BY key.position
+         )
+         FROM pg_constraint AS constraint_row
+         WHERE constraint_row.conrelid='verification_service.alembic_version'::regclass
+           AND constraint_row.conname='alembic_version_pkc'
+           AND constraint_row.contype='p'",
+    )
+    .fetch_optional(&mut **transaction)
+    .await?
+    .flatten();
+    if history_primary_key.as_deref() != Some(&["version_num".into()]) {
+        return Err(SessionMigrationError::Incompatible(
+            "Alembic history primary key is missing or incompatible".into(),
+        ));
+    }
+
+    validate_guard_behavior(transaction).await?;
+
     if require_head && migration_versions(transaction).await? != [HEAD_REVISION] {
         return Err(SessionMigrationError::Incompatible(
             "verification migration history is not at the released head".into(),
         ));
+    }
+    Ok(())
+}
+
+async fn validate_guard_behavior(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), SessionMigrationError> {
+    let probe_id_collision: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM public.verification_sessions
+             WHERE id LIKE '\\_\\_verification\\_schema\\_probe\\_%' ESCAPE '\\'
+         )",
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    if probe_id_collision {
+        return Err(SessionMigrationError::Incompatible(
+            "verification schema probe identifier is already in use".into(),
+        ));
+    }
+    let probes = [
+        (
+            "nonce length",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,nonce)
+             VALUES('__verification_schema_probe_nonce','probe','did:web:probe','{}','PENDING',
+                    '{}',clock_timestamp(),clock_timestamp(),'short')",
+        ),
+        (
+            "submission digest",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,nonce,submission_sha256)
+             VALUES('__verification_schema_probe_submission','probe','did:web:probe','{}','EXPIRED',
+                    '{}',clock_timestamp(),clock_timestamp(),NULL,
+                    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')",
+        ),
+        (
+            "processing token digest",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,expires_at,nonce,
+              submission_sha256,processing_token_sha256,processing_started_at,processing_expires_at)
+             VALUES('__verification_schema_probe_token','probe','did:web:probe','{}','IN_PROGRESS',
+                    '{}',clock_timestamp(),clock_timestamp(),clock_timestamp()+interval '1 hour',
+                    'nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn',
+                    repeat('a',64),repeat('A',64),clock_timestamp(),clock_timestamp()+interval '1 minute')",
+        ),
+        (
+            "strict processing lease",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,expires_at,nonce,
+              submission_sha256,processing_token_sha256,processing_started_at,processing_expires_at)
+             SELECT '__verification_schema_probe_lease','probe','did:web:probe','{}','IN_PROGRESS',
+                    '{}',clock_timestamp(),clock_timestamp(),clock_timestamp()+interval '1 hour',
+                    'lllllllllllllllllllllllllllllllllllllllllll',repeat('a',64),repeat('b',64),now_value,now_value
+             FROM (SELECT clock_timestamp() AT TIME ZONE 'UTC' AS now_value) AS clock",
+        ),
+        (
+            "pending atomic state",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,nonce)
+             VALUES('__verification_schema_probe_pending','probe','did:web:probe','{}','PENDING',
+                    '{}',clock_timestamp(),clock_timestamp(),NULL)",
+        ),
+        (
+            "terminal atomic state",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,nonce)
+             VALUES('__verification_schema_probe_terminal','probe','did:web:probe','{}','VERIFIED',
+                    '{}',clock_timestamp(),clock_timestamp(),
+                    'ttttttttttttttttttttttttttttttttttttttttttt')",
+        ),
+        (
+            "expired atomic state",
+            "INSERT INTO public.verification_sessions
+             (id,organization_id,verifier_did,presentation_definition,status,
+              verification_evidence,created_at,updated_at,nonce,
+              processing_token_sha256,processing_started_at,processing_expires_at)
+             VALUES('__verification_schema_probe_expired','probe','did:web:probe','{}','EXPIRED',
+                    '{}',clock_timestamp(),clock_timestamp(),NULL,repeat('b',64),
+                    clock_timestamp(),clock_timestamp()+interval '1 minute')",
+        ),
+    ];
+    for (name, sql) in probes {
+        expect_rejected(transaction, name, "23514", sql).await?;
+    }
+    expect_rejected(
+        transaction,
+        "live nonce uniqueness",
+        "23505",
+        "INSERT INTO public.verification_sessions
+         (id,organization_id,verifier_did,presentation_definition,status,
+          verification_evidence,created_at,updated_at,nonce)
+         VALUES
+         ('__verification_schema_probe_unique_a','probe','did:web:probe','{}','PENDING',
+          '{}',clock_timestamp(),clock_timestamp(),'uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu'),
+         ('__verification_schema_probe_unique_b','probe','did:web:probe','{}','PENDING',
+          '{}',clock_timestamp(),clock_timestamp(),'uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu')",
+    )
+    .await
+}
+
+async fn expect_rejected(
+    transaction: &mut Transaction<'_, Postgres>,
+    name: &str,
+    expected_sqlstate: &str,
+    sql: &'static str,
+) -> Result<(), SessionMigrationError> {
+    sqlx::query("SAVEPOINT verification_schema_probe")
+        .execute(&mut **transaction)
+        .await?;
+    let result = sqlx::raw_sql(sql).execute(&mut **transaction).await;
+    let rejected_as_expected = result
+        .as_ref()
+        .err()
+        .and_then(sqlx::Error::as_database_error)
+        .and_then(|error| error.code())
+        .is_some_and(|code| code == expected_sqlstate);
+    sqlx::query("ROLLBACK TO SAVEPOINT verification_schema_probe")
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("RELEASE SAVEPOINT verification_schema_probe")
+        .execute(&mut **transaction)
+        .await?;
+    if !rejected_as_expected {
+        return Err(SessionMigrationError::Incompatible(format!(
+            "verification schema did not reject invalid {name} with SQLSTATE {expected_sqlstate}"
+        )));
     }
     Ok(())
 }
