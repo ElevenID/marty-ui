@@ -69,7 +69,9 @@ def test_shared_service_image_is_a_rust_only_runtime() -> None:
     ):
         assert marker not in runtime
     assert "COPY services/entrypoint.sh /app/services/entrypoint.sh" in runtime
-    assert runtime.count("COPY --from=rust-service-builder") == 17
+    assert runtime.count("COPY --from=rust-service-builder") == dockerfile.count(
+        " --bin marty-"
+    )
 
 
 def test_shared_service_image_provisions_private_writable_runtime_state() -> None:

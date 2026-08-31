@@ -17,7 +17,17 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     canvas_contracts = {
         path.stem for path in contract_dir.glob("canvas_*_postgres_contract.rs")
     }
-    assert len(canvas_contracts) == 8
+    assert canvas_contracts == {
+        "canvas_award_candidate_postgres_contract",
+        "canvas_event_status_postgres_contract",
+        "canvas_lti_deep_linking_postgres_contract",
+        "canvas_lti_evidence_postgres_contract",
+        "canvas_lti_login_postgres_contract",
+        "canvas_lti_sync_enqueue_postgres_contract",
+        "canvas_management_postgres_contract",
+        "canvas_oauth_postgres_contract",
+        "canvas_sync_worker_postgres_contract",
+    }
     assert (contract_dir / "proof_nonce_postgres_contract.rs").is_file()
 
     workflow = text(".github/workflows/ci.yml")

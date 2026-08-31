@@ -23,14 +23,18 @@ RUST_SERVICES = {
     "trust_profile": "marty-trust-profile",
     "verification": "marty-verification-service",
 }
+UNROUTED_RUST_CANDIDATES = {"marty-canvas-sync-worker"}
+ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_CANDIDATES
 
 
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
     assert dockerfile.count("RUN cargo build --locked --release") == 1
-    assert dockerfile.count(" --bin marty-") == len(RUST_SERVICES)
-    assert dockerfile.count("COPY --from=rust-service-builder") == len(RUST_SERVICES)
+    assert dockerfile.count(" --bin marty-") == len(ALL_RUST_BINARIES)
+    assert dockerfile.count("COPY --from=rust-service-builder") == len(
+        ALL_RUST_BINARIES
+    )
 
 
 def test_container_entrypoint_is_the_exact_closed_rust_allowlist() -> None:
@@ -45,12 +49,14 @@ def test_container_entrypoint_is_the_exact_closed_rust_allowlist() -> None:
     for service_name, binary in RUST_SERVICES.items():
         assert f'if [ "$MODULE_NAME" = "{service_name}" ]; then' in script
         assert f"exec /usr/local/bin/{binary}" in script
+    for binary in UNROUTED_RUST_CANDIDATES:
+        assert f"exec /usr/local/bin/{binary}" not in script
 
 
 def test_every_allowlisted_binary_is_built_and_copied() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
-    for binary in RUST_SERVICES.values():
+    for binary in ALL_RUST_BINARIES:
         assert f"--bin {binary}" in dockerfile
         assert (
             f"/build/rust/target/release/{binary} /usr/local/bin/{binary}"
