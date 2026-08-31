@@ -308,8 +308,8 @@ ENV VERIFICATION_SERVICE_PORT=8012 \
     RUST_LOG=info
 EXPOSE 8012 9017
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
-    CMD ["curl", "--fail", "http://127.0.0.1:8012/health"]
-ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-verification-service"]
+    CMD ["curl", "--fail", "http://127.0.0.1:8012/ready"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-verification-service \"$@\"", "--"]
 
 FROM runtime AS deployment_profile
 ARG MARTY_RELEASE_VERSION=development

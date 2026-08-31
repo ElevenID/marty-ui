@@ -253,6 +253,10 @@ services:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/3
+      VERIFICATION_CREDENTIALS_COMPAT_ENABLED: "true"
+      VERIFICATION_GOVERNANCE_JSON: ${VERIFICATION_GOVERNANCE_JSON:?VERIFICATION_GOVERNANCE_JSON must be set for beta verification compatibility}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       VERIF_GRPC_ENABLED: "false"
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert
       GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key

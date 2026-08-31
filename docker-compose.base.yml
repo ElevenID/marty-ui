@@ -312,6 +312,28 @@ services:
     networks:
       - marty-network
 
+  # The canonical verification image owns the released compatibility schema.
+  # Use the same Rust artifact for migration and runtime so they cannot drift.
+  verification-migrations:
+    build:
+      context: .
+      dockerfile: rust/services/Dockerfile.ci
+      target: verification
+      args:
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: "no"
+    networks:
+      - marty-network
+
   # ==========================================================================
   # Application Services
   # ==========================================================================
@@ -1091,11 +1113,20 @@ services:
       VERIF_GRPC_ENABLED: "true"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       REDIS_URL: redis://redis:6379/3
+      VERIFICATION_CREDENTIALS_COMPAT_ENABLED: ${VERIFICATION_CREDENTIALS_COMPAT_ENABLED:-false}
+      VERIFICATION_GOVERNANCE_JSON: ${VERIFICATION_GOVERNANCE_JSON:-}
+      VERIFICATION_PROCESSING_LEASE_SECONDS: ${VERIFICATION_PROCESSING_LEASE_SECONDS:-60}
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     ports:
       - "127.0.0.1:8012:8012"
       - "127.0.0.1:9017:9017"
     depends_on:
+      verification-migrations:
+        condition: service_completed_successfully
       credential-template:
         condition: service_healthy
       presentation-policy:
@@ -1103,7 +1134,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8012/ready"]
       interval: 10s
       timeout: 5s
       retries: 3
