@@ -31,19 +31,22 @@ def assert_supported_backend(job: dict[str, object]) -> None:
         "features": {"containerd-snapshotter": True}
     }
     setup_buildx = next(step for step in steps if step.get("uses") == SETUP_BUILDX)
+    assert setup_buildx["id"] == "buildx"
     assert setup_buildx["with"] == {
         "version": "v0.36.1",
         "driver": "docker-container",
         "driver-opts": f"image={BUILDKIT_IMAGE}",
     }
-    commands = "\n".join(str(step.get("run", "")) for step in steps)
-    assert "docker version --format '{{.Server.Version}}')\" = \"29.7.2" in commands
-    assert "docker buildx version | awk '{print $2}')\" = \"v0.36.1" in commands
-    assert "docker buildx inspect --bootstrap" in commands
-    assert '$1 == "BuildKit" && $2 == "version:" { print $3 }' in commands
-    assert '= "v0.32.2"' in commands
-    assert "[[driver-type io.containerd.snapshotter.v1]]" in commands
-    assert "docker info --format '{{ .DriverStatus }}'" in commands
+    probe = next(
+        step
+        for step in steps
+        if step.get("name") == "Require the exact supported OCI backend"
+    )
+    assert probe["env"] == {
+        "MARTY_BUILDX_DRIVER": "${{ steps.buildx.outputs.driver }}",
+        "MARTY_BUILDX_NODES_JSON": "${{ steps.buildx.outputs.nodes }}",
+    }
+    assert probe["run"] == "python scripts/check_verification_candidate_backend.py"
 
 
 def test_candidate_workflow_is_manual_nonpublishing_and_least_privilege() -> None:
@@ -185,6 +188,14 @@ def test_manual_candidate_backend_contract_rejects_single_field_drift() -> None:
             step for step in value["steps"] if step.get("uses") == SETUP_BUILDX
         )["with"].__setitem__("driver-opts", "image=moby/buildkit:latest"),
         lambda value: next(
+            step for step in value["steps"] if step.get("uses") == SETUP_BUILDX
+        ).update(id="other"),
+        lambda value: next(
+            step
+            for step in value["steps"]
+            if step.get("name") == "Require the exact supported OCI backend"
+        )["env"].update(MARTY_BUILDX_NODES_JSON="[]"),
+        lambda value: next(
             step
             for step in value["steps"]
             if step.get("name") == "Require the exact supported OCI backend"
@@ -247,6 +258,7 @@ def test_supported_containerd_candidate_contract_is_a_required_ci_lane() -> None
     assert "uv pip install --system pytest==9.1.1 pyyaml==6.0.3" in commands
     assert (
         "python -m pytest -q tests/test_verification_candidate_build.py "
+        "tests/test_verification_candidate_backend.py "
         "tests/test_verification_candidate_workflow.py"
     ) in commands
     assert "verification-candidate-oci-contract" in document["jobs"]["ci-gate"]["needs"]
