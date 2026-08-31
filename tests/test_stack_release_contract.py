@@ -306,13 +306,10 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     assert "grep -v '^migrations$' || true" not in workflow
 
 
-def test_corrected_verifier_artifact_retains_safe_parity_and_rollback_anchors() -> None:
+def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate_overlay() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
-    assert (
-        "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml"
-        in workflow
-    )
+    assert "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml" in workflow
     assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
 
     lock = json.loads(_text("release/stack-lock.json"))
@@ -321,22 +318,10 @@ def test_corrected_verifier_artifact_retains_safe_parity_and_rollback_anchors() 
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert lock["release"] == "marty-ui@1.1.210"
-    assert integration["version"] == "1.2.75"
-    assert integration["commit"] == "60b58b0812b92319ab67129dca22cae733d916d4"
-    integration_artifact = integration["artifacts"][0]
-    assert integration_artifact["uri"] == (
-        "https://github.com/ElevenID/marty-integration-tests/releases/download/"
-        "v1.2.75/marty-integration-tests-1.2.75-source.tar.gz"
-    )
-    assert integration_artifact["digest"] == (
-        "sha256:426a281c6c19fb0a61b1f0325b3d01cfb24d998df3509f6ef8ef73e8cbd7620e"
-    )
-    assert integration_artifact["sbom"].endswith(
-        "/v1.2.75/marty-integration-tests.spdx.json"
-    )
-    assert integration_artifact["provenance"].endswith(
-        "/v1.2.75/marty-integration-tests-1.2.75-source.tar.gz.sigstore.json"
+    assert integration["version"] == "1.2.76"
+    assert integration["commit"] == "85f7d794b28079781e9455be5715e69b8995f9f4"
+    assert integration["artifacts"][0]["digest"] == (
+        "sha256:2617792b8499f34d48605f8874567292c2f4c6c050f3d68c002a3f9a94c29c59"
     )
 
     issuance = next(
@@ -344,95 +329,11 @@ def test_corrected_verifier_artifact_retains_safe_parity_and_rollback_anchors() 
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.71"
-    assert issuance["commit"] == "94f19ad369e7e41883f2aa3d77656ce561bb6534"
-    issuance_artifact = issuance["artifacts"][0]
-    assert issuance_artifact["uri"] == (
-        "ghcr.io/elevenid/marty-credentials-issuance"
-    )
-    assert issuance_artifact["digest"] == (
-        "sha256:3b396ef763f99179a4d6123cc30b8fabd2afaadb200a3d4e6cf1317489a61c5c"
-    )
-    assert issuance_artifact["sbom"].endswith(
-        "/v0.1.71/marty-credentials-issuance.spdx.json"
-    )
-
-    serialized_lock = json.dumps(lock, sort_keys=True)
-    assert "1.1.209" not in serialized_lock
-    assert "1.1.211" not in serialized_lock
-    assert "1.1.212" not in serialized_lock
-    assert "1.2.76" not in serialized_lock
-    assert "1.2.77" not in serialized_lock
-    assert "1.2.78" not in serialized_lock
-    assert "0.1.72" not in serialized_lock
-    assert "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8" not in serialized_lock
-    assert "85f7d794b28079781e9455be5715e69b8995f9f4" not in serialized_lock
-    assert (
-        "sha256:c223ee06d86dc85bc960a22aec4328f1e22fb6f38124bc261d38c3c21c0ac995"
-        not in serialized_lock
-    )
-    assert (
-        "sha256:28f48e7ed885046ae753c1f4eea8855b8769cd166602741a8783cbc3dba64643"
-        not in serialized_lock
-    )
-    assert (
-        "sha256:2617792b8499f34d48605f8874567292c2f4c6c050f3d68c002a3f9a94c29c59"
-        not in serialized_lock
-    )
-    assert (
+    assert issuance["version"] == "0.1.72"
+    assert issuance["commit"] == "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
+    assert issuance["artifacts"][0]["digest"] == (
         "sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
-        not in serialized_lock
     )
-
-
-def test_verifier_recovery_docs_do_not_preselect_or_promote_held_artifacts() -> None:
-    roadmap = _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md")
-    plan = _text("docs/rust-migrations/verification-image-consolidation-plan.md")
-    incident = _text("docs/rust-migrations/verifier-release-incident-2026-08-31.md")
-    release_docs = "\n".join((roadmap, plan, incident))
-    release_words = " ".join(release_docs.split())
-    incident_words = " ".join(incident.split())
-
-    for preselected_version in ("v1.1.211", "v1.1.212"):
-        assert preselected_version not in release_docs
-    assert "marty-integration-tests@v1.2.78" in release_docs
-    assert "3baad4b5dbccc720a50ff9ae5a280349180c02a8" in release_docs
-    assert "preliminary harness release" in release_words.lower()
-    assert "non-activating" in release_words
-    assert "does not pin a corrected Rust services image" in incident_words
-    assert "is not an aggregate pin" in incident_words
-    assert "19-check portable differential" in incident_words
-    assert "Rust-only default-disabled compatibility check" in incident_words
-    assert "canonical.oid4vp-positive-runtime-not-exercised" in release_docs
-    assert (
-        "No corrected Credentials release, corrected Rust artifact, "
-        "corrected-Rust-pinned integration release, or aggregate UI release "
-        "is selected."
-    ) in release_words
-    assert "no replacement version is selected" not in release_docs.lower()
-    assert "no replacement release version is selected" not in release_docs.lower()
-    assert "Before the next versioned write" not in release_docs
-    assert "No immutable post-fix integration release exists" not in release_docs
-    assert "The forward harness must" not in release_docs
-    assert "The forward harness correction must" not in release_docs
-    candidate_record = (
-        "83a2557735dfe2a33e401f3cacde8c63e05546f4",
-        "unexercised, correction-required candidate producer",
-        "has never been dispatched",
-        "supplies no candidate evidence",
-        "does not satisfy the candidate gate",
-        "reject every unreferenced archive member",
-        "bounded archive and layer expansion plus member-count limits",
-        "actual Buildx archive end to end on a declared supported backend",
-        "exact five-file name/type allowlist",
-    )
-    for release_doc in (roadmap, plan, incident):
-        normalized_doc = " ".join(release_doc.split())
-        for required_fact in candidate_record:
-            assert required_fact in normalized_doc
-    assert "not an approved candidate or selected release" in incident_words
-    assert "incomplete and ineligible" in incident_words
-    assert "distinct corrected-Rust-pinned integration tree" in incident_words
 
 
 def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:

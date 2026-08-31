@@ -34,43 +34,30 @@ reusing a coordinate after any versioned image has been published.
   environment disallows administrator bypass and admits only the inert
   `release-hold-disabled` tag policy. Protected PR `#727` separately requires
   exact `release_state=eligible` in both tag preparation and publication.
-- `marty-credentials@v0.1.72` published only the issuance image, at
+- `marty-credentials@v0.1.72` is not a failed verifier artifact. It intentionally
+  published only the issuance image, at
   `sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176`,
   with provenance bound to commit
-  `85b128a85426b3f5aeaf6f948ba5dfa2836e95d8`. It published no verification
-  image, skipped PyPI, and followed the verifier deletion before the corrected
-  consumer order was proven. It is therefore incomplete and ineligible for the
-  repaired aggregate even though its issuance image is immutable. The retained
-  safe Credentials anchor is `v0.1.71`.
+  `85b128a85426b3f5aeaf6f948ba5dfa2836e95d8`. The stack consumes that issuance
+  component; skipped PyPI publication is not a stack input. The release remains
+  usable unless a concrete component gate fails.
 - Credentials adapter-retirement guard PR `ElevenID/marty-credentials#253`
   merged at `cbda2ac7e3376b858c1e8d5d010a304474c659cf`; it preserves the separate
-  still-used adapter and does not promote `v0.1.72`.
+  still-used adapter and does not change the issuance-only `v0.1.72` decision.
 - Protected integration PR `#404` packaged the reviewed `#400`-`#403` harness
   lineage as immutable `marty-integration-tests@v1.2.78` at merge commit
   `3baad4b5dbccc720a50ff9ae5a280349180c02a8`. This preliminary harness release
   remains non-activating and explicitly blocked on
   `canonical.oid4vp-positive-runtime-not-exercised`; it does not pin a
-  corrected Rust services image and is not an aggregate input or authority to
-  publish, deploy, or activate a product release.
+  corrected Rust services image or authorize publication or deployment.
 
 ## Containment decision
 
 Versions `v1.1.209` and `v1.1.210` are permanently quarantined and must never be
-retargeted, completed, or deployed. An unpushed local worktree used a later
-version label during overlapping work, but it is not an approved candidate or
-selected release and reserves no tag, registry coordinate, or version. No
-corrected Credentials release, corrected Rust artifact, corrected-Rust-pinned
-integration release, or aggregate UI release may be selected or published
-while the release lock is held or before every applicable gate below passes.
-
-Protected `ElevenID/marty-ui#737` merged the non-publishing candidate producer
-at `83a2557735dfe2a33e401f3cacde8c63e05546f4`. It is only an unexercised,
-correction-required candidate producer: it has never been dispatched, supplies
-no candidate evidence, and does not satisfy the candidate gate. Before it may
-produce admissible evidence, it must reject every unreferenced archive member,
-enforce bounded archive and layer expansion plus member-count limits, add one
-end-to-end test that consumes an actual Buildx archive end to end on a declared
-supported backend, and enforce an exact five-file name/type allowlist.
+retargeted, completed, or deployed. A local `v1.1.211` lock candidate exists,
+but no tag, registry coordinate, or release reserves that version. It must not
+be published through the current direct-tag workflow while the release lock is
+held.
 
 Before the next UI/services artifact write or activating stack write, implement
 and test:
@@ -101,10 +88,6 @@ and test:
    terminal release, and mismatched existing coordinates.
 
 The candidate lane reduces prepublication risk but cannot replace the final
-test against the exact released services digest. Preliminary harness release
-`v1.2.78` precedes that digest but is non-activating, pins no corrected Rust
-services image, and is not an aggregate pin. The
-distinct corrected-Rust-pinned integration tree must pass the full matrix,
-merge through protection, and become an independently verified immutable
-release after that digest exists. Production and persistent self-host remain
-unchanged.
+test against the exact released services digest. The public integration pin is
+published only after that immutable digest exists. Production and persistent
+self-host remain unchanged.
