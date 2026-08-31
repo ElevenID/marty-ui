@@ -457,8 +457,8 @@ jobs:
             | select(.executable != null)
             | .executable
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
-          if (( ${#canvas_issuance_contract_executables[@]} != 9 )); then
-            printf 'Expected nine Canvas Issuance PostgreSQL contracts, found %s.\n' "${#canvas_issuance_contract_executables[@]}" >&2
+          if (( ${#canvas_issuance_contract_executables[@]} != 10 )); then
+            printf 'Expected ten issuance PostgreSQL contracts (nine Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contract_executables[@]}" >&2
             exit 1
           fi
           canvas_issuance_contract_relatives=()
@@ -677,8 +677,8 @@ jobs:
               \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
               | sort
           )
-          if (( ${#canvas_issuance_contracts[@]} != 9 )); then
-            printf 'Expected nine Canvas Issuance PostgreSQL contract executables, found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
+          if (( ${#canvas_issuance_contracts[@]} != 10 )); then
+            printf 'Expected ten issuance PostgreSQL contract executables (nine Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
             exit 1
           fi
           for contract in "${canvas_issuance_contracts[@]}"; do

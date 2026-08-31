@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -39,7 +38,8 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     assert 'startswith("canvas_")' in workflow
     assert 'endswith("_postgres_contract")' in workflow
     assert "canvas_*_postgres_contract-*" in workflow
-    assert workflow.count("Expected nine Canvas Issuance PostgreSQL") == 2
+    assert workflow.count("Expected ten issuance PostgreSQL contract") == 2
+    assert workflow.count("nine Canvas plus proof nonce") == 2
 
 
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
