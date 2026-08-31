@@ -187,6 +187,9 @@ Alembic head `202608091200`, starts compatibility mode against disposable
 PostgreSQL and Redis, checks readiness and both health contracts, creates a
 governed session, submits a malformed presentation, proves canonical
 fail-closed scoped identifiers, and confirms terminal nonce minimization. The
-deployment, contract and implementation reviews are repeating against that
-stack. A newer immutable artifact, the v2 consumer pin and differential lane,
-and the final Python deletion gate remain open; activation remains beta only.
+release workflow invokes the same gate against the exact pushed shared
+services digest through its production dispatcher before attestation and
+signing. The deployment, contract and implementation reviews are repeating
+against that stack. A newer immutable artifact, the v2 consumer pin and
+differential lane, and the final Python deletion gate remain open; activation
+remains beta only.

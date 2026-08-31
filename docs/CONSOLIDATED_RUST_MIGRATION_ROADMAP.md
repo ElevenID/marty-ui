@@ -161,6 +161,9 @@ The parallel `rust-verification/post-merge-review-v1` stream now owns the
 database-monitor supervision, scoped canonical session identifiers, and a
 same-image CI smoke that proves two migrations, readiness, governed creation,
 canonical fail-closed submission, terminal persistence and nonce minimization.
+The release workflow runs that same gate against the exact pushed shared
+services digest through `/app/services/entrypoint.sh` before signing, so its
+dispatcher and migration override cannot diverge from the dedicated image.
 Other workers must not switch the immutable consumer pin until this reviewed
 stack merges and a newer artifact is published. Switching that pin, running
 the immutable differential lane, and deleting the Python service remain open.
