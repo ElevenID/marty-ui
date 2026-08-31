@@ -95,6 +95,28 @@ and keep the worker plus all helpers reachable from it, until their respective
 consumer and whole-worker gates prove behavioral and persistence parity. This
 is an explicit delayed deletion gate, not permission for a permanent fallback.
 
+### Parallel verification-image consolidation
+
+The separately published Python verification image is being consolidated into
+the canonical Rust verification service in coordinated
+`rust-verification/consolidation-v1` worktrees for `marty-credentials` and
+`marty-ui`. This is distinct from the already completed wave-three verification
+service cutover: it preserves and absorbs the extra seven-operation Credentials
+image compatibility surface instead of deleting it or creating a second Rust
+verifier.
+
+The stream is active but unmerged. The Credentials branch has committed
+source-derived HTTP/configuration/governance/persistence/migration/runtime
+surface freezes and continues to strengthen executable behavior fixtures. The
+UI branch has committed the canonical Core governance adapter, governed startup
+configuration and fail-closed DTO boundaries, with further DTO/application
+work still dirty in its isolated worktree. Focused Rust governance/DTO tests and
+the focused Python surface-contract suite passed at their latest reviewed
+checkpoint, but full differential, PostgreSQL migration/race, packaging,
+consumer, deletion and beta acceptance gates remain. Preserve both worktrees
+and land their changes through their own reviewed PRs; they must not be folded
+into or removed during Canvas branch cleanup.
+
 ## Wave three — Rust service plane and complete MMF replacement
 
 Wave three replaces the remaining deployed Python service plane with Rust and
