@@ -418,9 +418,14 @@ fn validate_typed_binding(
     {
         return Err(PersistedEvidenceError::AuthorityMismatch);
     }
-    if result.verification_id() != format!("verification:{session_id}")
-        || context.transaction_id.as_deref() != Some(session_id)
-    {
+    let scoped_transaction_id = format!("transaction:{session_id}");
+    let transaction_is_bound = context
+        .transaction_id
+        .as_deref()
+        .is_some_and(|transaction_id| {
+            transaction_id == session_id || transaction_id == scoped_transaction_id
+        });
+    if result.verification_id() != format!("verification:{session_id}") || !transaction_is_bound {
         return Err(PersistedEvidenceError::SessionMismatch);
     }
     if result.input_digest() != format!("sha256:{}", presentation_digest.as_str()) {
@@ -661,6 +666,23 @@ mod tests {
         assert_eq!(
             failed.require_verified(),
             Err(PersistedEvidenceError::CanonicalPassRequired)
+        );
+
+        let mut scoped = canonical_input(&governance, &digest, false);
+        scoped.context.transaction_id = Some(format!("transaction:{SESSION_ID}"));
+        PersistedEvidence::canonical(&governance, SESSION_ID, &digest, &build_result(scoped))
+            .unwrap();
+
+        let mut wrong_scope = canonical_input(&governance, &digest, false);
+        wrong_scope.context.transaction_id = Some("transaction:other-session".into());
+        assert_eq!(
+            PersistedEvidence::canonical(
+                &governance,
+                SESSION_ID,
+                &digest,
+                &build_result(wrong_scope),
+            ),
+            Err(PersistedEvidenceError::SessionMismatch)
         );
     }
 
