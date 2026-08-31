@@ -302,3 +302,34 @@ protected harness lineage as immutable `v1.2.78` at merge commit
 `release_clearance` is still blocked on the positive OID4VP runtime, it does
 not pin a corrected Rust services image, and it grants no publication,
 deployment or activation authority.
+
+Protected `ElevenID/marty-integration-tests#405` then advanced `main` to
+`92512b4e05e2e119e5ee56de64d50163631581d2` with a release-tag-to-protected-
+main lineage gate. It did not publish a replacement for `v1.2.78` or clear the
+positive-runtime blocker. The forward candidate harness must include that
+protected lineage; the older `3baad4b5...` release commit is not a sufficient
+base by itself.
+
+Protected `ElevenID/marty-ui#737` subsequently merged the producer half of the
+non-publishing candidate lane at
+`83a2557735dfe2a33e401f3cacde8c63e05546f4` from reviewed source
+`70e60e91a595551c4a80299b7e7f85ffb5b9af7d`. It creates one exact-main,
+Linux/amd64 OCI archive and a digest-bound CycloneDX SBOM, build metadata,
+provenance document and candidate pin; attests the pin and archive; and uploads
+only a three-day Actions artifact. It cannot publish packages, releases,
+registry coordinates or deployments. Its PR and merge-group checks passed and
+it has not been dispatched.
+
+That merge does not clear the positive-runtime blocker or complete the lane.
+The active verification-consolidation stream owns the local candidate harness,
+its protected merge, the later `marty-ui` consumer pinned to that exact
+integration merge SHA, the first no-publish execution and review/fix cycles.
+The local harness was replayed onto PR `#405` as
+`8c93c5c6c20f44d2753a1b740f77b424783337d6`, where its 76 focused and 770 full
+unit tests pass, but it remains local and consumer-ineligible until the real
+positive runtime is integrated, the exact commit is reviewed again, and the
+result merges through protection.
+The authenticated OID4VP worker owns the non-overlapping canonical
+contract/runtime prerequisite. No parallel worker should duplicate the
+producer, create a second verifier or evidence schema, dispatch the producer,
+or infer release eligibility from its presence.
