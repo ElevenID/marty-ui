@@ -1,6 +1,6 @@
 # Credentials verification-image consolidation plan
 
-Status: `contract-freeze-active`. This workstream is owned by the coordinated
+Status: `native-runtime-and-beta-packaging-active`. This workstream is owned by the coordinated
 `rust-verification/consolidation-v1` worktrees in `marty-ui` and
 `marty-credentials`. It proceeds independently from the active Canvas route
 work and does not change production.
@@ -150,3 +150,28 @@ reviewer reports no issues and the full affected test suites pass.
 Python deletion, production promotion and retirement of public SDK/binding
 surfaces are not implicit in any implementation slice and require their stated
 gates or separate approval.
+
+## Implementation checkpoint — 2026-08-31
+
+The compatibility DTO, governance, canonical-decision/evidence, durable
+PostgreSQL lifecycle, migration adoption, HTTP, application, native
+JWT/structured/VDS-NC and organization-first issuer-resolution slices are now
+implemented on `rust-verification/consolidation-v1`. Production route mounting
+is operational-state gated; startup validates the released schema rather than
+silently migrating it. The same canonical Rust image exposes the explicit
+`migrate` command, and the beta Compose plane runs that one-shot before enabling
+the compatibility namespace with explicit governance.
+
+Real PostgreSQL migration/application/race coverage, strict Rust linting and
+container/deployment contract tests are green at this checkpoint. A fresh
+canonical image build has also run its `migrate` command twice against a
+disposable PostgreSQL 17 database, reached released head `202608091200`, then
+started both its ordinary and compatibility-enabled runtimes healthy from that
+same artifact. The rendered beta stack binds the migration and runtime to the
+same immutable image and waits for migration completion. Production,
+self-host-production and Kubernetes-production manifests have no changes in
+this slice.
+
+Independent contract, implementation and deployment reviews remain active.
+Differential fixture execution, consumer/release pin changes and the final
+Python deletion gate are still open; activation remains beta only.
