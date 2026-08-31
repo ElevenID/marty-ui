@@ -280,7 +280,7 @@ impl CanvasAwardCandidateRepository for PostgresCanvasAwardCandidateRepository {
     }
 }
 
-async fn record_fact_and_policy(
+pub(crate) async fn record_fact_and_policy(
     pool: &PgPool,
     application: &CanvasLtiBootstrapApplication,
     binding: &Map<String, Value>,

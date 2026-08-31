@@ -97,7 +97,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             ])
             .send()
             .await
-            .map_err(|_| provider_error(None))?;
+            .map_err(transport_error)?;
         if response.status().is_redirection() {
             return Err(provider_error(None));
         }
@@ -160,7 +160,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             ])
             .send()
             .await
-            .map_err(|_| provider_error(None))?;
+            .map_err(transport_error)?;
         if response.status().is_redirection() {
             return Err(provider_error(None));
         }
@@ -219,7 +219,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(|_| provider_error(None))?;
+            .map_err(transport_error)?;
         if response.status().is_redirection() {
             return Err(provider_error(None));
         }
@@ -232,7 +232,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
         ) {
             Ok(())
         } else {
-            Err(provider_error(None))
+            Err(CanvasOAuthProviderError::RevocationRejected)
         }
     }
 }
@@ -245,7 +245,7 @@ async fn limited_json(mut response: Response) -> Result<Value, CanvasOAuthProvid
         return Err(provider_error(None));
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| provider_error(None))? {
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
         if body.len().saturating_add(chunk.len()) > TOKEN_RESPONSE_MAX_BYTES {
             return Err(provider_error(None));
         }
@@ -257,6 +257,14 @@ async fn limited_json(mut response: Response) -> Result<Value, CanvasOAuthProvid
 fn provider_error(retry_after_seconds: Option<u64>) -> CanvasOAuthProviderError {
     CanvasOAuthProviderError::Failed {
         retry_after_seconds,
+    }
+}
+
+fn transport_error(error: reqwest::Error) -> CanvasOAuthProviderError {
+    if error.is_timeout() {
+        CanvasOAuthProviderError::Timeout
+    } else {
+        provider_error(None)
     }
 }
 

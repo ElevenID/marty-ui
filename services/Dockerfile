@@ -21,7 +21,7 @@ RUN cargo build --locked --release \
     -p marty-applicant --bin marty-applicant \
     -p marty-device-registration --bin marty-device-registration \
     -p marty-verification-service --bin marty-verification-service \
-    -p marty-issuance-service --bin marty-issuance-service \
+    -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker \
     -p marty-deployment-profile --bin marty-deployment-profile \
     -p marty-compliance-profile --bin marty-compliance-profile
 
@@ -60,6 +60,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-applicant /usr
 COPY --from=rust-service-builder /build/rust/target/release/marty-device-registration /usr/local/bin/marty-device-registration
 COPY --from=rust-service-builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
+COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sync-worker /usr/local/bin/marty-canvas-sync-worker
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh
