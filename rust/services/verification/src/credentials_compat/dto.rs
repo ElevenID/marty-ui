@@ -1,3 +1,5 @@
+use marty_verification::verification::VerificationDecisionResult as CoreVerificationResult;
+use serde::de::Error as DeserializeError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -21,22 +23,49 @@ pub struct CreateSessionRequest {
     pub verifier_did: String,
     pub presentation_definition: PresentationDefinition,
     #[serde(default = "default_session_duration_seconds")]
-    pub session_duration_seconds: u64,
+    pub session_duration_seconds: SessionDurationSeconds,
 }
 
-impl CreateSessionRequest {
-    pub fn validate(&self) -> Result<(), RequestValidationError> {
-        if !(MIN_SESSION_DURATION_SECONDS..=MAX_SESSION_DURATION_SECONDS)
-            .contains(&self.session_duration_seconds)
-        {
-            return Err(RequestValidationError::SessionDuration);
+const fn default_session_duration_seconds() -> SessionDurationSeconds {
+    SessionDurationSeconds(DEFAULT_SESSION_DURATION_SECONDS)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionDurationSeconds(u64);
+
+impl SessionDurationSeconds {
+    pub fn new(value: u64) -> Result<Self, RequestValidationError> {
+        if (MIN_SESSION_DURATION_SECONDS..=MAX_SESSION_DURATION_SECONDS).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(RequestValidationError::SessionDuration)
         }
-        Ok(())
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
     }
 }
 
-const fn default_session_duration_seconds() -> u64 {
-    DEFAULT_SESSION_DURATION_SECONDS
+impl<'de> Deserialize<'de> for SessionDurationSeconds {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let integer = match value {
+            Value::Number(number) => number.as_u64().or_else(|| {
+                let float = number.as_f64()?;
+                (float.is_finite() && float.fract() == 0.0 && float >= 0.0).then_some(float as u64)
+            }),
+            Value::String(value) => value.trim().parse().ok(),
+            _ => None,
+        }
+        .ok_or_else(|| D::Error::custom("session_duration_seconds must be an integer"))?;
+        Self::new(integer).map_err(D::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -104,36 +133,38 @@ pub struct ClaimResult {
 /// canonical result. Missing or inconsistent evidence therefore fails closed.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct VerificationResult {
-    pub canonical_result: Option<Value>,
-    pub processing_status: String,
-    pub decision: String,
-    pub decision_code: String,
-    pub valid: bool,
-    pub overall_result: String,
-    pub claim_results: Vec<ClaimResult>,
-    pub trust_chain_valid: bool,
-    pub revocation_checked: bool,
-    pub revocation_status: Option<String>,
-    pub evaluated_at: Option<String>,
-    pub verifier_nonce: Option<String>,
-    pub flow_instance_id: Option<String>,
-    pub policy_id: Option<String>,
-    pub verified_claims: Option<Map<String, Value>>,
-    pub verification_method: Option<String>,
-    pub error: Option<String>,
-    pub verified_at: Option<String>,
+    canonical_result: Option<Value>,
+    processing_status: String,
+    decision: String,
+    decision_code: String,
+    valid: bool,
+    overall_result: String,
+    claim_results: Vec<ClaimResult>,
+    trust_chain_valid: bool,
+    revocation_checked: bool,
+    revocation_status: Option<String>,
+    evaluated_at: Option<String>,
+    verifier_nonce: Option<String>,
+    flow_instance_id: Option<String>,
+    policy_id: Option<String>,
+    verified_claims: Option<Map<String, Value>>,
+    verification_method: Option<String>,
+    error: Option<String>,
+    verified_at: Option<String>,
 }
 
 impl VerificationResult {
     #[must_use]
     pub fn from_canonical(
-        canonical_result: Option<Value>,
+        canonical_result: Option<&CoreVerificationResult>,
         verification_method: Option<String>,
         error: Option<String>,
     ) -> Self {
-        let Some(canonical) = canonical_result else {
+        let Some(canonical_result) = canonical_result else {
             return Self::unavailable(verification_method, error);
         };
+        let canonical = serde_json::to_value(canonical_result)
+            .expect("Core VerificationDecisionResult serialization is infallible");
         let processing_status = string_field(&canonical, "processing_status", "UNAVAILABLE");
         let decision = string_field(&canonical, "decision", "INDETERMINATE");
         let decision_code = string_field(&canonical, "decision_code", "PROCESSING_NOT_COMPLETED");
@@ -188,6 +219,36 @@ impl VerificationResult {
         }
     }
 
+    #[must_use]
+    pub fn canonical_result(&self) -> Option<&Value> {
+        self.canonical_result.as_ref()
+    }
+
+    #[must_use]
+    pub fn processing_status(&self) -> &str {
+        &self.processing_status
+    }
+
+    #[must_use]
+    pub fn decision(&self) -> &str {
+        &self.decision
+    }
+
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    #[must_use]
+    pub fn verified_at(&self) -> Option<&str> {
+        self.verified_at.as_deref()
+    }
+
     fn unavailable(verification_method: Option<String>, error: Option<String>) -> Self {
         Self {
             canonical_result: None,
@@ -240,9 +301,78 @@ fn check<'a>(canonical: &'a Value, check_id: &str) -> Option<&'a Map<String, Val
 
 #[cfg(test)]
 mod tests {
+    use marty_verification::verification::{
+        build_verification_decision_result, VerificationCheckCategory, VerificationCheckOutcome,
+        VerificationCheckResult, VerificationComponentVersion, VerificationContextMode,
+        VerificationDecisionContext, VerificationDecisionResultInput, VerificationProcessingStatus,
+        VerificationProfileReference,
+    };
     use serde_json::json;
 
     use super::*;
+
+    const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn canonical_input(status: VerificationProcessingStatus) -> VerificationDecisionResultInput {
+        VerificationDecisionResultInput {
+            verification_id: "verification:compat-001".into(),
+            context: VerificationDecisionContext {
+                mode: VerificationContextMode::Online,
+                verifier_id: "did:web:verifier.example".into(),
+                organization_id: Some("123e4567-e89b-42d3-a456-426614174000".into()),
+                transaction_id: Some("transaction:compat-001".into()),
+                audience: Some("did:web:verifier.example".into()),
+                offline_profile_id: None,
+            },
+            processing_status: status,
+            evaluated_at: "2026-08-30T12:00:00Z".into(),
+            input_digest: DIGEST.into(),
+            evidence_digest: DIGEST.into(),
+            policy: VerificationProfileReference {
+                id: "policy:employee".into(),
+                version: "1.0.0".into(),
+                content_digest: DIGEST.into(),
+            },
+            trust_profile: VerificationProfileReference {
+                id: "trust:employee".into(),
+                version: "1.0.0".into(),
+                content_digest: DIGEST.into(),
+            },
+            components: vec![VerificationComponentVersion {
+                component_id: "marty-core".into(),
+                version: "0.1.61".into(),
+                artifact_digest: DIGEST.into(),
+                adapter_id: Some("verification-service".into()),
+                adapter_version: Some("1.0.0".into()),
+            }],
+            checks: vec![
+                VerificationCheckResult {
+                    check_id: "issuer.trust".into(),
+                    category: VerificationCheckCategory::IssuerTrust,
+                    required: true,
+                    outcome: VerificationCheckOutcome::Passed,
+                    code: "ISSUER_TRUSTED".into(),
+                    component_id: "marty-core".into(),
+                    evaluated_at: "2026-08-30T12:00:00Z".into(),
+                    evidence_refs: vec![
+                        "urn:marty:evidence:123e4567-e89b-42d3-a456-426614174001".into()
+                    ],
+                },
+                VerificationCheckResult {
+                    check_id: "credential.status".into(),
+                    category: VerificationCheckCategory::Status,
+                    required: true,
+                    outcome: VerificationCheckOutcome::Passed,
+                    code: "CREDENTIAL_STATUS_VALID".into(),
+                    component_id: "marty-core".into(),
+                    evaluated_at: "2026-08-30T12:00:00Z".into(),
+                    evidence_refs: vec![
+                        "urn:marty:evidence:123e4567-e89b-42d3-a456-426614174002".into()
+                    ],
+                },
+            ],
+        }
+    }
 
     #[test]
     fn request_models_reject_unknown_fields_and_enforce_duration_bounds() {
@@ -251,16 +381,15 @@ mod tests {
             "presentation_definition": {"id": "pd-1", "input_descriptors": []}
         }))
         .unwrap();
-        assert_eq!(request.session_duration_seconds, 600);
-        request.validate().unwrap();
+        assert_eq!(request.session_duration_seconds.get(), 600);
 
-        for duration in [29, 3_601] {
-            let mut request = request.clone();
-            request.session_duration_seconds = duration;
-            assert_eq!(
-                request.validate(),
-                Err(RequestValidationError::SessionDuration)
-            );
+        for duration in [json!(29), json!(3_601)] {
+            assert!(serde_json::from_value::<CreateSessionRequest>(json!({
+                "verifier_did": "did:web:verifier.example",
+                "presentation_definition": {"id": "pd-1", "input_descriptors": []},
+                "session_duration_seconds": duration
+            }))
+            .is_err());
         }
         assert!(serde_json::from_value::<CreateSessionRequest>(json!({
             "verifier_did": "did:web:verifier.example",
@@ -268,6 +397,33 @@ mod tests {
             "unexpected": true
         }))
         .is_err());
+    }
+
+    #[test]
+    fn duration_ingress_matches_released_pydantic_coercion() {
+        let cases = [
+            (json!("600"), Some(600)),
+            (json!(600.0), Some(600)),
+            (json!(600.5), None),
+            (json!(true), None),
+            (json!(30), Some(30)),
+            (json!(3_600), Some(3_600)),
+            (json!(29), None),
+            (json!(3_601), None),
+        ];
+        for (duration, expected) in cases {
+            let parsed = serde_json::from_value::<CreateSessionRequest>(json!({
+                "verifier_did": "did:web:verifier.example",
+                "presentation_definition": {"id": "pd-1", "input_descriptors": []},
+                "session_duration_seconds": duration
+            }));
+            assert_eq!(
+                parsed
+                    .ok()
+                    .map(|request| request.session_duration_seconds.get()),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -293,56 +449,56 @@ mod tests {
             Some("jwt".into()),
             Some("adapter claimed success without provenance".into()),
         );
-        assert!(!result.valid);
-        assert_eq!(result.processing_status, "UNAVAILABLE");
-        assert_eq!(result.decision, "INDETERMINATE");
-        assert_eq!(result.verified_at, None);
+        assert!(!result.is_valid());
+        assert_eq!(result.processing_status(), "UNAVAILABLE");
+        assert_eq!(result.decision(), "INDETERMINATE");
+        assert_eq!(result.verified_at(), None);
     }
 
     #[test]
     fn canonical_pass_projects_trust_status_and_timestamps() {
-        let result = VerificationResult::from_canonical(
-            Some(json!({
-                "processing_status": "COMPLETED",
-                "decision": "PASS",
-                "decision_code": "ALL_REQUIRED_CHECKS_PASSED",
-                "valid": true,
-                "evaluated_at": "2026-08-30T12:00:00Z",
-                "policy": {"id": "policy:employee"},
-                "checks": [
-                    {"check_id": "issuer.trust", "outcome": "PASSED"},
-                    {"check_id": "credential.status", "outcome": "PASSED", "code": "CREDENTIAL_STATUS_VALID"}
-                ]
-            })),
-            Some("vds_nc".into()),
-            None,
-        );
-        assert!(result.valid);
+        let canonical = build_verification_decision_result(canonical_input(
+            VerificationProcessingStatus::Completed,
+        ))
+        .unwrap();
+        let result =
+            VerificationResult::from_canonical(Some(&canonical), Some("vds_nc".into()), None);
+        assert!(result.is_valid());
         assert!(result.trust_chain_valid);
         assert!(result.revocation_checked);
         assert_eq!(result.revocation_status.as_deref(), Some("VALID"));
         assert_eq!(result.policy_id.as_deref(), Some("policy:employee"));
         assert_eq!(result.verified_at, result.evaluated_at);
-        assert_eq!(result.error, None);
+        assert_eq!(result.error(), None);
     }
 
     #[test]
-    fn inconsistent_canonical_success_cannot_escape_fail_closed_projection() {
-        let result = VerificationResult::from_canonical(
-            Some(json!({
-                "processing_status": "COMPLETED",
-                "decision": "FAIL",
-                "decision_code": "REQUIRED_CHECK_FAILED",
+    fn incomplete_or_tampered_inputs_never_reach_the_projection() {
+        assert!(
+            serde_json::from_value::<VerificationDecisionResultInput>(json!({
+                "decision": "PASS",
                 "valid": true
-            })),
-            None,
-            None,
+            }))
+            .is_err()
         );
-        assert!(!result.valid);
-        assert_eq!(result.overall_result, "FAIL");
-        assert_eq!(
-            result.error.as_deref(),
-            Some("Canonical verification did not pass")
-        );
+        let mut tampered = canonical_input(VerificationProcessingStatus::Completed);
+        tampered.evidence_digest = "tampered".into();
+        assert!(build_verification_decision_result(tampered).is_err());
+        let mut incomplete = canonical_input(VerificationProcessingStatus::Completed);
+        incomplete.components.clear();
+        assert!(build_verification_decision_result(incomplete).is_err());
+    }
+
+    #[test]
+    fn core_reducer_prevents_contradictory_processing_success() {
+        let canonical = build_verification_decision_result(canonical_input(
+            VerificationProcessingStatus::Unavailable,
+        ))
+        .unwrap();
+        let result = VerificationResult::from_canonical(Some(&canonical), None, None);
+        assert!(!result.is_valid());
+        assert_eq!(result.processing_status(), "UNAVAILABLE");
+        assert_eq!(result.decision(), "INDETERMINATE");
+        assert_eq!(result.error(), Some("Canonical verification did not pass"));
     }
 }

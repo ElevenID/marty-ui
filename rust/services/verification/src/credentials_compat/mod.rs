@@ -9,8 +9,8 @@ pub mod governance;
 
 pub use dto::{
     ClaimResult, CreateSessionRequest, PresentationDefinition, PresentationPayload,
-    RequestValidationError, SessionResponse, SubmitPresentationRequest, VerificationResult,
-    VerifyDirectRequest, VerifyVdsNcRequest,
+    RequestValidationError, SessionDurationSeconds, SessionResponse, SubmitPresentationRequest,
+    VerificationResult, VerifyDirectRequest, VerifyVdsNcRequest,
 };
 pub use governance::{
     GovernanceEngine, GovernanceError, GovernancePurpose, GovernanceSnapshot, PolicyAuthority,
