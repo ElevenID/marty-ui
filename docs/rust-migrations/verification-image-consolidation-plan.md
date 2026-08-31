@@ -1,9 +1,11 @@
 # Credentials verification-image consolidation plan
 
-Status: `native-runtime-and-beta-packaging-active`. This workstream is owned by the coordinated
-`rust-verification/consolidation-v1` worktrees in `marty-ui` and
-`marty-credentials`. It proceeds independently from the active Canvas route
-work and does not change production.
+Status: `post-merge-review-and-immutable-cutover-active`. This workstream is
+owned by `rust-verification/post-merge-review-v1` in `marty-ui` and the gated
+`rust-verification/delete-python-verifier-v1` worktree in `marty-credentials`.
+It proceeds independently from the active Canvas route work and does not
+change production. Other workers must not switch the public consumer pin or
+delete the Python service while this owner is closing the artifact gates.
 
 ## Objective
 
@@ -156,9 +158,10 @@ gates or separate approval.
 The compatibility DTO, governance, canonical-decision/evidence, durable
 PostgreSQL lifecycle, migration adoption, HTTP, application, native
 JWT/structured/VDS-NC and organization-first issuer-resolution slices are now
-implemented on `rust-verification/consolidation-v1`. Production route mounting
-is operational-state gated; startup validates the released schema rather than
-silently migrating it. The same canonical Rust image exposes the explicit
+implemented through protected PRs `marty-credentials#249` and `marty-ui#718`.
+Production route mounting is operational-state gated; startup validates the
+released schema rather than silently migrating it. The same canonical Rust
+image exposes the explicit
 `migrate` command, and the beta Compose plane runs that one-shot before enabling
 the compatibility namespace with explicit governance.
 
@@ -172,6 +175,18 @@ same immutable image and waits for migration completion. Production,
 self-host-production and Kubernetes-production manifests have no changes in
 this slice.
 
-Independent contract, implementation and deployment reviews remain active.
-Differential fixture execution, consumer/release pin changes and the final
-Python deletion gate are still open; activation remains beta only.
+Bootstrap `marty-ui` release `v1.1.208` published the first immutable services
+artifact, but post-merge review found two corrections that make it ineligible
+for cutover: the database monitor must remain supervised and URL-safe session
+tokens must be scoped before use as canonical Core identifiers. Those fixes
+and their regression tests are owned by
+`rust-verification/post-merge-review-v1`.
+
+The same-image CI smoke now runs the Rust artifact's migration twice, asserts
+Alembic head `202608091200`, starts compatibility mode against disposable
+PostgreSQL and Redis, checks readiness and both health contracts, creates a
+governed session, submits a malformed presentation, proves canonical
+fail-closed scoped identifiers, and confirms terminal nonce minimization. The
+deployment, contract and implementation reviews are repeating against that
+stack. A newer immutable artifact, the v2 consumer pin and differential lane,
+and the final Python deletion gate remain open; activation remains beta only.

@@ -21,17 +21,15 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 Wave three's MMF replacement and ordered Rust service plane are complete. The
 follow-on 31-route Canvas management cutover merged through protected PR
 `ElevenID/marty-ui#717` at `a6b375bb0ecc649f30db7053ba34e3ac64a23998`.
-The latest completed stack release remains `v1.1.207` at source commit
-`256bcff55c738e2dd90dac303eb0354f90335611`. Bootstrap stack `v1.1.208` is
-tagged at protected-main commit
-`7c8fa31500acd8f2ec589781232c444fe81dd22e`; its release workflow is building
-the first published canonical Rust verifier artifact after its protected
-release-environment preflight, exact-tag preparation check, dependency
-provenance checks, and immutable OCI-input checks passed. This bootstrap
-release will not be deployed. The next deployment remains one aggregate
-beta-only update after the Rust verifier receives an exact released-artifact
-pin and the superseded Python image is deleted. Production is not in scope and
-its deployment configuration remains unchanged.
+Bootstrap stack `v1.1.208` is published at source commit
+`7c8fa31500acd8f2ec589781232c444fe81dd22e` and contains the first immutable
+Rust services artifact with the merged verifier. It is release evidence only
+and will not be deployed or used for the consumer cutover: the continuing
+post-merge review found readiness-supervision and canonical session-ID
+hardening that must merge and receive a newer immutable release first. The
+next deployment remains one aggregate beta-only update after that corrected
+artifact is pinned and the superseded Python image is deleted. Production is
+not in scope and its deployment configuration remains unchanged.
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -142,9 +140,10 @@ PostgreSQL session state, migration ownership, canonical decisions, native use
 cases, runtime activation, beta-only packaging, bounded readiness, secret
 redaction and removal of avoidable invariant panics.
 
-Strict Rust formatting and Clippy pass; 64 library, six service-behavior and
-five session-behavior tests pass; the fresh native image ran the released
-migration twice to Alembic head `202608091200` and started both ordinary and
+Strict Rust formatting and Clippy pass; 66 library, six service-behavior, five
+session-behavior and the real-PostgreSQL atomic repository tests pass; the
+fresh native image ran the released migration twice to Alembic head
+`202608091200` and started both ordinary and
 compatibility-enabled runtimes healthy. Beta Compose renders the migration and
 runtime from one immutable image. Production, self-host-production and
 Kubernetes-production manifests have no changes. Differential fixture
@@ -153,22 +152,28 @@ released Python oracle and the local Rust image. The dual-target consumer
 harness merged through `ElevenID/marty-integration-tests#394` at
 `32861513dc4c74b3232975e4e5e6a396a452ab1a` and was published in immutable
 integration release `v1.2.75` from
-`60b58b0812b92319ab67129dca22cae733d916d4`. The bootstrap stack lock and this
-roadmap update merged through `ElevenID/marty-ui#719` at
-`7c8fa31500acd8f2ec589781232c444fe81dd22e`. Its governed `v1.1.208` annotated
-tag was prepared with evidence SHA-256
+`60b58b0812b92319ab67129dca22cae733d916d4`. Bootstrap release `v1.1.208`
+published the first Rust services artifact, but it is not cutover-eligible. Its
+governed annotated tag was prepared with evidence SHA-256
 `c679572cb42a9ff091a3aba8af49e795b7082df7f72e8a7d514eb85912d49bc3` and pushed
 only after temporarily authorized tag-rule bypass was restored to no bypass.
-Publishing and independently verifying that Rust services artifact, switching
-the consumer's immutable pin, and deleting the Python service remain open.
+The parallel `rust-verification/post-merge-review-v1` stream now owns the
+database-monitor supervision, scoped canonical session identifiers, and a
+same-image CI smoke that proves two migrations, readiness, governed creation,
+canonical fail-closed submission, terminal persistence and nonce minimization.
+Other workers must not switch the immutable consumer pin until this reviewed
+stack merges and a newer artifact is published. Switching that pin, running
+the immutable differential lane, and deleting the Python service remain open.
 
 ### Verification consolidation guardrails
 
 The separately published Python verification image in `marty-credentials` is
-owned by this coordinated cross-repository cutover. Its implementation has
-merged; only its release/pin/deletion chain remains. This stream uses separate
-service, contract, migration, packaging and deployment paths from Canvas.
-Other work must not start a second verifier port or duplicate verification
+claimed by the coordinated `rust-verification/post-merge-review-v1` UI stream
+and `rust-verification/delete-python-verifier-v1` Credentials deletion gate.
+Its base implementation has merged; this review and the release/pin/deletion
+chain proceed in parallel with Canvas completion because they own separate
+service, contract, migration, packaging and deployment paths.
+Other workers must not start a second verifier port or duplicate verification
 decisions in a new crate.
 
 The workstream first freezes implementation-independent HTTP, configuration,
