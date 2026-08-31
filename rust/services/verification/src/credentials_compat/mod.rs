@@ -6,4 +6,7 @@
 
 pub mod governance;
 
-pub use governance::{GovernanceEngine, GovernanceError, GovernancePurpose, GovernanceSnapshot};
+pub use governance::{
+    GovernanceEngine, GovernanceError, GovernancePurpose, GovernanceSnapshot, PolicyAuthority,
+    TrustAuthority,
+};
