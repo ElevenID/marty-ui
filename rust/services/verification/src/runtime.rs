@@ -204,7 +204,7 @@ mod tests {
     use std::{
         future::pending,
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
         },
         time::Duration,
@@ -213,7 +213,7 @@ mod tests {
     use axum::{body::Body, http::Request};
     use mmf_core::HealthStatus;
     use mmf_runtime::system_router;
-    use tokio::sync::{watch, Notify};
+    use tokio::sync::{mpsc, watch};
     use tower::ServiceExt;
 
     use super::*;
@@ -377,14 +377,16 @@ mod tests {
         runtime.activate().unwrap();
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let probe_started = Arc::new(Notify::new());
-        let monitor_probe_started = probe_started.clone();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let monitor_attempts = attempts.clone();
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
         let monitor_runtime = runtime.clone();
         let monitor = tokio::spawn(async move {
             monitor_runtime
                 .monitor_compatibility_database_checks(
                     move || {
-                        monitor_probe_started.notify_one();
+                        let attempt = monitor_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                        started_tx.send(attempt).unwrap();
                         pending::<bool>()
                     },
                     shutdown_rx,
@@ -393,6 +395,7 @@ mod tests {
                 )
                 .await
         });
+        assert_eq!(started_rx.recv().await, Some(1));
 
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
@@ -409,7 +412,7 @@ mod tests {
             HealthStatus::Degraded
         );
 
-        probe_started.notified().await;
+        assert_eq!(started_rx.recv().await, Some(2));
         shutdown_tx.send(true).unwrap();
         tokio::time::timeout(Duration::from_millis(100), monitor)
             .await
