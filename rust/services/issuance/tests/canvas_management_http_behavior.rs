@@ -511,6 +511,26 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         Ok(Some(existing.clone()))
     }
 
+    async fn save_binding_readiness(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let mut bindings = self.bindings.lock().expect("bindings");
+        let Some(existing) = bindings.iter_mut().find(|candidate| {
+            candidate.organization_id == binding.organization_id
+                && candidate.id == binding.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == expected_config_version
+                && candidate.updated_at == expected_updated_at
+        }) else {
+            return Ok(None);
+        };
+        *existing = binding.clone();
+        Ok(Some(existing.clone()))
+    }
+
     async fn archive_binding(
         &self,
         organization_id: &str,

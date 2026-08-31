@@ -108,6 +108,19 @@ const UPDATE_BINDING_CONFIGURATION: &str = "UPDATE issuance_service.canvas_progr
      readiness_checks, readiness_validated_at, activated_at, archived_at,
      credential_template_snapshot, enabled, created_at, updated_at";
 
+const UPDATE_BINDING_READINESS: &str = "UPDATE issuance_service.canvas_program_bindings
+ SET validated_config_version = $5, readiness_checks = $6,
+     readiness_validated_at = $7, credential_template_snapshot = $8
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND archived_at IS NULL
+ RETURNING id, organization_id, platform_id, application_template_id,
+     credential_template_id, display_name, flow_mode, direct_issue_enabled,
+     auto_approve_on_evidence, evidence_requirements, canvas_scope,
+     delivery_mode, issuer_mode, approval_policy_set_id, deployment_profile_id,
+     feature_flags, canvas_credentials, config_version, validated_config_version,
+     readiness_checks, readiness_validated_at, activated_at, archived_at,
+     credential_template_snapshot, enabled, created_at, updated_at";
+
 const ARCHIVE_BINDING: &str = "UPDATE issuance_service.canvas_program_bindings
  SET enabled = false, archived_at = $4, updated_at = $4
  WHERE organization_id = $1 AND id = $2 AND config_version = $3
@@ -811,6 +824,38 @@ impl PostgresCanvasManagementRepository {
         binding_from_row(row).map(Some)
     }
 
+    pub async fn save_binding_readiness(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        if binding.config_version != expected_config_version
+            || binding.updated_at != expected_updated_at
+            || binding.validated_config_version != Some(expected_config_version)
+            || binding.readiness_validated_at.is_none()
+            || binding.readiness_checks.is_empty()
+        {
+            return Err(CanvasManagementRepositoryError::ConfigurationChanged);
+        }
+        sqlx::query(UPDATE_BINDING_READINESS)
+            .bind(&binding.organization_id)
+            .bind(&binding.id)
+            .bind(version_i32(expected_config_version)?)
+            .bind(expected_updated_at)
+            .bind(version_i32(binding.validated_config_version.ok_or(
+                CanvasManagementRepositoryError::ConfigurationChanged,
+            )?)?)
+            .bind(Value::Array(binding.readiness_checks.clone()))
+            .bind(binding.readiness_validated_at)
+            .bind(Value::Object(binding.credential_template_snapshot.clone()))
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .map(binding_from_row)
+            .transpose()
+    }
+
     pub async fn archive_binding(
         &self,
         organization_id: &str,
@@ -1014,6 +1059,21 @@ impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
             self,
             binding,
             expected_config_version,
+        )
+        .await
+    }
+
+    async fn save_binding_readiness(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::save_binding_readiness(
+            self,
+            binding,
+            expected_config_version,
+            expected_updated_at,
         )
         .await
     }
@@ -1381,6 +1441,12 @@ mod tests {
         assert!(INVALIDATE_PLATFORM_BINDINGS.contains("validated_config_version = NULL"));
         assert!(INVALIDATE_PLATFORM_BINDINGS.contains("readiness_checks = '[]'::jsonb"));
         assert!(INVALIDATE_PLATFORM_BINDINGS.contains("activated_at = NULL"));
+        assert!(UPDATE_BINDING_READINESS.contains("organization_id = $1"));
+        assert!(UPDATE_BINDING_READINESS.contains("config_version = $3"));
+        assert!(UPDATE_BINDING_READINESS.contains("updated_at = $4"));
+        assert!(UPDATE_BINDING_READINESS.contains("archived_at IS NULL"));
+        assert!(UPDATE_BINDING_READINESS.contains("validated_config_version = $5"));
+        assert!(UPDATE_BINDING_READINESS.contains("credential_template_snapshot = $8"));
     }
 
     #[test]

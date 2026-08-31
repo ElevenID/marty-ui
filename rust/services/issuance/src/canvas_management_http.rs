@@ -1431,6 +1431,10 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
             StatusCode::NOT_FOUND,
             "Canvas program binding not found".to_owned(),
         ),
+        CanvasPlatformManagementError::ReadinessUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Canvas readiness dependencies are unavailable".to_owned(),
+        ),
         CanvasPlatformManagementError::ApplicationTemplateNotFound => (
             StatusCode::NOT_FOUND,
             "Application template not found".to_owned(),

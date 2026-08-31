@@ -695,12 +695,67 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .await
         .unwrap()
         .is_none());
+    let mut readiness_binding = updated_binding.clone();
+    readiness_binding.validated_config_version = Some(updated_binding.config_version);
+    readiness_binding.readiness_checks = vec![json!({
+        "code": "worker_heartbeat",
+        "component": "synchronization",
+        "status": "ready",
+        "blocking": true,
+        "remediation": "",
+        "timestamp": "2026-08-30T22:00:14+00:00"
+    })];
+    readiness_binding.readiness_validated_at = Some(now + chrono::Duration::seconds(14));
+    readiness_binding.credential_template_snapshot = json!({
+        "id": "credential-template-native",
+        "status": "active"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let readiness_binding = repository
+        .save_binding_readiness(
+            &readiness_binding,
+            updated_binding.config_version,
+            updated_binding.updated_at,
+        )
+        .await
+        .unwrap()
+        .expect("binding readiness CAS");
+    assert_eq!(
+        readiness_binding.validated_config_version,
+        Some(updated_binding.config_version)
+    );
+    assert_eq!(readiness_binding.readiness_checks.len(), 1);
+    assert_eq!(
+        readiness_binding.credential_template_snapshot["id"],
+        "credential-template-native"
+    );
+    assert_eq!(readiness_binding.updated_at, updated_binding.updated_at);
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings
+         SET updated_at = $2 WHERE id = $1",
+    )
+    .bind(&readiness_binding.id)
+    .bind(now + chrono::Duration::seconds(15))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .save_binding_readiness(
+            &readiness_binding,
+            readiness_binding.config_version,
+            readiness_binding.updated_at,
+        )
+        .await
+        .unwrap()
+        .is_none());
     let archived_binding = repository
         .archive_binding(
             "org-management",
             &updated_binding.id,
             updated_binding.config_version,
-            now + chrono::Duration::seconds(14),
+            now + chrono::Duration::seconds(16),
         )
         .await
         .unwrap()

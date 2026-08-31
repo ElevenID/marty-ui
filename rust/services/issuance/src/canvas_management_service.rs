@@ -27,6 +27,10 @@ use crate::{
     canvas_management_domain::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
     },
+    canvas_readiness::{
+        apply_canvas_readiness_result, evaluate_canvas_binding_readiness, CanvasBindingReadiness,
+        CanvasReadinessInputs,
+    },
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
 };
@@ -83,6 +87,8 @@ pub enum CanvasPlatformManagementError {
     RepositoryUnavailable,
     #[error("Canvas program binding not found")]
     BindingNotFound,
+    #[error("Canvas readiness dependencies are not configured")]
+    ReadinessUnavailable,
     #[error("Application template not found")]
     ApplicationTemplateNotFound,
     #[error("Canvas Credentials configuration requires an organization-owned API token secret")]
@@ -200,6 +206,13 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_config_version: i64,
     ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
 
+    async fn save_binding_readiness(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        expected_config_version: i64,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+
     async fn archive_binding(
         &self,
         organization_id: &str,
@@ -207,6 +220,16 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_config_version: i64,
         now: DateTime<Utc>,
     ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+}
+
+#[async_trait]
+pub trait CanvasReadinessInputProvider: Send + Sync {
+    async fn inputs(
+        &self,
+        platform: &CanvasPlatformRecord,
+        binding: &CanvasProgramBindingRecord,
+        evaluated_at: DateTime<Utc>,
+    ) -> CanvasReadinessInputs;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -222,6 +245,12 @@ pub struct CanvasPlatformProbeResult {
     pub probe: CanvasLtiProbeResponse,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasBindingValidationResult {
+    pub binding: CanvasProgramBindingRecord,
+    pub readiness: CanvasBindingReadiness,
+}
+
 #[derive(Clone)]
 pub struct CanvasPlatformManagementService {
     repository: Arc<dyn CanvasPlatformManagementRepository>,
@@ -231,6 +260,7 @@ pub struct CanvasPlatformManagementService {
     lti_probe_config: CanvasLtiJwksRefreshConfig,
     lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
     canvas_credentials_origins: Arc<BTreeSet<String>>,
+    readiness_input_provider: Option<Arc<dyn CanvasReadinessInputProvider>>,
 }
 
 impl std::fmt::Debug for CanvasPlatformManagementService {
@@ -241,6 +271,10 @@ impl std::fmt::Debug for CanvasPlatformManagementService {
             .field("origin_policy", &self.origin_policy)
             .field("issuer_base_url", &self.issuer_base_url)
             .field("lti_probe_config", &self.lti_probe_config)
+            .field(
+                "readiness_input_provider_configured",
+                &self.readiness_input_provider.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -264,6 +298,7 @@ impl CanvasPlatformManagementService {
             canvas_credentials_origins: Arc::new(BTreeSet::from([
                 "https://api.badgr.io".to_owned()
             ])),
+            readiness_input_provider: None,
         }
     }
 
@@ -286,6 +321,7 @@ impl CanvasPlatformManagementService {
             canvas_credentials_origins: Arc::new(BTreeSet::from([
                 "https://api.badgr.io".to_owned()
             ])),
+            readiness_input_provider: None,
         }
     }
 
@@ -301,6 +337,15 @@ impl CanvasPlatformManagementService {
                 .filter_map(|value| trusted_https_origin(&value)),
         );
         self.canvas_credentials_origins = Arc::new(trusted);
+        self
+    }
+
+    #[must_use]
+    pub fn with_readiness_input_provider(
+        mut self,
+        provider: Arc<dyn CanvasReadinessInputProvider>,
+    ) -> Self {
+        self.readiness_input_provider = Some(provider);
         self
     }
 
@@ -557,6 +602,46 @@ impl CanvasPlatformManagementService {
             .map_err(map_binding_repository_error)?
             .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
         Ok(())
+    }
+
+    pub async fn validate_binding(
+        &self,
+        binding_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasBindingValidationResult, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let mut binding = self.active_binding(organization_id, binding_id).await?;
+        let platform = self
+            .active_platform(organization_id, &binding.platform_id)
+            .await?;
+        let application_template = self
+            .repository
+            .application_template(&binding.application_template_id)
+            .await
+            .map_err(map_binding_repository_error)?;
+        let evaluated_at = Utc::now();
+        let readiness_input_provider = self
+            .readiness_input_provider
+            .as_ref()
+            .ok_or(CanvasPlatformManagementError::ReadinessUnavailable)?;
+        let mut inputs = readiness_input_provider
+            .inputs(&platform, &binding, evaluated_at)
+            .await;
+        inputs.application_template = application_template;
+        let readiness =
+            evaluate_canvas_binding_readiness(&platform, &binding, &inputs, evaluated_at);
+        let expected_config_version = binding.config_version;
+        let expected_updated_at = binding.updated_at;
+        apply_canvas_readiness_result(&mut binding, &readiness)
+            .map_err(|_| CanvasPlatformManagementError::ConfigurationChanged)?;
+        let binding = self
+            .repository
+            .save_binding_readiness(&binding, expected_config_version, expected_updated_at)
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(CanvasBindingValidationResult { binding, readiness })
     }
 
     pub async fn update(
@@ -1049,7 +1134,11 @@ fn map_archive_repository_error(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+        time::Duration,
+    };
 
     use tokio::sync::Mutex;
 
@@ -1058,6 +1147,69 @@ mod tests {
         CanvasDeliveryMode, CanvasEvidenceFactType, CanvasEvidencePassRuleInput,
         CanvasEvidenceRequirementInput, CanvasEvidenceScopeInput, CanvasEvidenceSource,
     };
+    use crate::canvas_readiness::{CanvasOAuthReadinessConnection, CanvasSyncReadiness};
+
+    #[derive(Clone, Debug)]
+    struct ReadyInputProvider;
+
+    #[async_trait]
+    impl CanvasReadinessInputProvider for ReadyInputProvider {
+        async fn inputs(
+            &self,
+            _platform: &CanvasPlatformRecord,
+            _binding: &CanvasProgramBindingRecord,
+            _evaluated_at: DateTime<Utc>,
+        ) -> CanvasReadinessInputs {
+            CanvasReadinessInputs {
+                rollout_allowed: true,
+                lti_metadata_ready: true,
+                lti_tool_signing_ready: true,
+                oauth_lookup_succeeded: true,
+                oauth_connection: Some(CanvasOAuthReadinessConnection {
+                    connected: true,
+                    reauthorization_required: false,
+                    access_token_secret_configured: true,
+                    capabilities: BTreeSet::from(["course_completion".to_owned()]),
+                    scopes: crate::canvas_oauth::scopes_for_capabilities(&[
+                        "course_completion".to_owned()
+                    ])
+                    .into_iter()
+                    .collect(),
+                }),
+                worker_heartbeat_configured: true,
+                sync_state: Some(CanvasSyncReadiness {
+                    dead_lettered: false,
+                    stale_backlog: false,
+                }),
+                application_template: None,
+                credential_template: json!({
+                    "id": "credential-template-1",
+                    "organization_id": "org-1",
+                    "status": "active",
+                    "credential_type": "OpenBadgeCredential",
+                    "credential_payload_format": "dc+sd-jwt",
+                    "revocation_profile_id": "status-profile-1",
+                    "issuer_did": "did:web:issuer.example.edu:orgs:org-1",
+                    "issuer_algorithm": "ES256"
+                })
+                .as_object()
+                .expect("credential template object")
+                .clone(),
+                credential_status_profile: json!({
+                    "id": "status-profile-1",
+                    "organization_id": "org-1",
+                    "status": "active"
+                })
+                .as_object()
+                .expect("status profile object")
+                .clone(),
+                kms_did_signing_ready: true,
+                learner_identity_status: None,
+                evidence_observed_at: None,
+                evidence_max_age: Duration::from_secs(900),
+            }
+        }
+    }
 
     #[derive(Default)]
     struct MemoryRepository {
@@ -1370,6 +1522,26 @@ mod tests {
                     && candidate.id == binding.id
                     && candidate.archived_at.is_none()
                     && candidate.config_version == expected_config_version
+            }) else {
+                return Ok(None);
+            };
+            *existing = binding.clone();
+            Ok(Some(existing.clone()))
+        }
+
+        async fn save_binding_readiness(
+            &self,
+            binding: &CanvasProgramBindingRecord,
+            expected_config_version: i64,
+            expected_updated_at: DateTime<Utc>,
+        ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            let mut bindings = self.bindings.lock().await;
+            let Some(existing) = bindings.iter_mut().find(|candidate| {
+                candidate.organization_id == binding.organization_id
+                    && candidate.id == binding.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == expected_config_version
+                    && candidate.updated_at == expected_updated_at
             }) else {
                 return Ok(None);
             };
@@ -1730,6 +1902,81 @@ mod tests {
         let archived = &repository.bindings.lock().await[0];
         assert!(archived.archived_at.is_some());
         assert!(!archived.enabled);
+    }
+
+    #[tokio::test]
+    async fn readiness_validation_persists_only_the_exact_evaluated_binding_revision() {
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .templates
+            .lock()
+            .await
+            .push(CanvasApplicationTemplateProjection {
+                id: "application-template-1".to_owned(),
+                organization_id: "org-1".to_owned(),
+                credential_template_id: Some("credential-template-1".to_owned()),
+                approval_policy_set_id: Some("policy-1".to_owned()),
+                active: true,
+            });
+        let unconfigured_service = service(repository.clone());
+        let service = unconfigured_service
+            .clone()
+            .with_readiness_input_provider(Arc::new(ReadyInputProvider));
+        let platform = service
+            .create(
+                request("Canvas", true),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        {
+            let mut platforms = repository.platforms.lock().await;
+            let platform = platforms.first_mut().expect("platform");
+            platform.enabled = true;
+            platform.registration_status = "installed".to_owned();
+        }
+        let binding = service
+            .create_binding(
+                &platform.id,
+                binding_request("Course 101", "course-101"),
+                Some("management-secret"),
+                Some("org-1"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unconfigured_service
+                .validate_binding(&binding.id, Some("management-secret"), Some("org-1"))
+                .await,
+            Err(CanvasPlatformManagementError::ReadinessUnavailable)
+        );
+        let validation = service
+            .validate_binding(&binding.id, Some("management-secret"), Some("org-1"))
+            .await
+            .unwrap();
+        assert!(validation.readiness.ready);
+        assert_eq!(validation.readiness.checks.len(), 23);
+        assert_eq!(
+            validation.binding.validated_config_version,
+            Some(binding.config_version)
+        );
+        assert_eq!(validation.binding.updated_at, binding.updated_at);
+        assert_eq!(repository.bindings.lock().await[0], validation.binding);
+        assert_eq!(
+            service
+                .validate_binding(&binding.id, Some("management-secret"), Some("org-2"))
+                .await,
+            Err(CanvasPlatformManagementError::BindingNotFound)
+        );
+
+        let stale = validation.binding.clone();
+        repository.bindings.lock().await[0].updated_at = Utc::now();
+        assert!(repository
+            .save_binding_readiness(&stale, stale.config_version, stale.updated_at)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
