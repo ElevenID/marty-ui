@@ -16,6 +16,23 @@ LTI signing, provider URL policy, and candidate persistence owners. The OAuth la
 provider, and deliberately keeps Rust's stronger atomic tenant-scoped
 connection/secret cleanup.
 
+The candidate now treats lease and configuration ownership as side-effect
+boundaries: the processor future is dropped on the first failed renewal,
+dead-letter and expired-lease target disables use the leased target generation,
+and platform/binding resources are loaded as one enabled, non-archived,
+generation-bound snapshot. The fact/policy transaction re-locks and verifies
+that target, platform, binding, application identity/status/context, and
+template policy/status are still the exact evaluated generation before any
+fact or policy effect. Provider reads use distinct frozen 64 KiB token and
+8 MiB page limits, a 200-page ceiling, completeness-preserving pagination, and
+semantic success validation for every REST/AGS fact shape. Self-managed LTI
+origins are controlled by `CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST`, independently
+of private-network authorization, and are restricted to same-origin services.
+Focused unit tests execute lease-loss cancellation, malformed protocol
+mutations, pagination credential/item rejection, and independent self-managed
+origin policy; the PostgreSQL contract exercises dead-letter and recovery
+reconfiguration races when its database gate is configured.
+
 This candidate does not change Compose, self-host, Kubernetes, beta, or
 production traffic. The executable uses the native processor while retaining
 the rollout gate:

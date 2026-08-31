@@ -9,6 +9,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fmt,
+    future::Future,
     sync::Arc,
     time::Duration,
 };
@@ -259,6 +260,7 @@ pub struct CanvasSyncJob {
     pub id: String,
     pub organization_id: String,
     pub target_id: String,
+    pub target_config_version: i32,
     pub status: CanvasSyncJobStatus,
     pub attempt_count: i32,
     pub max_attempts: i32,
@@ -390,6 +392,7 @@ pub trait CanvasSyncWorkerRepository: Send + Sync {
         job: &CanvasSyncJob,
         worker_id: &str,
         failure: &JobFailure<'_>,
+        target_config_version: i32,
     ) -> Result<Option<CanvasSyncJobStatus>, CanvasSyncRepositoryError>;
 }
 
@@ -550,7 +553,7 @@ impl CanvasSyncWorker {
         &self,
         job: CanvasSyncJob,
     ) -> Result<CanvasSyncJobStatus, EscapedJobError> {
-        let Some(mut target) = self
+        let Some(target) = self
             .repository
             .target(&job.organization_id, &job.target_id)
             .await?
@@ -567,18 +570,13 @@ impl CanvasSyncWorker {
                 )
                 .await;
         };
+        require_leased_target_generation(&job, &target)?;
         if !self
             .repository
             .touch_target_heartbeat(&target, &self.config.worker_id)
             .await?
         {
-            if let Some(current) = self
-                .repository
-                .target(&job.organization_id, &job.target_id)
-                .await?
-            {
-                target = current;
-            }
+            return Err(EscapedJobError::StaleLease);
         }
 
         let evaluation = async {
@@ -590,28 +588,25 @@ impl CanvasSyncWorker {
             }
             self.processor.process(&target).await
         };
-        let processing = tokio::time::timeout(self.config.job_timeout, evaluation);
-        tokio::pin!(processing);
-        let mut lease_maintenance_active = true;
-        let outcome = loop {
-            tokio::select! {
-                outcome = &mut processing => break outcome,
-                () = tokio::time::sleep(self.config.lease_renewal_interval()), if lease_maintenance_active => {
-                    lease_maintenance_active = self.repository.renew_lease(
-                        &job,
-                        &self.config.worker_id,
-                        self.config.lease_seconds,
-                    ).await?;
-                    if lease_maintenance_active {
-                        let _ = self.repository.touch_target_heartbeat(
-                            &target,
-                            &self.config.worker_id,
-                        ).await?;
-                        self.heartbeat("processing", 1).await?;
-                    }
+        let outcome = await_with_lease_renewal(
+            tokio::time::timeout(self.config.job_timeout, evaluation),
+            self.config.lease_renewal_interval(),
+            || async {
+                let renewed = self
+                    .repository
+                    .renew_lease(&job, &self.config.worker_id, self.config.lease_seconds)
+                    .await?;
+                if renewed {
+                    let _ = self
+                        .repository
+                        .touch_target_heartbeat(&target, &self.config.worker_id)
+                        .await?;
+                    self.heartbeat("processing", 1).await?;
                 }
-            }
-        };
+                Ok(renewed)
+            },
+        )
+        .await?;
         let status = match outcome {
             Err(_) => {
                 self.persist_failure(
@@ -664,7 +659,12 @@ impl CanvasSyncWorker {
                 } else {
                     let safe = safe_result(&result);
                     self.repository
-                        .complete_job(&job, &self.config.worker_id, target.config_version, &safe)
+                        .complete_job(
+                            &job,
+                            &self.config.worker_id,
+                            job.target_config_version,
+                            &safe,
+                        )
                         .await?
                         .then_some(CanvasSyncJobStatus::Succeeded)
                         .ok_or(EscapedJobError::StaleLease)
@@ -687,7 +687,12 @@ impl CanvasSyncWorker {
         failure.error_code = &code;
         failure.error_summary = summary.as_deref();
         self.repository
-            .fail_job(job, &self.config.worker_id, &failure)
+            .fail_job(
+                job,
+                &self.config.worker_id,
+                &failure,
+                job.target_config_version,
+            )
             .await?
             .ok_or(EscapedJobError::StaleLease)
     }
@@ -1007,4 +1012,109 @@ pub(crate) fn random_job_retry_delay_seconds(attempt_count: i32, retry_after: Op
 
 pub(crate) const fn maximum_attempts() -> i32 {
     MAX_ATTEMPTS
+}
+
+async fn await_with_lease_renewal<F, R, RF>(
+    processing: F,
+    interval: Duration,
+    mut renew: R,
+) -> Result<F::Output, EscapedJobError>
+where
+    F: Future,
+    R: FnMut() -> RF,
+    RF: Future<Output = Result<bool, CanvasSyncRepositoryError>>,
+{
+    tokio::pin!(processing);
+    loop {
+        tokio::select! {
+            outcome = &mut processing => return Ok(outcome),
+            () = tokio::time::sleep(interval) => {
+                if !renew().await? {
+                    // Returning drops the pinned processor future immediately.
+                    return Err(EscapedJobError::StaleLease);
+                }
+            }
+        }
+    }
+}
+
+fn require_leased_target_generation(
+    job: &CanvasSyncJob,
+    target: &CanvasSyncTarget,
+) -> Result<(), EscapedJobError> {
+    if target.config_version != job.target_config_version || !target.enabled {
+        return Err(EscapedJobError::StaleLease);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    use super::*;
+
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn lease_loss_immediately_drops_processing_future() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let signal = DropSignal(dropped.clone());
+        let processing = async move {
+            let _signal = signal;
+            std::future::pending::<()>().await;
+        };
+        let result =
+            await_with_lease_renewal(processing, Duration::from_millis(1), || async { Ok(false) })
+                .await;
+        assert!(matches!(result, Err(EscapedJobError::StaleLease)));
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn leased_job_never_adopts_a_reconfigured_target() {
+        let now = Utc::now();
+        let job = CanvasSyncJob {
+            id: "job".into(),
+            organization_id: "org".into(),
+            target_id: "target".into(),
+            target_config_version: 3,
+            status: CanvasSyncJobStatus::Leased,
+            attempt_count: 1,
+            max_attempts: 8,
+            available_at: now,
+            lease_owner: Some("worker".into()),
+            lease_expires_at: Some(now + TimeDelta::minutes(1)),
+            created_at: now,
+            started_at: Some(now),
+        };
+        let target = CanvasSyncTarget {
+            id: "target".into(),
+            organization_id: "org".into(),
+            platform_id: "platform".into(),
+            binding_id: "binding".into(),
+            target_type: CanvasSyncTargetType::LearnerApplication,
+            logical_key: "logical".into(),
+            application_id: Some("application".into()),
+            candidate_id: None,
+            enabled: true,
+            schedule_seconds: 60,
+            config_version: 4,
+            metadata: Map::new(),
+            created_at: now,
+        };
+        assert!(matches!(
+            require_leased_target_generation(&job, &target),
+            Err(EscapedJobError::StaleLease)
+        ));
+    }
 }

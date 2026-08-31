@@ -1,6 +1,8 @@
 use chrono::{Duration, Utc};
 use marty_issuance_service::{
-    canvas_sync_worker::{CanvasSyncJobStatus, CanvasSyncWorkerRepository, WorkerHeartbeat},
+    canvas_sync_worker::{
+        CanvasSyncJobStatus, CanvasSyncWorkerRepository, JobFailure, WorkerHeartbeat,
+    },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -54,9 +56,11 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
 
     seed_target(&pool, "target-expired-retry", 900).await;
     seed_target(&pool, "target-expired-final", 900).await;
+    seed_target(&pool, "target-expired-reconfigured", 900).await;
     for (id, target, attempt) in [
         ("expired-retry", "target-expired-retry", 7),
         ("expired-final", "target-expired-final", 8),
+        ("expired-reconfigured", "target-expired-reconfigured", 8),
     ] {
         sqlx::query(
             "INSERT INTO issuance_service.canvas_evidence_sync_jobs
@@ -65,7 +69,8 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
                  updated_at, started_at)
              VALUES ($1, 'org-1', $2, 'leased', $3, 8, clock_timestamp(),
                      'crashed-worker', clock_timestamp() - interval '1 second',
-                     '{}'::json, clock_timestamp(), clock_timestamp(), clock_timestamp())",
+                     jsonb_build_object('target_config_version', 3),
+                     clock_timestamp(), clock_timestamp(), clock_timestamp())",
         )
         .bind(id)
         .bind(target)
@@ -74,6 +79,13 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         .await
         .unwrap();
     }
+    sqlx::query(
+        "UPDATE issuance_service.canvas_evidence_sync_targets
+         SET config_version = 4, enabled = true WHERE id = 'target-expired-reconfigured'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let recovery_leased = repository.lease_ready("worker-1", 10, 120).await.unwrap();
     let retry: (String, String) = sqlx::query_as(
         "SELECT status, last_error_code FROM issuance_service.canvas_evidence_sync_jobs
@@ -124,6 +136,46 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         .await
         .unwrap());
 
+    sqlx::query(
+        "UPDATE issuance_service.canvas_evidence_sync_targets
+         SET config_version = 4, enabled = true WHERE id = 'target-new'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        repository
+            .fail_job(
+                &leased,
+                "worker-1",
+                &JobFailure {
+                    error_code: "terminal_test",
+                    error_summary: None,
+                    retry_after_seconds: None,
+                    force_dead_letter: true,
+                },
+                leased.target_config_version,
+            )
+            .await
+            .unwrap(),
+        Some(CanvasSyncJobStatus::DeadLetter)
+    );
+    let reconfigured_enabled: bool = sqlx::query_scalar(
+        "SELECT enabled FROM issuance_service.canvas_evidence_sync_targets
+         WHERE id = 'target-expired-reconfigured'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(reconfigured_enabled);
+    assert!(sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM issuance_service.canvas_evidence_sync_targets
+         WHERE id = 'target-new'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap());
+
     let heartbeat = WorkerHeartbeat {
         worker_id: "worker-1".to_owned(),
         started_at: Utc::now() - Duration::minutes(1),
@@ -143,6 +195,133 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     assert_eq!(metadata["leased_jobs"], 1);
     assert_eq!(metadata["process"], "standalone");
     assert_eq!(metadata["processor_configured"], false);
+
+    seed_target(&pool, "target-complete-current", 900).await;
+    seed_target(&pool, "target-complete-stale", 900).await;
+    seed_target(&pool, "target-complete-during", 900).await;
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_evidence_sync_jobs
+            (id, organization_id, target_id, status, attempt_count, max_attempts,
+             available_at, result, created_at, updated_at)
+         VALUES
+            ('complete-current', 'org-1', 'target-complete-current', 'queued', 0, 8,
+             clock_timestamp(), '{}'::json, clock_timestamp(), clock_timestamp()),
+            ('complete-stale', 'org-1', 'target-complete-stale', 'queued', 0, 8,
+             clock_timestamp(), '{}'::json, clock_timestamp(), clock_timestamp()),
+            ('complete-during', 'org-1', 'target-complete-during', 'queued', 0, 8,
+             clock_timestamp(), '{}'::json, clock_timestamp(), clock_timestamp()),
+            ('orphan', 'org-1', 'missing-target', 'queued', 0, 8,
+             clock_timestamp(), '{}'::json, clock_timestamp(), clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let race_jobs = repository
+        .lease_ready("race-worker", 10, 120)
+        .await
+        .unwrap();
+    let current = race_jobs
+        .iter()
+        .find(|job| job.id == "complete-current")
+        .unwrap();
+    let stale = race_jobs
+        .iter()
+        .find(|job| job.id == "complete-stale")
+        .unwrap();
+    let during = race_jobs
+        .iter()
+        .find(|job| job.id == "complete-during")
+        .unwrap()
+        .clone();
+    let orphan = race_jobs.iter().find(|job| job.id == "orphan").unwrap();
+    assert_eq!(orphan.target_config_version, 0);
+    assert!(repository
+        .complete_job(
+            current,
+            "race-worker",
+            current.target_config_version,
+            &serde_json::Map::new(),
+        )
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.canvas_evidence_sync_targets
+         SET config_version = 4 WHERE id = 'target-complete-current'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let completed_status: String = sqlx::query_scalar(
+        "SELECT status FROM issuance_service.canvas_evidence_sync_jobs WHERE id = 'complete-current'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(completed_status, "succeeded");
+    sqlx::query(
+        "UPDATE issuance_service.canvas_evidence_sync_targets
+         SET config_version = 4 WHERE id = 'target-complete-stale'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(!repository
+        .complete_job(
+            stale,
+            "race-worker",
+            stale.target_config_version,
+            &serde_json::Map::new(),
+        )
+        .await
+        .unwrap());
+    let stale_status: String = sqlx::query_scalar(
+        "SELECT status FROM issuance_service.canvas_evidence_sync_jobs WHERE id = 'complete-stale'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stale_status, "leased");
+
+    let mut reconfiguration = pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.canvas_evidence_sync_targets
+         SET config_version = 4 WHERE id = 'target-complete-during'",
+    )
+    .execute(&mut *reconfiguration)
+    .await
+    .unwrap();
+    let during_repository = repository.clone();
+    let completion = tokio::spawn(async move {
+        during_repository
+            .complete_job(
+                &during,
+                "race-worker",
+                during.target_config_version,
+                &serde_json::Map::new(),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    reconfiguration.commit().await.unwrap();
+    assert!(!completion.await.unwrap());
+    assert_eq!(
+        repository
+            .fail_job(
+                orphan,
+                "race-worker",
+                &JobFailure {
+                    error_code: "canvas_sync_target_not_found",
+                    error_summary: None,
+                    retry_after_seconds: None,
+                    force_dead_letter: true,
+                },
+                orphan.target_config_version,
+            )
+            .await
+            .unwrap(),
+        Some(CanvasSyncJobStatus::DeadLetter),
+    );
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {
@@ -189,15 +368,14 @@ async fn setup_schema(pool: &sqlx::PgPool) {
     ] {
         sqlx::query(statement).execute(pool).await.unwrap();
     }
-    sqlx::query(
+    for statement in [
         "INSERT INTO issuance_service.canvas_platforms
-            VALUES ('platform-1', 'org-1', true, NULL, 3);
-         INSERT INTO issuance_service.canvas_program_bindings
-            VALUES ('binding-1', 'org-1', 'platform-1', true, NULL, 3);",
-    )
-    .execute(pool)
-    .await
-    .unwrap();
+            VALUES ('platform-1', 'org-1', true, NULL, 3)",
+        "INSERT INTO issuance_service.canvas_program_bindings
+            VALUES ('binding-1', 'org-1', 'platform-1', true, NULL, 3)",
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+    }
 }
 
 async fn seed_target(pool: &sqlx::PgPool, id: &str, schedule_seconds: i32) {

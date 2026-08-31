@@ -8,7 +8,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
-    canvas_award_candidate_postgres::record_fact_and_policy,
+    canvas_award_candidate_postgres::{record_fact_and_policy, CanvasSyncCommitFence},
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_sync_processor::{
         CanvasAuthoritativeObservation, CanvasCandidateObservationSnapshot, CanvasFactCommit,
@@ -36,45 +36,49 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         &self,
         target: &CanvasSyncTarget,
     ) -> Result<Option<CanvasSyncResources>, CanvasSyncProcessingError> {
+        // Platform and binding generation are captured by one statement so a
+        // reconfiguration cannot yield a mixed resource snapshot.
         let platform = sqlx::query(
-            "SELECT id, organization_id, COALESCE(canvas_base_url, '') AS canvas_base_url,
-                    COALESCE(lti_issuer, '') AS lti_issuer,
-                    COALESCE(lti_client_id, '') AS lti_client_id,
-                    COALESCE(lti_deployment_id, '') AS lti_deployment_id,
-                    COALESCE(lti_openid_configuration->>'token_endpoint', '') AS lti_auth_token_url,
-                    config_version
-             FROM issuance_service.canvas_platforms
-             WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL",
+            "SELECT p.id, p.organization_id,
+                    COALESCE(p.canvas_base_url, '') AS canvas_base_url,
+                    COALESCE(p.lti_issuer, '') AS lti_issuer,
+                    COALESCE(p.lti_client_id, '') AS lti_client_id,
+                    COALESCE(p.lti_deployment_id, '') AS lti_deployment_id,
+                    COALESCE(p.lti_openid_configuration->>'token_endpoint', '') AS lti_auth_token_url,
+                    p.config_version,
+                    jsonb_build_object(
+                        'id', b.id, 'organization_id', b.organization_id,
+                        'platform_id', b.platform_id,
+                        'application_template_id', b.application_template_id,
+                        'approval_policy_set_id', b.approval_policy_set_id,
+                        'auto_approve_on_evidence', b.auto_approve_on_evidence,
+                        'evidence_requirements', b.evidence_requirements,
+                        'feature_flags', b.feature_flags, 'enabled', b.enabled,
+                        'config_version', b.config_version) AS binding
+             FROM issuance_service.canvas_platforms p
+             JOIN issuance_service.canvas_program_bindings b
+               ON b.organization_id = p.organization_id AND b.platform_id = p.id
+             WHERE p.id = $1 AND p.organization_id = $2 AND b.id = $3
+               AND p.enabled = true AND p.archived_at IS NULL
+               AND b.enabled = true AND b.archived_at IS NULL
+               AND b.config_version = $4",
         )
         .bind(&target.platform_id)
         .bind(&target.organization_id)
+        .bind(&target.binding_id)
+        .bind(target.config_version)
         .fetch_optional(&self.pool)
         .await
         .map_err(repository_error)?;
         let Some(platform) = platform else {
             return Ok(None);
         };
-        let binding = sqlx::query_scalar::<_, Value>(
-            "SELECT jsonb_build_object(
-                'id', id, 'organization_id', organization_id, 'platform_id', platform_id,
-                'application_template_id', application_template_id,
-                'approval_policy_set_id', approval_policy_set_id,
-                'auto_approve_on_evidence', auto_approve_on_evidence,
-                'evidence_requirements', evidence_requirements, 'feature_flags', feature_flags,
-                'enabled', enabled, 'config_version', config_version)
-             FROM issuance_service.canvas_program_bindings
-             WHERE id = $1 AND organization_id = $2 AND platform_id = $3",
-        )
-        .bind(&target.binding_id)
-        .bind(&target.organization_id)
-        .bind(&target.platform_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(repository_error)?
-        .and_then(|value| value.as_object().cloned());
-        let Some(binding) = binding else {
-            return Ok(None);
-        };
+        let binding = platform
+            .try_get::<Value, _>("binding")
+            .map_err(repository_error)?
+            .as_object()
+            .cloned()
+            .ok_or_else(unavailable)?;
         let application = if let Some(application_id) = target.application_id.as_deref() {
             sqlx::query(
                 "SELECT id, organization_id, application_template_id, applicant_identifier,
@@ -182,6 +186,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
 
     async fn record_fact(
         &self,
+        target: &CanvasSyncTarget,
         resources: &CanvasSyncResources,
         fact: &Value,
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError> {
@@ -201,6 +206,24 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             &resources.binding,
             template,
             fact,
+            Some(&CanvasSyncCommitFence {
+                target_id: target.id.clone(),
+                target_config_version: target.config_version,
+                platform_id: resources.platform.id.clone(),
+                platform_config_version: resources.platform.config_version,
+                binding_id: target.binding_id.clone(),
+                application_status: application.application.status.clone(),
+                application_integration_context: application
+                    .application
+                    .integration_context
+                    .clone(),
+                template_id: required_text(template, "id")?,
+                template_status: required_text(template, "status")?,
+                template_policy_set_id: template
+                    .get("approval_policy_set_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            }),
         )
         .await
         .map_err(|_| unavailable())?;
@@ -463,6 +486,19 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .map_err(repository_error)?;
         Ok(())
     }
+}
+
+fn required_text(
+    value: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<String, CanvasSyncProcessingError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(unavailable)
 }
 
 impl PostgresCanvasSyncProcessorRepository {

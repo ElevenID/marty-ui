@@ -8,6 +8,7 @@ use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
+    canvas_provider_http::CanvasHttpClientPolicy,
     canvas_sync_processor::NativeCanvasSyncProcessor,
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
@@ -48,6 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let worker_repository = Arc::new(PostgresCanvasSyncWorkerRepository::new(pool.clone()));
     let vault = Arc::new(PostgresIntegrationSecretVault::new(pool.clone(), cipher));
     let private_origins = comma_values("CANVAS_PRIVATE_ORIGIN_ALLOWLIST");
+    let self_managed_origins = comma_values("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
     let allow_private = env_bool("CANVAS_ALLOW_PRIVATE_BASE_URLS");
     let allow_localhost = env_bool("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS");
     let provider = Arc::new(HttpCanvasOAuthProvider::new_with_policy(
@@ -95,10 +97,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         oauth,
         issuance_api_key,
         signer,
-        Duration::from_secs(20),
-        private_origins,
-        allow_private,
-        allow_localhost,
+        CanvasHttpClientPolicy {
+            timeout: Duration::from_secs(20),
+            private_origin_allowlist: private_origins,
+            allow_private_networks: allow_private,
+            allow_http_localhost: allow_localhost,
+        },
+        self_managed_origins,
     ));
     let processor = Arc::new(NativeCanvasSyncProcessor::new(
         Arc::new(PostgresCanvasSyncProcessorRepository::new(pool.clone())),

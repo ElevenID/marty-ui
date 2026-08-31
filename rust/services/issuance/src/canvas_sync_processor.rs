@@ -143,6 +143,7 @@ pub trait CanvasSyncProcessorRepository: Send + Sync {
     ) -> Result<Option<CanvasLinkedIdentitySnapshot>, CanvasSyncProcessingError>;
     async fn record_fact(
         &self,
+        target: &CanvasSyncTarget,
         resources: &CanvasSyncResources,
         fact: &Value,
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError>;
@@ -326,7 +327,10 @@ impl NativeCanvasSyncProcessor {
             );
             // The reused atomic owner locks the application, advances the fact
             // head, evaluates policy, and creates/resolves correction reviews.
-            let commit = self.repository.record_fact(resources, &fact).await?;
+            let commit = self
+                .repository
+                .record_fact(target, resources, &fact)
+                .await?;
             checked.push(text(requirement.get("requirement_id")));
             if commit.inserted {
                 created += 1;
@@ -928,6 +932,7 @@ mod tests {
         }
         async fn record_fact(
             &self,
+            _: &CanvasSyncTarget,
             _: &CanvasSyncResources,
             fact: &Value,
         ) -> Result<CanvasFactCommit, CanvasSyncProcessingError> {

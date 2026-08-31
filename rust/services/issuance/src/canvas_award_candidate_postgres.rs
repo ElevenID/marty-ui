@@ -229,7 +229,15 @@ impl CanvasAwardCandidateRepository for PostgresCanvasAwardCandidateRepository {
         application_template: &Map<String, Value>,
         fact: &Value,
     ) -> Result<bool, CanvasAwardCandidateRepositoryError> {
-        record_fact_and_policy(&self.pool, application, binding, application_template, fact).await
+        record_fact_and_policy(
+            &self.pool,
+            application,
+            binding,
+            application_template,
+            fact,
+            None,
+        )
+        .await
     }
 
     async fn link_candidate(
@@ -286,6 +294,7 @@ pub(crate) async fn record_fact_and_policy(
     binding: &Map<String, Value>,
     application_template: &Map<String, Value>,
     fact: &Value,
+    sync_fence: Option<&CanvasSyncCommitFence>,
 ) -> Result<bool, CanvasAwardCandidateRepositoryError> {
     let fact = fact
         .as_object()
@@ -304,6 +313,9 @@ pub(crate) async fn record_fact_and_policy(
     let requirements = validated_requirements(binding)
         .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)?;
     let mut database = pool.begin().await.map_err(repository_error)?;
+    if let Some(fence) = sync_fence {
+        validate_sync_commit_fence(&mut database, application, fence).await?;
+    }
     let decision = record_fact_and_policy_in_transaction(
         &mut database,
         application,
@@ -318,6 +330,68 @@ pub(crate) async fn record_fact_and_policy(
     .ok_or(CanvasAwardCandidateRepositoryError::Unavailable)?;
     database.commit().await.map_err(repository_error)?;
     Ok(decision.get("allowed").and_then(Value::as_bool) == Some(true))
+}
+
+pub(crate) struct CanvasSyncCommitFence {
+    pub target_id: String,
+    pub target_config_version: i32,
+    pub platform_id: String,
+    pub platform_config_version: i32,
+    pub binding_id: String,
+    pub application_status: String,
+    pub application_integration_context: Value,
+    pub template_id: String,
+    pub template_status: String,
+    pub template_policy_set_id: Option<String>,
+}
+
+async fn validate_sync_commit_fence(
+    database: &mut Transaction<'_, Postgres>,
+    application: &CanvasLtiBootstrapApplication,
+    fence: &CanvasSyncCommitFence,
+) -> Result<(), CanvasAwardCandidateRepositoryError> {
+    let current: Option<i32> = sqlx::query_scalar(
+        "SELECT 1
+         FROM issuance_service.canvas_evidence_sync_targets t
+         JOIN issuance_service.canvas_platforms p
+           ON p.id = t.platform_id AND p.organization_id = t.organization_id
+         JOIN issuance_service.canvas_program_bindings b
+           ON b.id = t.binding_id AND b.platform_id = p.id
+          AND b.organization_id = t.organization_id
+         JOIN issuance_service.applications a
+           ON a.id = $7 AND a.organization_id = t.organization_id
+         JOIN issuance_service.application_templates at
+           ON at.id = a.application_template_id AND at.organization_id = a.organization_id
+         WHERE t.id = $1 AND t.organization_id = $2 AND t.config_version = $3
+           AND t.enabled = true AND p.id = $4 AND p.config_version = $5
+           AND p.enabled = true AND p.archived_at IS NULL
+           AND b.id = $6 AND b.config_version = $3
+           AND b.enabled = true AND b.archived_at IS NULL
+           AND a.application_template_id = $8 AND a.status = $9
+           AND a.integration_context = $10
+           AND at.id = $8 AND at.status = $11
+           AND at.approval_policy_set_id IS NOT DISTINCT FROM $12
+         FOR SHARE OF t, p, b, a, at",
+    )
+    .bind(&fence.target_id)
+    .bind(&application.organization_id)
+    .bind(fence.target_config_version)
+    .bind(&fence.platform_id)
+    .bind(fence.platform_config_version)
+    .bind(&fence.binding_id)
+    .bind(&application.id)
+    .bind(&fence.template_id)
+    .bind(&fence.application_status)
+    .bind(&fence.application_integration_context)
+    .bind(&fence.template_status)
+    .bind(&fence.template_policy_set_id)
+    .fetch_optional(&mut **database)
+    .await
+    .map_err(repository_error)?;
+    if current.is_none() {
+        return Err(CanvasAwardCandidateRepositoryError::Unavailable);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

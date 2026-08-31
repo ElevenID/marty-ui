@@ -144,11 +144,19 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                      lease_owner = $2,
                      lease_expires_at = clock_timestamp() + make_interval(secs => $3),
                      started_at = COALESCE(started_at, clock_timestamp()),
+                     result = jsonb_set(COALESCE(result::jsonb, '{}'::jsonb),
+                         '{target_config_version}',
+                         COALESCE(to_jsonb((SELECT config_version
+                                   FROM issuance_service.canvas_evidence_sync_targets
+                                   WHERE id = target_id AND organization_id = canvas_evidence_sync_jobs.organization_id)),
+                                  '0'::jsonb),
+                         true),
                      updated_at = clock_timestamp()
                  WHERE id = $1
                  RETURNING id, organization_id, target_id, status, attempt_count,
                            max_attempts, available_at, lease_owner, lease_expires_at,
-                           created_at, started_at",
+                           created_at, started_at,
+                           (result->>'target_config_version')::integer AS target_config_version",
             )
             .bind(id)
             .bind(worker_id)
@@ -413,6 +421,23 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         result: &Map<String, Value>,
     ) -> Result<bool, CanvasSyncRepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let target_updated: Option<String> = sqlx::query_scalar(
+            "UPDATE issuance_service.canvas_evidence_sync_targets
+             SET last_succeeded_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE id = $1 AND organization_id = $2 AND config_version = $3
+               AND enabled = true
+             RETURNING id",
+        )
+        .bind(&job.target_id)
+        .bind(&job.organization_id)
+        .bind(target_config_version)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        if target_updated.is_none() {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Ok(false);
+        }
         let updated: Option<String> = sqlx::query_scalar(
             "UPDATE issuance_service.canvas_evidence_sync_jobs
              SET status = 'succeeded', result = $5, last_error_code = NULL,
@@ -436,20 +461,6 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
             transaction.rollback().await.map_err(repository_error)?;
             return Ok(false);
         }
-        // A target CAS loss must not roll back the already-fenced successful
-        // job; a reconfigured target owns its newer projection.
-        sqlx::query(
-            "UPDATE issuance_service.canvas_evidence_sync_targets
-             SET last_succeeded_at = clock_timestamp(), updated_at = clock_timestamp()
-             WHERE id = $1 AND organization_id = $2 AND config_version = $3
-               AND enabled = true",
-        )
-        .bind(&job.target_id)
-        .bind(&job.organization_id)
-        .bind(target_config_version)
-        .execute(&mut *transaction)
-        .await
-        .map_err(repository_error)?;
         transaction.commit().await.map_err(repository_error)?;
         Ok(true)
     }
@@ -459,6 +470,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         job: &CanvasSyncJob,
         worker_id: &str,
         failure: &JobFailure<'_>,
+        target_config_version: i32,
     ) -> Result<Option<CanvasSyncJobStatus>, CanvasSyncRepositoryError> {
         let dead_letter = failure.force_dead_letter || job.attempt_count >= job.max_attempts;
         let status = if dead_letter {
@@ -505,10 +517,11 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
             sqlx::query(
                 "UPDATE issuance_service.canvas_evidence_sync_targets
                  SET enabled = false, updated_at = clock_timestamp()
-                 WHERE id = $1 AND organization_id = $2",
+                 WHERE id = $1 AND organization_id = $2 AND config_version = $3",
             )
             .bind(&job.target_id)
             .bind(&job.organization_id)
+            .bind(target_config_version)
             .execute(&mut *transaction)
             .await
             .map_err(repository_error)?;
@@ -522,7 +535,8 @@ async fn recover_expired_final(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<(), CanvasSyncRepositoryError> {
     let expired = sqlx::query(
-        "SELECT id, organization_id, target_id
+        "SELECT id, organization_id, target_id,
+                (result->>'target_config_version')::integer AS target_config_version
          FROM issuance_service.canvas_evidence_sync_jobs
          WHERE status = 'leased' AND lease_expires_at <= clock_timestamp()
            AND attempt_count >= max_attempts
@@ -535,6 +549,9 @@ async fn recover_expired_final(
         let id: String = row.try_get("id").map_err(repository_error)?;
         let organization_id: String = row.try_get("organization_id").map_err(repository_error)?;
         let target_id: String = row.try_get("target_id").map_err(repository_error)?;
+        let target_config_version: Option<i32> = row
+            .try_get("target_config_version")
+            .map_err(repository_error)?;
         sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_jobs
              SET status = 'dead_letter', lease_owner = NULL, lease_expires_at = NULL,
@@ -550,10 +567,11 @@ async fn recover_expired_final(
         sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
              SET enabled = false, updated_at = clock_timestamp()
-             WHERE id = $1 AND organization_id = $2",
+             WHERE id = $1 AND organization_id = $2 AND config_version = $3",
         )
         .bind(target_id)
         .bind(organization_id)
+        .bind(target_config_version.unwrap_or(i32::MIN))
         .execute(&mut **transaction)
         .await
         .map_err(repository_error)?;
@@ -603,6 +621,9 @@ fn job_from_row(row: &sqlx::postgres::PgRow) -> Result<CanvasSyncJob, CanvasSync
         id: row.try_get("id").map_err(repository_error)?,
         organization_id: row.try_get("organization_id").map_err(repository_error)?,
         target_id: row.try_get("target_id").map_err(repository_error)?,
+        target_config_version: row
+            .try_get("target_config_version")
+            .map_err(repository_error)?,
         status: CanvasSyncJobStatus::from_database(&status)
             .ok_or(CanvasSyncRepositoryError::InvalidState)?,
         attempt_count: row.try_get("attempt_count").map_err(repository_error)?,
@@ -682,10 +703,11 @@ async fn disable_target(pool: &PgPool, target: &CanvasSyncTarget) {
     if let Err(error) = sqlx::query(
         "UPDATE issuance_service.canvas_evidence_sync_targets
          SET enabled = false, updated_at = clock_timestamp()
-         WHERE id = $1 AND organization_id = $2",
+         WHERE id = $1 AND organization_id = $2 AND config_version = $3",
     )
     .bind(&target.id)
     .bind(&target.organization_id)
+    .bind(target.config_version)
     .execute(pool)
     .await
     {

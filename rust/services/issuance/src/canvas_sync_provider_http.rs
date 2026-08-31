@@ -1,6 +1,6 @@
 //! Bounded, redirect-free Canvas REST, AGS, and NRPS provider adapter.
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -30,7 +30,9 @@ use crate::{
 const AGS_RESULT_READ_SCOPE: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly";
 const NRPS_MEMBERSHIP_READ_SCOPE: &str =
     "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly";
-const PAGE_BYTES: usize = 1_048_576;
+const TOKEN_RESPONSE_BYTES: usize = 65_536;
+const COLLECTION_PAGE_BYTES: usize = 8_388_608;
+const COLLECTION_MAX_PAGES: usize = 200;
 
 #[derive(Clone)]
 pub struct HttpCanvasAuthoritativeProvider {
@@ -38,6 +40,7 @@ pub struct HttpCanvasAuthoritativeProvider {
     oauth_api_key: String,
     signer: Arc<dyn CanvasLtiToolJwtSigner>,
     policy: CanvasHttpClientPolicy,
+    self_managed_origin_allowlist: Vec<String>,
 }
 
 impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
@@ -56,21 +59,15 @@ impl HttpCanvasAuthoritativeProvider {
         oauth: Arc<CanvasOAuthService>,
         oauth_api_key: impl Into<String>,
         signer: Arc<dyn CanvasLtiToolJwtSigner>,
-        timeout: Duration,
-        private_origin_allowlist: Vec<String>,
-        allow_private_networks: bool,
-        allow_http_localhost: bool,
+        policy: CanvasHttpClientPolicy,
+        self_managed_origin_allowlist: Vec<String>,
     ) -> Self {
         Self {
             oauth,
             oauth_api_key: oauth_api_key.into(),
             signer,
-            policy: CanvasHttpClientPolicy {
-                timeout,
-                private_origin_allowlist,
-                allow_private_networks,
-                allow_http_localhost,
-            },
+            policy,
+            self_managed_origin_allowlist,
         }
     }
 
@@ -153,7 +150,9 @@ impl HttpCanvasAuthoritativeProvider {
                 .map_err(map_oauth_error)?;
             return Err(CanvasProviderReadError::ReauthorizationRequired);
         }
-        read_json_response(response).await
+        let payload = read_json_response(response, COLLECTION_PAGE_BYTES).await?;
+        validate_rest_record(&text(requirement.get("fact_type")), &payload)?;
+        Ok(payload)
     }
 
     async fn lti_access_token(
@@ -167,6 +166,7 @@ impl HttpCanvasAuthoritativeProvider {
         )
         .await
         .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        self.enforce_self_managed_same_origin(resources, &endpoint)?;
         if resources.platform.lti_client_id.trim().is_empty() {
             return Err(CanvasProviderReadError::InvalidConfiguration);
         }
@@ -203,7 +203,7 @@ impl HttpCanvasAuthoritativeProvider {
             .send()
             .await
             .map_err(|_| CanvasProviderReadError::Unavailable)?;
-        let payload = read_json_response(response).await?;
+        let payload = read_json_response(response, TOKEN_RESPONSE_BYTES).await?;
         payload
             .get("access_token")
             .and_then(Value::as_str)
@@ -223,6 +223,7 @@ impl HttpCanvasAuthoritativeProvider {
         let validated = validate_canvas_lti_service_url(url, &self.policy.private_origin_allowlist)
             .await
             .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        self.enforce_self_managed_same_origin(resources, &validated)?;
         let token = self.lti_access_token(resources, scope).await?;
         let mut next =
             Url::parse(&validated).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
@@ -240,12 +241,16 @@ impl HttpCanvasAuthoritativeProvider {
         limit: usize,
     ) -> Result<Vec<Value>, CanvasProviderReadError> {
         let expected_origin = origin_url(&next)?;
+        reject_embedded_credentials(&next)?;
         let (client, _) = client_for_canvas_origin(expected_origin.as_str(), &self.policy)
             .await
             .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         let mut output = Vec::new();
         let mut visited = BTreeSet::new();
-        while output.len() < limit && visited.insert(next.to_string()) {
+        for _page in 0..COLLECTION_MAX_PAGES {
+            if !visited.insert(next.to_string()) {
+                return Err(CanvasProviderReadError::InvalidConfiguration);
+            }
             if origin_url(&next)? != expected_origin {
                 return Err(CanvasProviderReadError::InvalidConfiguration);
             }
@@ -261,21 +266,32 @@ impl HttpCanvasAuthoritativeProvider {
                 .get(LINK)
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
-            let payload = read_json_response(response).await?;
+            let payload = read_json_response(response, COLLECTION_PAGE_BYTES).await?;
             let rows = payload
                 .as_array()
                 .or_else(|| payload.get("members").and_then(Value::as_array))
                 .or_else(|| payload.get("results").and_then(Value::as_array))
                 .ok_or(CanvasProviderReadError::Unavailable)?;
-            output.extend(rows.iter().take(limit - output.len()).cloned());
+            if rows.iter().any(|row| !valid_collection_item(row)) {
+                return Err(CanvasProviderReadError::Unavailable);
+            }
+            let remaining = limit.saturating_sub(output.len());
+            if rows.len() > remaining {
+                return Err(CanvasProviderReadError::Unavailable);
+            }
+            output.extend(rows.iter().cloned());
             let Some(candidate) = link.as_deref().and_then(next_link) else {
-                break;
+                return Ok(output);
             };
+            if output.len() >= limit {
+                return Err(CanvasProviderReadError::Unavailable);
+            }
             next =
                 Url::parse(candidate).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            reject_embedded_credentials(&next)?;
         }
-        let _ = resources; // Tenant-bound token/resource snapshot is retained by the caller.
-        Ok(output)
+        let _ = resources;
+        Err(CanvasProviderReadError::InvalidConfiguration)
     }
 }
 
@@ -306,7 +322,11 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     100,
                 )
                 .await?;
-            let record = results.first().cloned().unwrap_or_else(|| json!({}));
+            let record = results
+                .first()
+                .cloned()
+                .ok_or(CanvasProviderReadError::Unavailable)?;
+            validate_ags_record(&record)?;
             let source_payload = selected_payload(
                 &record,
                 &[
@@ -467,7 +487,24 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
     }
 }
 
-async fn read_json_response(response: Response) -> Result<Value, CanvasProviderReadError> {
+impl HttpCanvasAuthoritativeProvider {
+    fn enforce_self_managed_same_origin(
+        &self,
+        resources: &CanvasSyncResources,
+        service_url: &str,
+    ) -> Result<(), CanvasProviderReadError> {
+        enforce_self_managed_origin(
+            &resources.platform.canvas_base_url,
+            service_url,
+            &self.self_managed_origin_allowlist,
+        )
+    }
+}
+
+async fn read_json_response(
+    mut response: Response,
+    maximum_bytes: usize,
+) -> Result<Value, CanvasProviderReadError> {
     if response.status().is_redirection() {
         return Err(CanvasProviderReadError::InvalidConfiguration);
     }
@@ -485,17 +522,137 @@ async fn read_json_response(response: Response) -> Result<Value, CanvasProviderR
     let length = response
         .content_length()
         .and_then(|value| usize::try_from(value).ok());
-    if length.is_some_and(|value| value > PAGE_BYTES) {
+    if length.is_some_and(|value| value > maximum_bytes) {
         return Err(CanvasProviderReadError::Unavailable);
     }
-    let bytes = response
-        .bytes()
+    let mut bytes = Vec::with_capacity(length.unwrap_or(0).min(maximum_bytes));
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|_| CanvasProviderReadError::Unavailable)?;
-    if bytes.len() > PAGE_BYTES {
-        return Err(CanvasProviderReadError::Unavailable);
+        .map_err(|_| CanvasProviderReadError::Unavailable)?
+    {
+        if bytes.len().saturating_add(chunk.len()) > maximum_bytes {
+            return Err(CanvasProviderReadError::Unavailable);
+        }
+        bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| CanvasProviderReadError::Unavailable)
+}
+
+fn reject_embedded_credentials(url: &Url) -> Result<(), CanvasProviderReadError> {
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(CanvasProviderReadError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
+fn enforce_self_managed_origin(
+    canvas_url: &str,
+    service_url: &str,
+    allowlist: &[String],
+) -> Result<(), CanvasProviderReadError> {
+    let canvas =
+        Url::parse(canvas_url).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+    let canvas_origin = origin_url(&canvas)?;
+    let self_managed = allowlist.iter().any(|candidate| {
+        Url::parse(candidate)
+            .ok()
+            .filter(|url| {
+                url.scheme() == "https"
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && matches!(url.path(), "" | "/")
+            })
+            .and_then(|url| origin_url(&url).ok())
+            .is_some_and(|origin| origin == canvas_origin)
+    });
+    if self_managed {
+        let service =
+            Url::parse(service_url).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        if origin_url(&service)? != canvas_origin {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+    }
+    Ok(())
+}
+
+fn validate_ags_record(record: &Value) -> Result<(), CanvasProviderReadError> {
+    let object = record
+        .as_object()
+        .ok_or(CanvasProviderReadError::Unavailable)?;
+    if value_identifier(object.get("id").unwrap_or(&Value::Null)).is_none()
+        || text(object.get("resultStatus")).is_empty()
+        || !valid_optional_number(object.get("resultScore"))
+        || !valid_optional_number(object.get("resultMaximum"))
+    {
+        return Err(CanvasProviderReadError::Unavailable);
+    }
+    Ok(())
+}
+
+fn validate_rest_record(fact_type: &str, record: &Value) -> Result<(), CanvasProviderReadError> {
+    let object = record
+        .as_object()
+        .ok_or(CanvasProviderReadError::Unavailable)?;
+    if fact_type != "canvas.course_completion"
+        && value_identifier(object.get("id").unwrap_or(&Value::Null)).is_none()
+    {
+        return Err(CanvasProviderReadError::Unavailable);
+    }
+    let complete = match fact_type {
+        "canvas.assignment_score" | "canvas.quiz_score" => {
+            !text(object.get("workflow_state").or_else(|| object.get("state"))).is_empty()
+                && valid_optional_number(object.get("score"))
+                && object
+                    .get("assignment")
+                    .and_then(Value::as_object)
+                    .is_none_or(|assignment| {
+                        valid_optional_number(assignment.get("points_possible"))
+                    })
+        }
+        "canvas.module_completion" => {
+            !text(object.get("state").or_else(|| object.get("workflow_state"))).is_empty()
+                || timestamp(object.get("completed_at")).is_some()
+        }
+        "canvas.course_completion" => {
+            nonnegative_number(object.get("requirement_count")).is_some()
+                && nonnegative_number(object.get("requirement_completed_count")).is_some()
+        }
+        _ => false,
+    };
+    if !complete {
+        return Err(CanvasProviderReadError::Unavailable);
+    }
+    Ok(())
+}
+
+fn valid_optional_number(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| !value.is_null() && provider_number(value).is_some_and(f64::is_finite))
+}
+
+fn nonnegative_number(value: Option<&Value>) -> Option<f64> {
+    value
+        .and_then(provider_number)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn provider_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(value) => value.as_f64(),
+        Value::String(value) => value.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn valid_collection_item(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    ["id", "user_id", "lti_user_id", "sub", "resultStatus"]
+        .iter()
+        .any(|key| object.get(*key).is_some_and(|value| !value.is_null()))
 }
 
 fn api_url(base: &Url, path: &str) -> Result<Url, CanvasProviderReadError> {
@@ -585,9 +742,126 @@ mod tests {
 
     #[test]
     fn pagination_only_accepts_explicit_next_relation() {
+        assert_eq!(TOKEN_RESPONSE_BYTES, 65_536);
+        assert_eq!(COLLECTION_PAGE_BYTES, 8_388_608);
+        assert_eq!(COLLECTION_MAX_PAGES, 200);
         let header =
             "<https://canvas.test/one>; rel=\"current\", <https://canvas.test/two>; rel=\"next\"";
         assert_eq!(next_link(header), Some("https://canvas.test/two"));
         assert_eq!(next_link("<https://canvas.test/two>; rel=\"last\""), None);
+    }
+
+    #[test]
+    fn pagination_credentials_and_malformed_items_fail_closed() {
+        let credentialed = Url::parse("https://user:secret@canvas.test/two").unwrap();
+        assert_eq!(
+            reject_embedded_credentials(&credentialed),
+            Err(CanvasProviderReadError::InvalidConfiguration)
+        );
+        assert!(!valid_collection_item(&json!({"name": "missing identity"})));
+        assert!(valid_collection_item(&json!({"id": 7})));
+    }
+
+    #[test]
+    fn all_authoritative_protocol_shapes_reject_semantically_incomplete_successes() {
+        assert_eq!(
+            validate_ags_record(&json!({})),
+            Err(CanvasProviderReadError::Unavailable)
+        );
+        for fact_type in [
+            "canvas.assignment_score",
+            "canvas.quiz_score",
+            "canvas.module_completion",
+            "canvas.course_completion",
+        ] {
+            assert_eq!(
+                validate_rest_record(fact_type, &json!({})),
+                Err(CanvasProviderReadError::Unavailable),
+                "{fact_type}"
+            );
+        }
+        for (fact_type, malformed) in [
+            (
+                "canvas.assignment_score",
+                json!({"id":1, "workflow_state":null}),
+            ),
+            ("canvas.quiz_score", json!({"id":2, "state":7})),
+            (
+                "canvas.module_completion",
+                json!({"id":3, "state":null, "completed_at":"bad"}),
+            ),
+            (
+                "canvas.course_completion",
+                json!({"requirement_count":null, "requirement_completed_count":null}),
+            ),
+        ] {
+            assert_eq!(
+                validate_rest_record(fact_type, &malformed),
+                Err(CanvasProviderReadError::Unavailable),
+                "{fact_type} accepted a malformed positive response",
+            );
+        }
+        assert_eq!(
+            validate_ags_record(
+                &json!({"id":"r1", "resultStatus":"FullyGraded", "resultScore":"bad"})
+            ),
+            Err(CanvasProviderReadError::Unavailable),
+        );
+        assert!(validate_ags_record(&json!({"id":"r1", "resultStatus":"FullyGraded"})).is_ok());
+        assert!(validate_rest_record(
+            "canvas.assignment_score",
+            &json!({"id":1, "workflow_state":"unsubmitted"})
+        )
+        .is_ok());
+        assert!(
+            validate_rest_record("canvas.quiz_score", &json!({"id":2, "state":"complete"})).is_ok()
+        );
+        assert!(validate_rest_record(
+            "canvas.module_completion",
+            &json!({"id":3, "state":"started"})
+        )
+        .is_ok());
+        assert!(validate_rest_record(
+            "canvas.course_completion",
+            &json!({"requirement_count":2, "requirement_completed_count":0})
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn self_managed_trust_is_independent_and_same_origin_only() {
+        let self_managed = vec!["https://canvas.example.edu".to_owned()];
+        assert!(enforce_self_managed_origin(
+            "https://canvas.example.edu",
+            "https://canvas.example.edu/api/lti/token",
+            &self_managed,
+        )
+        .is_ok());
+        for invalid in [
+            "https://user:secret@canvas.example.edu",
+            "https://canvas.example.edu/path",
+            "http://canvas.example.edu",
+        ] {
+            assert!(enforce_self_managed_origin(
+                "https://canvas.example.edu",
+                "https://attacker.example/token",
+                &[invalid.to_owned()],
+            )
+            .is_ok());
+        }
+        assert_eq!(
+            enforce_self_managed_origin(
+                "https://canvas.example.edu",
+                "https://attacker.example/api/lti/token",
+                &self_managed,
+            ),
+            Err(CanvasProviderReadError::InvalidConfiguration)
+        );
+        assert!(enforce_self_managed_origin(
+            "https://school.instructure.com",
+            "https://canvas.instructure.com/login/oauth2/token",
+            &self_managed,
+        )
+        .is_ok());
     }
 }
