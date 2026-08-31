@@ -16,6 +16,8 @@ use marty_issuance_service::{
     canvas_credentials_validation::{
         CanvasCredentialsValidationService, HttpCanvasCredentialsValidationTransport,
     },
+    canvas_event_status::CanvasEventStatusService,
+    canvas_event_status_postgres::PostgresCanvasEventStatusRepository,
     canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
@@ -378,7 +380,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )),
         config.canvas_local_admin_token.clone(),
     )
-    .with_application_approval(canvas_application_approval);
+    .with_application_approval(canvas_application_approval)
+    .with_event_status(CanvasEventStatusService::new(
+        config.issuance_api_key.as_deref(),
+        Arc::new(PostgresCanvasEventStatusRepository::new(pool.clone())),
+    ));
     let canvas_lti_deep_linking = CanvasLtiDeepLinkingService::new(
         canvas_lti_experience_session.clone(),
         Arc::new(PostgresCanvasLtiDeepLinkingRepository::new(pool.clone())),

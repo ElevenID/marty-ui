@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    canvas_event_status::CanvasEvidenceEventStatusResponse,
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
         CanvasLtiBootstrapServiceError,
@@ -42,9 +43,8 @@ use crate::{
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
     canvas_management::{
         CanvasApplicationApprovalRequest, CanvasCredentialsValidationRequest,
-        CanvasIntegrationSecretCreate,
-        CanvasIntegrationSecretUpdate, CanvasPlatformRequest, CanvasProgramBindingRequest,
-        CanvasScopeDiscoveryRequest,
+        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasPlatformRequest,
+        CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
     },
     canvas_management_http::{
         integration_secret_query, organization_id_from_query, parse_application_approval,
@@ -824,6 +824,10 @@ fn router_with_optional_services(
                 post(approve_canvas_application),
             )
             .route(
+                "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
+                get(get_canvas_evidence_event_status),
+            )
+            .route(
                 "/v1/integrations/canvas/lti/config/{token}",
                 get(get_public_canvas_lti_config),
             )
@@ -1019,6 +1023,17 @@ async fn approve_canvas_application(
     let request: CanvasApplicationApprovalRequest = parse_application_approval(request).await?;
     service
         .approve_application(&headers, &application_id, request)
+        .await
+        .map(Json)
+}
+
+async fn get_canvas_evidence_event_status(
+    State(state): State<IssuanceState>,
+    Path((canvas_account_id, provider_event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasEvidenceEventStatusResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .get_event_status(&headers, &canvas_account_id, &provider_event_id)
         .await
         .map(Json)
 }

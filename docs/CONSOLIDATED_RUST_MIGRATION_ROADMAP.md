@@ -34,44 +34,42 @@ floor is `contracts/issuance-canvas-management.json`.
 
 | Canvas management state | Routes | Current evidence / owner |
 |---|---:|---|
-| Implemented and committed on the active Rust branch | 26 | Platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, and read-only Canvas Credentials provider validation at `b110e625d` |
-| Parallel isolated worktree | 1 | Application approval at `POST /applications/{application_id}/approve`, owned by `rust-issuance/canvas-approval-v1`; it must preserve canonical approval and issuance guards rather than duplicate them |
-| Not yet ported | 4 | Three default-disabled legacy evidence ingest routes and the tenant-bound evidence-event status route |
+| Implemented and committed on the active Rust branch | 28 | Platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, read-only Canvas Credentials provider validation, native application approval at `e00c25b0a`, and the tenant-bound evidence-event status read with its exact 16-field replay projection |
+| Not yet ported | 3 | The default-disabled legacy evidence, AGS score and NRPS membership ingestion adapters; these remain one shared-kernel slice |
 
-Thus, 26 of 31 routes are committed locally, one is being implemented in
-parallel, and four remain after those branches converge. The provider slice's
+Thus, 28 of 31 routes are committed locally, and only the three shared
+legacy-ingest adapters remain.
+The provider slice's
 gate passed 196 Rust library tests, 22 black-box Canvas HTTP tests, two contract
 tests, strict all-target Clippy, and 90 preserved Python tests.
 Counts describe local migration progress, not merged `main` coverage.
 
 ### Remaining work in the active wave
 
-1. Maintainer-review the parallel application-approval branch for feature and
-   test loss, then integrate it without duplicating approval policy logic.
-2. Freeze and port the three compatibility ingest routes and the event-status
-   read, including signature, replay/idempotency, tenant hiding, fail-closed
-   default-disable, evidence-policy and exact response behavior.
-3. Move the remaining Canvas worker/schema ownership needed by those routes,
+1. Freeze and port the three compatibility ingest routes through one shared
+   kernel, including signature, replay/idempotency, fail-closed default-disable,
+   evidence-policy and exact response behavior.
+2. Move the remaining Canvas worker/schema ownership needed by those routes,
    run disposable PostgreSQL, full Rust/Python differential, packaging,
    ownership, security and demo gates, then delete the superseded Python
    implementation immediately when the deletion gate passes.
-4. Rebase onto current `origin/main`, self-review as maintainers, open and merge
+3. Rebase onto current `origin/main`, self-review as maintainers, open and merge
    clean PRs, then remove merged or superseded local branches/worktrees. This
    cleanup includes the already-merged CDLA review/test worktrees and detached
    beta release worktrees; no unlanded feature work may be discarded.
-5. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
+4. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
    release-demo recordings plus acceptance/soak checks, and leave production
    unchanged.
 
-### Next parallel target after application approval
+### Next implementation target
 
 Do not split the three ingest endpoints among independent implementations:
 they share signature verification, canonical event mapping, replay protection,
 evidence persistence and application-policy transitions. Treat them as one DRY
 Rust event-ingest kernel with three thin HTTP adapters. The evidence-event
-status read may proceed independently only after its persistence projection is
-frozen, making it the safest next parallel work item when another isolated
-worker becomes available.
+status read is now complete. The three adapters are the only remaining route
+surface and must land together with differential tests against the preserved
+Python oracle.
 
 ## Wave three — Rust service plane and complete MMF replacement
 

@@ -21,11 +21,14 @@ use crate::{
         CanvasCatalogProviderError, CanvasScopeDiscoveryResponse,
     },
     canvas_credentials_validation::CanvasCredentialsValidationResult,
+    canvas_event_status::{
+        CanvasEventStatusError, CanvasEventStatusService, CanvasEvidenceEventStatusResponse,
+    },
     canvas_management::{
         CanvasApplicationApprovalRequest, CanvasCredentialsValidationRequest,
-        CanvasIntegrationSecretCreate,
-        CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest, CanvasPlatformRequest,
-        CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest, ValidateCanvasRequest,
+        CanvasIntegrationSecretCreate, CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest,
+        CanvasPlatformRequest, CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest,
+        ValidateCanvasRequest,
     },
     canvas_management_domain::{CanvasManagementDomainError, CanvasPlatformRecord},
     canvas_management_service::{
@@ -54,6 +57,7 @@ pub struct CanvasPlatformManagementHttpService {
     management: CanvasPlatformManagementService,
     catalog: Option<CanvasCatalogRuntime>,
     application_approval: Option<CanvasApplicationApprovalService>,
+    event_status: Option<CanvasEventStatusService>,
 }
 
 #[derive(Clone)]
@@ -73,6 +77,7 @@ impl std::fmt::Debug for CanvasPlatformManagementHttpService {
                 "application_approval_configured",
                 &self.application_approval.is_some(),
             )
+            .field("event_status_configured", &self.event_status.is_some())
             .finish()
     }
 }
@@ -84,6 +89,7 @@ impl CanvasPlatformManagementHttpService {
             management,
             catalog: None,
             application_approval: None,
+            event_status: None,
         }
     }
 
@@ -111,6 +117,7 @@ impl CanvasPlatformManagementHttpService {
                 local_admin_token,
             }),
             application_approval: None,
+            event_status: None,
         }
     }
 
@@ -120,6 +127,12 @@ impl CanvasPlatformManagementHttpService {
         application_approval: CanvasApplicationApprovalService,
     ) -> Self {
         self.application_approval = Some(application_approval);
+        self
+    }
+
+    #[must_use]
+    pub fn with_event_status(mut self, event_status: CanvasEventStatusService) -> Self {
+        self.event_status = Some(event_status);
         self
     }
 
@@ -161,6 +174,31 @@ impl CanvasPlatformManagementHttpService {
             )
             .await
             .map(CanvasApplicationApprovalResponse::from)
+            .map_err(Into::into)
+    }
+
+    pub async fn get_event_status(
+        &self,
+        headers: &HeaderMap,
+        canvas_account_id: &str,
+        provider_event_id: &str,
+    ) -> Result<CanvasEvidenceEventStatusResponse, CanvasManagementHttpError> {
+        // Keep authentication and the trusted tenant boundary ahead of both
+        // runtime configuration and repository access.
+        self.management.authorize_request(
+            header(headers, "X-API-Key"),
+            header(headers, "X-Organization-ID"),
+        )?;
+        self.event_status
+            .as_ref()
+            .ok_or(CanvasEventStatusError::RepositoryUnavailable)?
+            .get(
+                canvas_account_id,
+                provider_event_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
             .map_err(Into::into)
     }
 
@@ -917,6 +955,7 @@ impl From<CanvasPlatformRecord> for CanvasPlatformResponse {
 pub enum CanvasManagementHttpError {
     Service(CanvasPlatformManagementError),
     ApplicationApproval(CanvasApplicationApprovalError),
+    EventStatus(CanvasEventStatusError),
     Validation(Vec<Value>),
     BodyTooLarge,
     DiscoveryOAuthRequired,
@@ -939,10 +978,17 @@ impl From<CanvasApplicationApprovalError> for CanvasManagementHttpError {
     }
 }
 
+impl From<CanvasEventStatusError> for CanvasManagementHttpError {
+    fn from(error: CanvasEventStatusError) -> Self {
+        Self::EventStatus(error)
+    }
+}
+
 impl IntoResponse for CanvasManagementHttpError {
     fn into_response(self) -> Response {
         match self {
             Self::ApplicationApproval(error) => application_approval_failure(error),
+            Self::EventStatus(error) => event_status_failure(error),
             Self::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({"detail": errors})),
@@ -1767,6 +1813,25 @@ fn application_approval_failure(error: CanvasApplicationApprovalError) -> Respon
         ),
     };
     (status, Json(json!({"detail": detail}))).into_response()
+}
+
+fn event_status_failure(error: CanvasEventStatusError) -> Response {
+    match error {
+        CanvasEventStatusError::Security(error) => {
+            service_failure(CanvasPlatformManagementError::Security(error))
+        }
+        CanvasEventStatusError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Canvas evidence event receipt not found"})),
+        )
+            .into_response(),
+        CanvasEventStatusError::MalformedReceipt
+        | CanvasEventStatusError::RepositoryUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail": "Canvas evidence event status is temporarily unavailable"})),
+        )
+            .into_response(),
+    }
 }
 
 fn service_failure(error: CanvasPlatformManagementError) -> Response {

@@ -24,6 +24,10 @@ use marty_issuance_service::{
     canvas_credentials_validation::{
         CanvasCredentialsValidationResult, CanvasCredentialsValidator,
     },
+    canvas_event_status::{
+        CanvasEventReceipt, CanvasEventStatusRepository, CanvasEventStatusRepositoryError,
+        CanvasEventStatusService,
+    },
     canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_launch::CanvasLtiClock,
     canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient},
@@ -72,6 +76,25 @@ struct ApprovalRepository {
     snapshot: Mutex<Option<CanvasApplicationApprovalSnapshot>>,
     reservations: Mutex<Vec<ApprovalReservation>>,
     result: Mutex<Result<String, CanvasApplicationApprovalError>>,
+}
+
+struct EventStatusRepository {
+    receipt: Mutex<Option<CanvasEventReceipt>>,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl CanvasEventStatusRepository for EventStatusRepository {
+    async fn receipt(
+        &self,
+        canvas_account_id: &str,
+        provider_event_id: &str,
+    ) -> Result<Option<CanvasEventReceipt>, CanvasEventStatusRepositoryError> {
+        assert_eq!(canvas_account_id, "account-status-1");
+        assert_eq!(provider_event_id, "event-status-1");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.receipt.lock().expect("event status receipt").clone())
+    }
 }
 
 #[async_trait]
@@ -1097,6 +1120,36 @@ fn app_with_approval(
         StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
         TransportPolicy::new(Vec::new()),
         CanvasPlatformManagementHttpService::new(management).with_application_approval(approval),
+    )
+}
+
+fn app_with_event_status(repository: Arc<EventStatusRepository>) -> axum::Router {
+    let management_repository = Arc::new(MemoryRepository::default());
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let management = CanvasPlatformManagementService::with_probe_client(
+        management_repository.clone(),
+        Some("management-key"),
+        CanvasOriginPolicy::default(),
+        "https://issuer.example.edu",
+        CanvasLtiJwksRefreshConfig {
+            timeout: Duration::from_secs(10),
+            ttl: Duration::from_secs(3_600),
+            self_managed_origins: Vec::new(),
+            allow_private_networks: false,
+            allow_http_localhost: false,
+        },
+        Arc::new(SuccessfulProbe),
+    )
+    .with_integration_secret_repository(management_repository);
+    router_with_canvas_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        CanvasPlatformManagementHttpService::new(management).with_event_status(
+            CanvasEventStatusService::new(Some("management-key"), repository),
+        ),
     )
 }
 
@@ -3392,4 +3445,147 @@ async fn application_approval_redacts_provider_failures_and_honors_rollout_gate(
         .lock()
         .expect("reservations")
         .is_empty());
+}
+
+#[tokio::test]
+async fn event_status_authenticates_before_lookup_hides_tenants_and_projects_exact_response() {
+    let repository = Arc::new(EventStatusRepository {
+        receipt: Mutex::new(Some(CanvasEventReceipt {
+            id: "receipt-status-1".to_owned(),
+            provider_event_id: "event-status-1".to_owned(),
+            canvas_account_id: Some("account-status-1".to_owned()),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: "credential-template-status-1".to_owned(),
+            payload_hash: "payload-hash-status-1".to_owned(),
+            issuance_transaction_id: Some("transaction-status-1".to_owned()),
+            issuance_response: json!({
+                "application_id": "application-status-1",
+                "evidence_facts": [{"fact_type": "canvas.course_completion"}],
+                "policy_decision": {"allowed": true},
+                "recorded_extension": "preserved"
+            }),
+            status: "evidence_received".to_owned(),
+            error_summary: None,
+            first_seen_at: Utc.with_ymd_and_hms(2026, 8, 30, 1, 2, 3).unwrap(),
+            last_seen_at: Utc.with_ymd_and_hms(2026, 8, 30, 2, 3, 4).unwrap(),
+        })),
+        calls: AtomicUsize::new(0),
+    });
+    let app = app_with_event_status(repository.clone());
+    let path = "/v1/integrations/canvas/evidence-events/account-status-1/event-status-1";
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::get(path)
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("unauthenticated response");
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    let missing_tenant = app
+        .clone()
+        .oneshot(
+            Request::get(path)
+                .header("x-api-key", "management-key")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("missing tenant response");
+    assert_eq!(missing_tenant.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 0);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::get(path)
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-foreign")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("foreign response");
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(foreign).await,
+        json!({"detail":"Canvas evidence event receipt not found"})
+    );
+
+    let owned = app
+        .clone()
+        .oneshot(
+            Request::get(path)
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("owned response");
+    assert_eq!(owned.status(), StatusCode::OK);
+    let owned = response_json(owned).await;
+    let fields = owned
+        .as_object()
+        .expect("event status object")
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        fields,
+        BTreeSet::from([
+            "id",
+            "provider_event_id",
+            "canvas_account_id",
+            "organization_id",
+            "credential_template_id",
+            "application_id",
+            "status",
+            "payload_hash",
+            "issuance_transaction_id",
+            "error_summary",
+            "first_seen_at",
+            "last_seen_at",
+            "response",
+            "evidence_facts",
+            "policy_decision",
+            "replay_available",
+        ])
+    );
+    assert_eq!(owned["application_id"], "application-status-1");
+    assert_eq!(owned["first_seen_at"], "2026-08-30T01:02:03+00:00");
+    assert_eq!(owned["response"]["recorded_extension"], "preserved");
+    assert_eq!(
+        owned["evidence_facts"][0]["fact_type"],
+        "canvas.course_completion"
+    );
+    assert_eq!(owned["policy_decision"], json!({"allowed": true}));
+    assert_eq!(owned["replay_available"], true);
+
+    repository
+        .receipt
+        .lock()
+        .expect("event status receipt")
+        .as_mut()
+        .expect("stored receipt")
+        .issuance_response = json!({"evidence_facts":["malformed"]});
+    let malformed = app
+        .oneshot(
+            Request::get(path)
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("malformed response");
+    assert_eq!(malformed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response_json(malformed).await,
+        json!({"detail":"Canvas evidence event status is temporarily unavailable"})
+    );
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 3);
 }
