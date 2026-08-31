@@ -166,7 +166,7 @@ async fn create_session(
 ) -> Response {
     let value = match parse_json_syntax(&body) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(_) => return validation_response(),
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::SessionCreate) {
         Ok(governance) => governance,
@@ -218,7 +218,7 @@ async fn verify_direct(
 ) -> Response {
     let value = match parse_json_syntax(&body) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(_) => return validation_response(),
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::Direct) {
         Ok(governance) => governance,
@@ -241,7 +241,7 @@ async fn verify_vds_nc(
 ) -> Response {
     let value = match parse_json_syntax(&body) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(_) => return validation_response(),
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::VdsNc) {
         Ok(governance) => governance,
@@ -295,8 +295,8 @@ fn validation_response() -> Response {
         .into_response()
 }
 
-fn parse_json_syntax(body: &[u8]) -> Result<serde_json::Value, Response> {
-    serde_json::from_slice(body).map_err(|_| validation_response())
+fn parse_json_syntax(body: &[u8]) -> serde_json::Result<serde_json::Value> {
+    serde_json::from_slice(body)
 }
 
 #[cfg(test)]
