@@ -60,12 +60,24 @@ impl<'de> Deserialize<'de> for SessionDurationSeconds {
                 let float = number.as_f64()?;
                 (float.is_finite() && float.fract() == 0.0 && float >= 0.0).then_some(float as u64)
             }),
-            Value::String(value) => value.trim().parse().ok(),
+            Value::String(value) => compatible_integer_string(&value),
             _ => None,
         }
         .ok_or_else(|| D::Error::custom("session_duration_seconds must be an integer"))?;
         Self::new(integer).map_err(D::Error::custom)
     }
+}
+
+fn compatible_integer_string(value: &str) -> Option<u64> {
+    let normalized = value.trim().replace('_', "");
+    if let Ok(integer) = normalized.parse() {
+        return Some(integer);
+    }
+    if !normalized.contains('.') || normalized.contains('e') || normalized.contains('E') {
+        return None;
+    }
+    let float: f64 = normalized.parse().ok()?;
+    (float.is_finite() && float.fract() == 0.0 && float >= 0.0).then_some(float as u64)
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -403,6 +415,11 @@ mod tests {
     fn duration_ingress_matches_released_pydantic_coercion() {
         let cases = [
             (json!("600"), Some(600)),
+            (json!("600.0"), Some(600)),
+            (json!("600.00"), Some(600)),
+            (json!("+600.0"), Some(600)),
+            (json!("6_00"), Some(600)),
+            (json!("6e2"), None),
             (json!(600.0), Some(600)),
             (json!(600.5), None),
             (json!(true), None),
