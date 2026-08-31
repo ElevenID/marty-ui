@@ -7,6 +7,7 @@
 pub mod dto;
 pub mod governance;
 pub mod http;
+pub mod migration;
 pub mod persistence;
 pub mod session;
 
@@ -20,6 +21,7 @@ pub use governance::{
     TrustAuthority,
 };
 pub use http::{router, CompatibilityError, CompatibilityState, CompatibilityUseCases};
+pub use migration::{migrate_session_schema, validate_session_schema, SessionMigrationError};
 pub use persistence::{PostgresSessionRepository, SessionPersistenceError, SessionRepository};
 pub use session::{
     ClaimState, ProcessingLease, ProcessingToken, SessionDraft, SessionRecord, SessionStatus,
