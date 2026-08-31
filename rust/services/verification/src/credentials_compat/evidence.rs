@@ -57,6 +57,7 @@ enum EvidenceKind {
     },
     Canonical {
         governance: GovernanceSnapshot,
+        result: Box<VerificationDecisionResult>,
         session_id: String,
         presentation_digest: Sha256Digest,
         passed: bool,
@@ -118,6 +119,7 @@ impl PersistedEvidence {
             }),
             kind: EvidenceKind::Canonical {
                 governance: governance.clone(),
+                result: Box::new(result.clone()),
                 session_id: session_id.to_owned(),
                 presentation_digest: presentation_digest.clone(),
                 passed,
@@ -147,6 +149,22 @@ impl PersistedEvidence {
 
     pub(crate) fn from_database(value: Value) -> Self {
         parse_persisted_value(value).unwrap_or_else(invalid_evidence)
+    }
+
+    #[must_use]
+    pub fn canonical_result(&self) -> Option<&VerificationDecisionResult> {
+        match &self.kind {
+            EvidenceKind::Canonical { result, .. } => Some(result.as_ref()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn pending_governance(&self) -> Option<&GovernanceSnapshot> {
+        match &self.kind {
+            EvidenceKind::Pending { governance } => Some(governance),
+            _ => None,
+        }
     }
 
     pub(crate) fn require_verified(&self) -> Result<(), PersistedEvidenceError> {
@@ -291,6 +309,7 @@ fn parse_canonical(value: Value) -> Option<PersistedEvidence> {
         value,
         kind: EvidenceKind::Canonical {
             governance,
+            result: Box::new(result),
             session_id,
             presentation_digest: digest,
             passed,

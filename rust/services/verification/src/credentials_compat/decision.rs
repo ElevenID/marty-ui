@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use chrono::{SecondsFormat, Utc};
 use marty_verification::{
@@ -55,10 +55,16 @@ pub enum CredentialStatus {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub enum Presented<'a> {
     String(&'a str),
     Object(&'a Map<String, Value>),
+}
+
+impl fmt::Debug for Presented<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Presented([REDACTED])")
+    }
 }
 
 impl Presented<'_> {
@@ -399,6 +405,13 @@ mod tests {
         assert_eq!(
             Presented::Object(&first).digest(),
             Sha256Digest::calculate(r#"{"a":"value","z":[3,{"a":1,"b":2}]}"#)
+        );
+        let debug = format!("{:?}", Presented::Object(&first));
+        assert_eq!(debug, "Presented([REDACTED])");
+        assert!(!debug.contains("value"));
+        assert_eq!(
+            format!("{:?}", Presented::String("header.secret.signature")),
+            "Presented([REDACTED])"
         );
     }
 }

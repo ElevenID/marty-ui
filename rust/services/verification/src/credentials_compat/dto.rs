@@ -13,7 +13,7 @@ const MAX_SESSION_DURATION_SECONDS: u64 = 3_600;
 pub struct PresentationDefinition {
     pub id: String,
     pub input_descriptors: Vec<Map<String, Value>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<Map<String, Value>>,
 }
 
