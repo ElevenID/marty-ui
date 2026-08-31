@@ -38,6 +38,13 @@ services:
     pull_policy: always
     build: !reset null
 
+  verification-migrations:
+    <<: *service-image
+    build: !reset null
+    entrypoint: ["/app/services/entrypoint.sh"]
+    environment:
+      SERVICE_NAME: verification
+
   revocation-profile-migrate:
     <<: *service-image
     build: !reset null

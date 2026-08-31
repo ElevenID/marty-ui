@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three are complete; the post-wave-three Rust issuance/Canvas completion wave is active; its aggregate beta acceptance is pending and production remains unchanged
+**Status:** Waves one through three and the 31-route Rust Canvas management cutover are merged; verification-image consolidation, cleanup and aggregate beta acceptance remain active; production is unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -19,28 +19,24 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ## Current execution snapshot — 2026-08-31
 
 Wave three's MMF replacement and ordered Rust service plane are complete. The
-current work is a follow-on whole-service issuance cutover, not a reactivation
-of unfinished MMF work. The latest prepared stack release is `v1.1.207` at
-source commit `256bcff55c738e2dd90dac303eb0354f90335611`; current `origin/main` is
-`ec87598589fb7df15bac85eb54b254f977846b44`. The next deployment remains one
-aggregate beta-only update after this wave lands. Production is not in scope.
+follow-on 31-route Canvas management cutover merged through protected PR
+`ElevenID/marty-ui#717` at `a6b375bb0ecc649f30db7053ba34e3ac64a23998`.
+The latest prepared stack release remains `v1.1.207` at source commit
+`256bcff55c738e2dd90dac303eb0354f90335611`; the next deployment is one
+aggregate beta-only update after verification consolidation lands. Production
+is not in scope and its deployment configuration remains unchanged.
 
-The active `rust-issuance/canvas-management-v1` worktree is intentionally
-isolated from `main`. Its unmerged Canvas migration stack was rebased
-onto current `origin/main` at `ec8759858` and is now zero commits behind; it
-must pass the post-rebase review and cutover gates before landing through a
-clean PR. The 31-route
-language-neutral Canvas management floor is
+The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
 
 | Canvas management state | Routes | Current evidence / owner |
 |---|---:|---|
-| Implemented and committed on the active Rust branch | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. The final implementation slice is commit `11a0256c0` after rebase |
-| Provenance-bound native beta routing committed locally | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; rebased local commit `b3bd4b936` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
+| Implemented and merged in Rust | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. PR `#717` merged at `a6b375bb0` |
+| Provenance-bound native beta routing merged | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; PR `#717` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
 
-Thus, all 31 routes and their beta routing are implemented and committed
-locally; this is not yet a merged or deployed native cutover. The final
-post-rebase maintainer gate passed 220 Rust issuance library tests and every
+Thus, all 31 routes and their beta routing are merged but not yet deployed.
+The final post-rebase maintainer and protected-queue gates passed 220 Rust
+issuance library tests and every
 issuance integration/executable target; 99 Gateway library tests and three
 executable tests; strict all-target Clippy and formatting; 116 Python service
 tests; 472 repository release, ownership, security and packaging tests; the
@@ -49,17 +45,15 @@ against fresh disposable PostgreSQL; and an actual beta Compose render with
 synthetic immutable artifact pins. The unchanged 27-case Python Canvas
 Credentials adapter oracle had already passed before rebase. Review also made
 all nine PostgreSQL contracts mandatory in CI and removed four avoidable
-production invariant panics. Counts describe local migration progress, not
-merged `main` coverage.
+production invariant panics. These counts are merged pre-deployment evidence,
+not live beta acceptance; merged coverage is bound to PR `#717`.
 
 ### Remaining work in the active wave
 
-1. Rebase, maintainer review and the full Rust/Python, disposable-PostgreSQL,
-   packaging, ownership and security gates are complete. The upstream behavior
-   contract and Python pending-transaction repair are merged in
-   `marty-credentials` at `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`.
-   Remaining gates begin with the clean downstream PR/merge, then the demo and
-   live beta acceptance checks against the merged aggregate.
+1. Canvas rebase, maintainer review, Rust/Python, disposable-PostgreSQL,
+   packaging, ownership, CodeQL and protected merge-queue gates are complete.
+   Remaining Canvas work is the demo and live beta acceptance evidence against
+   the final merged aggregate.
 2. Keep the Python webhook handlers as the production and self-host parity
    oracle during this beta-only canary: those consumers
    still route to the Python issuance image, so deleting the handlers now would
@@ -70,22 +64,13 @@ merged `main` coverage.
    wave: Rust currently owns enqueue/readiness support, but not that processor's
    complete Canvas API polling, lease, retry, heartbeat and reconciliation
    behavior. They require a separate contract-frozen whole-worker migration.
-3. Self-review as maintainers, open and merge clean PRs, then remove merged or
-   superseded local branches/worktrees. This
-   cleanup no longer includes the already-merged CDLA review/test worktrees or
-   detached `v1.1.206`/`v1.1.207` beta release worktrees: those were verified
-   against their upstream squash merges and removed on 2026-08-30. Preserve and
-   land the still-unique verification-consolidation worktrees; no unlanded
-   feature work may be discarded. The core proof-boundary dependency PR
-   `ElevenID/marty-credentials#246` merged through the protected queue on
-   2026-08-31. The mdoc proof-metadata repair subsequently merged as
-   `ElevenID/marty-credentials#247`, and the Canvas contract/repair merged as
-   `#248`; their clean, squash-replaced topic worktrees remain queued for local
-   and remote branch cleanup after the downstream Canvas PR lands. The
-   separately authorized UI/MMF history rewrites, release/tag retirement and
-   protection restoration were already completed and verified; their lingering
-   tracking issue `ElevenID/.github#22` was closed after reconciling the merged
-   evidence, so no additional destructive history operation remains.
+3. Remove the now-merged Canvas management worktree and its squash-replaced
+   legacy-ingest precursor after tree-equivalence checks. Preserve and land the
+   unique verification-consolidation worktrees; no unlanded feature work may be
+   discarded. The mdoc and Canvas Credentials worktrees were already verified
+   against squash merges `#247` and `#248` and removed. The authorized UI/MMF
+   history rewrite, release/tag retirement and protection restoration are also
+   complete, so no additional destructive history operation remains.
 4. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
    release-demo recordings plus acceptance/soak checks, and leave production
    unchanged.
@@ -95,12 +80,10 @@ merged `main` coverage.
 The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
-The next implementation boundary is therefore not another route port: contract
-provenance and beta routing are committed locally, so the remaining boundary is
-rebase, whole-stack gates, clean PR/merge and the aggregate beta-only canary. Do
-not duplicate this kernel while wiring consumers, and keep differential tests
-against the preserved Python oracle until the all-consumer deletion gate
-passes.
+The next Canvas boundary is therefore not another route port: it is the
+aggregate beta-only canary. Do not duplicate this kernel while wiring
+consumers, and keep differential tests against the preserved Python oracle
+until the all-consumer deletion gate passes.
 
 The eventual deletion boundary is route-level, not file-level, until the whole
 issuance service is native. Python's large `canvas_routes.py` module also owns
@@ -110,6 +93,14 @@ remove production capability. Keep the three handlers for non-beta consumers,
 and keep the worker plus all helpers reachable from it, until their respective
 consumer and whole-worker gates prove behavioral and persistence parity. This
 is an explicit delayed deletion gate, not permission for a permanent fallback.
+
+The safest parallel worker target is now the language-neutral contract freeze
+for that standalone Canvas sync worker: polling cursors, lease acquisition and
+recovery, retry/backoff, heartbeat, idempotent reconciliation, provider error
+mapping and shutdown behavior. That worker may build fixtures and mutation
+gates without overlapping verification consolidation. Rust implementation
+starts only after the persistence projection is frozen, and Python is deleted
+only after whole-worker differential and failure gates pass.
 
 ### Parallel verification-image consolidation
 
@@ -121,24 +112,58 @@ service cutover: it preserves and absorbs the extra seven-operation Credentials
 image compatibility surface instead of deleting it or creating a second Rust
 verifier.
 
-The stream is active but unmerged. The Credentials branch has eight committed
-contract/governance/dispatch slices and is three commits behind its current
-`origin/main`. The UI branch has 34 committed slices covering governed startup,
-typed compatibility DTOs and HTTP behavior, durable PostgreSQL session state,
-migration ownership, canonical decisions, native use cases and runtime
-activation; its current nine-file dirty slice wires beta packaging and removes
-the obsolete Python verification-image entry point. PostgreSQL
-migration/application/race coverage, strict Rust linting and deployment
-contract tests are green at that checkpoint. Differential fixtures,
-built-image smoke/evidence, consumer/release pins, complete review and the
-Python deletion gate remain open. Preserve both worktrees and land their changes
-through their own reviewed PRs; they must not be folded into or removed during
-Canvas branch cleanup.
+The stream is active and rebased cleanly. The Credentials source-surface,
+governance and migration-dispatch work merged through protected PR
+`ElevenID/marty-credentials#249` at `f802d45a0eea6d3b36cf423fd722f30c967b03ad`;
+its 124-test Python parity-oracle suite and 40 focused contract/migration tests
+pass. The UI branch is in protected PR `ElevenID/marty-ui#718`, with 38 slices
+covering governed startup, typed compatibility DTOs and HTTP behavior, durable
+PostgreSQL session state, migration ownership, canonical decisions, native use
+cases, runtime activation, beta-only packaging, bounded readiness, secret
+redaction and removal of avoidable invariant panics. It is zero commits behind
+Canvas-merged `origin/main`.
 
-The separate `fix/cdla-mdoc-proof-metadata-v1` Credentials worktree is no
-longer an active implementation stream: its tested fix merged as
-`ElevenID/marty-credentials#247` at `8e3868b`. Its clean, squash-replaced topic
-branch/worktree can be removed during the approved branch cleanup.
+Strict Rust formatting and Clippy pass; 64 library, six service-behavior and
+five session-behavior tests pass; the fresh native image ran the released
+migration twice to Alembic head `202608091200` and started both ordinary and
+compatibility-enabled runtimes healthy. Beta Compose renders the migration and
+runtime from one immutable image. Production, self-host-production and
+Kubernetes-production manifests have no changes. Differential fixture
+execution, consumer/release pin changes, final review/PR and the Python service
+deletion gate remain open.
+
+### Verification consolidation guardrails
+
+The separately published Python verification image in `marty-credentials` is
+claimed by the coordinated `rust-verification/consolidation-v1` worktrees in
+`marty-ui` and `marty-credentials`. This stream proceeds in parallel with the
+Canvas completion work because it owns separate service, contract, migration,
+packaging and deployment paths. Other workers must not start a second verifier
+port or duplicate verification decisions in a new crate.
+
+The workstream first freezes implementation-independent HTTP, configuration,
+governance, persistence, migration, concurrency, failure and release contracts
+from the Python service. It then reconciles those contracts with the existing
+canonical `marty-ui/rust/services/verification` binary and the reusable
+`marty-core` verification kernels. Shared policy, protocol, cryptographic,
+canonical-result and evidence-validation behavior remains at the lowest
+reusable Rust layer; the service crate owns only domain use cases, transport
+adaptation, repositories and provider composition. Generic lifecycle,
+configuration, authorization-context, migration, resilience and observability
+behavior must come from MMF rather than being copied into the service.
+
+No Python route, supported purpose, governed trust decision, processing state,
+storage guarantee, migration path, deployment mode or public error may be
+removed merely because it is difficult to port. The Python runtime and image
+remain the parity oracle until positive, negative, malformed-input, tenancy,
+authorization, replay, idempotency, concurrency, dependency-failure,
+secret-redaction, migration and packaging gates pass against the Rust service.
+Deletion is mandatory only after those gates prove that the canonical Rust
+service preserves the intended contract and every consumer has moved. Each
+focused commit receives a maintainer-style self-review followed by an
+independent reviewer pass; findings are fixed and re-reviewed until no issues
+remain. The resulting image cutover joins a reviewed aggregate beta release;
+production remains unchanged without separate approval.
 
 ## Wave three — Rust service plane and complete MMF replacement
 

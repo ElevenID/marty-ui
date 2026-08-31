@@ -7,11 +7,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use mmf_runtime::{system_router, RuntimeState};
+use mmf_core::HealthReport;
+use mmf_runtime::{system_router, system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
+    credentials_compat::{self, CompatibilityState},
     EvaluateRequest, ManagementPrincipal, StartVerificationRequest, SubmitVerificationRequest,
     VerificationError, VerificationService, ZkpSubmitRequest,
 };
@@ -22,6 +24,7 @@ pub struct HttpState {
     pub runtime: RuntimeState,
     pub release_version: String,
     pub build_revision: String,
+    pub credentials_compat: Option<CompatibilityState>,
 }
 
 #[derive(Debug)]
@@ -81,7 +84,16 @@ const fn default_limit() -> usize {
 }
 
 pub fn router(state: HttpState) -> Router {
-    Router::new()
+    let system_routes = if state.credentials_compat.is_some() {
+        system_router_with_options(
+            state.runtime.clone(),
+            SystemRouteOptions::default().with_health_projector(compatibility_health),
+        )
+    } else {
+        system_router(state.runtime.clone())
+    };
+    let compatibility = state.credentials_compat.clone();
+    let application = Router::new()
         .route("/v1/verify", post(start))
         .route("/v1/verify/sessions", get(list))
         .route("/v1/verify/evaluate", post(evaluate))
@@ -94,8 +106,29 @@ pub fn router(state: HttpState) -> Router {
         .route("/startup", get(startup))
         .route("/health/native-backend", get(native_health))
         .route("/metrics", get(metrics))
-        .with_state(state.clone())
-        .merge(system_router(state.runtime))
+        .with_state(state);
+    let application = compatibility.map_or(application.clone(), |compatibility| {
+        application.merge(credentials_compat::router(compatibility))
+    });
+    application.merge(system_routes)
+}
+
+fn compatibility_health(_: &HealthReport) -> Value {
+    compatibility_health_body()
+}
+
+fn compatibility_health_body() -> Value {
+    json!({
+        "status": "healthy",
+        "service": "verification",
+        "native_backend": {
+            "available": true,
+            "module": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+            "missing_capabilities": [],
+            "error": null,
+        },
+    })
 }
 
 async fn start(
@@ -240,4 +273,73 @@ fn header(headers: &HeaderMap, name: &'static str) -> String {
         .map(str::trim)
         .unwrap_or_default()
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use mmf_core::BuildInfo;
+    use mmf_runtime::{
+        system_router, system_router_with_options, RuntimeState, SystemRouteOptions,
+    };
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    use super::{compatibility_health, compatibility_health_body};
+
+    #[test]
+    fn root_health_uses_the_released_compatibility_projection() {
+        assert_eq!(
+            compatibility_health_body(),
+            json!({
+                "status": "healthy",
+                "service": "verification",
+                "native_backend": {
+                    "available": true,
+                    "module": env!("CARGO_PKG_NAME"),
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "missing_capabilities": [],
+                    "error": null,
+                },
+            })
+        );
+        assert_ne!(
+            compatibility_health_body()["native_backend"]["module"],
+            "_marty_rs"
+        );
+    }
+
+    async fn health_body(router: axum::Router) -> Value {
+        let response = router
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
+    }
+
+    fn runtime() -> RuntimeState {
+        RuntimeState::new(BuildInfo {
+            service: "verification".into(),
+            version: "test".into(),
+            build_revision: "test".into(),
+            enabled_features: vec!["native_oid4vp".into()],
+        })
+    }
+
+    #[tokio::test]
+    async fn compatibility_health_projection_is_activation_gated_at_the_route() {
+        let inactive = health_body(system_router(runtime())).await;
+        assert!(inactive.get("components").is_some());
+        assert!(inactive.get("native_backend").is_none());
+
+        let active = health_body(system_router_with_options(
+            runtime(),
+            SystemRouteOptions::default().with_health_projector(compatibility_health),
+        ))
+        .await;
+        assert_eq!(active, compatibility_health_body());
+    }
 }

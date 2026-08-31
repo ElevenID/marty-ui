@@ -20,16 +20,23 @@ base64.workspace = true
 chrono.workspace = true
 http.workspace = true
 marty-flow = { path = "../flow" }
+marty-didcomm = { workspace = true, features = ["did_jwk", "did_key", "did_web"] }
+marty-oid4vci.workspace = true
+marty-verification.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
+p256.workspace = true
 prost.workspace = true
 rand.workspace = true
 redis.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -47,6 +54,7 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 tower.workspace = true
 
 [lints.rust]

@@ -30,6 +30,27 @@ def test_dedicated_native_image_compose_target_and_ci_gate_are_present() -> None
     assert "tags: marty-verification-service:ci" in workflow
 
 
+def test_native_images_forward_the_same_migration_command_to_the_binary() -> None:
+    entrypoint = text("services/entrypoint.sh")
+    dedicated = text("rust/services/Dockerfile.ci")
+    ghcr = text("docker-compose.profile.ghcr.yml")
+    assert 'exec /usr/local/bin/marty-verification-service "$@"' in entrypoint
+    assert '\\"$@\\"' in dedicated
+    assert 'entrypoint: ["/app/services/entrypoint.sh"]' in ghcr
+
+
+def test_beta_uses_the_same_native_image_for_schema_and_compatibility_runtime() -> None:
+    base = text("docker-compose.base.yml")
+    beta = text("docker-compose.beta.yml")
+    workflow = text(".github/workflows/ci.yml")
+    assert "verification-migrations:" in base
+    assert 'command: ["migrate"]' in base
+    assert "verification-migrations:\n        condition: service_completed_successfully" in base
+    assert 'VERIFICATION_CREDENTIALS_COMPAT_ENABLED: "true"' in beta
+    assert "VERIFICATION_GOVERNANCE_JSON must be set for beta" in beta
+    assert "VERIFICATION_GOVERNANCE_JSON: '{\"ci_compose_render_only\":true}'" in workflow
+
+
 def test_only_native_verification_runtime_sources_remain() -> None:
     service = ROOT / "services" / "verification"
     assert not list(service.rglob("*.py"))

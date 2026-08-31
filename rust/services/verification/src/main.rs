@@ -1,12 +1,18 @@
 use std::{error::Error, sync::Arc};
 
 use marty_verification_service::{
+    credentials_compat::{
+        migrate_session_schema, validate_session_schema, CompatibilityState,
+        CredentialsCompatibilityService, NativeCredentialVerificationKernel,
+        OrganizationIssuerKeyResolver, PostgresSessionRepository,
+    },
     http::{router, HttpState},
     verification_proto::verification_service_server::VerificationServiceServer,
     Environment, MemorySessionStore, RedisSessionStore, SessionStore, VerificationDependency,
-    VerificationGrpcService, VerificationProviders, VerificationRuntime, VerificationService,
-    VerificationServiceConfig,
+    VerificationGrpcService, VerificationMigrationConfig, VerificationProviders,
+    VerificationRuntime, VerificationService, VerificationServiceConfig,
 };
+use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -22,11 +28,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+    let mut arguments = std::env::args().skip(1);
+    let mode = match (arguments.next(), arguments.next()) {
+        (None, None) => None,
+        (Some(mode), None) if mode == "migrate" => Some(mode),
+        _ => return Err("usage: marty-verification-service [migrate]".into()),
+    };
+    if mode.is_some() {
+        let migration = VerificationMigrationConfig::from_env()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(migration.database_url())
+            .await?;
+        migrate_session_schema(&pool).await?;
+        pool.close().await;
+        info!("verification session schema is at the released head");
+        return Ok(());
+    }
     let config = VerificationServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid Verification configuration");
         error
     })?;
     let runtime = VerificationRuntime::new(&config)?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let store: Arc<dyn SessionStore> = match config.redis_url.as_deref() {
         Some(url) => Arc::new(RedisSessionStore::connect(url).await?),
         None if matches!(
@@ -57,6 +81,46 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.public_base_url.clone(),
         false,
     ));
+    let mut compatibility_database_pool = None;
+    let credentials_compat = if config.credentials_compat_enabled {
+        let database_url = config
+            .credentials_database_url
+            .as_deref()
+            .ok_or("compatibility database URL was not validated")?;
+        let pool = PgPoolOptions::new()
+            .max_connections(12)
+            .connect(database_url)
+            .await?;
+        validate_session_schema(&pool).await?;
+        runtime.mark_healthy(VerificationDependency::CompatibilityDatabase)?;
+        compatibility_database_pool = Some(pool.clone());
+        let resolver = config
+            .credentials_resolver
+            .as_ref()
+            .ok_or("compatibility issuer resolver was not validated")?;
+        let issuer_resolver = Arc::new(OrganizationIssuerKeyResolver::new(
+            resolver.base_url.clone(),
+            resolver.api_key().into(),
+            config.providers.timeout,
+            resolver.did_web_allowed_hosts.clone(),
+        )?);
+        let service = Arc::new(CredentialsCompatibilityService::new(
+            Arc::new(PostgresSessionRepository::new(pool)),
+            Arc::new(NativeCredentialVerificationKernel),
+            issuer_resolver,
+            config
+                .credentials_governance
+                .clone()
+                .ok_or("compatibility governance was not validated")?,
+            config.credentials_processing_lease,
+        ));
+        Some(CompatibilityState {
+            use_cases: service,
+            governance: config.credentials_governance.clone(),
+        })
+    } else {
+        None
+    };
     let http_listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_healthy(VerificationDependency::HttpListener)?;
     let grpc_listener = if config.grpc_enabled {
@@ -71,14 +135,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runtime: runtime.state(),
         release_version: config.release_version.clone(),
         build_revision: config.build_revision.clone(),
+        credentials_compat,
     })
     .layer(TraceLayer::new_for_http());
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut http_shutdown = shutdown_rx.clone();
     let http = axum::serve(http_listener, http_app).with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let mut grpc_shutdown = shutdown_rx;
+    let mut grpc_shutdown = shutdown_rx.clone();
     let grpc = grpc_listener.map(|listener| async move {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         let server = VerificationServiceServer::new(VerificationGrpcService::new(grpc_service));
@@ -94,6 +158,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await
     });
     runtime.activate()?;
+    let compatibility_database_monitor = compatibility_database_pool.map(|pool| {
+        let runtime = runtime.clone();
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move { runtime.monitor_compatibility_database(pool, shutdown).await })
+    });
     info!(
         http_address = %config.http_addr,
         grpc_address = config.grpc_enabled.then(|| config.grpc_addr.to_string()),
@@ -116,6 +185,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     runtime.drain()?;
     let _ = shutdown_tx.send(true);
+    if let Some(monitor) = compatibility_database_monitor {
+        monitor.await??;
+    }
     runtime.stop()?;
     result
 }
