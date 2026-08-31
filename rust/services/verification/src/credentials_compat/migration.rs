@@ -197,7 +197,8 @@ async fn validate_connection(
     validate_constraint_definitions(&definitions)?;
 
     let index = sqlx::query(
-        "SELECT i.indisunique, i.indisvalid, i.indisready,
+        "SELECT i.indisunique, i.indisvalid, i.indisready, i.indnkeyatts,
+                i.indexprs IS NULL AS has_no_expressions,
                 pg_get_expr(i.indpred, i.indrelid) AS predicate,
                 ARRAY(
                     SELECT attribute.attname
@@ -215,6 +216,10 @@ async fn validate_connection(
         row.try_get::<bool, _>("indisunique").unwrap_or(false)
             && row.try_get::<bool, _>("indisvalid").unwrap_or(false)
             && row.try_get::<bool, _>("indisready").unwrap_or(false)
+            && row.try_get::<i16, _>("indnkeyatts").ok() == Some(1)
+            && row
+                .try_get::<bool, _>("has_no_expressions")
+                .unwrap_or(false)
             && row.try_get::<Vec<String>, _>("keys").ok().as_deref() == Some(&["nonce".into()])
             && row
                 .try_get::<Option<String>, _>("predicate")
@@ -280,6 +285,7 @@ async fn validate_guard_behavior(
     let probes = [
         (
             "nonce length",
+            "ck_verification_nonce_length",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,nonce)
@@ -288,6 +294,7 @@ async fn validate_guard_behavior(
         ),
         (
             "submission digest",
+            "ck_verification_submission_digest",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,nonce,submission_sha256)
@@ -297,6 +304,7 @@ async fn validate_guard_behavior(
         ),
         (
             "processing token digest",
+            "ck_verification_processing_token_digest",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,expires_at,nonce,
@@ -308,6 +316,7 @@ async fn validate_guard_behavior(
         ),
         (
             "strict processing lease",
+            "ck_verification_processing_lease",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,expires_at,nonce,
@@ -319,6 +328,7 @@ async fn validate_guard_behavior(
         ),
         (
             "pending atomic state",
+            "ck_verification_atomic_state",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,nonce)
@@ -327,6 +337,7 @@ async fn validate_guard_behavior(
         ),
         (
             "terminal atomic state",
+            "ck_verification_atomic_state",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,nonce)
@@ -336,6 +347,7 @@ async fn validate_guard_behavior(
         ),
         (
             "expired atomic state",
+            "ck_verification_atomic_state",
             "INSERT INTO public.verification_sessions
              (id,organization_id,verifier_did,presentation_definition,status,
               verification_evidence,created_at,updated_at,nonce,
@@ -345,13 +357,14 @@ async fn validate_guard_behavior(
                     clock_timestamp(),clock_timestamp()+interval '1 minute')",
         ),
     ];
-    for (name, sql) in probes {
-        expect_rejected(transaction, name, "23514", sql).await?;
+    for (name, constraint, sql) in probes {
+        expect_rejected(transaction, name, "23514", constraint, sql).await?;
     }
     expect_rejected(
         transaction,
         "live nonce uniqueness",
         "23505",
+        "ux_verification_sessions_live_nonce",
         "INSERT INTO public.verification_sessions
          (id,organization_id,verifier_did,presentation_definition,status,
           verification_evidence,created_at,updated_at,nonce)
@@ -368,6 +381,7 @@ async fn expect_rejected(
     transaction: &mut Transaction<'_, Postgres>,
     name: &str,
     expected_sqlstate: &str,
+    expected_constraint: &str,
     sql: &'static str,
 ) -> Result<(), SessionMigrationError> {
     sqlx::query("SAVEPOINT verification_schema_probe")
@@ -378,8 +392,10 @@ async fn expect_rejected(
         .as_ref()
         .err()
         .and_then(sqlx::Error::as_database_error)
-        .and_then(|error| error.code())
-        .is_some_and(|code| code == expected_sqlstate);
+        .is_some_and(|error| {
+            error.code().as_deref() == Some(expected_sqlstate)
+                && error.constraint() == Some(expected_constraint)
+        });
     sqlx::query("ROLLBACK TO SAVEPOINT verification_schema_probe")
         .execute(&mut **transaction)
         .await?;
@@ -388,7 +404,7 @@ async fn expect_rejected(
         .await?;
     if !rejected_as_expected {
         return Err(SessionMigrationError::Incompatible(format!(
-            "verification schema did not reject invalid {name} with SQLSTATE {expected_sqlstate}"
+            "verification schema did not reject invalid {name} with {expected_constraint} ({expected_sqlstate})"
         )));
     }
     Ok(())

@@ -298,12 +298,12 @@ impl TerminalDecision {
         self.0
     }
 
-    pub(crate) fn validate_binding(
+    pub(crate) fn validate_session(
         &self,
-        session_id: &str,
+        current: &SessionRecord,
         presentation_digest: &Sha256Digest,
     ) -> Result<(), PersistedEvidenceError> {
-        match &self.0 {
+        let evidence = match &self.0 {
             TerminalDecisionKind::Verified {
                 verification_evidence,
                 ..
@@ -311,8 +311,15 @@ impl TerminalDecision {
             | TerminalDecisionKind::Failed {
                 verification_evidence,
                 ..
-            } => verification_evidence.validate_terminal_binding(session_id, presentation_digest),
-        }
+            } => verification_evidence,
+        };
+        evidence.validate_terminal_binding(&current.id, presentation_digest)?;
+        evidence.validate_session_authority(
+            &current.verification_evidence,
+            &current.organization_id,
+            &current.verifier_did,
+            &current.presentation_definition,
+        )
     }
 }
 

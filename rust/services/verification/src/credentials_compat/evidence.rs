@@ -3,14 +3,15 @@ use std::fmt;
 use marty_verification::{
     governance::canonical_digest_json,
     verification::{
-        build_verification_decision_result, VerificationCheckOutcome, VerificationDecision,
-        VerificationDecisionResult, VerificationDecisionResultInput, VerificationProcessingStatus,
+        build_verification_decision_result, VerificationCheckOutcome, VerificationContextMode,
+        VerificationDecision, VerificationDecisionResult, VerificationDecisionResultInput,
+        VerificationProcessingStatus,
     },
 };
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 
-use super::{GovernanceSnapshot, Sha256Digest};
+use super::{GovernancePurpose, GovernanceSnapshot, Sha256Digest};
 
 const EVIDENCE_SCHEMA_VERSION: u64 = 2;
 
@@ -51,8 +52,11 @@ pub enum PersistedEvidenceError {
 
 #[derive(Clone, Debug, PartialEq)]
 enum EvidenceKind {
-    Pending,
+    Pending {
+        governance: GovernanceSnapshot,
+    },
     Canonical {
+        governance: GovernanceSnapshot,
         session_id: String,
         presentation_digest: Sha256Digest,
         passed: bool,
@@ -89,7 +93,9 @@ impl PersistedEvidence {
                 "state": "PENDING",
                 "governance": governance.value(),
             }),
-            kind: EvidenceKind::Pending,
+            kind: EvidenceKind::Pending {
+                governance: governance.clone(),
+            },
         }
     }
 
@@ -111,6 +117,7 @@ impl PersistedEvidence {
                 "evidence_records": records,
             }),
             kind: EvidenceKind::Canonical {
+                governance: governance.clone(),
                 session_id: session_id.to_owned(),
                 presentation_digest: presentation_digest.clone(),
                 passed,
@@ -157,7 +164,7 @@ impl PersistedEvidence {
             EvidenceKind::Canonical { passed: true, .. } => {
                 Err(PersistedEvidenceError::FailureEvidenceRequired)
             }
-            EvidenceKind::Pending | EvidenceKind::Invalid => {
+            EvidenceKind::Pending { .. } | EvidenceKind::Invalid => {
                 Err(PersistedEvidenceError::InvalidTerminalEvidence)
             }
         }
@@ -177,7 +184,7 @@ impl PersistedEvidence {
             EvidenceKind::FailClosed {
                 presentation_digest,
             } => (None, presentation_digest),
-            EvidenceKind::Pending | EvidenceKind::Invalid => {
+            EvidenceKind::Pending { .. } | EvidenceKind::Invalid => {
                 return Err(PersistedEvidenceError::InvalidTerminalEvidence);
             }
         };
@@ -186,6 +193,37 @@ impl PersistedEvidence {
         }
         if bound_digest != presentation_digest {
             return Err(PersistedEvidenceError::PresentationMismatch);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_session_authority(
+        &self,
+        pending: &Self,
+        organization_id: &str,
+        verifier_did: &str,
+        presentation_definition: &Value,
+    ) -> Result<(), PersistedEvidenceError> {
+        let EvidenceKind::Pending {
+            governance: pending_governance,
+        } = &pending.kind
+        else {
+            return Err(PersistedEvidenceError::InvalidTerminalEvidence);
+        };
+        if pending_governance.organization_id() != organization_id
+            || pending_governance
+                .require_purpose(GovernancePurpose::SessionCreate)
+                .is_err()
+            || pending_governance
+                .validate_request(verifier_did, presentation_definition)
+                .is_err()
+        {
+            return Err(PersistedEvidenceError::AuthorityMismatch);
+        }
+        if let EvidenceKind::Canonical { governance, .. } = &self.kind {
+            if governance != pending_governance {
+                return Err(PersistedEvidenceError::AuthorityMismatch);
+            }
         }
         Ok(())
     }
@@ -205,14 +243,13 @@ fn parse_persisted_value(value: Value) -> Option<PersistedEvidence> {
 
 fn parse_pending(value: Value) -> Option<PersistedEvidence> {
     let object = value.as_object()?;
-    if !exact_keys(object, &["schema_version", "state", "governance"])
-        || validated_governance(object).is_none()
-    {
+    if !exact_keys(object, &["schema_version", "state", "governance"]) {
         return None;
     }
+    let governance = validated_governance(object)?;
     Some(PersistedEvidence {
         value,
-        kind: EvidenceKind::Pending,
+        kind: EvidenceKind::Pending { governance },
     })
 }
 
@@ -250,6 +287,7 @@ fn parse_canonical(value: Value) -> Option<PersistedEvidence> {
     Some(PersistedEvidence {
         value,
         kind: EvidenceKind::Canonical {
+            governance,
             session_id,
             presentation_digest: digest,
             passed,
@@ -327,8 +365,11 @@ fn validate_typed_binding(
         .iter()
         .map(|check| check.check_id.as_str())
         .collect::<Vec<_>>();
-    if context.organization_id.as_deref() != Some(governance.organization_id())
+    if context.mode != VerificationContextMode::Online
+        || context.organization_id.as_deref() != Some(governance.organization_id())
         || context.verifier_id != governance.policy().verifier_id()
+        || context.audience.as_deref() != Some(governance.policy().verifier_id())
+        || context.offline_profile_id.is_some()
         || result.policy().id != governance.policy().reference().id
         || result.policy().version != governance.policy().reference().version
         || result.policy().content_digest != governance.policy().reference().content_digest
@@ -351,6 +392,7 @@ fn validate_typed_binding(
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
+        || result.checks().iter().any(|check| !check.required)
     {
         return Err(PersistedEvidenceError::AuthorityMismatch);
     }
@@ -433,19 +475,28 @@ mod tests {
 
     const SESSION_ID: &str = "session-001";
 
-    fn governance() -> GovernanceSnapshot {
+    fn governance_for(purpose: GovernancePurpose) -> GovernanceSnapshot {
         let fixture: Value = serde_json::from_str(behavior_fixture_json()).unwrap();
         GovernanceEngine::new(&fixture["governance"].to_string())
             .unwrap()
-            .authorize("purpose-scoped-test-key", GovernancePurpose::Direct)
+            .authorize("purpose-scoped-test-key", purpose)
             .unwrap()
     }
 
-    fn canonical_result(
+    fn governance() -> GovernanceSnapshot {
+        governance_for(GovernancePurpose::SessionCreate)
+    }
+
+    fn presentation_definition() -> Value {
+        let fixture: Value = serde_json::from_str(behavior_fixture_json()).unwrap();
+        fixture["definition"].clone()
+    }
+
+    fn canonical_input(
         governance: &GovernanceSnapshot,
         digest: &Sha256Digest,
         failed: bool,
-    ) -> VerificationDecisionResult {
+    ) -> VerificationDecisionResultInput {
         let evaluated_at = "2026-08-30T12:00:00Z";
         let checks = governance
             .policy()
@@ -473,7 +524,7 @@ mod tests {
                 )],
             })
             .collect::<Vec<_>>();
-        let provisional = VerificationDecisionResultInput {
+        VerificationDecisionResultInput {
             verification_id: format!("verification:{SESSION_ID}"),
             context: VerificationDecisionContext {
                 mode: VerificationContextMode::Online,
@@ -509,22 +560,29 @@ mod tests {
                 adapter_version: Some(governance.component().adapter_version.clone()),
             }],
             checks,
-        };
-        let provisional_result = build_verification_decision_result(provisional.clone()).unwrap();
+        }
+    }
+
+    fn build_result(mut input: VerificationDecisionResultInput) -> VerificationDecisionResult {
+        let provisional_result = build_verification_decision_result(input.clone()).unwrap();
         let records = evidence_records(&provisional_result);
-        let evidence_digest =
+        input.evidence_digest =
             canonical_digest_json(&serde_json::to_string(&records).unwrap()).unwrap();
-        build_verification_decision_result(VerificationDecisionResultInput {
-            evidence_digest,
-            ..provisional
-        })
-        .unwrap()
+        build_verification_decision_result(input).unwrap()
+    }
+
+    fn canonical_result(
+        governance: &GovernanceSnapshot,
+        digest: &Sha256Digest,
+        failed: bool,
+    ) -> VerificationDecisionResult {
+        build_result(canonical_input(governance, digest, failed))
     }
 
     #[test]
     fn pending_and_fail_closed_evidence_have_fixed_claim_free_shapes() {
         let pending = PersistedEvidence::pending(&governance());
-        assert!(matches!(pending.kind, EvidenceKind::Pending));
+        assert!(matches!(pending.kind, EvidenceKind::Pending { .. }));
         assert_eq!(pending.as_value().as_object().unwrap().len(), 3);
 
         let raw = "raw.presentation.secret";
@@ -581,6 +639,84 @@ mod tests {
         assert_eq!(
             failed.require_verified(),
             Err(PersistedEvidenceError::CanonicalPassRequired)
+        );
+    }
+
+    #[test]
+    fn governed_required_checks_and_online_context_cannot_be_downgraded() {
+        let governance = governance();
+        let digest = Sha256Digest::calculate("presentation");
+
+        let mut optional_failure = canonical_input(&governance, &digest, true);
+        optional_failure.checks[0].required = false;
+        let optional_failure = build_result(optional_failure);
+        assert!(optional_failure.is_valid());
+        assert_eq!(
+            PersistedEvidence::canonical(&governance, SESSION_ID, &digest, &optional_failure,),
+            Err(PersistedEvidenceError::AuthorityMismatch)
+        );
+
+        let mut wrong_audience = canonical_input(&governance, &digest, false);
+        wrong_audience.context.audience = Some("did:web:other.example".into());
+        assert_eq!(
+            PersistedEvidence::canonical(
+                &governance,
+                SESSION_ID,
+                &digest,
+                &build_result(wrong_audience),
+            ),
+            Err(PersistedEvidenceError::AuthorityMismatch)
+        );
+
+        let mut offline = canonical_input(&governance, &digest, false);
+        offline.context.mode = VerificationContextMode::Offline;
+        offline.context.organization_id = None;
+        offline.context.transaction_id = None;
+        offline.context.audience = None;
+        offline.context.offline_profile_id = Some("offline:profile".into());
+        assert_eq!(
+            PersistedEvidence::canonical(&governance, SESSION_ID, &digest, &build_result(offline),),
+            Err(PersistedEvidenceError::AuthorityMismatch)
+        );
+    }
+
+    #[test]
+    fn session_terminal_evidence_must_preserve_creation_authority() {
+        let session_governance = governance();
+        let other_purpose = governance_for(GovernancePurpose::Direct);
+        let digest = Sha256Digest::calculate("presentation");
+        let pending = PersistedEvidence::pending(&session_governance);
+        let matching = PersistedEvidence::canonical(
+            &session_governance,
+            SESSION_ID,
+            &digest,
+            &canonical_result(&session_governance, &digest, false),
+        )
+        .unwrap();
+        matching
+            .validate_session_authority(
+                &pending,
+                session_governance.organization_id(),
+                session_governance.policy().verifier_id(),
+                &presentation_definition(),
+            )
+            .unwrap();
+
+        let substituted = PersistedEvidence::canonical(
+            &other_purpose,
+            SESSION_ID,
+            &digest,
+            &canonical_result(&other_purpose, &digest, false),
+        )
+        .unwrap();
+        assert_eq!(
+            substituted.validate_session_authority(
+                &pending,
+                session_governance.organization_id(),
+                session_governance.policy().verifier_id(),
+                &presentation_definition(),
+            ),
+            Err(PersistedEvidenceError::AuthorityMismatch)
         );
     }
 

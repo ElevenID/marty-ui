@@ -7,7 +7,7 @@ use marty_verification_service::credentials_compat::{
     SessionDurationSeconds, SessionRepository, SessionStatus, Sha256Digest, TerminalDecision,
     VerificationMethod, VerifierNonce,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::{postgres::PgPoolOptions, Row};
 
 fn draft(id: &str, nonce_character: char) -> SessionDraft {
@@ -19,9 +19,9 @@ fn draft(id: &str, nonce_character: char) -> SessionDraft {
         .unwrap();
     SessionDraft {
         id: id.into(),
-        organization_id: "org-1".into(),
+        organization_id: governance.organization_id().into(),
         verifier_did: "did:web:verifier.example".into(),
-        presentation_definition: json!({"id":"pd-1","input_descriptors":[]}),
+        presentation_definition: fixture["definition"].clone(),
         required_credential_types: Vec::new(),
         trusted_issuers: vec!["did:web:issuer.example".into()],
         required_claims: Vec::new(),
@@ -208,6 +208,50 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
         .unwrap();
     assert_eq!(finalized.state, ClaimState::Finalized);
     assert_eq!(finalized.session.unwrap().status, SessionStatus::Failed);
+
+    let precedence_digest = Sha256Digest::calculate("precedence-mismatch");
+    assert_eq!(
+        repository
+            .finalize(
+                "missing-session",
+                &race_digest,
+                winner,
+                TerminalDecision::failed(
+                    PersistedEvidence::fail_closed(
+                        &precedence_digest,
+                        EvidenceFailureReason::CanonicalResultBuildFailed,
+                    ),
+                    Some(VerificationMethod::JwtVp),
+                    "ignored".into(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+            .state,
+        ClaimState::NotFound
+    );
+    assert_eq!(
+        repository
+            .finalize(
+                "race-session",
+                &race_digest,
+                winner,
+                TerminalDecision::failed(
+                    PersistedEvidence::fail_closed(
+                        &precedence_digest,
+                        EvidenceFailureReason::CanonicalResultBuildFailed,
+                    ),
+                    Some(VerificationMethod::JwtVp),
+                    "ignored".into(),
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+            .state,
+        ClaimState::Terminal
+    );
 
     sqlx::query(
         "UPDATE public.verification_sessions
@@ -568,6 +612,15 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
     sqlx::raw_sql(
         "DROP INDEX public.ux_verification_sessions_live_nonce;
          CREATE UNIQUE INDEX ux_verification_sessions_live_nonce
+             ON public.verification_sessions(nonce, lower(id)) WHERE nonce IS NOT NULL;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+    sqlx::raw_sql(
+        "DROP INDEX public.ux_verification_sessions_live_nonce;
+         CREATE UNIQUE INDEX ux_verification_sessions_live_nonce
              ON public.verification_sessions(nonce) WHERE nonce IS NOT NULL;",
     )
     .execute(&pool)
@@ -590,6 +643,26 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
     assert!(migrate_session_schema(&pool).await.is_err());
     sqlx::raw_sql(
         "ALTER TABLE public.verification_sessions
+             DROP CONSTRAINT ck_verification_processing_lease;
+         ALTER TABLE public.verification_sessions
+             ADD CONSTRAINT ck_verification_processing_lease CHECK (
+                 processing_started_at IS NULL
+                 OR processing_expires_at >= processing_started_at
+                 OR id='__verification_schema_probe_lease'
+             );
+         ALTER TABLE public.verification_sessions
+             ADD CONSTRAINT ck_verification_decoy_lease CHECK (
+                 id <> '__verification_schema_probe_lease'
+             );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+    sqlx::raw_sql(
+        "ALTER TABLE public.verification_sessions
+             DROP CONSTRAINT ck_verification_decoy_lease;
+         ALTER TABLE public.verification_sessions
              DROP CONSTRAINT ck_verification_processing_lease;
          ALTER TABLE public.verification_sessions
              ADD CONSTRAINT ck_verification_processing_lease CHECK (

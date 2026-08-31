@@ -258,9 +258,6 @@ impl SessionRepository for PostgresSessionRepository {
         processing_token: &ProcessingToken,
         decision: TerminalDecision,
     ) -> Result<SubmissionClaim, SessionPersistenceError> {
-        decision
-            .validate_binding(session_id, presentation_digest)
-            .map_err(SessionPersistenceError::InvalidEvidence)?;
         let mut transaction = self.pool.begin().await?;
         let Some(row) = locked_row(&mut transaction, session_id).await? else {
             transaction.rollback().await?;
@@ -311,6 +308,10 @@ impl SessionRepository for PostgresSessionRepository {
             transaction.rollback().await?;
             return Ok(SubmissionClaim::state(ClaimState::Stale));
         }
+
+        decision
+            .validate_session(&current, presentation_digest)
+            .map_err(SessionPersistenceError::InvalidEvidence)?;
 
         let status = decision.status();
         let (verified_claims, evidence, method, error_message, verified_at) =
