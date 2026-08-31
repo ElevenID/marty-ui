@@ -1,0 +1,24 @@
+[package]
+name = "marty-oid4vp-contract"
+version = "0.1.0"
+description = "Versioned trust-boundary contracts for canonical Marty OID4VP verification"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+marty-verification.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
