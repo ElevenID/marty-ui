@@ -158,11 +158,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await
     });
     runtime.activate()?;
-    let compatibility_database_monitor = compatibility_database_pool.map(|pool| {
+    let compatibility_database_monitor = {
         let runtime = runtime.clone();
         let shutdown = shutdown_rx.clone();
-        tokio::spawn(async move { runtime.monitor_compatibility_database(pool, shutdown).await })
-    });
+        async move {
+            match compatibility_database_pool {
+                Some(pool) => runtime.monitor_compatibility_database(pool, shutdown).await,
+                None => std::future::pending::<Result<(), mmf_core::MmfError>>().await,
+            }
+        }
+    };
     info!(
         http_address = %config.http_addr,
         grpc_address = config.grpc_enabled.then(|| config.grpc_addr.to_string()),
@@ -175,19 +180,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::select! {
             result = http => result.map_err(|error| Box::new(error) as Box<dyn Error>),
             result = grpc => result.map_err(|error| Box::new(error) as Box<dyn Error>),
+            result = compatibility_database_monitor => match result {
+                Ok(()) => Err("compatibility database monitor stopped unexpectedly".into()),
+                Err(error) => Err(Box::new(error) as Box<dyn Error>),
+            },
             () = shutdown_signal() => Ok(()),
         }
     } else {
         tokio::select! {
             result = http => result.map_err(|error| Box::new(error) as Box<dyn Error>),
+            result = compatibility_database_monitor => match result {
+                Ok(()) => Err("compatibility database monitor stopped unexpectedly".into()),
+                Err(error) => Err(Box::new(error) as Box<dyn Error>),
+            },
             () = shutdown_signal() => Ok(()),
         }
     };
     runtime.drain()?;
     let _ = shutdown_tx.send(true);
-    if let Some(monitor) = compatibility_database_monitor {
-        monitor.await??;
-    }
     runtime.stop()?;
     result
 }
