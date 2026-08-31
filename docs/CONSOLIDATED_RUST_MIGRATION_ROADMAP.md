@@ -35,7 +35,7 @@ floor is `contracts/issuance-canvas-management.json`.
 | Canvas management state | Routes | Current evidence / owner |
 |---|---:|---|
 | Implemented and committed on the active Rust branch | 28 | Platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, read-only Canvas Credentials provider validation, native application approval at `e00c25b0a`, and the tenant-bound evidence-event status read with its exact 16-field replay projection |
-| Not yet ported | 3 | The default-disabled legacy evidence, AGS score and NRPS membership ingestion adapters; these remain one shared-kernel slice |
+| In progress in an isolated worktree | 3 | The default-disabled legacy evidence, AGS score and NRPS membership ingestion adapters; these remain one shared-kernel slice and are not yet counted as committed Rust coverage |
 
 Thus, 28 of 31 routes are committed locally, and only the three shared
 legacy-ingest adapters remain.
@@ -49,10 +49,15 @@ Counts describe local migration progress, not merged `main` coverage.
 1. Freeze and port the three compatibility ingest routes through one shared
    kernel, including signature, replay/idempotency, fail-closed default-disable,
    evidence-policy and exact response behavior.
-2. Move the remaining Canvas worker/schema ownership needed by those routes,
-   run disposable PostgreSQL, full Rust/Python differential, packaging,
-   ownership, security and demo gates, then delete the superseded Python
-   implementation immediately when the deletion gate passes.
+2. Move only the receipt/persistence ownership used by those routes, run
+   disposable PostgreSQL, full Rust/Python differential, packaging, ownership,
+   security and demo gates, then delete only the superseded Python webhook
+   handlers and adapter code immediately when the deletion gate passes. The
+   standalone `canvas-sync-worker` and its
+   `process_authoritative_canvas_sync_target` processor remain Python in this
+   wave: Rust currently owns enqueue/readiness support, but not that processor's
+   complete Canvas API polling, lease, retry, heartbeat and reconciliation
+   behavior. They require a separate contract-frozen whole-worker migration.
 3. Rebase onto current `origin/main`, self-review as maintainers, open and merge
    clean PRs, then remove merged or superseded local branches/worktrees. This
    cleanup includes the already-merged CDLA review/test worktrees and detached
@@ -70,6 +75,13 @@ Rust event-ingest kernel with three thin HTTP adapters. The evidence-event
 status read is now complete. The three adapters are the only remaining route
 surface and must land together with differential tests against the preserved
 Python oracle.
+
+The deletion boundary is route-level, not file-level. Python's large
+`canvas_routes.py` module also owns the deployed standalone synchronization
+processor loaded through `CANVAS_SYNC_PROCESSOR`; deleting that module during
+the webhook cutover would remove production capability. Keep the worker and
+all helpers reachable from it until a later Rust worker port proves behavioral
+and persistence parity.
 
 ## Wave three — Rust service plane and complete MMF replacement
 
