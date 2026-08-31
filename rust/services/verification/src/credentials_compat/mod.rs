@@ -4,6 +4,7 @@
 //! Core and MMF behavior. It must not contain an independent verification,
 //! governance, cryptographic, DID, policy, or framework implementation.
 
+pub mod decision;
 pub mod dto;
 pub mod evidence;
 pub mod governance;
@@ -12,6 +13,9 @@ pub mod migration;
 pub mod persistence;
 pub mod session;
 
+pub use decision::{
+    build_canonical_decision, AdapterFacts, CredentialStatus, DecisionBuildError, Presented,
+};
 pub use dto::{
     ClaimResult, CreateSessionRequest, PresentationDefinition, PresentationPayload,
     RequestValidationError, SessionDurationSeconds, SessionResponse, SubmitPresentationRequest,
