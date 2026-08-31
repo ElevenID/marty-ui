@@ -12,6 +12,26 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def test_canvas_postgres_contracts_are_required_in_ci() -> None:
+    contract_dir = ROOT / "rust" / "services" / "issuance" / "tests"
+    canvas_contracts = {
+        path.stem for path in contract_dir.glob("canvas_*_postgres_contract.rs")
+    }
+    assert len(canvas_contracts) == 8
+    assert (contract_dir / "proof_nonce_postgres_contract.rs").is_file()
+
+    workflow = text(".github/workflows/ci.yml")
+    assert (
+        "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: "
+        "postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test"
+        in workflow
+    )
+    assert 'startswith("canvas_")' in workflow
+    assert 'endswith("_postgres_contract")' in workflow
+    assert "canvas_*_postgres_contract-*" in workflow
+    assert workflow.count("Expected nine Canvas Issuance PostgreSQL") == 2
+
+
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     surface_bytes = (ROOT / "contracts/issuance-runtime-surface.json").read_bytes()
     surface = json.loads(surface_bytes)
