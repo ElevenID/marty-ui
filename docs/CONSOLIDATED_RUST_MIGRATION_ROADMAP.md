@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged; bootstrap artifact `v1.1.208` is published as release evidence but is not cutover-eligible, so the reviewed verifier corrections and a newer immutable release must land before consumer pinning, superseded Python-image deletion, one aggregate beta deployment, and acceptance; production is unchanged
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, the canonical Rust verification-image implementation, and its clean post-merge correction review are merged; corrected artifact `v1.1.209` is being prepared, after which immutable consumer pinning, superseded Python-image deletion, one aggregate beta deployment, and acceptance remain; production is unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -26,10 +26,13 @@ Bootstrap stack `v1.1.208` is published at source commit
 Rust services artifact with the merged verifier. It is release evidence only
 and will not be deployed or used for the consumer cutover: the continuing
 post-merge review found readiness-supervision and canonical session-ID
-hardening that must merge and receive a newer immutable release first. The
-next deployment remains one aggregate beta-only update after that corrected
-artifact is pinned and the superseded Python image is deleted. Production is
-not in scope and its deployment configuration remains unchanged.
+hardening. Those corrections merged through protected PR
+`ElevenID/marty-ui#721` at
+`b2b2953f9fe00d848761830623935773419bdf60`; corrected stack `v1.1.209` is now
+locked for governed preparation and publication. The next deployment remains
+one aggregate beta-only update after that corrected artifact is pinned and the
+superseded Python image is deleted. Production is not in scope and its
+deployment configuration remains unchanged.
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -55,10 +58,10 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 
 ### Remaining work in the active wave
 
-1. Merge the clean post-merge verifier corrections and publish a newer
-   `marty-ui` release. Capture its exact services image and services-SBOM
-   digests and independently verify their tag-and-commit-scoped provenance.
-   Retain `v1.1.208` as release evidence only; do not deploy or pin it.
+1. Publish corrected `marty-ui@v1.1.209`. Capture its exact services image and
+   services-SBOM digests and independently verify their
+   tag-and-commit-scoped provenance. Retain `v1.1.208` as release evidence
+   only; do not deploy or pin it.
 2. Change the released `marty-integration-tests@v1.2.75` dual-target verifier
    consumer from its immutable Python oracle pin to that exact newer reviewed
    Rust services artifact. Re-run the ten-gate artifact matrix, SBOM checks,
@@ -86,8 +89,8 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 6. The Canvas, mdoc, Canvas Credentials, base verifier implementation, verifier
    contract, and integration-consumer worktrees have been tree-equivalence
    checked and removed after their protected merges. Retain the owned
-   `rust-verification/post-merge-review-v1` stream and gated Credentials
-   deletion worktree until their release/pin/deletion gates complete. Finish
+   verifier release-binder stream and gated Credentials deletion worktree
+   until their release/pin/deletion gates complete. Finish
    with a read-only branch/worktree audit, retain only release evidence still
    required for the final aggregate, and preserve unrelated user-owned files
    such as the untracked `marty-credentials/uv.lock`. The authorized UI/MMF
@@ -161,25 +164,28 @@ published the first Rust services artifact, but it is not cutover-eligible. Its
 governed annotated tag was prepared with evidence SHA-256
 `c679572cb42a9ff091a3aba8af49e795b7082df7f72e8a7d514eb85912d49bc3` and pushed
 only after temporarily authorized tag-rule bypass was restored to no bypass.
-The parallel `rust-verification/post-merge-review-v1` stream now owns the
-database-monitor supervision, scoped canonical session identifiers, and a
-same-image CI smoke that proves two migrations, readiness, governed creation,
-canonical fail-closed submission, terminal persistence and nonce minimization.
+Protected PR `ElevenID/marty-ui#721` merged the database-monitor supervision,
+scoped canonical session identifiers, and a same-image CI smoke that proves
+two migrations, readiness, governed creation, canonical fail-closed
+submission, terminal persistence and nonce minimization. Its independent
+implementation, contract and deployment reviews and both PR-head and
+merge-group protected gates are clean.
 The release workflow runs that same gate against the exact pushed shared
 services digest through `/app/services/entrypoint.sh` before signing, so its
 dispatcher and migration override cannot diverge from the dedicated image.
-Other workers must not switch the immutable consumer pin until this reviewed
-stack merges and a newer artifact is published. Switching that pin, running
-the immutable differential lane, and deleting the Python service remain open.
+Other workers must not switch the immutable consumer pin until corrected
+`v1.1.209` is published and its exact image/SBOM provenance is captured.
+Switching that pin, running the immutable differential lane, and deleting the
+Python service remain open.
 
 ### Verification consolidation guardrails
 
 The separately published Python verification image in `marty-credentials` is
-claimed by the coordinated `rust-verification/post-merge-review-v1` UI stream
-and `rust-verification/delete-python-verifier-v1` Credentials deletion gate.
-Its base implementation has merged; this review and the release/pin/deletion
-chain proceed in parallel with Canvas completion because they own separate
-service, contract, migration, packaging and deployment paths.
+claimed by the coordinated verifier release-binder stream and
+`rust-verification/delete-python-verifier-v1` Credentials deletion gate. Its
+reviewed implementation has merged; the release/pin/deletion chain proceeds
+in parallel with Canvas completion because it owns separate service, contract,
+migration, packaging and deployment paths.
 Other workers must not start a second verifier port or duplicate verification
 decisions in a new crate.
 

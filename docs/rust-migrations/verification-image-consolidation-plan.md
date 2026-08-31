@@ -1,7 +1,7 @@
 # Credentials verification-image consolidation plan
 
-Status: `post-merge-review-and-immutable-cutover-active`. This workstream is
-owned by `rust-verification/post-merge-review-v1` in `marty-ui` and the gated
+Status: `corrected-artifact-release-and-immutable-cutover-active`. This
+workstream is owned by the `marty-ui@v1.1.209` release binder and the gated
 `rust-verification/delete-python-verifier-v1` worktree in `marty-credentials`.
 It proceeds independently from the active Canvas route work and does not
 change production. Other workers must not switch the public consumer pin or
@@ -179,8 +179,9 @@ Bootstrap `marty-ui` release `v1.1.208` published the first immutable services
 artifact, but post-merge review found two corrections that make it ineligible
 for cutover: the database monitor must remain supervised and URL-safe session
 tokens must be scoped before use as canonical Core identifiers. Those fixes
-and their regression tests are owned by
-`rust-verification/post-merge-review-v1`.
+and their regression tests merged through protected
+`ElevenID/marty-ui#721` at
+`b2b2953f9fe00d848761830623935773419bdf60`.
 
 The same-image CI smoke now runs the Rust artifact's migration twice, asserts
 Alembic head `202608091200`, starts compatibility mode against disposable
@@ -189,7 +190,8 @@ governed session, submits a malformed presentation, proves canonical
 fail-closed scoped identifiers, and confirms terminal nonce minimization. The
 release workflow invokes the same gate against the exact pushed shared
 services digest through its production dispatcher before attestation and
-signing. The deployment, contract and implementation reviews are repeating
-against that stack. A newer immutable artifact, the v2 consumer pin and
-differential lane, and the final Python deletion gate remain open; activation
+signing. The deployment, contract and implementation reviews are clean, as are
+the PR-head and protected merge-group gates. Corrected stack `v1.1.209` is
+being prepared; its immutable artifact/provenance, the v2 consumer pin and
+differential lane, and the final Python deletion gate remain open. Activation
 remains beta only.
