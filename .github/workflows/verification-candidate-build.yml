@@ -1,0 +1,122 @@
+name: Verification candidate build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: verification-candidate-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build nonpublishing Rust verification candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out exact default-branch source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require reviewed default-branch candidate source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "ElevenID/marty-ui"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          git fetch --no-tags origin refs/heads/main
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+          git merge-base --is-ancestor b2b2953f9fe00d848761830623935773419bdf60 "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "version=0.0.0-candidate.${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare private candidate workspace
+        shell: bash
+        run: mkdir -p "${{ runner.temp }}/verification-candidate"
+
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v6.2.0
+
+      - name: Build one local Linux amd64 OCI archive
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: services/Dockerfile
+          push: false
+          pull: true
+          platforms: linux/amd64
+          tags: docker.io/elevenid/marty-ui-verification-candidate:candidate-${{ github.sha }}
+          build-args: |
+            SERVICE_NAME=verification
+            MARTY_RELEASE_VERSION=${{ steps.source.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
+          outputs: type=oci,dest=${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar,compression=gzip,force-compression=true
+          provenance: false
+          sbom: false
+
+      - name: Generate raw CycloneDX SBOM from the local archive
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: oci-archive:${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/verification-candidate/raw-sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate and bind the complete candidate bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_verification_candidate.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF" \
+            --workflow ".github/workflows/verification-candidate-build.yml" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --archive "${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar" \
+            --raw-sbom "${{ runner.temp }}/verification-candidate/raw-sbom.cdx.json" \
+            --sbom "${{ runner.temp }}/verification-candidate/marty-ui-services-sbom.cdx.json" \
+            --dockerfile services/Dockerfile \
+            --metadata "${{ runner.temp }}/verification-candidate/marty-ui-services-build-metadata.json" \
+            --provenance "${{ runner.temp }}/verification-candidate/marty-ui-services-provenance.json" \
+            --pin "${{ runner.temp }}/verification-candidate/verification-candidate.json"
+          rm -f "${{ runner.temp }}/verification-candidate/raw-sbom.cdx.json"
+          test "$(find "${{ runner.temp }}/verification-candidate" -maxdepth 1 -type f | wc -l)" -eq 5
+
+      - name: Attest exact candidate pin
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/verification-candidate/verification-candidate.json
+
+      - name: Attest exact candidate OCI archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar
+
+      - name: Upload short-lived nonpublishing candidate bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verification-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/verification-candidate/verification-candidate.json
+            ${{ runner.temp }}/verification-candidate/marty-ui-services.oci.tar
+            ${{ runner.temp }}/verification-candidate/marty-ui-services-sbom.cdx.json
+            ${{ runner.temp }}/verification-candidate/marty-ui-services-build-metadata.json
+            ${{ runner.temp }}/verification-candidate/marty-ui-services-provenance.json
+          if-no-files-found: error
+          retention-days: 3
