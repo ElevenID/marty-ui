@@ -40,21 +40,26 @@ language-neutral Canvas management floor is
 
 Thus, all 31 routes and their beta routing are implemented and committed
 locally; this is not yet a merged or deployed native cutover. The final
-independent maintainer gate passed
-220 Rust library tests and every issuance integration target, including 27
-Canvas management HTTP tests, six service-level and four HTTP legacy-ingest
-behavior tests, strict all-target Clippy, and a fresh disposable-PostgreSQL
-contract covering replay, reservation, lifecycle repair and rollback. The
-unchanged 27-case Python Canvas Credentials adapter oracle also passed. Counts
-describe local migration progress, not merged `main` coverage.
+post-rebase maintainer gate passed 220 Rust issuance library tests and every
+issuance integration/executable target; 99 Gateway library tests and three
+executable tests; strict all-target Clippy and formatting; 116 Python service
+tests; 472 repository release, ownership, security and packaging tests; the
+three-case issuance cutover/provenance gate; all nine Canvas issuance contracts
+against fresh disposable PostgreSQL; and an actual beta Compose render with
+synthetic immutable artifact pins. The unchanged 27-case Python Canvas
+Credentials adapter oracle had already passed before rebase. Review also made
+all nine PostgreSQL contracts mandatory in CI and removed four avoidable
+production invariant panics. Counts describe local migration progress, not
+merged `main` coverage.
 
 ### Remaining work in the active wave
 
-1. Rebase is complete. Re-run the full Rust/Python differential,
-   disposable-PostgreSQL, packaging, ownership, security and demo gates against
-   the rebased tree. The upstream behavior
-   contract and Python pending-transaction repair are already merged in
+1. Rebase, maintainer review and the full Rust/Python, disposable-PostgreSQL,
+   packaging, ownership and security gates are complete. The upstream behavior
+   contract and Python pending-transaction repair are merged in
    `marty-credentials` at `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`.
+   Remaining gates begin with the clean downstream PR/merge, then the demo and
+   live beta acceptance checks against the merged aggregate.
 2. Keep the Python webhook handlers as the production and self-host parity
    oracle during this beta-only canary: those consumers
    still route to the Python issuance image, so deleting the handlers now would
