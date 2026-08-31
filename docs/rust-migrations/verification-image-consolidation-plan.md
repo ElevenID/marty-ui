@@ -12,11 +12,14 @@ the partial publication. Exact `v1.1.209` and `v1.1.210` evidence is retained in
 Comprehensive differential
 `marty-integration-tests@v1.2.77` is published and independently verified with
 the Python image as passing oracle and `v1.1.208` as bounded negative control.
-The fail-closed eligibility interlock is merged. The next eligible corrected
-Rust artifact (expected `v1.1.211`), an exact fully passing consumer release
-(expected `v1.2.78`), and a later aggregate binder are required before beta
-acceptance. The separate public Python binding and the still-used Credentials
-adapter remain supported. Production is unchanged.
+Protected parity corrections through PR `#403` are packaged as preliminary,
+non-activating `marty-integration-tests@v1.2.78`, which remains explicitly
+blocked and does not pin a corrected Rust runtime. The fail-closed eligibility
+interlock is merged. The next eligible corrected Rust artifact (expected
+`v1.1.211`), a later exact fully passing consumer release using a version after
+`v1.2.78`, and a later aggregate binder are required before beta acceptance.
+The separate public Python binding and the still-used Credentials adapter
+remain supported. Production is unchanged.
 
 ## Objective
 
@@ -244,13 +247,15 @@ Protected `ElevenID/marty-ui#727` merged the fail-closed eligibility interlock
 at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`; the protected-main lock remains
 `hold`. Before the next corrected artifact (expected `v1.1.211`) may be merged,
 reserved, prepared, or published, it must pass the non-publishing candidate,
-missing artifact-differential parity, and digest-first resumable release
+trusted-positive OID4VP runtime, the landed artifact-differential parity gates,
+and digest-first resumable release
 requirements in
 [`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).
-It must then bind verified `v1.2.77`, pass the hardened release gates and
+It must then bind the reviewed harness baseline, pass the hardened release gates and
 publish without deployment. The differential must pin that exact image and
 pass every group before a new
-immutable integration release is published (expected `v1.2.78`). A later
+immutable corrected-Rust-pinned integration release is published using a
+version after harness-only `v1.2.78`. A later
 aggregate stack (expected `v1.1.212`) owns the single beta-only deployment,
 demos, acceptance soak and cleanup. Production is unchanged.
 
@@ -290,3 +295,10 @@ presentation-policy, or status-source information to construct those facts
 without a product-policy decision. Implement the frozen decision through the
 existing canonical `marty-verification` policy service; never manufacture a
 PASS in the compatibility adapter.
+
+Protected PR `ElevenID/marty-integration-tests#404` packaged that exact
+protected harness lineage as immutable `v1.2.78` at merge commit
+`3baad4b5dbccc720a50ff9ae5a280349180c02a8`. It remains preliminary evidence:
+`release_clearance` is still blocked on the positive OID4VP runtime, it does
+not pin a corrected Rust services image, and it grants no publication,
+deployment or activation authority.
