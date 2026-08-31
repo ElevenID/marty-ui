@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover and the canonical Rust verification-image consolidation are merged; immutable verifier pinning, Python deletion, cleanup and aggregate beta acceptance remain active; production is unchanged
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged; the bootstrap Rust artifact release is building, after which immutable consumer pinning, superseded Python-image deletion, one aggregate beta deployment, and acceptance remain; production is unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -21,13 +21,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 Wave three's MMF replacement and ordered Rust service plane are complete. The
 follow-on 31-route Canvas management cutover merged through protected PR
 `ElevenID/marty-ui#717` at `a6b375bb0ecc649f30db7053ba34e3ac64a23998`.
-The latest published stack release remains `v1.1.207` at source commit
-`256bcff55c738e2dd90dac303eb0354f90335611`; the next deployment is one
-aggregate beta-only update after the Rust verifier receives an immutable
-release pin and the superseded Python image is deleted. Bootstrap stack
-`v1.1.208` is being prepared to publish that first immutable Rust artifact but
-will not be deployed. Production is not in scope and its deployment
-configuration remains unchanged.
+The latest completed stack release remains `v1.1.207` at source commit
+`256bcff55c738e2dd90dac303eb0354f90335611`. Bootstrap stack `v1.1.208` is
+tagged at protected-main commit
+`7c8fa31500acd8f2ec589781232c444fe81dd22e`; its release workflow is building
+the first published canonical Rust verifier artifact after its protected
+release-environment preflight, exact-tag preparation check, dependency
+provenance checks, and immutable OCI-input checks passed. This bootstrap
+release will not be deployed. The next deployment remains one aggregate
+beta-only update after the Rust verifier receives an exact released-artifact
+pin and the superseded Python image is deleted. Production is not in scope and
+its deployment configuration remains unchanged.
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -53,11 +57,24 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 
 ### Remaining work in the active wave
 
-1. Canvas rebase, maintainer review, Rust/Python, disposable-PostgreSQL,
-   packaging, ownership, CodeQL and protected merge-queue gates are complete.
-   Remaining Canvas work is the demo and live beta acceptance evidence against
-   the final merged aggregate.
-2. Keep the Python webhook handlers as the production and self-host parity
+1. Complete bootstrap release `marty-ui@v1.1.208`, capture the exact services
+   image and services-SBOM digests, and independently verify their
+   tag-and-commit-scoped provenance. Do not deploy this bootstrap release.
+2. Change the released `marty-integration-tests@v1.2.75` dual-target verifier
+   consumer from its immutable Python oracle pin to the exact `v1.1.208` Rust
+   services artifact. Re-run the ten-gate artifact matrix, SBOM checks, and
+   provenance checks before protected merge.
+3. Delete the superseded standalone Python verification service, its dedicated
+   image/release machinery, and implementation-specific tests immediately
+   after the Rust pin passes. Preserve the separate legacy
+   `python/marty_credentials/adapters/services/verification_service.py` adapter
+   until its own callers and behavior have a proven Rust cutover; it is not the
+   standalone image covered by this gate.
+4. Publish an exact integration-suite release containing the Rust pin, bind it
+   into the final stack release, and run the one official beta-only deployment,
+   demo recordings, acceptance checks, and soak. Production and persistent
+   self-host deployments remain unchanged.
+5. Keep the Python webhook handlers as the production and self-host parity
    oracle during this beta-only canary: those consumers
    still route to the Python issuance image, so deleting the handlers now would
    fail the no-feature-loss gate. Delete them immediately only after every
@@ -67,26 +84,26 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    wave: Rust currently owns enqueue/readiness support, but not that processor's
    complete Canvas API polling, lease, retry, heartbeat and reconciliation
    behavior. They require a separate contract-frozen whole-worker migration.
-3. Remove the now-merged Canvas management worktree and its squash-replaced
-   legacy-ingest precursor after tree-equivalence checks. Preserve and land the
-   unique verification-consolidation worktrees; no unlanded feature work may be
-   discarded. The mdoc and Canvas Credentials worktrees were already verified
-   against squash merges `#247` and `#248` and removed. The authorized UI/MMF
-   history rewrite, release/tag retirement and protection restoration are also
-   complete, so no additional destructive history operation remains.
-4. Build one commit-pinned aggregate, deploy it to beta only, run the Canvas and
-   release-demo recordings plus acceptance/soak checks, and leave production
-   unchanged.
+6. The Canvas, mdoc, Canvas Credentials, verifier implementation, verifier
+   contract, and integration-consumer worktrees have been tree-equivalence
+   checked and removed after their protected merges. Finish with a read-only
+   branch/worktree audit, retain only release evidence still required for the
+   final aggregate, and preserve unrelated user-owned files such as the
+   untracked `marty-credentials/uv.lock`. The authorized UI/MMF history rewrite,
+   old-tag retirement, and protection restoration are complete; no additional
+   destructive history operation is planned.
 
-### Next implementation target
+### Next execution target
 
 The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
-The next Canvas boundary is therefore not another route port: it is the
-aggregate beta-only canary. Do not duplicate this kernel while wiring
-consumers, and keep differential tests against the preserved Python oracle
-until the all-consumer deletion gate passes.
+The next Canvas boundary is therefore not another route port: it is the final
+aggregate beta-only canary. The immediate critical path is the verifier
+artifact release, exact consumer pin, and standalone Python-image deletion.
+Do not duplicate either the Canvas ingest kernel or verifier decisions while
+wiring consumers, and keep differential tests against preserved Python oracles
+until each distinct all-consumer deletion gate passes.
 
 The eventual deletion boundary is route-level, not file-level, until the whole
 issuance service is native. Python's large `canvas_routes.py` module also owns
@@ -105,15 +122,14 @@ gates without overlapping verification consolidation. Rust implementation
 starts only after the persistence projection is frozen, and Python is deleted
 only after whole-worker differential and failure gates pass.
 
-### Parallel verification-image consolidation
+### Verification-image consolidation release and deletion gate
 
-The separately published Python verification image is being consolidated into
-the canonical Rust verification service in coordinated
-`rust-verification/consolidation-v1` worktrees for `marty-credentials` and
-`marty-ui`. This is distinct from the already completed wave-three verification
-service cutover: it preserves and absorbs the extra seven-operation Credentials
-image compatibility surface instead of deleting it or creating a second Rust
-verifier.
+The separately published Python verification image has been implemented in the
+canonical Rust verification service and its implementation worktrees have been
+cleaned after protected merge. This is distinct from the already completed
+wave-three verification service cutover: it preserves and absorbs the extra
+seven-operation Credentials image compatibility surface instead of deleting it
+or creating a second Rust verifier.
 
 The Rust implementation is merged. The Credentials source-surface,
 governance and migration-dispatch work merged through protected PR
@@ -137,18 +153,23 @@ released Python oracle and the local Rust image. The dual-target consumer
 harness merged through `ElevenID/marty-integration-tests#394` at
 `32861513dc4c74b3232975e4e5e6a396a452ab1a` and was published in immutable
 integration release `v1.2.75` from
-`60b58b0812b92319ab67129dca22cae733d916d4`. Publishing the Rust services
-artifact, switching that consumer's immutable pin, and deleting the Python
-service remain open.
+`60b58b0812b92319ab67129dca22cae733d916d4`. The bootstrap stack lock and this
+roadmap update merged through `ElevenID/marty-ui#719` at
+`7c8fa31500acd8f2ec589781232c444fe81dd22e`. Its governed `v1.1.208` annotated
+tag was prepared with evidence SHA-256
+`c679572cb42a9ff091a3aba8af49e795b7082df7f72e8a7d514eb85912d49bc3` and pushed
+only after temporarily authorized tag-rule bypass was restored to no bypass.
+Publishing and independently verifying that Rust services artifact, switching
+the consumer's immutable pin, and deleting the Python service remain open.
 
 ### Verification consolidation guardrails
 
 The separately published Python verification image in `marty-credentials` is
-claimed by the coordinated `rust-verification/consolidation-v1` worktrees in
-`marty-ui` and `marty-credentials`. This stream proceeds in parallel with the
-Canvas completion work because it owns separate service, contract, migration,
-packaging and deployment paths. Other workers must not start a second verifier
-port or duplicate verification decisions in a new crate.
+owned by this coordinated cross-repository cutover. Its implementation has
+merged; only its release/pin/deletion chain remains. This stream uses separate
+service, contract, migration, packaging and deployment paths from Canvas.
+Other work must not start a second verifier port or duplicate verification
+decisions in a new crate.
 
 The workstream first freezes implementation-independent HTTP, configuration,
 governance, persistence, migration, concurrency, failure and release contracts
