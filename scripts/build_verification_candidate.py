@@ -12,9 +12,10 @@ import re
 import stat
 import tarfile
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO
 
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE_PIN_SCHEMA = "elevenid.credentials-verifier-candidate-pin/v1"
@@ -65,6 +66,13 @@ MAX_RAW_SBOM_BYTES = 128 * 1024 * 1024
 MAX_SBOM_TOP_LEVEL_KEYS = 64
 MAX_SBOM_COMPONENTS = 100_000
 MAX_SBOM_DEPENDENCIES = 100_000
+# A single dependency fan-out is capped at the calibrated per-layer member
+# ceiling, while the aggregate edge budget is twice the calibrated total layer
+# member ceiling. Both retain ample headroom over the 5,016-member reference
+# image without allowing one valid-looking dependency object to dominate the
+# SBOM validation walk.
+MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY = 20_000
+MAX_TOTAL_SBOM_DEPENDENCY_EDGES = 100_000
 MAX_SBOM_PROPERTIES = 4_096
 MAX_SBOM_SCANNER_COMPONENTS = 64
 TAR_BLOCK_BYTES = 512
@@ -411,6 +419,10 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             isinstance(index, dict) and index.get("schemaVersion") == 2,
             "OCI index schema changed",
         )
+        require(
+            index.get("mediaType", OCI_INDEX) == OCI_INDEX,
+            "OCI index media type changed",
+        )
         descriptors = index.get("manifests")
         require(
             isinstance(descriptors, list) and len(descriptors) == 1,
@@ -427,6 +439,18 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
         )
         manifest_digest, value = descriptor_json(archive, members, descriptor)
         if descriptor.get("mediaType") == OCI_INDEX:
+            require(
+                "platform" not in descriptor,
+                "OCI image index descriptor platform changed",
+            )
+            require(
+                value.get("schemaVersion") == 2,
+                "OCI image index schema changed",
+            )
+            require(
+                value.get("mediaType", OCI_INDEX) == OCI_INDEX,
+                "OCI image index media type changed",
+            )
             nested = value.get("manifests")
             require(
                 isinstance(nested, list) and len(nested) == 1,
@@ -439,7 +463,7 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
                 "OCI candidate platform changed",
             )
             manifest_digest, value = descriptor_json(archive, members, descriptor)
-        elif "platform" in descriptor:
+        else:
             require(
                 descriptor.get("platform") == {"architecture": "amd64", "os": "linux"},
                 "OCI candidate platform changed",
@@ -449,6 +473,10 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
             "OCI candidate is not an image manifest",
         )
         require(value.get("schemaVersion") == 2, "OCI manifest schema changed")
+        require(
+            value.get("mediaType", OCI_MANIFEST) == OCI_MANIFEST,
+            "OCI manifest media type changed",
+        )
 
         config_descriptor = value.get("config")
         require(isinstance(config_descriptor, dict), "OCI config descriptor is missing")
@@ -734,6 +762,7 @@ def normalize_sbom(
         "candidate SBOM dependencies changed",
     )
     dependency_roots: set[str] = set()
+    total_dependency_edges = 0
     for dependency in dependencies:
         require(isinstance(dependency, dict), "candidate SBOM dependency changed")
         reference = dependency.get("ref")
@@ -745,11 +774,27 @@ def normalize_sbom(
             "candidate SBOM dependency reference changed",
         )
         require(
-            isinstance(depends_on, list)
-            and all(
+            isinstance(depends_on, list),
+            "candidate SBOM dependency edge changed",
+        )
+        require(
+            len(depends_on) <= MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY,
+            "candidate SBOM dependency fan-out is too large",
+        )
+        require(
+            all(
                 isinstance(item, str) and item in all_references for item in depends_on
             ),
             "candidate SBOM dependency edge changed",
+        )
+        require(
+            len(set(depends_on)) == len(depends_on),
+            "candidate SBOM dependency edge is duplicated",
+        )
+        total_dependency_edges += len(depends_on)
+        require(
+            total_dependency_edges <= MAX_TOTAL_SBOM_DEPENDENCY_EDGES,
+            "candidate SBOM aggregate dependency edges are too large",
         )
         dependency_roots.add(reference)
     require(

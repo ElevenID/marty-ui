@@ -94,6 +94,15 @@ def write_oci_archive(
     environment: list[str] | None = None,
     archive_tag: str | None = None,
     manifest_media_type: str | None = None,
+    manifest_schema_version: int = 2,
+    manifest_payload_media_type: str | None = candidate.OCI_MANIFEST,
+    index_schema_version: int = 2,
+    index_payload_media_type: str | None = None,
+    nested_index: bool = False,
+    nested_index_schema_version: int = 2,
+    nested_index_payload_media_type: str | None = candidate.OCI_INDEX,
+    omit_platform: bool = False,
+    top_index_platform: dict[str, str] | None = None,
     config_media_type: str | None = None,
     layer_media_type: str | None = None,
     manifest_size_delta: int = 0,
@@ -161,32 +170,67 @@ def write_oci_archive(
         layer_descriptor["digest"] = "sha256:" + "9" * 64
     if corrupt_config:
         config_descriptor["digest"] = "sha256:" + "7" * 64
-    manifest = candidate.canonical_json(
-        {
-            "schemaVersion": 2,
-            "mediaType": candidate.OCI_MANIFEST,
-            "config": config_descriptor,
-            "layers": [layer_descriptor],
+    manifest_value: dict[str, object] = {
+        "schemaVersion": manifest_schema_version,
+        "config": config_descriptor,
+        "layers": [layer_descriptor],
+    }
+    if manifest_payload_media_type is not None:
+        manifest_value["mediaType"] = manifest_payload_media_type
+    manifest = candidate.canonical_json(manifest_value)
+    manifest_descriptor_fields: dict[str, object] = {
+        "annotations": {
+            "org.opencontainers.image.ref.name": archive_tag or f"candidate-{commit}"
         }
-    )
-    manifest_descriptor = descriptor(
-        manifest,
-        manifest_media_type or candidate.OCI_MANIFEST,
-        platform=(
+    }
+    if not omit_platform:
+        manifest_descriptor_fields["platform"] = (
             platform
             if platform is not None
             else {"architecture": "amd64", "os": "linux"}
-        ),
-        annotations={
-            "org.opencontainers.image.ref.name": archive_tag or f"candidate-{commit}"
-        },
+        )
+    manifest_descriptor = descriptor(
+        manifest,
+        manifest_media_type or candidate.OCI_MANIFEST,
+        **manifest_descriptor_fields,
     )
     manifest_descriptor["size"] = int(manifest_descriptor["size"]) + manifest_size_delta
     if corrupt_manifest:
         manifest_descriptor["digest"] = "sha256:" + "6" * 64
-    index = candidate.canonical_json(
-        {"schemaVersion": 2, "manifests": [manifest_descriptor]}
-    )
+    index_descriptor = manifest_descriptor
+    nested_index_blob: tuple[str, bytes] | None = None
+    if nested_index:
+        nested_value: dict[str, object] = {
+            "schemaVersion": nested_index_schema_version,
+            "manifests": [manifest_descriptor],
+        }
+        if nested_index_payload_media_type is not None:
+            nested_value["mediaType"] = nested_index_payload_media_type
+        nested = candidate.canonical_json(nested_value)
+        nested_descriptor_fields: dict[str, object] = {
+            "annotations": {
+                "org.opencontainers.image.ref.name": archive_tag
+                or f"candidate-{commit}"
+            }
+        }
+        if top_index_platform is not None:
+            nested_descriptor_fields["platform"] = top_index_platform
+        index_descriptor = descriptor(
+            nested,
+            candidate.OCI_INDEX,
+            **nested_descriptor_fields,
+        )
+        nested_index_blob = (
+            f"blobs/sha256/{str(index_descriptor['digest']).split(':', 1)[1]}",
+            nested,
+        )
+    index_value: dict[str, object] = {
+        "schemaVersion": index_schema_version,
+        "manifests": [index_descriptor],
+    }
+    if index_payload_media_type is not None:
+        index_value["mediaType"] = index_payload_media_type
+    index = candidate.canonical_json(index_value)
     layout = candidate.canonical_json({"imageLayoutVersion": "1.0.0"})
     members = {
         "oci-layout": layout,
@@ -195,6 +239,8 @@ def write_oci_archive(
         f"blobs/sha256/{str(manifest_descriptor['digest']).split(':', 1)[1]}": manifest,
         f"blobs/sha256/{hashlib.sha256(layer).hexdigest()}": layer,
     }
+    if nested_index_blob is not None:
+        members[nested_index_blob[0]] = nested_index_blob[1]
     members.update(extra_members or {})
     with tarfile.open(path, "w") as archive:
         for name in extra_directories or []:
@@ -296,6 +342,8 @@ def test_candidate_resource_limits_preserve_calibrated_runner_headroom() -> None
         "sbom_top_level": candidate.MAX_SBOM_TOP_LEVEL_KEYS,
         "sbom_components": candidate.MAX_SBOM_COMPONENTS,
         "sbom_dependencies": candidate.MAX_SBOM_DEPENDENCIES,
+        "sbom_dependency_edges_per_entry": candidate.MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY,
+        "sbom_dependency_edges_total": candidate.MAX_TOTAL_SBOM_DEPENDENCY_EDGES,
         "sbom_properties": candidate.MAX_SBOM_PROPERTIES,
         "sbom_scanners": candidate.MAX_SBOM_SCANNER_COMPONENTS,
     } == {
@@ -316,6 +364,8 @@ def test_candidate_resource_limits_preserve_calibrated_runner_headroom() -> None
         "sbom_top_level": 64,
         "sbom_components": 100_000,
         "sbom_dependencies": 100_000,
+        "sbom_dependency_edges_per_entry": 20_000,
+        "sbom_dependency_edges_total": 100_000,
         "sbom_properties": 4_096,
         "sbom_scanners": 64,
     }
@@ -463,7 +513,55 @@ def test_finalize_binds_every_candidate_asset_and_oci_coordinate(
     [
         ({"platform": {"architecture": "arm64", "os": "linux"}}, "platform changed"),
         ({"platform": {"architecture": "amd64", "os": "windows"}}, "platform changed"),
+        (
+            {
+                "platform": {
+                    "architecture": "amd64",
+                    "os": "linux",
+                    "variant": "v1",
+                }
+            },
+            "platform changed",
+        ),
+        ({"omit_platform": True}, "platform changed"),
+        ({"index_schema_version": 1}, "index schema changed"),
+        ({"index_payload_media_type": "application/json"}, "index media type changed"),
         ({"manifest_media_type": "application/json"}, "not an image manifest"),
+        ({"manifest_schema_version": 1}, "manifest schema changed"),
+        (
+            {"manifest_payload_media_type": "application/json"},
+            "manifest media type changed",
+        ),
+        (
+            {"nested_index": True, "nested_index_schema_version": 1},
+            "image index schema changed",
+        ),
+        (
+            {
+                "nested_index": True,
+                "nested_index_payload_media_type": "application/json",
+            },
+            "image index media type changed",
+        ),
+        (
+            {
+                "nested_index": True,
+                "top_index_platform": {"architecture": "amd64", "os": "linux"},
+            },
+            "index descriptor platform changed",
+        ),
+        (
+            {
+                "nested_index": True,
+                "platform": {
+                    "architecture": "amd64",
+                    "os": "linux",
+                    "variant": "v1",
+                },
+            },
+            "platform changed",
+        ),
+        ({"nested_index": True, "omit_platform": True}, "platform changed"),
         ({"config_media_type": "application/json"}, "config media type changed"),
         ({"layer_media_type": "application/json"}, "layer media type changed"),
         ({"manifest_size_delta": 1}, "descriptor size does not match"),
@@ -570,6 +668,27 @@ def test_inspection_rejects_rebound_or_incomplete_oci_archives(
 
     with pytest.raises(ValueError, match=message):
         candidate.inspect_oci_archive(archive, commit=commit, version=version)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"manifest_payload_media_type": None},
+        {"index_payload_media_type": candidate.OCI_INDEX},
+        {"nested_index": True},
+        {"nested_index": True, "nested_index_payload_media_type": None},
+    ],
+)
+def test_inspection_accepts_absent_or_exact_oci_payload_media_types(
+    tmp_path: Path,
+    options: dict[str, object],
+) -> None:
+    commit = "a" * 40
+    version = f"0.0.0-candidate.{commit[:12]}"
+    archive = tmp_path / "candidate.tar"
+    write_oci_archive(archive, commit=commit, version=version, **options)  # type: ignore[arg-type]
+
+    candidate.inspect_oci_archive(archive, commit=commit, version=version)
 
 
 @pytest.mark.parametrize(
@@ -1097,6 +1216,62 @@ def test_sbom_dependencies_accept_exact_and_reject_over_limit(
 
     monkeypatch.setattr(candidate, "MAX_SBOM_DEPENDENCIES", 0)
     with pytest.raises(ValueError, match="dependencies changed"):
+        candidate.finalize(args)
+
+
+def test_sbom_dependency_fan_out_accepts_exact_and_rejects_exact_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = build_inputs(tmp_path)
+    value = json.loads(args.raw_sbom.read_text(encoding="utf-8"))
+    value["dependencies"] = [
+        {"ref": "candidate-image", "dependsOn": ["marty-verification-service"]}
+    ]
+    args.raw_sbom.write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(candidate, "MAX_SBOM_DEPENDENCY_EDGES_PER_ENTRY", 1)
+    candidate.finalize(args)
+
+    value["dependencies"][0]["dependsOn"].append("candidate-image")
+    args.raw_sbom.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="fan-out is too large"):
+        candidate.finalize(args)
+
+
+def test_sbom_aggregate_dependency_edges_accept_exact_and_reject_exact_plus_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = build_inputs(tmp_path)
+    value = json.loads(args.raw_sbom.read_text(encoding="utf-8"))
+    value["dependencies"] = [
+        {"ref": "candidate-image", "dependsOn": ["marty-verification-service"]},
+        {"ref": "marty-verification-service", "dependsOn": ["candidate-image"]},
+    ]
+    args.raw_sbom.write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(candidate, "MAX_TOTAL_SBOM_DEPENDENCY_EDGES", 2)
+    candidate.finalize(args)
+
+    monkeypatch.setattr(candidate, "MAX_TOTAL_SBOM_DEPENDENCY_EDGES", 1)
+    with pytest.raises(ValueError, match="aggregate dependency edges"):
+        candidate.finalize(args)
+
+
+def test_sbom_rejects_duplicate_dependency_edges(tmp_path: Path) -> None:
+    args = build_inputs(tmp_path)
+    value = json.loads(args.raw_sbom.read_text(encoding="utf-8"))
+    value["dependencies"] = [
+        {
+            "ref": "candidate-image",
+            "dependsOn": [
+                "marty-verification-service",
+                "marty-verification-service",
+            ],
+        }
+    ]
+    args.raw_sbom.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dependency edge is duplicated"):
         candidate.finalize(args)
 
 
