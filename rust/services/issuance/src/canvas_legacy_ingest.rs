@@ -4,7 +4,7 @@
 //! evidence-transition kernel. Provider-shaped AGS and NRPS bodies are only
 //! adapters into the frozen completion-event contract.
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Timelike, Utc};
@@ -111,19 +111,40 @@ impl CanvasLegacyIngestConfig {
         {
             return Some(secret.clone());
         }
-        let path = self
+        let configured_path = self
             .shared_secret_file
             .as_ref()
             .filter(|path| !path.is_empty())?;
-        let metadata = std::fs::metadata(path).ok()?;
-        if metadata.len() > 64 * 1024 {
+        let trusted_root = canvas_secret_root().canonicalize().ok()?;
+        let configured_path = PathBuf::from(configured_path);
+        let candidate = if configured_path.is_absolute() {
+            configured_path
+        } else {
+            trusted_root.join(configured_path)
+        };
+        let candidate = candidate.canonicalize().ok()?;
+        if !candidate.starts_with(&trusted_root) {
             return None;
         }
-        std::fs::read_to_string(path)
+        let metadata = std::fs::metadata(&candidate).ok()?;
+        if !metadata.is_file() || metadata.len() > 64 * 1024 {
+            return None;
+        }
+        std::fs::read_to_string(candidate)
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     }
+}
+
+#[cfg(not(test))]
+fn canvas_secret_root() -> PathBuf {
+    PathBuf::from("/run/secrets")
+}
+
+#[cfg(test)]
+fn canvas_secret_root() -> PathBuf {
+    std::env::temp_dir()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1883,6 +1904,22 @@ mod tests {
         config.shared_secret = Some("direct".to_owned());
         assert_eq!(config.resolve_shared_secret().as_deref(), Some("direct"));
         std::fs::remove_file(path).expect("remove test secret");
+    }
+
+    #[test]
+    fn file_secret_rejects_paths_outside_the_trusted_secret_root() {
+        let config = CanvasLegacyIngestConfig {
+            enabled: true,
+            shared_secret: None,
+            shared_secret_file: Some(
+                std::env::current_exe()
+                    .expect("current test executable")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            signature_tolerance_seconds: 300,
+        };
+        assert_eq!(config.resolve_shared_secret(), None);
     }
 
     #[test]
