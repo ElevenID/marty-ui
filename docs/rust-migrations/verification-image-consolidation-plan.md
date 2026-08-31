@@ -6,7 +6,10 @@ standalone Python verifier source/image deletion is merged in
 `marty-integration-tests@v1.2.76` pinned bootstrap `marty-ui@v1.1.208`, which
 predates the required corrections in `marty-ui#721`. Pre-interlock
 `marty-ui@v1.1.210` is quarantined: its canceled attempts produced no GitHub
-release or services artifact. Comprehensive differential
+release or services artifact, but one UI-only registry coordinate remains from
+the partial publication. Exact `v1.1.209` and `v1.1.210` evidence is retained in
+[`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).
+Comprehensive differential
 `marty-integration-tests@v1.2.77` is published and independently verified with
 the Python image as passing oracle and `v1.1.208` as bounded negative control.
 The fail-closed eligibility interlock is merged. The next eligible corrected
@@ -217,8 +220,11 @@ Those results do not authorize cutover because `v1.1.208` is not a descendant
 of required correction PR `#721`. Annotated `v1.1.209` records the intervening
 correction binder but has no published release. Annotated `v1.1.210` was
 created before an explicit release-eligibility interlock; all attempts were
-canceled, leaving no GitHub release and no services artifact. It is quarantined
-and must not be retargeted or deployed.
+canceled, leaving no GitHub release and no services artifact. Both attempts did
+publish UI-only registry coordinates before cancellation. Their exact digests
+and workflow evidence are recorded in
+[`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).
+They are quarantined and must not be retargeted or deployed.
 
 Protected `ElevenID/marty-integration-tests#398` expanded the artifact
 differential across stateful session create/reload/restart, minimized database
@@ -236,9 +242,14 @@ and the SPDX SBOM is
 
 Protected `ElevenID/marty-ui#727` merged the fail-closed eligibility interlock
 at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`; the protected-main lock remains
-`hold`. The next corrected artifact (expected `v1.1.211`) must bind verified
-`v1.2.77`, pass the release gates and publish without deployment. The
-differential must then pin that exact image and pass every group before a new
+`hold`. Before the next corrected artifact (expected `v1.1.211`) may be merged,
+reserved, prepared, or published, it must pass the non-publishing candidate,
+missing artifact-differential parity, and digest-first resumable release
+requirements in
+[`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).
+It must then bind verified `v1.2.77`, pass the hardened release gates and
+publish without deployment. The differential must pin that exact image and
+pass every group before a new
 immutable integration release is published (expected `v1.2.78`). A later
 aggregate stack (expected `v1.1.212`) owns the single beta-only deployment,
 demos, acceptance soak and cleanup. Production is unchanged.

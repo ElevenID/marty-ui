@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tag `v1.1.210` is quarantined because it did not publish a complete stack release. The comprehensive Python-oracle/Rust-negative-control differential is merged and published as verified `marty-integration-tests@v1.2.77`, and the fail-closed stack eligibility interlock is merged. Cutover remains on repair hold pending the next eligible corrected Rust artifact, its exact positive differential release, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tag `v1.1.210` is quarantined because it did not publish a complete stack release. The comprehensive Python-oracle/Rust-negative-control differential is merged and published as verified `marty-integration-tests@v1.2.77`, and the fail-closed stack eligibility interlock is merged. Exact partial-publication evidence is retained in [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md). Cutover remains on repair hold pending a non-publishing candidate lane, missing artifact-differential parity gates, digest-first resumable publication, the next corrected Rust artifact, its exact positive differential release, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -37,9 +37,11 @@ Annotated tag `v1.1.209` records the correction binder at
 published. Annotated `v1.1.210` records aggregate commit
 `4326524a1c6a265bad6f6b46945e248345af0451`; it was tagged before the explicit
 eligibility interlock and its repeated release attempts were canceled. It has
-no GitHub release and no services artifact. Any partial signed UI-only
-publication from those attempts is quarantined evidence, not a valid stack
-release, and the tag must not be retargeted or deployed.
+no GitHub release and no services artifact. Both `v1.1.209` and `v1.1.210`
+nevertheless published UI-only registry coordinates before cancellation. Their
+exact digests, preparation/run evidence and containment controls are recorded
+in [`the release incident record`](rust-migrations/verifier-release-incident-2026-08-31.md).
+Those coordinates are quarantined and must not be retargeted or deployed.
 
 Protected `ElevenID/marty-integration-tests#398` merged the comprehensive
 artifact differential at `e95bb5998818cc502ce28051b5e650efa7ac6238`.
@@ -69,10 +71,10 @@ in scope and its deployment configuration remains unchanged.
 | Artifact | State | Meaning |
 |---|---|---|
 | `marty-ui@v1.1.208` | Published, verified, rejected | First Rust verifier services artifact; predates required PR `#721` corrections |
-| `marty-ui@v1.1.209` | Annotated tag only | Correction-binder history; no release |
-| `marty-ui@v1.1.210` | Quarantined tag | Pre-interlock, incomplete release attempts; no services artifact and never deployable |
+| `marty-ui@v1.1.209` | Quarantined partial publication | UI-only registry coordinate; no services/migrations image or GitHub release |
+| `marty-ui@v1.1.210` | Quarantined partial publication | Pre-interlock UI-only registry coordinate; no services/migrations image or GitHub release and never deployable |
 | `marty-integration-tests@v1.2.77` | Published and independently verified | Complete Python oracle plus `v1.1.208` bounded negative control |
-| next corrected `marty-ui` artifact (expected `v1.1.211`) | Held | Must bind PR `#721`, verified integration `v1.2.77`, and exact `release_state=eligible` through the landed interlock |
+| next corrected `marty-ui` artifact (expected `v1.1.211`) | Local candidate; held and unreserved | Must first pass the non-publishing candidate and missing artifact-differential parity gates, then use the hardened digest-first release transaction; no tag, image or release exists |
 | later integration release (expected `v1.2.78`) | Not started | Must pin the corrected services image and convert the negative control to a completely passing Rust candidate |
 | later aggregate `marty-ui` release (expected `v1.1.212`) | Not started | Only artifact eligible for the single beta deployment and soak |
 
@@ -100,13 +102,20 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 
 ### Remaining work in the active wave
 
-1. Prepare the next available corrected artifact version from the exact
-   protected-main descendant of PR `#721` (expected `marty-ui@v1.1.211`). Bind
-   independently verified `marty-integration-tests@v1.2.77`, set the exact lock
-   to `release_state=eligible`, run all release and production-boundary gates,
-   merge through protection, then publish artifact-only. Capture the exact
-   services image and services-SBOM digests and independently verify
-   tag-and-commit-scoped provenance. Do not deploy it.
+1. Keep the protected-main release lock and all release entry points held while implementing
+   the non-publishing services-image candidate lane, the missing positive
+   OID4VP/migration-idempotence/compatibility artifact-differential parity
+   gates, and a digest-first,
+   resumable release transaction with exact-coordinate preflight and
+   cancellation-point tests. The detailed requirements and immutable incident
+   evidence are in
+   [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md).
+   Then run the candidate from the exact protected-main descendant of PR `#721`.
+   Only after those gates pass may the still-unused local `marty-ui@v1.1.211`
+   candidate be merged, reserved and prepared, its lock changed to exact `release_state=eligible`,
+   and the final exact services digest built, tested, signed and published.
+   Capture the services image and services-SBOM digests and independently
+   verify tag-and-commit-scoped provenance. Do not deploy it.
 2. Pin the comprehensive integration differential to that exact corrected
    services image and SBOM. Replace the bounded `v1.1.208` expected failure
    with a fully passing Rust candidate, run every oracle/candidate group,
@@ -172,11 +181,12 @@ The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
 The next Canvas boundary is therefore not another route port. The immediate
-critical path is the eligibility interlock, the next corrected artifact-only
-Rust verifier release, exact comprehensive differential re-pin, final
-aggregate release, and beta-only canary. The Python source deletion is already
-merged but cannot be declared accepted until the corrected immutable artifact
-passes every oracle/candidate group.
+critical path is the non-publishing verifier candidate lane, missing
+artifact-differential parity gates, digest-first resumable release hardening,
+the next corrected artifact-only Rust verifier release, exact comprehensive
+differential re-pin, final aggregate release, and beta-only canary. The Python
+source deletion is already merged but cannot be declared accepted until the
+corrected immutable artifact passes every oracle/candidate group.
 Do not duplicate either the Canvas ingest kernel or verifier decisions while
 wiring consumers, and keep differential tests against preserved Python oracles
 until each distinct all-consumer deletion gate passes.
@@ -255,11 +265,13 @@ merged and no beta or production deployment occurred. Pre-interlock
 complete stack release. Comprehensive differential PR
 `marty-integration-tests#398` and independently verified release `v1.2.77`
 preserve the Python passing oracle and expose the rejected `v1.1.208` session
-scoping defect as a bounded negative control. The repair gate is to land the
-explicit eligibility interlock, publish the next eligible corrected artifact,
-pin and execute every differential group against its exact
-image/SBOM/provenance, publish the fully passing integration release, and only
-then bind a later aggregate stack for beta acceptance.
+scoping defect as a bounded negative control. The eligibility interlock is
+merged. The remaining repair gate is to implement and pass the candidate,
+missing artifact-differential parity, and digest-first resumable release
+requirements in the incident record; publish the next eligible corrected
+artifact only afterward; pin and execute every differential group against its
+exact image/SBOM/provenance; publish the fully passing integration release; and
+only then bind a later aggregate stack for beta acceptance.
 
 ### Verification consolidation guardrails
 
