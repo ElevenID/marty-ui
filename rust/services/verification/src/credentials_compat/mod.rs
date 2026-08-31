@@ -7,6 +7,8 @@
 pub mod dto;
 pub mod governance;
 pub mod http;
+pub mod persistence;
+pub mod session;
 
 pub use dto::{
     ClaimResult, CreateSessionRequest, PresentationDefinition, PresentationPayload,
@@ -18,3 +20,8 @@ pub use governance::{
     TrustAuthority,
 };
 pub use http::{router, CompatibilityError, CompatibilityState, CompatibilityUseCases};
+pub use persistence::{PostgresSessionRepository, SessionPersistenceError, SessionRepository};
+pub use session::{
+    ClaimState, ProcessingLease, ProcessingToken, SessionDraft, SessionRecord, SessionStatus,
+    Sha256Digest, SubmissionClaim, TerminalDecision, VerificationMethod, VerifierNonce,
+};
