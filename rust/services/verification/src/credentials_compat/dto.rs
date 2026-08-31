@@ -73,8 +73,10 @@ fn compatible_integer_string(value: &str) -> Option<u64> {
     let mut parts = value.split('.');
     let integer = digit_sequence(parts.next()?)?;
     if let Some(fraction) = parts.next() {
-        let fraction = digit_sequence(fraction)?;
-        if parts.next().is_some() || !fraction.bytes().all(|byte| byte == b'0') {
+        if fraction.is_empty()
+            || parts.next().is_some()
+            || !fraction.bytes().all(|byte| byte == b'0')
+        {
             return None;
         }
     }
@@ -437,6 +439,9 @@ mod tests {
             (json!("6__00"), None),
             (json!("6_.0"), None),
             (json!("600.0000000000000000000000000001"), None),
+            (json!("600.0_0"), None),
+            (json!("600.000_000"), None),
+            (json!("6_0.0_0"), None),
             (json!(600.0), Some(600)),
             (json!(600.5), None),
             (json!(true), None),
