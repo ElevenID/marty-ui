@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.208",
+  "release": "marty-ui@1.1.209",
   "components": [
     {
       "name": "marty-api-core",
