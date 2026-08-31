@@ -42,6 +42,10 @@ pub struct IssuanceServiceConfig {
     pub didcomm_tls_ca_file: Option<String>,
     pub didcomm_allow_private_ips: bool,
     pub canvas_portable_enabled: bool,
+    pub canvas_legacy_event_ingest_enabled: bool,
+    pub canvas_credentials_shared_secret: Option<String>,
+    pub canvas_credentials_shared_secret_file: Option<String>,
+    pub canvas_credentials_signature_tolerance_seconds: i64,
     pub canvas_pilot_organizations: BTreeSet<String>,
     pub canvas_evidence_max_age: Duration,
     pub canvas_readiness_max_age: Duration,
@@ -145,6 +149,22 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             )
             .field("didcomm_allow_private_ips", &self.didcomm_allow_private_ips)
             .field("canvas_portable_enabled", &self.canvas_portable_enabled)
+            .field(
+                "canvas_legacy_event_ingest_enabled",
+                &self.canvas_legacy_event_ingest_enabled,
+            )
+            .field(
+                "canvas_credentials_shared_secret_configured",
+                &self.canvas_credentials_shared_secret.is_some(),
+            )
+            .field(
+                "canvas_credentials_shared_secret_file_configured",
+                &self.canvas_credentials_shared_secret_file.is_some(),
+            )
+            .field(
+                "canvas_credentials_signature_tolerance_seconds",
+                &self.canvas_credentials_signature_tolerance_seconds,
+            )
             .field(
                 "canvas_pilot_organizations",
                 &self.canvas_pilot_organizations,
@@ -449,6 +469,27 @@ impl IssuanceServiceConfig {
             .filter(|value| !value.is_empty());
         let canvas_portable_enabled =
             environment_flag(&values, "CANVAS_PORTABLE_INTEGRATION_ENABLED");
+        let canvas_legacy_event_ingest_enabled =
+            environment_flag(&values, "CANVAS_LEGACY_EVENT_INGEST_ENABLED");
+        let canvas_credentials_shared_secret = values
+            .get("CANVAS_CREDENTIALS_SHARED_SECRET")
+            .filter(|value| !value.is_empty())
+            .cloned();
+        let canvas_credentials_shared_secret_file = values
+            .get("CANVAS_CREDENTIALS_SHARED_SECRET_FILE")
+            .filter(|value| !value.is_empty())
+            .cloned();
+        let canvas_credentials_signature_tolerance_seconds = values
+            .get("CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS")
+            .map_or(Ok(300_i64), |value| {
+                value.trim().parse::<i64>().map_err(|error| {
+                    MmfError::new(
+                        ErrorCode::Configuration,
+                        "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS must be an integer",
+                    )
+                    .with_detail("cause", error.to_string())
+                })
+            })?;
         let canvas_pilot_organizations =
             comma_separated_values(&values, "CANVAS_PILOT_ORGANIZATION_IDS")
                 .into_iter()
@@ -588,6 +629,10 @@ impl IssuanceServiceConfig {
             didcomm_tls_ca_file: optional_trimmed(settings.didcomm.tls_ca_file),
             didcomm_allow_private_ips: settings.didcomm.allow_private_ips,
             canvas_portable_enabled,
+            canvas_legacy_event_ingest_enabled,
+            canvas_credentials_shared_secret,
+            canvas_credentials_shared_secret_file,
+            canvas_credentials_signature_tolerance_seconds,
             canvas_pilot_organizations,
             canvas_evidence_max_age,
             canvas_readiness_max_age,
@@ -1234,6 +1279,52 @@ mod tests {
         assert!(!config.canvas_allow_private_base_urls);
         assert!(!config.canvas_allow_http_localhost_base_urls);
         assert!(config.canvas_local_admin_token.is_none());
+        assert!(!config.canvas_legacy_event_ingest_enabled);
+        assert!(config.canvas_credentials_shared_secret.is_none());
+        assert!(config.canvas_credentials_shared_secret_file.is_none());
+        assert_eq!(config.canvas_credentials_signature_tolerance_seconds, 300);
+    }
+
+    #[test]
+    fn canvas_legacy_ingest_configuration_is_exact_and_redacted() {
+        for enabled in ["1", "true", "yes", "on", " TRUE "] {
+            let config = IssuanceServiceConfig::from_values(values(&[
+                ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", enabled),
+                ("CANVAS_CREDENTIALS_SHARED_SECRET", "direct-secret"),
+                (
+                    "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
+                    "/run/secrets/canvas",
+                ),
+                ("CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS", " 45 "),
+            ]))
+            .expect("legacy Canvas settings");
+            assert!(config.canvas_legacy_event_ingest_enabled, "{enabled}");
+            assert_eq!(
+                config.canvas_credentials_shared_secret.as_deref(),
+                Some("direct-secret")
+            );
+            assert_eq!(
+                config.canvas_credentials_shared_secret_file.as_deref(),
+                Some("/run/secrets/canvas")
+            );
+            assert_eq!(config.canvas_credentials_signature_tolerance_seconds, 45);
+            let debug = format!("{config:?}");
+            assert!(!debug.contains("direct-secret"));
+            assert!(!debug.contains("/run/secrets/canvas"));
+        }
+        for disabled in ["0", "false", "no", "off", "enabled", ""] {
+            let config = IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+                disabled,
+            )]))
+            .expect("disabled setting");
+            assert!(!config.canvas_legacy_event_ingest_enabled, "{disabled}");
+        }
+        assert!(IssuanceServiceConfig::from_values(values(&[(
+            "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
+            "three-hundred",
+        )]))
+        .is_err());
     }
 
     #[test]

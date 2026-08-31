@@ -93,6 +93,7 @@ pub struct CanvasApplicationApprovalSnapshot {
     pub application_template: Map<String, Value>,
     pub platform: Map<String, Value>,
     pub binding: Map<String, Value>,
+    pub existing_transaction: Option<CredentialTransaction>,
 }
 
 impl fmt::Debug for CanvasApplicationApprovalSnapshot {
@@ -103,6 +104,10 @@ impl fmt::Debug for CanvasApplicationApprovalSnapshot {
             .field("application_template", &REDACTED)
             .field("platform", &REDACTED)
             .field("binding", &REDACTED)
+            .field(
+                "has_existing_transaction",
+                &self.existing_transaction.is_some(),
+            )
             .finish()
     }
 }
@@ -306,6 +311,9 @@ impl CanvasApplicationApprovalService {
             now,
         )
         .ok_or(CanvasApplicationApprovalError::NotReady)?;
+        if let Some(existing) = snapshot.existing_transaction.as_ref() {
+            transaction = reuse_canvas_approval_transaction(existing, &transaction, true);
+        }
         // The Python boundary intentionally collapses every KMS/provider
         // failure to one non-sensitive readiness conflict.
         resolve_and_attach_canvas_issuer(
@@ -425,11 +433,155 @@ pub fn plan_canvas_approval_transaction(
         claims.insert("_vct".to_owned(), Value::String(vct));
     }
     let validity = credential.get("validity_rules").and_then(Value::as_object);
+    build_canvas_approval_transaction(
+        application,
+        text(binding.get("credential_template_id")),
+        seed,
+        now,
+        claims,
+        CanvasApprovalCredentialContext {
+            credential_type,
+            credential_payload_format,
+            revocation_profile_id,
+            wallet_configs: object_array(credential.get("wallet_configs")),
+            selective_disclosure_claims: string_array(
+                credential.get("selective_disclosure_fields"),
+            ),
+            zk_predicate_claims: string_array(credential.get("zk_predicate_claims")),
+            validity_days: positive_i64(
+                validity.and_then(|value| value.get("default_validity_days")),
+                365,
+            ),
+            renewable: validity
+                .and_then(|value| value.get("renewable"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            renewal_window_days: positive_i64(
+                validity.and_then(|value| value.get("renewal_window_days")),
+                30,
+            ),
+            issuer_did,
+            issuer_algorithm,
+        },
+    )
+}
+
+/// Preserve the historical credential defaults used by the legacy evidence
+/// transition. Unlike management/candidate approval, that Python call did not
+/// opt into the strict validated credential-template snapshot context.
+pub(crate) fn plan_legacy_canvas_approval_transaction(
+    application: &Map<String, Value>,
+    credential_template_id: &str,
+    seed: &CanvasAwardApprovalSeed,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<CredentialTransaction> {
+    let mut claims = application
+        .get("form_data")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let integration = application
+        .get("integration_context")
+        .and_then(Value::as_object);
+    let form_credential_type =
+        python_truthy_text(claims.remove("_credential_type").as_ref()).ok()?;
+    let integration_credential_type =
+        python_truthy_text(integration.and_then(|value| value.get("credential_type"))).ok()?;
+    let credential_type = form_credential_type
+        .or(integration_credential_type)
+        .unwrap_or_else(|| "org.iso.18013.5.1.mDL".to_owned());
+    let credential_vct = python_truthy_text(claims.get("_vct"))
+        .ok()?
+        .or(python_truthy_text(integration.and_then(|value| value.get("credential_vct"))).ok()?);
+    if let Some(vct) = credential_vct {
+        claims.insert("_vct".to_owned(), Value::String(vct));
+    }
+    build_canvas_approval_transaction(
+        application,
+        credential_template_id.to_owned(),
+        seed,
+        now,
+        claims,
+        CanvasApprovalCredentialContext {
+            credential_type,
+            credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+            revocation_profile_id: None,
+            wallet_configs: Vec::new(),
+            selective_disclosure_claims: Vec::new(),
+            zk_predicate_claims: Vec::new(),
+            validity_days: 365,
+            renewable: false,
+            renewal_window_days: 30,
+            issuer_did: None,
+            issuer_algorithm: None,
+        },
+    )
+}
+
+pub(crate) fn reuse_canvas_approval_transaction(
+    existing: &CredentialTransaction,
+    planned: &CredentialTransaction,
+    strict_context: bool,
+) -> CredentialTransaction {
+    let mut transaction = existing.clone();
+    transaction.delivery_mode = planned.delivery_mode.clone();
+    if strict_context {
+        transaction.credential_type = planned.credential_type.clone();
+        transaction.credential_payload_format = planned.credential_payload_format.clone();
+        transaction.revocation_profile_id = planned.revocation_profile_id.clone();
+        transaction.wallet_configs = planned.wallet_configs.clone();
+        transaction.selective_disclosure_claims = planned.selective_disclosure_claims.clone();
+        transaction.zk_predicate_claims = planned.zk_predicate_claims.clone();
+        transaction.validity_days = planned.validity_days;
+        transaction.renewable = planned.renewable;
+        transaction.renewal_window_days = planned.renewal_window_days;
+        transaction.issuer_did = planned.issuer_did.clone();
+        transaction.issuer_algorithm = planned.issuer_algorithm.clone();
+        if let Some(vct) = planned.claims.get("_vct") {
+            transaction.claims.insert("_vct".to_owned(), vct.clone());
+        }
+        transaction.issuer_profile_id = None;
+        transaction.signing_service_id = None;
+    }
+    transaction
+}
+
+struct CanvasApprovalCredentialContext {
+    credential_type: String,
+    credential_payload_format: String,
+    revocation_profile_id: Option<String>,
+    wallet_configs: Vec<Value>,
+    selective_disclosure_claims: Vec<String>,
+    zk_predicate_claims: Vec<String>,
+    validity_days: i64,
+    renewable: bool,
+    renewal_window_days: i64,
+    issuer_did: Option<String>,
+    issuer_algorithm: Option<String>,
+}
+
+fn build_canvas_approval_transaction(
+    application: &Map<String, Value>,
+    credential_template_id: String,
+    seed: &CanvasAwardApprovalSeed,
+    now: chrono::DateTime<chrono::Utc>,
+    claims: Map<String, Value>,
+    context: CanvasApprovalCredentialContext,
+) -> Option<CredentialTransaction> {
+    let organization_id = text(application.get("organization_id"));
+    let application_id = text(application.get("id"));
+    if organization_id.is_empty()
+        || application_id.is_empty()
+        || !text(application.get("status")).eq_ignore_ascii_case("pending")
+        || credential_template_id.is_empty()
+    {
+        return None;
+    }
     Some(CredentialTransaction {
         id: seed.transaction_id.clone(),
         organization_id,
-        credential_template_id: text(binding.get("credential_template_id")),
-        revocation_profile_id,
+        credential_template_id,
+        revocation_profile_id: context.revocation_profile_id,
         renewal_of_credential_id: None,
         applicant_id: optional_text(application.get("applicant_identifier")),
         application_id: Some(application_id),
@@ -440,28 +592,19 @@ pub fn plan_canvas_approval_transaction(
         pre_authorized_code: seed.pre_authorized_code.clone(),
         nonce: None,
         claims,
-        credential_type: Some(credential_type),
-        selective_disclosure_claims: string_array(credential.get("selective_disclosure_fields")),
-        zk_predicate_claims: string_array(credential.get("zk_predicate_claims")),
-        credential_payload_format,
-        wallet_configs: object_array(credential.get("wallet_configs")),
-        validity_days: positive_i64(
-            validity.and_then(|value| value.get("default_validity_days")),
-            365,
-        ),
-        renewable: validity
-            .and_then(|value| value.get("renewable"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        renewal_window_days: positive_i64(
-            validity.and_then(|value| value.get("renewal_window_days")),
-            30,
-        ),
+        credential_type: Some(context.credential_type),
+        selective_disclosure_claims: context.selective_disclosure_claims,
+        zk_predicate_claims: context.zk_predicate_claims,
+        credential_payload_format: context.credential_payload_format,
+        wallet_configs: context.wallet_configs,
+        validity_days: context.validity_days,
+        renewable: context.renewable,
+        renewal_window_days: context.renewal_window_days,
         delivery_mode: delivery_mode(application.get("integration_context")),
         issuer_profile_id: None,
         issuer_mode: "org_managed".to_owned(),
-        issuer_did,
-        issuer_algorithm,
+        issuer_did: context.issuer_did,
+        issuer_algorithm: context.issuer_algorithm,
         signing_service_id: None,
         reserved_credential_id: None,
         oid4vci_client_id: None,
@@ -470,7 +613,27 @@ pub fn plan_canvas_approval_transaction(
     })
 }
 
-async fn resolve_and_attach_canvas_issuer(
+fn python_truthy_text(value: Option<&Value>) -> Result<Option<String>, ()> {
+    Ok(match value {
+        None => None,
+        Some(value) => match value {
+            Value::Null | Value::Bool(false) => None,
+            Value::Number(value) if value.as_f64() == Some(0.0) => None,
+            Value::String(value) if value.is_empty() => None,
+            Value::Array(value) if value.is_empty() => None,
+            Value::Object(value) if value.is_empty() => None,
+            Value::String(value) => Some(value.clone()),
+            Value::Bool(true) => Some("True".to_owned()),
+            Value::Number(value) => Some(value.to_string()),
+            // Arbitrary containers are not valid credential identifiers. The
+            // Python repr is implementation-specific, so fail the approval plan
+            // instead of silently selecting a different credential type.
+            Value::Array(_) | Value::Object(_) => return Err(()),
+        },
+    })
+}
+
+pub(crate) async fn resolve_and_attach_canvas_issuer(
     issuer_resolver: &dyn IssuerContextResolver,
     binding: &Map<String, Value>,
     transaction: &mut CredentialTransaction,
@@ -485,6 +648,30 @@ async fn resolve_and_attach_canvas_issuer(
         return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
     }
     attach_issuer_context(transaction, &issuer);
+    Ok(())
+}
+
+pub(crate) async fn resolve_and_attach_required_issuer(
+    issuer_resolver: &dyn IssuerContextResolver,
+    transaction: &mut CredentialTransaction,
+) -> Result<(), CanvasAwardCandidateApprovalError> {
+    let remote_format = remote_credential_format(&transaction.credential_payload_format)
+        .map_err(|_| CanvasAwardCandidateApprovalError::ReadinessDrift)?;
+    let issuer = issuer_resolver
+        .resolve(transaction, &remote_format, true)
+        .await
+        .map_err(approval_issuer_error)?;
+    if !required_kms_issuer_context(&issuer) {
+        return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
+    }
+    attach_issuer_context(transaction, &issuer);
+    if transaction.issuer_profile_id.as_deref() != Some(issuer.issuer_profile_id.as_str())
+        || transaction.issuer_did.as_deref() != Some(issuer.issuer_did.as_str())
+        || transaction.issuer_algorithm.as_deref() != Some(issuer.algorithm.as_str())
+        || transaction.signing_service_id.as_deref() != Some(issuer.signing_service_id.as_str())
+    {
+        return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
+    }
     Ok(())
 }
 
@@ -520,7 +707,8 @@ fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerConte
         raw.and_then(|value| value.get("verification_method_id")),
         profile.and_then(|value| value.get("verification_method_id")),
     ]);
-    resolved_issuer_matches(binding, issuer)
+    required_kms_issuer_context(issuer)
+        && resolved_issuer_matches(binding, issuer)
         && !issuer.issuer_profile_id.trim().is_empty()
         && profile_id == issuer.issuer_profile_id
         && !issuer.signing_service_id.trim().is_empty()
@@ -533,6 +721,43 @@ fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerConte
                     && value.starts_with(&format!("{}#", issuer.issuer_did))
             })
         && issuer.public_jwk.as_ref().is_some_and(Value::is_object)
+        && !text(signing_key_reference).is_empty()
+}
+
+fn required_kms_issuer_context(issuer: &IssuerContext) -> bool {
+    let raw = issuer.raw_context.as_object();
+    let profile = raw
+        .and_then(|value| value.get("issuer_profile"))
+        .and_then(Value::as_object);
+    let signing_key_reference = raw
+        .and_then(|value| value.get("signing_key_reference"))
+        .or_else(|| profile.and_then(|value| value.get("signing_key_reference")));
+    let profile_id = first_text(&[
+        raw.and_then(|value| value.get("issuer_profile_id")),
+        profile.and_then(|value| value.get("id")),
+    ]);
+    let issuer_did = first_text(&[
+        raw.and_then(|value| value.get("issuer_did")),
+        profile.and_then(|value| value.get("issuer_did")),
+    ]);
+    let algorithm = first_text(&[
+        raw.and_then(|value| value.get("algorithm")),
+        profile.and_then(|value| value.get("algorithm")),
+    ]);
+    let signing_service_id = first_text(&[
+        raw.and_then(|value| value.get("signing_service_id")),
+        profile.and_then(|value| value.get("signing_service_id")),
+    ]);
+    let verification_method = first_text(&[
+        raw.and_then(|value| value.get("verification_method_id")),
+        profile.and_then(|value| value.get("verification_method_id")),
+    ]);
+    profile.is_none_or(|profile| text(profile.get("status")).eq_ignore_ascii_case("active"))
+        && profile_id == issuer.issuer_profile_id
+        && issuer_did == issuer.issuer_did
+        && algorithm == issuer.algorithm
+        && signing_service_id == issuer.signing_service_id
+        && issuer.verification_method_id.as_deref() == Some(verification_method.as_str())
         && !text(signing_key_reference).is_empty()
 }
 
@@ -613,5 +838,50 @@ fn text(value: Option<&Value>) -> String {
         Some(Value::String(value)) => value.trim().to_owned(),
         Some(Value::Null) | None => String::new(),
         Some(value) => value.to_string().trim_matches('"').trim().to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod legacy_planner_tests {
+    use chrono::Utc;
+    use serde_json::{json, Map};
+
+    use super::*;
+
+    #[test]
+    fn legacy_planner_preserves_historical_defaults_without_a_credential_snapshot() {
+        let application = Map::from_iter([
+            ("id".to_owned(), json!("application-1")),
+            ("organization_id".to_owned(), json!("org-1")),
+            ("status".to_owned(), json!("pending")),
+            (
+                "applicant_identifier".to_owned(),
+                json!("learner@example.test"),
+            ),
+            ("form_data".to_owned(), json!({"name":"Learner"})),
+            (
+                "integration_context".to_owned(),
+                json!({"delivery_mode":"wallet_plus_canvas_mirror"}),
+            ),
+        ]);
+        let transaction = plan_legacy_canvas_approval_transaction(
+            &application,
+            "credential-template-1",
+            &CanvasAwardApprovalSeed {
+                transaction_id: "transaction-1".to_owned(),
+                pre_authorized_code: "code-1".to_owned(),
+            },
+            Utc::now(),
+        )
+        .expect("historical planner does not require credential_template_snapshot");
+        assert_eq!(
+            transaction.credential_type.as_deref(),
+            Some("org.iso.18013.5.1.mDL")
+        );
+        assert_eq!(transaction.credential_payload_format, "w3c_vcdm_v2_sd_jwt");
+        assert_eq!(transaction.delivery_mode, "wallet_plus_canvas_mirror");
+        assert_eq!(transaction.revocation_profile_id, None);
+        assert_eq!(transaction.validity_days, 365);
+        assert!(!transaction.renewable);
     }
 }

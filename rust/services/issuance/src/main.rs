@@ -19,6 +19,10 @@ use marty_issuance_service::{
     canvas_event_status::CanvasEventStatusService,
     canvas_event_status_postgres::PostgresCanvasEventStatusRepository,
     canvas_issuance_guard::CanvasGuardConfig,
+    canvas_legacy_ingest::{
+        CanvasLegacyIngestConfig, CanvasLegacyIngestService, UuidCanvasLegacyIdGenerator,
+    },
+    canvas_legacy_ingest_postgres::PostgresCanvasLegacyIngestRepository,
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
     },
@@ -306,6 +310,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         canvas_lti_clock.clone(),
         canvas_guard_config.clone(),
     );
+    let canvas_legacy_ingest = CanvasLegacyIngestService::new(
+        Arc::new(PostgresCanvasLegacyIngestRepository::new(pool.clone())),
+        issuer_resolver.clone(),
+        Arc::new(SecureCanvasAwardApprovalSeedGenerator),
+        Arc::new(UuidCanvasLegacyIdGenerator),
+        canvas_lti_clock.clone(),
+        CanvasLegacyIngestConfig {
+            enabled: config.canvas_legacy_event_ingest_enabled,
+            shared_secret: config.canvas_credentials_shared_secret.clone(),
+            shared_secret_file: config.canvas_credentials_shared_secret_file.clone(),
+            signature_tolerance_seconds: config.canvas_credentials_signature_tolerance_seconds,
+        },
+    );
     let canvas_award_materializer = Arc::new(CanvasAwardCandidateMaterializerService::new(
         Arc::new(PostgresCanvasAwardCandidateRepository::new(pool.clone())),
         canvas_award_approver,
@@ -547,6 +564,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             CanvasServices::new(
                 canvas_oauth,
                 canvas_management,
+                canvas_legacy_ingest,
                 CanvasLtiServices::new(
                     canvas_lti_login,
                     canvas_lti_launch,

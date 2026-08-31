@@ -17,6 +17,7 @@ use crate::{
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
     credential::{CredentialTransaction, CredentialTransactionStatus},
+    credential_postgres::transaction_row,
 };
 
 const LOAD_APPLICATION: &str = "SELECT jsonb_build_object(
@@ -241,6 +242,7 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
                 application_template: serde_json::Map::new(),
                 platform: serde_json::Map::new(),
                 binding: serde_json::Map::new(),
+                existing_transaction: None,
             }));
         }
         let (platform, binding, template) = tokio::try_join!(
@@ -278,11 +280,14 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         {
             return Ok(None);
         }
+        let existing_transaction =
+            load_current_pending_transaction(&self.pool, &application).await?;
         Ok(Some(CanvasApplicationApprovalSnapshot {
             application,
             application_template,
             platform,
             binding,
+            existing_transaction,
         }))
     }
 
@@ -314,19 +319,43 @@ async fn reserve_management_canvas_issuance(
     review_notes: &str,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, CanvasApplicationApprovalError> {
+    let mut database = pool
+        .begin()
+        .await
+        .map_err(manual_approval_repository_error)?;
+    let reserved = reserve_management_canvas_issuance_in_transaction(
+        &mut database,
+        prepared,
+        snapshot,
+        reviewer_id,
+        review_notes,
+        reviewed_at,
+    )
+    .await?;
+    database
+        .commit()
+        .await
+        .map_err(manual_approval_repository_error)?;
+    Ok(reserved)
+}
+
+pub(crate) async fn reserve_management_canvas_issuance_in_transaction(
+    database: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    prepared: &CredentialTransaction,
+    snapshot: &CanvasApplicationApprovalSnapshot,
+    reviewer_id: &str,
+    review_notes: &str,
+    reviewed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<String, CanvasApplicationApprovalError> {
     let application_id = prepared
         .application_id
         .as_deref()
         .filter(|value| !value.is_empty())
         .ok_or(CanvasApplicationApprovalError::NotReady)?;
-    let mut database = pool
-        .begin()
-        .await
-        .map_err(manual_approval_repository_error)?;
     let current = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_APPLICATION)
         .bind(application_id)
         .bind(&prepared.organization_id)
-        .fetch_optional(&mut *database)
+        .fetch_optional(&mut **database)
         .await
         .map_err(manual_approval_repository_error)?
         .and_then(|value| value.as_object().cloned())
@@ -339,50 +368,57 @@ async fn reserve_management_canvas_issuance(
     {
         return Err(CanvasApplicationApprovalError::NotReady);
     }
-    lock_manual_approval_dependencies(&mut database, prepared, snapshot).await?;
+    lock_manual_approval_dependencies(database, prepared, snapshot).await?;
 
     let current_transaction_id = optional_text(current.get("issuance_transaction_id"));
     let current_transaction = if let Some(current_id) = current_transaction_id.as_deref() {
         sqlx::query(
-            "SELECT id, status, expires_at FROM issuance_service.issuance_transactions
+            "SELECT * FROM issuance_service.issuance_transactions
              WHERE id = $1 AND organization_id = $2 AND application_id = $3 FOR UPDATE",
         )
         .bind(current_id)
         .bind(&prepared.organization_id)
         .bind(application_id)
-        .fetch_optional(&mut *database)
+        .fetch_optional(&mut **database)
         .await
         .map_err(manual_approval_repository_error)?
     } else {
         None
     };
-    let reserved_id = if let Some(current_transaction) = current_transaction {
-        let status: String = current_transaction
-            .try_get("status")
-            .map_err(manual_approval_repository_error)?;
-        match status.as_str() {
-            "authorized" | "signing" | "issued" => {
+    let reserved_id = if let Some(current_row) = current_transaction {
+        let current_transaction =
+            transaction_row(current_row).map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+        match current_transaction.status {
+            CredentialTransactionStatus::Authorized
+            | CredentialTransactionStatus::Signing
+            | CredentialTransactionStatus::Issued => {
                 return Err(CanvasApplicationApprovalError::NotReady);
             }
-            "pending"
-                if current_transaction
-                    .try_get::<chrono::DateTime<chrono::Utc>, _>("expires_at")
-                    .map_err(manual_approval_repository_error)?
-                    > reviewed_at =>
+            CredentialTransactionStatus::Pending
+                if current_transaction.expires_at > reviewed_at =>
             {
-                current_transaction
-                    .try_get("id")
-                    .map_err(manual_approval_repository_error)?
+                if let Some(expected) = snapshot.existing_transaction.as_ref() {
+                    if &current_transaction != expected || prepared.id != expected.id {
+                        return Err(CanvasApplicationApprovalError::NotReady);
+                    }
+                    refresh_pending_canvas_transaction(database, prepared, reviewed_at).await?;
+                } else if !canvas_transaction_context_matches(&current_transaction, prepared) {
+                    // A concurrent approver may have inserted the same canonical
+                    // transaction while this request waited for the application
+                    // lock. Converge without copying either request's capabilities.
+                    return Err(CanvasApplicationApprovalError::NotReady);
+                }
+                current_transaction.id
             }
             _ => {
-                insert_transaction(&mut database, prepared)
+                insert_transaction(database, prepared)
                     .await
                     .map_err(map_candidate_approval_error)?;
                 prepared.id.clone()
             }
         }
     } else {
-        insert_transaction(&mut database, prepared)
+        insert_transaction(database, prepared)
             .await
             .map_err(map_candidate_approval_error)?;
         prepared.id.clone()
@@ -401,16 +437,12 @@ async fn reserve_management_canvas_issuance(
     .bind(reviewer_id)
     .bind(reviewed_at)
     .bind(&reserved_id)
-    .execute(&mut *database)
+    .execute(&mut **database)
     .await
     .map_err(manual_approval_repository_error)?;
     if updated.rows_affected() != 1 {
         return Err(CanvasApplicationApprovalError::NotReady);
     }
-    database
-        .commit()
-        .await
-        .map_err(manual_approval_repository_error)?;
     Ok(reserved_id)
 }
 
@@ -473,6 +505,123 @@ fn application_approval_snapshot_is_current(
     ]
     .iter()
     .all(|field| current.get(*field) == expected.get(*field))
+}
+
+async fn load_current_pending_transaction(
+    pool: &PgPool,
+    application: &serde_json::Map<String, Value>,
+) -> Result<Option<CredentialTransaction>, CanvasApplicationApprovalError> {
+    let Some(transaction_id) = optional_text(application.get("issuance_transaction_id")) else {
+        return Ok(None);
+    };
+    let application_id = text(application.get("id"));
+    let organization_id = text(application.get("organization_id"));
+    sqlx::query(
+        "SELECT * FROM issuance_service.issuance_transactions
+         WHERE id = $1 AND organization_id = $2 AND application_id = $3
+           AND status = 'pending' AND expires_at > clock_timestamp()",
+    )
+    .bind(transaction_id)
+    .bind(organization_id)
+    .bind(application_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(manual_approval_repository_error)?
+    .map(transaction_row)
+    .transpose()
+    .map_err(|_| CanvasApplicationApprovalError::Unavailable)
+}
+
+async fn refresh_pending_canvas_transaction(
+    database: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    prepared: &CredentialTransaction,
+    reviewed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), CanvasApplicationApprovalError> {
+    if prepared.status != CredentialTransactionStatus::Pending
+        || prepared
+            .issuer_profile_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        || prepared
+            .signing_service_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return Err(CanvasApplicationApprovalError::NotReady);
+    }
+    let validity_days = i32::try_from(prepared.validity_days)
+        .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+    let renewal_window_days = i32::try_from(prepared.renewal_window_days)
+        .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+    let updated = sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET credential_template_id = $4, revocation_profile_id = $5,
+             claims = $6, credential_type = $7,
+             selective_disclosure_claims = $8, zk_predicate_claims = $9,
+             credential_payload_format = $10, wallet_configs = $11,
+             validity_days = $12, renewable = $13, renewal_window_days = $14,
+             delivery_mode = $15, issuer_profile_id = $16, issuer_mode = $17,
+             issuer_did_override = $18, issuer_algorithm = $19,
+             signing_service_id = $20
+         WHERE id = $1 AND organization_id = $2 AND application_id = $3
+           AND status = 'pending' AND expires_at > $21",
+    )
+    .bind(&prepared.id)
+    .bind(&prepared.organization_id)
+    .bind(&prepared.application_id)
+    .bind(&prepared.credential_template_id)
+    .bind(&prepared.revocation_profile_id)
+    .bind(Value::Object(prepared.claims.clone()))
+    .bind(&prepared.credential_type)
+    .bind(json!(prepared.selective_disclosure_claims))
+    .bind(json!(prepared.zk_predicate_claims))
+    .bind(&prepared.credential_payload_format)
+    .bind(json!(prepared.wallet_configs))
+    .bind(validity_days)
+    .bind(prepared.renewable)
+    .bind(renewal_window_days)
+    .bind(&prepared.delivery_mode)
+    .bind(&prepared.issuer_profile_id)
+    .bind(&prepared.issuer_mode)
+    .bind(&prepared.issuer_did)
+    .bind(&prepared.issuer_algorithm)
+    .bind(&prepared.signing_service_id)
+    .bind(reviewed_at)
+    .execute(&mut **database)
+    .await
+    .map_err(manual_approval_repository_error)?;
+    if updated.rows_affected() != 1 {
+        return Err(CanvasApplicationApprovalError::NotReady);
+    }
+    Ok(())
+}
+
+fn canvas_transaction_context_matches(
+    current: &CredentialTransaction,
+    prepared: &CredentialTransaction,
+) -> bool {
+    current.organization_id == prepared.organization_id
+        && current.credential_template_id == prepared.credential_template_id
+        && current.revocation_profile_id == prepared.revocation_profile_id
+        && current.renewal_of_credential_id == prepared.renewal_of_credential_id
+        && current.applicant_id == prepared.applicant_id
+        && current.application_id == prepared.application_id
+        && current.subject_did == prepared.subject_did
+        && current.claims == prepared.claims
+        && current.credential_type == prepared.credential_type
+        && current.selective_disclosure_claims == prepared.selective_disclosure_claims
+        && current.zk_predicate_claims == prepared.zk_predicate_claims
+        && current.credential_payload_format == prepared.credential_payload_format
+        && current.wallet_configs == prepared.wallet_configs
+        && current.validity_days == prepared.validity_days
+        && current.renewable == prepared.renewable
+        && current.renewal_window_days == prepared.renewal_window_days
+        && current.delivery_mode == prepared.delivery_mode
+        && current.issuer_profile_id == prepared.issuer_profile_id
+        && current.issuer_mode == prepared.issuer_mode
+        && current.issuer_did == prepared.issuer_did
+        && current.issuer_algorithm == prepared.issuer_algorithm
+        && current.signing_service_id == prepared.signing_service_id
 }
 
 async fn candidate_link_is_current(
@@ -765,7 +914,7 @@ async fn lock_current_approval_dependencies(
     Ok(())
 }
 
-async fn insert_transaction(
+pub(crate) async fn insert_transaction(
     database: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     transaction: &CredentialTransaction,
 ) -> Result<(), CanvasAwardCandidateApprovalError> {

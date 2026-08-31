@@ -19,6 +19,8 @@ pub mod canvas_credentials_validation;
 pub mod canvas_event_status;
 pub mod canvas_event_status_postgres;
 pub mod canvas_issuance_guard;
+pub mod canvas_legacy_ingest;
+pub mod canvas_legacy_ingest_postgres;
 pub mod canvas_lti_bootstrap;
 pub mod canvas_lti_deep_linking;
 pub mod canvas_lti_deep_linking_postgres;

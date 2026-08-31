@@ -15,9 +15,10 @@ use axum::{
 use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
     canvas_award_candidate_approval::{
-        CanvasApplicationApprovalError, CanvasApplicationApprovalRepository,
-        CanvasApplicationApprovalService, CanvasApplicationApprovalSnapshot,
-        CanvasAwardApprovalSeed, CanvasAwardApprovalSeedGenerator,
+        plan_canvas_approval_transaction, CanvasApplicationApprovalError,
+        CanvasApplicationApprovalRepository, CanvasApplicationApprovalService,
+        CanvasApplicationApprovalSnapshot, CanvasAwardApprovalSeed,
+        CanvasAwardApprovalSeedGenerator,
     },
     canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
     canvas_catalog::{CanvasCatalogOAuth, CanvasCatalogProvider, CanvasCatalogProviderError},
@@ -264,6 +265,7 @@ fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
                 }
             }
         })),
+        existing_transaction: None,
     }
 }
 
@@ -3281,6 +3283,73 @@ async fn application_approval_uses_canonical_snapshot_and_returns_only_safe_fiel
         "Approved through Canvas integration operations"
     );
     assert_eq!(*reviewed_at, approval_now());
+}
+
+#[tokio::test]
+async fn application_approval_refreshes_the_exact_existing_pending_transaction() {
+    let mut snapshot = approval_snapshot();
+    let existing_seed = CanvasAwardApprovalSeed {
+        transaction_id: "transaction-existing-1".to_owned(),
+        pre_authorized_code: "existing-private-code".to_owned(),
+    };
+    let mut existing = plan_canvas_approval_transaction(
+        &snapshot.application,
+        &snapshot.binding,
+        &existing_seed,
+        approval_now(),
+    )
+    .expect("existing transaction");
+    existing.nonce = Some("existing-nonce".to_owned());
+    existing
+        .claims
+        .insert("preserved_claim".to_owned(), json!("keep-me"));
+    existing.delivery_mode = "wallet_only".to_owned();
+    existing.credential_type = Some("stale-type".to_owned());
+    existing.issuer_profile_id = Some("stale-profile".to_owned());
+    existing.signing_service_id = Some("stale-service".to_owned());
+    snapshot.application.insert(
+        "issuance_transaction_id".to_owned(),
+        json!(existing.id.clone()),
+    );
+    snapshot.existing_transaction = Some(existing);
+
+    let repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(snapshot)),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-existing-1".to_owned())),
+    });
+    let response = app_with_approval(repository.clone(), Ok(approval_issuer()), true)
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/applications/application-approval-1/approve"),
+            json!({}),
+        ))
+        .await
+        .expect("approval response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["issuance_transaction_id"],
+        "transaction-existing-1"
+    );
+
+    let reservations = repository.reservations.lock().expect("reservations");
+    let transaction = &reservations[0].0;
+    assert_eq!(transaction.id, "transaction-existing-1");
+    assert_eq!(transaction.pre_authorized_code, "existing-private-code");
+    assert_eq!(transaction.nonce.as_deref(), Some("existing-nonce"));
+    assert_eq!(transaction.claims["preserved_claim"], "keep-me");
+    assert_eq!(transaction.delivery_mode, "wallet_plus_canvas_mirror");
+    assert_eq!(
+        transaction.credential_type.as_deref(),
+        Some("OpenBadgeCredential")
+    );
+    assert_eq!(
+        transaction.issuer_profile_id.as_deref(),
+        Some("issuer-profile-1")
+    );
+    assert_eq!(
+        transaction.signing_service_id.as_deref(),
+        Some("kms-service-1")
+    );
 }
 
 #[tokio::test]

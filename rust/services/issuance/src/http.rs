@@ -20,6 +20,10 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     canvas_event_status::CanvasEvidenceEventStatusResponse,
+    canvas_legacy_ingest::{
+        CanvasLegacyEventKind, CanvasLegacyIngestError, CanvasLegacyIngestService, EVIDENCE_LINK,
+        SUNSET,
+    },
     canvas_lti_bootstrap::{
         CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
         CanvasLtiBootstrapServiceError,
@@ -103,6 +107,7 @@ struct IssuanceState {
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     canvas_oauth: Option<CanvasOAuthService>,
     canvas_management: Option<CanvasPlatformManagementHttpService>,
+    canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
 }
 
 pub struct IssuanceServices {
@@ -155,6 +160,7 @@ impl IssuanceCoreServices {
 pub struct CanvasServices {
     oauth: CanvasOAuthService,
     management: CanvasPlatformManagementHttpService,
+    legacy_ingest: CanvasLegacyIngestService,
     lti: CanvasLtiServices,
 }
 
@@ -163,11 +169,13 @@ impl CanvasServices {
     pub fn new(
         oauth: CanvasOAuthService,
         management: CanvasPlatformManagementHttpService,
+        legacy_ingest: CanvasLegacyIngestService,
         lti: CanvasLtiServices,
     ) -> Self {
         Self {
             oauth,
             management,
+            legacy_ingest,
             lti,
         }
     }
@@ -285,6 +293,7 @@ struct OptionalServices {
     canvas_lti_tool_signer: Option<Arc<dyn CanvasLtiToolJwtSigner>>,
     canvas_oauth: Option<CanvasOAuthService>,
     canvas_management: Option<CanvasPlatformManagementHttpService>,
+    canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -357,6 +366,7 @@ pub fn router_with_all_services(
             credential_management: Some(services.credential_management),
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
+            canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
             canvas_lti_experience: Some(services.canvas.lti.experience),
@@ -542,6 +552,23 @@ pub fn router_with_canvas_management(
         transport,
         OptionalServices {
             canvas_management: Some(canvas_management),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_canvas_legacy_ingest(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_legacy_ingest: CanvasLegacyIngestService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_legacy_ingest: Some(canvas_legacy_ingest),
             ..OptionalServices::default()
         },
     )
@@ -973,6 +1000,21 @@ fn router_with_optional_services(
             post(sync_canvas_lti_evidence),
         );
     }
+    if services.canvas_legacy_ingest.is_some() {
+        api = api
+            .route(
+                "/v1/integrations/canvas/evidence-events",
+                post(process_canvas_evidence_event),
+            )
+            .route(
+                "/v1/integrations/canvas/ags/score-events",
+                post(process_canvas_ags_score_event),
+            )
+            .route(
+                "/v1/integrations/canvas/nrps/membership-events",
+                post(process_canvas_nrps_membership_event),
+            );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -985,6 +1027,7 @@ fn router_with_optional_services(
         credential_management: services.credential_management,
         canvas_oauth: services.canvas_oauth,
         canvas_management: services.canvas_management,
+        canvas_legacy_ingest: services.canvas_legacy_ingest,
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
         canvas_lti_experience: services.canvas_lti_experience,
@@ -1025,6 +1068,85 @@ async fn approve_canvas_application(
         .approve_application(&headers, &application_id, request)
         .await
         .map(Json)
+}
+
+async fn process_canvas_evidence_event(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Response {
+    process_canvas_legacy_event(state, request, CanvasLegacyEventKind::Evidence).await
+}
+
+async fn process_canvas_ags_score_event(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Response {
+    process_canvas_legacy_event(state, request, CanvasLegacyEventKind::AgsScore).await
+}
+
+async fn process_canvas_nrps_membership_event(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Response {
+    process_canvas_legacy_event(state, request, CanvasLegacyEventKind::NrpsMembership).await
+}
+
+async fn process_canvas_legacy_event(
+    state: IssuanceState,
+    request: Request,
+    kind: CanvasLegacyEventKind,
+) -> Response {
+    let Some(service) = state.canvas_legacy_ingest.as_ref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Preserve the Python route's fail-closed switch ordering. In particular,
+    // malformed or oversized bodies must not preempt the default-disabled 410.
+    if !service.enabled() {
+        return CanvasLegacyIngestHttpError(CanvasLegacyIngestError::Gone(kind.disabled_detail()))
+            .into_response();
+    }
+    let (parts, body) = request.into_parts();
+    let headers = parts
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_owned()))
+        })
+        .collect();
+    // Match the established gateway request-body ceiling; the Python route had
+    // no narrower per-route cap and large NRPS extension sets must keep working.
+    const MAX_CANVAS_LEGACY_BODY_BYTES: usize = 10 * 1024 * 1024;
+    let raw_body = match to_bytes(body, MAX_CANVAS_LEGACY_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "Canvas event payload is too large"})),
+            )
+                .into_response();
+        }
+    };
+    match service.process(kind, &raw_body, &headers).await {
+        Ok(response) => {
+            let mut response = Json(response).into_response();
+            response
+                .headers_mut()
+                .insert("deprecation", HeaderValue::from_static("true"));
+            response
+                .headers_mut()
+                .insert("sunset", HeaderValue::from_static(SUNSET));
+            if kind == CanvasLegacyEventKind::Evidence {
+                response
+                    .headers_mut()
+                    .insert("link", HeaderValue::from_static(EVIDENCE_LINK));
+            }
+            response
+        }
+        Err(error) => CanvasLegacyIngestHttpError(error).into_response(),
+    }
 }
 
 async fn get_canvas_evidence_event_status(
@@ -3459,6 +3581,53 @@ impl IntoResponse for TenantDiscoveryHttpError {
             TenantDiscoveryError::RepositoryUnavailable => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Tenant credential metadata is temporarily unavailable",
+            ),
+        };
+        (status, Json(json!({"detail": detail}))).into_response()
+    }
+}
+
+struct CanvasLegacyIngestHttpError(CanvasLegacyIngestError);
+
+impl IntoResponse for CanvasLegacyIngestHttpError {
+    fn into_response(self) -> Response {
+        let (status, detail) = match &self.0 {
+            CanvasLegacyIngestError::Gone(detail) => (StatusCode::GONE, json!(detail)),
+            CanvasLegacyIngestError::InvalidSignature => {
+                (StatusCode::FORBIDDEN, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::MalformedPayload
+            | CanvasLegacyIngestError::ObjectRequired
+            | CanvasLegacyIngestError::InvalidApplicationStatus(_) => {
+                (StatusCode::BAD_REQUEST, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::Validation(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Value::Array(errors.clone()),
+            ),
+            CanvasLegacyIngestError::ApplicationNotFound
+            | CanvasLegacyIngestError::ProgramBindingNotFound => {
+                (StatusCode::NOT_FOUND, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::FeatureDisabled(_)
+            | CanvasLegacyIngestError::OrganizationMismatch
+            | CanvasLegacyIngestError::ApplicationTemplateMismatch
+            | CanvasLegacyIngestError::BindingCredentialTemplateMismatch
+            | CanvasLegacyIngestError::ApplicationCredentialTemplateMismatch
+            | CanvasLegacyIngestError::EvidenceNotRequired
+            | CanvasLegacyIngestError::ReplayPayloadConflict
+            | CanvasLegacyIngestError::ReplayFlowConflict => {
+                (StatusCode::CONFLICT, json!(self.0.to_string()))
+            }
+            CanvasLegacyIngestError::AutoApprovalUnavailable => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!("Internal Server Error"),
+            ),
+            CanvasLegacyIngestError::SnapshotChanged
+            | CanvasLegacyIngestError::RepositoryUnavailable
+            | CanvasLegacyIngestError::MalformedStoredResponse => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!("Canvas evidence processing is temporarily unavailable"),
             ),
         };
         (status, Json(json!({"detail": detail}))).into_response()
