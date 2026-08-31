@@ -6,7 +6,7 @@
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-08-31
 
 ## Objective
 
@@ -16,7 +16,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-08-30
+## Current execution snapshot — 2026-08-31
 
 Wave three's MMF replacement and ordered Rust service plane are complete. The
 current work is a follow-on whole-service issuance cutover, not a reactivation
@@ -38,10 +38,11 @@ floor is `contracts/issuance-canvas-management.json`.
 | In progress in an isolated worktree | 3 | The default-disabled legacy evidence, AGS score and NRPS membership ingestion adapters; these remain one shared-kernel slice and are not yet counted as committed Rust coverage |
 
 Thus, 28 of 31 routes are committed locally, and only the three shared
-legacy-ingest adapters remain.
-The provider slice's
-gate passed 196 Rust library tests, 22 black-box Canvas HTTP tests, two contract
-tests, strict all-target Clippy, and 90 preserved Python tests.
+legacy-ingest adapters remain. The latest combined committed Canvas gate passed
+200 Rust library tests, 26 black-box Canvas HTTP tests, two contract tests,
+strict all-target Clippy, a disposable-PostgreSQL event-status contract, and
+the preserved Python oracle tests. The earlier provider-only checkpoint passed
+196 Rust library tests, 22 black-box tests and 90 focused Python tests.
 Counts describe local migration progress, not merged `main` coverage.
 
 ### Remaining work in the active wave
@@ -66,8 +67,11 @@ Counts describe local migration progress, not merged `main` coverage.
    cleanup no longer includes the already-merged CDLA review/test worktrees or
    detached `v1.1.206`/`v1.1.207` beta release worktrees: those were verified
    against their upstream squash merges and removed on 2026-08-30. Preserve and
-   land the still-unique verification-consolidation worktrees and the open core
-   proof-boundary dependency PR; no unlanded feature work may be discarded. The
+   land the still-unique verification-consolidation worktrees; no unlanded
+   feature work may be discarded. The core proof-boundary dependency PR
+   `ElevenID/marty-credentials#246` merged through the protected queue on
+   2026-08-31, local `main` was fast-forwarded to `1bc2681`, and its clean
+   worktree and squash-replaced branch were removed. The
    separately authorized UI/MMF history rewrites, release/tag retirement and
    protection restoration were already completed and verified; their lingering
    tracking issue `ElevenID/.github#22` was closed after reconciling the merged
@@ -116,6 +120,12 @@ checkpoint, but full differential, PostgreSQL migration/race, packaging,
 consumer, deletion and beta acceptance gates remain. Preserve both worktrees
 and land their changes through their own reviewed PRs; they must not be folded
 into or removed during Canvas branch cleanup.
+
+A separate `fix/cdla-mdoc-proof-metadata-v1` Credentials worktree was created
+from `1bc2681` and currently contains only an uncommitted OID4VCI proof-metadata
+algorithm regression test. It receives no completed-migration credit yet. Keep
+it isolated, review the behavior it freezes, and either land a tested fix or
+remove it only after proving that it contains no unique required work.
 
 ## Wave three — Rust service plane and complete MMF replacement
 
