@@ -16,10 +16,11 @@ use crate::{
     QueryKind, VpToken, WalletSubmissionV1, MAX_CLAIMS_PER_CREDENTIAL, MAX_CLAIM_VALUE_BYTES,
     MAX_CODE_BYTES, MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH, MAX_EVIDENCE_LIST_ITEMS,
     MAX_EVIDENCE_PROJECTION_BYTES, MAX_FROZEN_REQUEST_BYTES, MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH,
-    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES,
-    MAX_QUERY_REQUIREMENTS, MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS,
-    MAX_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES,
-    REQUIRED_OID4VP_CHECKS,
+    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_NORMALIZATION_STATES,
+    MAX_PRIVACY_NORMALIZATION_STEPS, MAX_PRIVACY_NORMALIZED_BYTES,
+    MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES, MAX_QUERY_REQUIREMENTS,
+    MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS, MAX_TOKEN_BYTES,
+    MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES, REQUIRED_OID4VP_CHECKS,
 };
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -782,8 +783,7 @@ impl Oid4vpEvidenceProjectionV1 {
         let value = serde_json::to_value(self).map_err(|_| Oid4vpContractError::Serialization)?;
         let raw_tokens = submission.raw_tokens();
         let sensitive_patterns = sensitive_token_patterns(&raw_tokens);
-        if contains_sensitive_string(&value, &sensitive_patterns) || contains_forbidden_key(&value)
-        {
+        if contains_sensitive_string(&value, &sensitive_patterns) {
             return Err(Oid4vpContractError::PrivacyViolation);
         }
         Ok(())
@@ -2123,77 +2123,100 @@ fn encode_base64_variants(value: &[u8]) -> [String; 4] {
 
 fn contains_sensitive_string(value: &Value, sensitive_patterns: &[String]) -> bool {
     match value {
-        Value::String(value) => string_contains_sensitive_pattern(value, sensitive_patterns),
+        Value::String(value) => normalized_value_is_forbidden(value, sensitive_patterns, false),
         Value::Array(values) => values
             .iter()
             .any(|value| contains_sensitive_string(value, sensitive_patterns)),
         Value::Object(values) => values.iter().any(|(key, value)| {
-            string_contains_sensitive_pattern(key, sensitive_patterns)
+            normalized_value_is_forbidden(key, sensitive_patterns, true)
                 || contains_sensitive_string(value, sensitive_patterns)
         }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
 
-fn string_contains_sensitive_pattern(value: &str, sensitive_patterns: &[String]) -> bool {
-    let contains_pattern = |candidate: &str| {
-        sensitive_patterns
-            .iter()
-            .any(|pattern| candidate.contains(pattern))
-    };
-    let mut candidates = vec![value.to_owned()];
-    for _ in 0..MAX_PRIVACY_PERCENT_DECODE_LAYERS {
-        let candidate = candidates.last().expect("candidate is initialized");
-        let decoded = percent_decode_str(candidate)
-            .decode_utf8_lossy()
-            .into_owned();
-        if decoded == *candidate {
-            break;
-        }
-        candidates.push(decoded);
-    }
-    let last = candidates.last().expect("candidate is initialized");
-    if percent_decode_str(last).decode_utf8_lossy() != *last {
-        return true;
-    }
-    candidates.into_iter().any(|candidate| {
-        contains_pattern(&candidate)
-            || base64_normalization_contains_sensitive(&candidate, sensitive_patterns)
-    })
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct NormalizationState {
+    value: String,
+    percent_steps: usize,
+    base64_steps: usize,
+    total_steps: usize,
 }
 
-fn base64_normalization_contains_sensitive(value: &str, sensitive_patterns: &[String]) -> bool {
-    if value.len() < MIN_TOKEN_BYTES {
-        return false;
-    }
-    let contains_pattern = |candidate: &str| {
-        sensitive_patterns
-            .iter()
-            .any(|pattern| candidate.contains(pattern))
+fn normalized_value_is_forbidden(
+    value: &str,
+    sensitive_patterns: &[String],
+    inspect_forbidden_key: bool,
+) -> bool {
+    let initial = NormalizationState {
+        value: value.to_owned(),
+        percent_steps: 0,
+        base64_steps: 0,
+        total_steps: 0,
     };
-    let mut frontier = BTreeSet::from([value.to_owned()]);
-    for _ in 0..MAX_PRIVACY_BASE64_DECODE_LAYERS {
-        let next = frontier
+    let mut pending = vec![initial.clone()];
+    let mut seen = BTreeSet::from([initial]);
+    while let Some(state) = pending.pop() {
+        if sensitive_patterns
             .iter()
-            .flat_map(|candidate| decode_base64_utf8_variants(candidate))
-            .collect::<BTreeSet<_>>();
-        if next.iter().any(|candidate| contains_pattern(candidate)) {
+            .any(|pattern| state.value.contains(pattern))
+            || (inspect_forbidden_key && is_forbidden_key(&state.value))
+        {
             return true;
         }
-        if next.is_empty() {
-            return false;
+
+        let percent = decode_percent_utf8(&state.value)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let base64 = decode_base64_utf8_variants(&state.value, inspect_forbidden_key);
+        if (!percent.is_empty()
+            && (state.percent_steps == MAX_PRIVACY_PERCENT_DECODE_LAYERS
+                || state.total_steps == MAX_PRIVACY_NORMALIZATION_STEPS))
+            || (!base64.is_empty()
+                && (state.base64_steps == MAX_PRIVACY_BASE64_DECODE_LAYERS
+                    || state.total_steps == MAX_PRIVACY_NORMALIZATION_STEPS))
+        {
+            return true;
         }
-        frontier = next;
+
+        for (decoded, is_percent) in percent
+            .into_iter()
+            .map(|value| (value, true))
+            .chain(base64.into_iter().map(|value| (value, false)))
+        {
+            if decoded.len() > MAX_PRIVACY_NORMALIZED_BYTES {
+                return true;
+            }
+            let next = NormalizationState {
+                value: decoded,
+                percent_steps: state.percent_steps + usize::from(is_percent),
+                base64_steps: state.base64_steps + usize::from(!is_percent),
+                total_steps: state.total_steps + 1,
+            };
+            if seen.insert(next.clone()) {
+                if seen.len() > MAX_PRIVACY_NORMALIZATION_STATES {
+                    return true;
+                }
+                pending.push(next);
+            }
+        }
     }
-    // A value that remains canonically decodable after the frozen budget is an
-    // opaque nested encoding and is rejected instead of partially normalized.
-    frontier
-        .iter()
-        .any(|candidate| !decode_base64_utf8_variants(candidate).is_empty())
+    false
 }
 
-fn decode_base64_utf8_variants(value: &str) -> Vec<String> {
-    if value.len() < MIN_TOKEN_BYTES {
+fn decode_percent_utf8(value: &str) -> Option<String> {
+    let decoded = percent_decode_str(value).decode_utf8().ok()?.into_owned();
+    (decoded != value).then_some(decoded)
+}
+
+fn decode_base64_utf8_variants(value: &str, inspect_short_key: bool) -> Vec<String> {
+    if value.len()
+        < if inspect_short_key {
+            4
+        } else {
+            MIN_TOKEN_BYTES
+        }
+    {
         return Vec::new();
     }
     [
@@ -2210,28 +2233,21 @@ fn decode_base64_utf8_variants(value: &str) -> Vec<String> {
     .collect()
 }
 
-fn contains_forbidden_key(value: &Value) -> bool {
+fn is_forbidden_key(value: &str) -> bool {
     const FORBIDDEN_KEYS: [&str; 4] = [
         "presentationsubmission",
         "rawcredential",
         "rawtoken",
         "vptoken",
     ];
-    match value {
-        Value::Object(values) => values.iter().any(|(key, value)| {
-            let normalized_key = key
-                .chars()
-                .filter(|character| character.is_ascii_alphanumeric())
-                .flat_map(char::to_lowercase)
-                .collect::<String>();
-            FORBIDDEN_KEYS
-                .iter()
-                .any(|forbidden| normalized_key.contains(forbidden))
-                || contains_forbidden_key(value)
-        }),
-        Value::Array(values) => values.iter().any(contains_forbidden_key),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
-    }
+    let normalized = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    FORBIDDEN_KEYS
+        .iter()
+        .any(|forbidden| normalized.contains(forbidden))
 }
 
 fn validate_serialized_size<T: Serialize>(

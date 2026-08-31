@@ -9,11 +9,13 @@ use marty_oid4vp_contract::{
     FROZEN_REQUEST_DIGEST_DOMAIN, MAX_CLAIMS_PER_CREDENTIAL, MAX_CLAIM_VALUE_BYTES, MAX_CODE_BYTES,
     MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH, MAX_EVIDENCE_LIST_ITEMS, MAX_EVIDENCE_PROJECTION_BYTES,
     MAX_FROZEN_REQUEST_BYTES, MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH,
-    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES,
-    MAX_QUERY_REQUIREMENTS, MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS,
-    MAX_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES,
-    NONCE_DIGEST_DOMAIN, QUERY_DOCUMENT_DIGEST_DOMAIN, REPLAY_KEY_DIGEST_DOMAIN,
-    REQUIRED_OID4VP_CHECKS, RESPONSE_ITEM_DIGEST_DOMAIN, WALLET_SUBMISSION_DIGEST_DOMAIN,
+    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_NORMALIZATION_STATES,
+    MAX_PRIVACY_NORMALIZATION_STEPS, MAX_PRIVACY_NORMALIZED_BYTES,
+    MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES, MAX_QUERY_REQUIREMENTS,
+    MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS, MAX_TOKEN_BYTES,
+    MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES, NONCE_DIGEST_DOMAIN,
+    QUERY_DOCUMENT_DIGEST_DOMAIN, REPLAY_KEY_DIGEST_DOMAIN, REQUIRED_OID4VP_CHECKS,
+    RESPONSE_ITEM_DIGEST_DOMAIN, WALLET_SUBMISSION_DIGEST_DOMAIN,
 };
 use serde_json::{json, Value};
 
@@ -113,6 +115,15 @@ fn language_neutral_contract_freezes_boundaries_limits_and_domains() {
             "privacy_base64_decode_layers",
             MAX_PRIVACY_BASE64_DECODE_LAYERS,
         ),
+        (
+            "privacy_normalization_steps",
+            MAX_PRIVACY_NORMALIZATION_STEPS,
+        ),
+        (
+            "privacy_normalization_states",
+            MAX_PRIVACY_NORMALIZATION_STATES,
+        ),
+        ("privacy_normalized_bytes", MAX_PRIVACY_NORMALIZED_BYTES),
     ] {
         assert_eq!(fixture["limits"][key], expected, "limit drifted: {key}");
     }
@@ -183,7 +194,7 @@ fn every_language_neutral_mutation_id_has_an_executable_rejection() {
     let fixture = fixture();
     let ids = fixture["required_mutation_ids"].as_array().unwrap();
     let vectors = fixture["mutation_vectors"].as_array().unwrap();
-    assert_eq!(ids.len(), 70);
+    assert_eq!(ids.len(), 80);
     assert_eq!(vectors.len(), ids.len());
     for (id, vector) in ids.iter().zip(vectors) {
         let id = id.as_str().unwrap();
@@ -633,6 +644,82 @@ fn execute_mutation(id: &str) -> Oid4vpContractError {
                 percent_encode_all_layers(encoded, MAX_PRIVACY_PERCENT_DECODE_LAYERS),
             );
         }
+        "base64_wrapped_percent_token" => apply_mixed_privacy_mutation(
+            &request,
+            &mut submission,
+            &mut projection,
+            &[MixedEncoding::Percent, MixedEncoding::Standard],
+        ),
+        "percent_wrapped_base64_token" => apply_mixed_privacy_mutation(
+            &request,
+            &mut submission,
+            &mut projection,
+            &[MixedEncoding::Standard, MixedEncoding::Percent],
+        ),
+        "alternating_token_at_total_budget" => apply_mixed_privacy_mutation(
+            &request,
+            &mut submission,
+            &mut projection,
+            &[
+                MixedEncoding::Percent,
+                MixedEncoding::Standard,
+                MixedEncoding::Percent,
+                MixedEncoding::UrlSafeNoPad,
+                MixedEncoding::Percent,
+            ],
+        ),
+        "alternating_token_over_total_budget" => apply_mixed_privacy_mutation(
+            &request,
+            &mut submission,
+            &mut projection,
+            &[
+                MixedEncoding::Percent,
+                MixedEncoding::StandardNoPad,
+                MixedEncoding::Percent,
+                MixedEncoding::UrlSafe,
+                MixedEncoding::Percent,
+                MixedEncoding::Standard,
+            ],
+        ),
+        "percent_forbidden_wallet_key" => retarget_claim(
+            &mut request,
+            &submission,
+            &mut projection,
+            &percent_encode_all_layers("vp_token".into(), 1),
+        ),
+        "standard_forbidden_wallet_key" => retarget_claim(
+            &mut request,
+            &submission,
+            &mut projection,
+            &general_purpose::STANDARD.encode("vp_token"),
+        ),
+        "standard_no_pad_forbidden_wallet_key" => retarget_claim(
+            &mut request,
+            &submission,
+            &mut projection,
+            &general_purpose::STANDARD_NO_PAD.encode("vp_token"),
+        ),
+        "url_safe_forbidden_wallet_key" => retarget_claim(
+            &mut request,
+            &submission,
+            &mut projection,
+            &general_purpose::URL_SAFE.encode("vp_token"),
+        ),
+        "url_safe_no_pad_forbidden_wallet_key" => retarget_claim(
+            &mut request,
+            &submission,
+            &mut projection,
+            &general_purpose::URL_SAFE_NO_PAD.encode("vp_token"),
+        ),
+        "mixed_forbidden_wallet_key" => {
+            let percent = percent_encode_all_layers("vp_token".into(), 1);
+            retarget_claim(
+                &mut request,
+                &submission,
+                &mut projection,
+                &general_purpose::URL_SAFE_NO_PAD.encode(percent),
+            );
+        }
         "pe_format_options_mismatch" => {
             make_presentation_exchange(&mut request, &mut submission);
             request.query.document["input_descriptors"][0]["format"]["dc+sd-jwt"]["alg"] =
@@ -850,7 +937,17 @@ fn expected_error_label(id: &str) -> &'static str {
         | "forbidden_wallet_key_variant"
         | "nested_base64_at_decode_budget"
         | "nested_base64_over_decode_budget"
-        | "mixed_percent_nested_base64" => "privacy",
+        | "mixed_percent_nested_base64"
+        | "base64_wrapped_percent_token"
+        | "percent_wrapped_base64_token"
+        | "alternating_token_at_total_budget"
+        | "alternating_token_over_total_budget"
+        | "percent_forbidden_wallet_key"
+        | "standard_forbidden_wallet_key"
+        | "standard_no_pad_forbidden_wallet_key"
+        | "url_safe_forbidden_wallet_key"
+        | "url_safe_no_pad_forbidden_wallet_key"
+        | "mixed_forbidden_wallet_key" => "privacy",
         _ => unreachable!(),
     }
 }
@@ -1062,6 +1159,77 @@ fn nested_mixed_base64(value: &str, layers: usize) -> String {
         };
     }
     encoded
+}
+
+#[test]
+fn benign_mixed_normalization_boundaries_remain_accepted() {
+    let (now, request, submission, mut projection) = golden();
+    let benign = [
+        MixedEncoding::Percent,
+        MixedEncoding::Standard,
+        MixedEncoding::Percent,
+        MixedEncoding::UrlSafeNoPad,
+        MixedEncoding::Percent,
+    ]
+    .iter()
+    .fold(
+        "ordinary~display".to_owned(),
+        |value, encoding| match encoding {
+            MixedEncoding::Percent => percent_encode_all_layers(value, 1),
+            MixedEncoding::Standard => general_purpose::STANDARD.encode(value),
+            MixedEncoding::StandardNoPad => general_purpose::STANDARD_NO_PAD.encode(value),
+            MixedEncoding::UrlSafe => general_purpose::URL_SAFE.encode(value),
+            MixedEncoding::UrlSafeNoPad => general_purpose::URL_SAFE_NO_PAD.encode(value),
+        },
+    );
+    leak_exact_claim(&mut projection, benign);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+
+    let (now, mut request, submission, mut projection) = golden();
+    let benign_key = general_purpose::URL_SAFE_NO_PAD
+        .encode(percent_encode_all_layers("display_name".into(), 1));
+    retarget_claim(&mut request, &submission, &mut projection, &benign_key);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+}
+
+#[derive(Clone, Copy)]
+enum MixedEncoding {
+    Percent,
+    Standard,
+    StandardNoPad,
+    UrlSafe,
+    UrlSafeNoPad,
+}
+
+fn apply_mixed_privacy_mutation(
+    request: &FrozenOid4vpRequestV1,
+    submission: &mut WalletSubmissionV1,
+    projection: &mut Oid4vpEvidenceProjectionV1,
+    encodings: &[MixedEncoding],
+) {
+    let token = "AAAAAAAAAAAAAAAAa~a";
+    replace_first_dcql_token(request, submission, projection, token);
+    let encoded = encodings
+        .iter()
+        .fold(token.to_owned(), |value, encoding| match encoding {
+            MixedEncoding::Percent => percent_encode_all_layers(value, 1),
+            MixedEncoding::Standard => general_purpose::STANDARD.encode(value),
+            MixedEncoding::StandardNoPad => general_purpose::STANDARD_NO_PAD.encode(value),
+            MixedEncoding::UrlSafe => general_purpose::URL_SAFE.encode(value),
+            MixedEncoding::UrlSafeNoPad => general_purpose::URL_SAFE_NO_PAD.encode(value),
+        });
+    leak_exact_claim(projection, encoded);
+}
+
+fn leak_exact_claim(projection: &mut Oid4vpEvidenceProjectionV1, value: String) {
+    projection.credentials[0]
+        .claims
+        .insert("given_name".into(), json!(value));
+    projection.policy_result.verified_claims = projection.credentials[0].claims.clone();
 }
 
 fn make_challenge_unavailable(projection: &mut Oid4vpEvidenceProjectionV1) {

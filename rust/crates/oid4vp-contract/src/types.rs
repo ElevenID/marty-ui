@@ -27,6 +27,13 @@ pub const MIN_NONCE_BYTES: usize = 32;
 /// rejected rather than accepted partially decoded.
 pub const MAX_PRIVACY_PERCENT_DECODE_LAYERS: usize = 3;
 pub const MAX_PRIVACY_BASE64_DECODE_LAYERS: usize = 2;
+/// Maximum combined normalization steps across alternating percent and base64
+/// encodings. Per-transform limits above remain independently enforced.
+pub const MAX_PRIVACY_NORMALIZATION_STEPS: usize =
+    MAX_PRIVACY_PERCENT_DECODE_LAYERS + MAX_PRIVACY_BASE64_DECODE_LAYERS;
+/// Hard work bounds for the privacy normalization graph.
+pub const MAX_PRIVACY_NORMALIZATION_STATES: usize = 64;
+pub const MAX_PRIVACY_NORMALIZED_BYTES: usize = MAX_CLAIM_VALUE_BYTES;
 
 pub const REQUIRED_OID4VP_CHECKS: [Oid4vpCheckId; 8] = [
     Oid4vpCheckId::PresentationStructure,
