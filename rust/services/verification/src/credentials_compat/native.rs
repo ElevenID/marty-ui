@@ -109,20 +109,27 @@ async fn verify_structured(
     let credentials = match presentation.get("verifiableCredential") {
         Some(Value::Array(credentials)) if !credentials.is_empty() => credentials.clone(),
         Some(credential) if !credential.is_null() => vec![credential.clone()],
-        _ => return structured_failure(Some(false), None, None),
+        _ => return structured_failure(VerificationProcessingStatus::Completed, Some(false), None),
     };
     if definition.input_descriptors.is_empty() {
-        return structured_failure(None, Some(false), None);
+        return structured_failure(VerificationProcessingStatus::Completed, None, Some(false));
     }
-    let Some(submission) = presentation.get("presentation_submission") else {
-        return structured_failure(None, Some(false), None);
+    let Some(submission) = presentation
+        .get("presentation_submission")
+        .filter(|submission| submission.is_object())
+    else {
+        return structured_failure(VerificationProcessingStatus::Completed, None, Some(false));
     };
     for credential in credentials {
         let Some(credential) = credential.as_object() else {
-            return structured_failure(Some(false), None, None);
+            return structured_failure(
+                VerificationProcessingStatus::Unsupported,
+                Some(false),
+                None,
+            );
         };
         if !verify_credential(credential, governance, issuer_resolver).await {
-            return structured_failure(Some(false), None, Some(false));
+            return structured_failure(VerificationProcessingStatus::Completed, Some(false), None);
         }
     }
     let definition = serde_json::to_value(definition)
@@ -138,7 +145,7 @@ async fn verify_structured(
                 && result.evidence.presentation_structure == VerificationCheckStatus::Passed
         });
     if !structure_valid {
-        return structured_failure(Some(true), Some(false), Some(true));
+        return structured_failure(VerificationProcessingStatus::Completed, None, Some(false));
     }
     AdapterFacts {
         processing_status: VerificationProcessingStatus::Completed,
@@ -184,8 +191,8 @@ async fn verify_credential(
             IssuerKeyRequest {
                 issuer_did: issuer,
                 verification_method_id: method_id,
-                credential_format: "vcdm",
-                key_purpose: "assertion",
+                credential_format: None,
+                key_purpose: None,
                 algorithm: None,
             },
         )
@@ -214,16 +221,16 @@ async fn verify_credential(
 }
 
 const fn structured_failure(
+    processing_status: VerificationProcessingStatus,
     credential_proofs_valid: Option<bool>,
     presentation_structure_valid: Option<bool>,
-    trust_chain_valid: Option<bool>,
 ) -> AdapterFacts {
     AdapterFacts {
-        processing_status: VerificationProcessingStatus::Completed,
+        processing_status,
         presentation_structure_valid,
         presentation_proof_valid: None,
         credential_proofs_valid,
-        trust_chain_valid,
+        trust_chain_valid: None,
         holder_binding_valid: None,
         transaction_binding_valid: None,
         presentation_constraints_valid: None,
@@ -242,9 +249,20 @@ const fn fact(status: VerificationCheckStatus) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{extract::State, http::Uri, routing::get, Json, Router};
+    use base64::{
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+        Engine as _,
+    };
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use p256::ecdsa::SigningKey as P256SigningKey;
+
     use super::*;
     use crate::credentials_compat::{
-        GovernanceEngine, GovernancePurpose, IssuerResolutionError, ResolvedIssuerKey,
+        build_canonical_decision, GovernanceEngine, GovernancePurpose, IssuerResolutionError,
+        OrganizationIssuerKeyResolver, Presented, ResolvedIssuerKey,
     };
 
     struct RejectingResolver;
@@ -271,6 +289,133 @@ mod tests {
         (governance, definition)
     }
 
+    fn canonical(facts: &AdapterFacts, governance: &GovernanceSnapshot) -> Value {
+        serde_json::to_value(
+            build_canonical_decision(
+                governance,
+                "verification:test",
+                "transaction:test",
+                Presented::String("test-presentation"),
+                facts,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn check_code<'a>(canonical: &'a Value, check_id: &str) -> &'a str {
+        canonical["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["check_id"] == check_id)
+            .and_then(|check| check["code"].as_str())
+            .unwrap()
+    }
+
+    #[derive(Clone)]
+    struct ResolverFixture {
+        response: Value,
+        query: Arc<Mutex<Option<String>>>,
+    }
+
+    async fn resolve_fixture(State(state): State<ResolverFixture>, uri: Uri) -> Json<Value> {
+        *state.query.lock().unwrap() = uri.query().map(str::to_owned);
+        Json(state.response)
+    }
+
+    async fn signed_credential_and_org_resolver() -> (
+        Value,
+        OrganizationIssuerKeyResolver,
+        Arc<Mutex<Option<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let issuer = "did:web:issuer.example";
+        let method = "did:web:issuer.example#key-1";
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let public_jwk = serde_json::json!({
+            "kty":"OKP",
+            "crv":"Ed25519",
+            "x":URL_SAFE_NO_PAD.encode(signing_key.verifying_key().as_bytes()),
+            "kid":method,
+            "alg":"EdDSA"
+        });
+        let prepared: Value = serde_json::from_str(
+            &marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json(
+                &serde_json::json!({
+                    "credential": {
+                        "@context": ["https://www.w3.org/ns/credentials/v2"],
+                        "id": "urn:uuid:org-resolved-vcdm",
+                        "type": ["VerifiableCredential"],
+                        "issuer": issuer,
+                        "validFrom": "2026-08-31T00:00:00Z",
+                        "credentialSubject": {"id":"did:example:holder"}
+                    },
+                    "issuer_did": issuer,
+                    "verification_method_id": method,
+                    "public_jwk": public_jwk
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let signing_input = URL_SAFE_NO_PAD
+            .decode(prepared["signing_input_b64"].as_str().unwrap())
+            .unwrap();
+        let signature = signing_key.sign(&signing_input);
+        let credential: Value = serde_json::from_str(
+            &marty_verification::vcdm::complete_vcdm_data_integrity_credential_json(
+                &serde_json::json!({
+                    "prepared": prepared,
+                    "signature_b64": URL_SAFE_NO_PAD.encode(signature.to_bytes())
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let query = Arc::new(Mutex::new(None));
+        let fixture = ResolverFixture {
+            response: serde_json::json!({
+                "ok":true,
+                "organization_id":"123e4567-e89b-42d3-a456-426614174000",
+                "issuer_did":issuer,
+                "verification_method_id":method,
+                "public_jwk":public_jwk,
+                "did_document":{
+                    "id":issuer,
+                    "verificationMethod":[{"id":method,"controller":issuer}],
+                    "assertionMethod":[method]
+                },
+                "verification_method":{"id":method,"controller":issuer},
+                "resolver":{"type":"organization_issuer_profile","public_fallback_used":false}
+            }),
+            query: query.clone(),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/resolve-issuer-did", get(resolve_fixture))
+                    .with_state(fixture),
+            )
+            .await
+            .unwrap();
+        });
+        let resolver = OrganizationIssuerKeyResolver::new(
+            format!("http://{address}"),
+            "test-key".into(),
+            std::time::Duration::from_secs(2),
+            Vec::new(),
+        )
+        .unwrap();
+        (credential, resolver, query, server)
+    }
+
     #[tokio::test]
     async fn malformed_jwt_and_vds_inputs_fail_closed_without_panicking() {
         let kernel = NativeCredentialVerificationKernel;
@@ -284,6 +429,65 @@ mod tests {
             .verify_vds_nc("malformed", &serde_json::json!({"kty":"oct","k":"secret"}))
             .await;
         assert_eq!(vds.credential_proofs_valid, Some(false));
+    }
+
+    #[test]
+    fn structured_failure_preserves_every_frozen_processing_state() {
+        for status in [
+            VerificationProcessingStatus::Completed,
+            VerificationProcessingStatus::Error,
+            VerificationProcessingStatus::Unavailable,
+            VerificationProcessingStatus::Unsupported,
+        ] {
+            assert_eq!(
+                structured_failure(status, Some(false), None).processing_status,
+                status
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn valid_signed_vds_nc_projects_a_verified_credential_proof() {
+        let signing_key = P256SigningKey::from_slice(&[9_u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let public_jwk = serde_json::json!({
+            "kty":"EC",
+            "crv":"P-256",
+            "x":URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+            "y":URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+            "alg":"ES256"
+        });
+        let claims = serde_json::from_value(serde_json::json!({
+            "docType":"CMC",
+            "issuingCountry":"AUS",
+            "documentNumber":"X123456",
+            "surname":"EXAMPLE",
+            "givenNames":"ADA",
+            "dateOfBirth":"19900102",
+            "nationality":"AUS",
+            "gender":"F",
+            "dateOfIssue":"20260101",
+            "dateOfExpiry":"20300101"
+        }))
+        .unwrap();
+        let payload = marty_oid4vci::formats::vds_nc_profile::build_profile_payload(
+            &claims,
+            "CMC",
+            "issuer-1",
+            "issuer-1#key-1",
+            "ES256",
+        )
+        .unwrap()
+        .0;
+        let signing_input = format!("DC03AUS~{payload}");
+        let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
+        let barcode = format!("{signing_input}~{}", STANDARD.encode(signature.to_bytes()));
+
+        let facts = NativeCredentialVerificationKernel
+            .verify_vds_nc(&barcode, &public_jwk)
+            .await;
+        assert_eq!(facts.credential_proofs_valid, Some(true));
+        assert_eq!(facts.trust_chain_valid, Some(true));
     }
 
     #[tokio::test]
@@ -301,6 +505,16 @@ mod tests {
             )
             .await;
         assert_eq!(facts.credential_proofs_valid, Some(false));
+        assert_eq!(facts.trust_chain_valid, None);
+        let outcome = canonical(&facts, &governance);
+        assert_eq!(
+            check_code(&outcome, "credential.proof"),
+            "CREDENTIAL_PROOFS_INVALID"
+        );
+        assert_eq!(
+            check_code(&outcome, "issuer.trust"),
+            "ISSUER_TRUST_NOT_PERFORMED"
+        );
 
         let mut no_descriptors = definition.clone();
         no_descriptors.input_descriptors.clear();
@@ -345,6 +559,111 @@ mod tests {
             )
             .await;
         assert_eq!(facts.credential_proofs_valid, Some(false));
-        assert_eq!(facts.trust_chain_valid, Some(false));
+        assert_eq!(facts.trust_chain_valid, None);
+    }
+
+    #[tokio::test]
+    async fn structured_contract_preserves_unsupported_and_org_resolved_signed_vcdm_paths() {
+        let kernel = NativeCredentialVerificationKernel;
+        let (governance, definition) = governed_direct();
+        let unsupported = serde_json::json!({
+            "verifiableCredential":["compact-but-unsupported"],
+            "presentation_submission":{}
+        });
+        let facts = kernel
+            .verify_structured_presentation(
+                unsupported.as_object().unwrap(),
+                &definition,
+                "did:web:verifier.example",
+                &governance,
+                &RejectingResolver,
+            )
+            .await;
+        assert_eq!(
+            facts.processing_status,
+            VerificationProcessingStatus::Unsupported
+        );
+        let outcome = canonical(&facts, &governance);
+        assert_eq!(outcome["processing_status"], "UNSUPPORTED");
+        assert_eq!(
+            check_code(&outcome, "credential.proof"),
+            "CREDENTIAL_PROOFS_INVALID"
+        );
+        assert_eq!(
+            check_code(&outcome, "issuer.trust"),
+            "ISSUER_TRUST_NOT_PERFORMED"
+        );
+
+        let (credential, resolver, query, server) = signed_credential_and_org_resolver().await;
+        let invalid_structure = serde_json::json!({
+            "verifiableCredential":[credential.clone()],
+            "presentation_submission":{}
+        });
+        let facts = kernel
+            .verify_structured_presentation(
+                invalid_structure.as_object().unwrap(),
+                &definition,
+                "did:web:verifier.example",
+                &governance,
+                &resolver,
+            )
+            .await;
+        assert_eq!(facts.presentation_structure_valid, Some(false));
+        assert_eq!(facts.credential_proofs_valid, None);
+        assert_eq!(facts.trust_chain_valid, None);
+        let outcome = canonical(&facts, &governance);
+        assert_eq!(
+            check_code(&outcome, "presentation.structure"),
+            "PRESENTATION_STRUCTURE_INVALID"
+        );
+        assert_eq!(
+            check_code(&outcome, "credential.proof"),
+            "CREDENTIAL_PROOF_NOT_PERFORMED"
+        );
+        assert_eq!(
+            check_code(&outcome, "issuer.trust"),
+            "ISSUER_TRUST_NOT_PERFORMED"
+        );
+
+        let valid_structure = serde_json::json!({
+            "verifiableCredential":[credential],
+            "presentation_submission":{
+                "id":"submission-1",
+                "definition_id":"pd-1",
+                "descriptor_map":[{
+                    "id":"employee",
+                    "format":"ldp_vc",
+                    "path":"$"
+                }]
+            }
+        });
+        let mut valid_definition = definition.clone();
+        valid_definition.input_descriptors[0]
+            .insert("constraints".into(), serde_json::json!({"fields":[]}));
+        let core_definition =
+            serde_json::from_value(serde_json::to_value(&valid_definition).unwrap()).unwrap();
+        let core_submission =
+            serde_json::from_value(valid_structure["presentation_submission"].clone()).unwrap();
+        let structural =
+            VerificationEngine::new("did:web:verifier.example", "did:web:verifier.example")
+                .verify_presentation_structure(&core_definition, &core_submission);
+        assert!(structural.check_valid, "{:?}", structural.errors);
+        let facts = kernel
+            .verify_structured_presentation(
+                valid_structure.as_object().unwrap(),
+                &valid_definition,
+                "did:web:verifier.example",
+                &governance,
+                &resolver,
+            )
+            .await;
+        server.abort();
+        assert_eq!(facts.credential_proofs_valid, Some(true));
+        assert_eq!(facts.presentation_structure_valid, Some(true));
+        assert_eq!(facts.trust_chain_valid, Some(true));
+        let query = query.lock().unwrap().clone().unwrap();
+        assert!(query.contains("verification_method_id="));
+        assert!(!query.contains("credential_format="));
+        assert!(!query.contains("key_purpose="));
     }
 }

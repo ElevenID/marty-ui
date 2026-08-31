@@ -54,6 +54,7 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 tower.workspace = true
 
 [lints.rust]

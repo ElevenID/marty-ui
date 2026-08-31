@@ -15,8 +15,8 @@ use super::GovernanceSnapshot;
 pub struct IssuerKeyRequest<'a> {
     pub issuer_did: &'a str,
     pub verification_method_id: Option<&'a str>,
-    pub credential_format: &'a str,
-    pub key_purpose: &'a str,
+    pub credential_format: Option<&'a str>,
+    pub key_purpose: Option<&'a str>,
     pub algorithm: Option<&'a str>,
 }
 
@@ -136,14 +136,18 @@ impl IssuerKeyResolver for OrganizationIssuerKeyResolver {
         let mut query = vec![
             ("organization_id", governance.organization_id()),
             ("issuer_did", request.issuer_did),
-            ("credential_format", request.credential_format),
-            ("key_purpose", request.key_purpose),
         ];
         if let Some(method) = request.verification_method_id {
             query.push(("verification_method_id", method));
         }
         if let Some(algorithm) = request.algorithm {
             query.push(("algorithm", algorithm));
+        }
+        if let Some(credential_format) = request.credential_format {
+            query.push(("credential_format", credential_format));
+        }
+        if let Some(key_purpose) = request.key_purpose {
+            query.push(("key_purpose", key_purpose));
         }
         let response = self
             .client
@@ -314,8 +318,10 @@ fn normalize_method_id(issuer_did: &str, method_id: &str) -> Option<String> {
         None
     } else if method_id.starts_with('#') {
         Some(format!("{issuer_did}{method_id}"))
-    } else {
+    } else if method_id.starts_with("did:") || method_id.contains('#') {
         Some(method_id.into())
+    } else {
+        Some(format!("{issuer_did}#{method_id}"))
     }
 }
 
@@ -461,8 +467,8 @@ mod tests {
         let request = IssuerKeyRequest {
             issuer_did: "did:web:issuer.example",
             verification_method_id: Some("#key-1"),
-            credential_format: "vds_nc",
-            key_purpose: "vdsnc_signing",
+            credential_format: Some("vds_nc"),
+            key_purpose: Some("vdsnc_signing"),
             algorithm: Some("ES256"),
         };
         let key = validate_response(&governance, &request, valid_response()).unwrap();
@@ -502,6 +508,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn method_ids_match_the_frozen_bare_fragment_and_absolute_normalization() {
+        let issuer = "did:web:issuer.example";
+        for (input, expected) in [
+            ("key-1", "did:web:issuer.example#key-1"),
+            ("#key-1", "did:web:issuer.example#key-1"),
+            (
+                "did:web:issuer.example#key-1",
+                "did:web:issuer.example#key-1",
+            ),
+        ] {
+            assert_eq!(
+                normalize_method_id(issuer, input).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn native_public_resolution_selects_only_an_authorized_unambiguous_key() {
         let public_jwk = serde_json::json!({
@@ -516,8 +540,8 @@ mod tests {
         let request = IssuerKeyRequest {
             issuer_did: &did,
             verification_method_id: None,
-            credential_format: "vcdm",
-            key_purpose: "assertion",
+            credential_format: None,
+            key_purpose: None,
             algorithm: Some("EdDSA"),
         };
 

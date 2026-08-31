@@ -297,8 +297,8 @@ impl CompatibilityUseCases for CredentialsCompatibilityService {
                 IssuerKeyRequest {
                     issuer_did: &request.issuer_did,
                     verification_method_id: request.verification_method_id.as_deref(),
-                    credential_format: "vds_nc",
-                    key_purpose: "vdsnc_signing",
+                    credential_format: Some("vds_nc"),
+                    key_purpose: Some("vdsnc_signing"),
                     algorithm: request.algorithm.as_deref(),
                 },
             )
@@ -313,6 +313,7 @@ impl CompatibilityUseCases for CredentialsCompatibilityService {
             .kernel
             .verify_vds_nc(&request.barcode, issuer.public_jwk())
             .await;
+        let proof_verified = facts.credential_proofs_valid == Some(true);
         let transaction = format!("transaction:{}", VerifierNonce::generate().as_str());
         let verification = format!("verification:{}", VerifierNonce::generate().as_str());
         let canonical = build_canonical_decision(
@@ -326,9 +327,13 @@ impl CompatibilityUseCases for CredentialsCompatibilityService {
         Ok(VerificationResult::from_canonical(
             Some(&canonical),
             Some("vds_nc".into()),
-            (!canonical.is_valid()).then(|| "VDS-NC credential proof did not verify".into()),
+            vds_proof_error(proof_verified),
         ))
     }
+}
+
+fn vds_proof_error(proof_verified: bool) -> Option<String> {
+    (!proof_verified).then(|| "VDS-NC credential proof did not verify".into())
 }
 
 fn fail_closed(
@@ -377,6 +382,8 @@ fn timestamp(value: chrono::NaiveDateTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials_compat::{AdapterFacts, CredentialStatus};
+    use marty_verification::verification::VerificationProcessingStatus;
 
     #[test]
     fn service_debug_is_secret_free() {
@@ -391,5 +398,51 @@ mod tests {
         let unavailable = VerificationResult::from_canonical(None, Some("jwt_vp".into()), None);
         assert!(!unavailable.is_valid());
         assert!(unavailable.error().is_some());
+    }
+
+    #[test]
+    fn valid_vds_proof_keeps_the_generic_canonical_non_pass_projection() {
+        let mut fixture: serde_json::Value =
+            serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+        let direct = fixture["governance"]["clients"][0]["purposes"]["verification.direct"].clone();
+        fixture["governance"]["clients"][0]["purposes"]["verification.vds-nc"] = direct;
+        let governance = GovernanceEngine::new(&fixture["governance"].to_string())
+            .unwrap()
+            .authorize("purpose-scoped-test-key", GovernancePurpose::VdsNc)
+            .unwrap();
+        let facts = AdapterFacts {
+            processing_status: VerificationProcessingStatus::Completed,
+            presentation_structure_valid: None,
+            presentation_proof_valid: None,
+            credential_proofs_valid: Some(true),
+            trust_chain_valid: Some(true),
+            holder_binding_valid: None,
+            transaction_binding_valid: None,
+            presentation_constraints_valid: None,
+            revocation_checked: None,
+            revocation_status: Some(CredentialStatus::Unknown),
+        };
+        let canonical = build_canonical_decision(
+            &governance,
+            "verification:vds-test",
+            "transaction:vds-test",
+            Presented::String("signed-vds"),
+            &facts,
+        )
+        .unwrap();
+        assert!(!canonical.is_valid());
+        let projected = VerificationResult::from_canonical(
+            Some(&canonical),
+            Some("vds_nc".into()),
+            vds_proof_error(facts.credential_proofs_valid == Some(true)),
+        );
+        assert_eq!(
+            projected.error(),
+            Some("Canonical verification did not pass")
+        );
+        assert_eq!(
+            vds_proof_error(false).as_deref(),
+            Some("VDS-NC credential proof did not verify")
+        );
     }
 }
