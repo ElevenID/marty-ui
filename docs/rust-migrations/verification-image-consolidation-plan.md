@@ -1,11 +1,17 @@
 # Credentials verification-image consolidation plan
 
-Status: `corrected-artifact-release-and-immutable-cutover-active`. This
-workstream is owned by the `marty-ui@v1.1.209` release binder and the gated
-`rust-verification/delete-python-verifier-v1` worktree in `marty-credentials`.
-It proceeds independently from the active Canvas route work and does not
-change production. Other workers must not switch the public consumer pin or
-delete the Python service while this owner is closing the artifact gates.
+Status: `contained-release-recovery-and-cutover-repair-active`. This workstream
+is owned by the prepared `marty-ui@v1.1.209` tag and isolated Credentials and
+integration forward-repair work. Credentials PR `#250` already deleted the
+Python source; integration PR `#396` pinned ineligible `v1.1.208`, and PR
+`#397` published that pin as `v1.2.76`, before the artifact gates closed.
+Credentials PR `#251` then prepared annotated tag `v0.1.72`; Release Stable run
+`33397438175` completed and created unpublished draft
+`untagged-4a7b307e1880b915ef93` before the differential gate. Its workflow is
+now disabled and the draft must not be published. The Marty UI Stack release
+workflow is also disabled after run `33399076976` was cancelled during the
+`v1.1.209` shared-services build. Those states and any partial output do not
+change production or authorize a cutover or beta activation.
 
 ## Objective
 
@@ -16,8 +22,12 @@ concurrency, deployment or release contract. The replacement extends the
 canonical service with thin compatibility adapters; it does not create a
 second Rust verifier or replace the existing `/v1/verify` product surface.
 
-The Python service remains the parity oracle until the full differential,
-database, migration, packaging and consumer gates pass. The reusable
+Released Credentials `v0.1.71`, integration `v1.2.75`, and the frozen
+pre-deletion source remain the immutable Python parity/rollback oracle until
+the full differential, database, migration, packaging and consumer gates pass.
+The unpublished `v0.1.72` draft and every tag, workflow result, and artifact
+are quarantined as non-cutover evidence and must not be published or deployed.
+The reusable
 `marty-verification-python` binding is a separate public dependency and is not
 removed by retiring the service image.
 
@@ -191,7 +201,18 @@ fail-closed scoped identifiers, and confirms terminal nonce minimization. The
 release workflow invokes the same gate against the exact pushed shared
 services digest through its production dispatcher before attestation and
 signing. The deployment, contract and implementation reviews are clean, as are
-the PR-head and protected merge-group gates. Corrected stack `v1.1.209` is
-being prepared; its immutable artifact/provenance, the v2 consumer pin and
-differential lane, and the final Python deletion gate remain open. Activation
-remains beta only.
+the PR-head and protected merge-group gates. Corrected annotated tag
+`v1.1.209` is bound to exact main, but its first release run was cancelled and
+the Stack release workflow is disabled pending accountable-owner review.
+Integration PR `#396` prematurely pinned `v1.1.208`, PR `#397`
+published that pin as immutable `v1.2.76`, Credentials PR `#250` prematurely
+deleted the Python source, and PR `#251` produced the quarantined unpublished
+`v0.1.72` draft. After
+the accountable release owner reviews and restores the release control,
+publish and provenance-check `v1.1.209`, forward-fix integration main to its exact
+digest without rewriting `v1.2.76`, and pass the immutable v2
+differential/artifact matrix against released Credentials `v0.1.71` and
+integration `v1.2.75` before any replacement integration or Credentials
+release or any activation. If a discrepancy appears, restore the exact frozen
+Python service/release path or complete a separately reviewed forward repair.
+Production and beta activation remain blocked.
