@@ -49,11 +49,14 @@ Counts describe local migration progress, not merged `main` coverage.
 1. Freeze and port the three compatibility ingest routes through one shared
    kernel, including signature, replay/idempotency, fail-closed default-disable,
    evidence-policy and exact response behavior.
-2. Move only the receipt/persistence ownership used by those routes, run
+2. Move only the receipt/persistence ownership used by those routes and run
    disposable PostgreSQL, full Rust/Python differential, packaging, ownership,
-   security and demo gates, then delete only the superseded Python webhook
-   handlers and adapter code immediately when the deletion gate passes. The
-   standalone `canvas-sync-worker` and its
+   security and demo gates. Keep the Python webhook handlers as the production
+   and self-host parity oracle during this beta-only canary: those consumers
+   still route to the Python issuance image, so deleting the handlers now would
+   fail the no-feature-loss gate. Delete them immediately only after every
+   deployed profile routes the operations to Rust. The standalone
+   `canvas-sync-worker` and its
    `process_authoritative_canvas_sync_target` processor remain Python in this
    wave: Rust currently owns enqueue/readiness support, but not that processor's
    complete Canvas API polling, lease, retry, heartbeat and reconciliation
@@ -79,12 +82,14 @@ status read is now complete. The three adapters are the only remaining route
 surface and must land together with differential tests against the preserved
 Python oracle.
 
-The deletion boundary is route-level, not file-level. Python's large
-`canvas_routes.py` module also owns the deployed standalone synchronization
-processor loaded through `CANVAS_SYNC_PROCESSOR`; deleting that module during
-the webhook cutover would remove production capability. Keep the worker and
-all helpers reachable from it until a later Rust worker port proves behavioral
-and persistence parity.
+The eventual deletion boundary is route-level, not file-level, until the whole
+issuance service is native. Python's large `canvas_routes.py` module also owns
+the deployed standalone synchronization processor loaded through
+`CANVAS_SYNC_PROCESSOR`; deleting that module during the webhook canary would
+remove production capability. Keep the three handlers for non-beta consumers,
+and keep the worker plus all helpers reachable from it, until their respective
+consumer and whole-worker gates prove behavioral and persistence parity. This
+is an explicit delayed deletion gate, not permission for a permanent fallback.
 
 ## Wave three — Rust service plane and complete MMF replacement
 
