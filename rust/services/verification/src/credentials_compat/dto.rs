@@ -69,15 +69,27 @@ impl<'de> Deserialize<'de> for SessionDurationSeconds {
 }
 
 fn compatible_integer_string(value: &str) -> Option<u64> {
-    let normalized = value.trim().replace('_', "");
-    if let Ok(integer) = normalized.parse() {
-        return Some(integer);
+    let value = value.trim().strip_prefix('+').unwrap_or(value.trim());
+    let mut parts = value.split('.');
+    let integer = digit_sequence(parts.next()?)?;
+    if let Some(fraction) = parts.next() {
+        let fraction = digit_sequence(fraction)?;
+        if parts.next().is_some() || !fraction.bytes().all(|byte| byte == b'0') {
+            return None;
+        }
     }
-    if !normalized.contains('.') || normalized.contains('e') || normalized.contains('E') {
+    integer.parse().ok()
+}
+
+fn digit_sequence(value: &str) -> Option<String> {
+    if value.is_empty()
+        || value
+            .split('_')
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
         return None;
     }
-    let float: f64 = normalized.parse().ok()?;
-    (float.is_finite() && float.fract() == 0.0 && float >= 0.0).then_some(float as u64)
+    Some(value.replace('_', ""))
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -420,6 +432,11 @@ mod tests {
             (json!("+600.0"), Some(600)),
             (json!("6_00"), Some(600)),
             (json!("6e2"), None),
+            (json!("_600"), None),
+            (json!("600_"), None),
+            (json!("6__00"), None),
+            (json!("6_.0"), None),
+            (json!("600.0000000000000000000000000001"), None),
             (json!(600.0), Some(600)),
             (json!(600.5), None),
             (json!(true), None),
