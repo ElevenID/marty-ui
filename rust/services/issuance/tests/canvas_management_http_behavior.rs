@@ -20,8 +20,9 @@ use marty_issuance_service::{
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
     canvas_management_service::{
-        CanvasManagementRepositoryError, CanvasPlatformManagementRepository,
-        CanvasPlatformManagementService, CanvasReadinessInputProvider,
+        CanvasBindingActivation, CanvasManagementRepositoryError,
+        CanvasPlatformManagementRepository, CanvasPlatformManagementService,
+        CanvasReadinessInputProvider,
     },
     canvas_oauth::CanvasOAuthError,
     canvas_readiness::{
@@ -44,6 +45,8 @@ struct MemoryRepository {
     force_oauth_conflict: Mutex<bool>,
     create_calls: Mutex<usize>,
     installation_invalidations: Mutex<Vec<bool>>,
+    activations: Mutex<Vec<CanvasBindingActivation>>,
+    deactivation_count: Mutex<usize>,
 }
 
 struct SuccessfulProbe;
@@ -591,6 +594,65 @@ impl CanvasPlatformManagementRepository for MemoryRepository {
         Ok(Some(existing.clone()))
     }
 
+    async fn activate_binding(
+        &self,
+        activation: &CanvasBindingActivation,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let mut platforms = self.platforms.lock().expect("platforms");
+        let Some(platform) = platforms.iter_mut().find(|candidate| {
+            candidate.organization_id == activation.platform.organization_id
+                && candidate.id == activation.platform.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == activation.platform.config_version
+                && candidate.updated_at == activation.platform.updated_at
+        }) else {
+            return Ok(None);
+        };
+        let mut bindings = self.bindings.lock().expect("bindings");
+        let Some(binding) = bindings.iter_mut().find(|candidate| {
+            candidate.organization_id == activation.binding.organization_id
+                && candidate.id == activation.binding.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == activation.binding.config_version
+                && candidate.updated_at == activation.binding.updated_at
+        }) else {
+            return Ok(None);
+        };
+        platform.enabled = true;
+        platform.updated_at = activation.activated_at;
+        binding.enabled = true;
+        binding.activated_at = Some(activation.activated_at);
+        binding.updated_at = activation.activated_at;
+        let activated = binding.clone();
+        self.activations
+            .lock()
+            .expect("activations")
+            .push(activation.clone());
+        Ok(Some(activated))
+    }
+
+    async fn deactivate_binding(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        deactivated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let mut bindings = self.bindings.lock().expect("bindings");
+        let Some(existing) = bindings.iter_mut().find(|candidate| {
+            candidate.organization_id == binding.organization_id
+                && candidate.id == binding.id
+                && candidate.archived_at.is_none()
+                && candidate.config_version == binding.config_version
+                && candidate.updated_at == binding.updated_at
+        }) else {
+            return Ok(None);
+        };
+        existing.enabled = false;
+        existing.activated_at = None;
+        existing.updated_at = deactivated_at;
+        *self.deactivation_count.lock().expect("deactivation count") += 1;
+        Ok(Some(existing.clone()))
+    }
+
     async fn archive_binding(
         &self,
         organization_id: &str,
@@ -665,7 +727,12 @@ fn app_with_readiness(repository: Arc<MemoryRepository>) -> axum::Router {
         },
         Arc::new(SuccessfulProbe),
     )
-    .with_readiness_input_provider(Arc::new(ReadyReadinessInputProvider));
+    .with_readiness_input_provider(Arc::new(ReadyReadinessInputProvider))
+    .with_activation_policy(
+        true,
+        BTreeSet::from(["org-1".to_owned()]),
+        Duration::from_secs(900),
+    );
     router_with_canvas_management(
         runtime.state(),
         StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
@@ -914,6 +981,222 @@ async fn binding_validation_returns_and_persists_the_frozen_readiness_projection
         .await
         .expect("hidden response");
     assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn binding_activation_returns_the_frozen_blocking_check_conflict() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository
+        .templates
+        .lock()
+        .expect("templates")
+        .push(CanvasApplicationTemplateProjection {
+            id: "application-template-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: Some("credential-template-1".to_owned()),
+            approval_policy_set_id: None,
+            active: true,
+        });
+    let app = app_with_readiness(repository.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/program-bindings"
+            )),
+            binding_request("course-101"),
+        ))
+        .await
+        .expect("binding response");
+    let binding_id = response_json(created).await["id"]
+        .as_str()
+        .expect("binding ID")
+        .to_owned();
+
+    let blocked = app
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/activate"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("activation response");
+    assert_eq!(blocked.status(), StatusCode::CONFLICT);
+    let body = response_json(blocked).await;
+    assert_eq!(
+        body["detail"]["message"],
+        "Canvas program binding has blocking readiness checks"
+    );
+    let checks = body["detail"]["checks"].as_array().expect("checks");
+    assert!(!checks.is_empty());
+    assert!(checks.iter().all(|check| check["blocking"] == true));
+    assert!(checks
+        .iter()
+        .all(|check| !matches!(check["status"].as_str(), Some("ready" | "not_applicable"))));
+    assert!(!repository.bindings.lock().expect("bindings")[0].enabled);
+    assert!(repository
+        .activations
+        .lock()
+        .expect("activations")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn binding_activation_rejects_non_pilots_before_readiness_work() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository
+        .templates
+        .lock()
+        .expect("templates")
+        .push(CanvasApplicationTemplateProjection {
+            id: "application-template-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: Some("credential-template-1".to_owned()),
+            approval_policy_set_id: None,
+            active: true,
+        });
+    let app = app(repository.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/program-bindings"
+            )),
+            binding_request("course-101"),
+        ))
+        .await
+        .expect("binding response");
+    let binding_id = response_json(created).await["id"]
+        .as_str()
+        .expect("binding ID")
+        .to_owned();
+
+    let rejected = app
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/activate"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("activation response");
+    assert_eq!(rejected.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(rejected).await["detail"],
+        "Portable Canvas integration is not enabled for this organization"
+    );
+    assert!(repository
+        .activations
+        .lock()
+        .expect("activations")
+        .is_empty());
+    assert!(repository.bindings.lock().expect("bindings")[0]
+        .readiness_checks
+        .is_empty());
+}
+
+#[tokio::test]
+async fn binding_activation_and_deactivation_mutate_the_aggregate_once() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository
+        .templates
+        .lock()
+        .expect("templates")
+        .push(CanvasApplicationTemplateProjection {
+            id: "application-template-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            credential_template_id: Some("credential-template-1".to_owned()),
+            approval_policy_set_id: None,
+            active: true,
+        });
+    let app = app_with_readiness(repository.clone());
+    let platform_id = seed_platform(&app, &repository).await;
+    {
+        let mut platforms = repository.platforms.lock().expect("platforms");
+        platforms[0].enabled = true;
+        platforms[0].registration_status = "installed".to_owned();
+    }
+    let created = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(format!(
+                "/v1/integrations/canvas/platforms/{platform_id}/program-bindings"
+            )),
+            binding_request("course-101"),
+        ))
+        .await
+        .expect("binding response");
+    let binding_id = response_json(created).await["id"]
+        .as_str()
+        .expect("binding ID")
+        .to_owned();
+
+    let activated = app
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/activate"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("activation response");
+    assert_eq!(activated.status(), StatusCode::OK);
+    let activated = response_json(activated).await;
+    assert_eq!(activated["ready"], true);
+    assert_eq!(activated["valid"], true);
+    assert_eq!(activated["active"], true);
+    {
+        let bindings = repository.bindings.lock().expect("bindings");
+        assert!(bindings[0].enabled);
+        assert!(bindings[0].activated_at.is_some());
+    }
+    assert!(repository.platforms.lock().expect("platforms")[0].enabled);
+    {
+        let activations = repository.activations.lock().expect("activations");
+        assert_eq!(activations.len(), 1);
+        assert!(activations[0].background_roster_metadata.is_none());
+    }
+
+    let deactivated = app
+        .oneshot(
+            Request::post(format!(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate"
+            ))
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-1")
+            .body(Body::empty())
+            .expect("request"),
+        )
+        .await
+        .expect("deactivation response");
+    assert_eq!(deactivated.status(), StatusCode::OK);
+    let deactivated = response_json(deactivated).await;
+    assert_eq!(deactivated["active"], false);
+    {
+        let bindings = repository.bindings.lock().expect("bindings");
+        assert!(!bindings[0].enabled);
+        assert!(bindings[0].activated_at.is_none());
+    }
+    assert_eq!(
+        *repository
+            .deactivation_count
+            .lock()
+            .expect("deactivation count"),
+        1
+    );
 }
 
 #[tokio::test]

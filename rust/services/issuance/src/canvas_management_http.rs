@@ -286,6 +286,38 @@ impl CanvasPlatformManagementHttpService {
             .map_err(Into::into)
     }
 
+    pub async fn activate_binding(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+    ) -> Result<CanvasProgramBindingValidationResponse, CanvasManagementHttpError> {
+        self.management
+            .activate_binding(
+                binding_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(CanvasProgramBindingValidationResponse::from)
+            .map_err(Into::into)
+    }
+
+    pub async fn deactivate_binding(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+    ) -> Result<CanvasProgramBindingValidationResponse, CanvasManagementHttpError> {
+        self.management
+            .deactivate_binding(
+                binding_id,
+                header(headers, "X-API-Key"),
+                header(headers, "X-Organization-ID"),
+            )
+            .await
+            .map(CanvasProgramBindingValidationResponse::from)
+            .map_err(Into::into)
+    }
+
     async fn binding_response(
         &self,
         headers: &HeaderMap,
@@ -1387,6 +1419,18 @@ fn validate_string(
 }
 
 fn service_failure(error: CanvasPlatformManagementError) -> Response {
+    if let CanvasPlatformManagementError::ActivationBlocked(checks) = error {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "detail": {
+                    "message": "Canvas program binding has blocking readiness checks",
+                    "checks": checks,
+                }
+            })),
+        )
+            .into_response();
+    }
     let (status, detail) = match error {
         CanvasPlatformManagementError::Security(error) => match error {
             TransactionReadError::ApiKeyNotConfigured => (
@@ -1537,6 +1581,13 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
             StatusCode::CONFLICT,
             "A Canvas program binding already exists for this template and scope".to_owned(),
         ),
+        CanvasPlatformManagementError::PilotDisabled => (
+            StatusCode::NOT_FOUND,
+            "Portable Canvas integration is not enabled for this organization".to_owned(),
+        ),
+        CanvasPlatformManagementError::ActivationBlocked(_) => {
+            unreachable!("activation failures are projected before scalar service errors")
+        }
         CanvasPlatformManagementError::BindingDomain(error) => match error {
             CanvasBindingDomainError::InvalidRequest(error) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, error.to_string())

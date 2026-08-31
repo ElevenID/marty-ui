@@ -10,7 +10,7 @@ use marty_issuance_service::{
     },
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_postgres::PostgresCanvasManagementRepository,
-    canvas_management_service::CanvasManagementRepositoryError,
+    canvas_management_service::{CanvasBindingActivation, CanvasManagementRepositoryError},
     canvas_readiness_runtime::{
         CanvasReadinessStateProvider, PostgresCanvasReadinessStateProvider,
     },
@@ -736,6 +736,161 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
     );
     assert_eq!(readiness_binding.updated_at, updated_binding.updated_at);
 
+    sqlx::query(
+        "INSERT INTO issuance_service.applications
+             (id, organization_id, application_template_id, integration_context,
+              status, credential_id)
+         VALUES
+             ('application-pending', 'org-management', 'application-template-native',
+              jsonb_build_object('canvas', jsonb_build_object(
+                  'canvas_program_binding_id', $1)), 'pending', NULL),
+             ('application-issued', 'org-management', 'application-template-native',
+              jsonb_build_object('canvas', jsonb_build_object(
+                  'canvas_program_binding_id', $1)), 'approved', 'credential-1'),
+             ('application-rejected', 'org-management', 'application-template-native',
+              jsonb_build_object('canvas', jsonb_build_object(
+                  'canvas_program_binding_id', $1)), 'rejected', NULL),
+             ('application-other-binding', 'org-management', 'application-template-native',
+              '{\"canvas\":{\"canvas_program_binding_id\":\"other\"}}'::jsonb,
+              'pending', NULL)",
+    )
+    .bind(&readiness_binding.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let activated_at = now + chrono::Duration::seconds(15);
+    let activated = repository
+        .activate_binding(&CanvasBindingActivation {
+            binding: readiness_binding.clone(),
+            platform: conflicting.clone(),
+            activated_at,
+            background_roster_metadata: Some(
+                json!({
+                    "created_from": "binding_activation",
+                    "verified_binding_id": readiness_binding.id,
+                    "verified_binding_config_version": readiness_binding.config_version,
+                    "verified_course_id": "course-202",
+                    "nrps_context_memberships_url": "https://canvas.example.edu/nrps"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        })
+        .await
+        .unwrap()
+        .expect("atomic binding activation");
+    assert!(activated.enabled);
+    assert_eq!(activated.activated_at, Some(activated_at));
+    assert!(
+        repository
+            .active_platform("org-management", &conflicting.id)
+            .await
+            .unwrap()
+            .expect("activated platform")
+            .enabled
+    );
+    let targets = sqlx::query(
+        "SELECT logical_key, target_type, enabled, schedule_seconds, metadata
+         FROM issuance_service.canvas_evidence_sync_targets
+         ORDER BY logical_key",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(targets.len(), 3);
+    assert_eq!(
+        targets[0].try_get::<String, _>("logical_key").unwrap(),
+        "application:application-issued"
+    );
+    assert_eq!(
+        targets[0].try_get::<String, _>("target_type").unwrap(),
+        "issued_drift"
+    );
+    assert_eq!(
+        targets[0].try_get::<i32, _>("schedule_seconds").unwrap(),
+        6 * 60 * 60
+    );
+    assert_eq!(
+        targets[1].try_get::<String, _>("logical_key").unwrap(),
+        "application:application-pending"
+    );
+    assert_eq!(
+        targets[1].try_get::<String, _>("target_type").unwrap(),
+        "learner_application"
+    );
+    assert_eq!(
+        targets[2].try_get::<String, _>("logical_key").unwrap(),
+        format!("roster:{}", readiness_binding.id)
+    );
+    assert_eq!(
+        targets[2].try_get::<String, _>("target_type").unwrap(),
+        "background_roster"
+    );
+    assert_eq!(
+        targets[2]
+            .try_get::<serde_json::Value, _>("metadata")
+            .unwrap()["verified_course_id"],
+        "course-202"
+    );
+    assert!(targets
+        .iter()
+        .all(|target| target.try_get::<bool, _>("enabled").unwrap()));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs
+             WHERE status = 'queued'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        3
+    );
+    assert!(repository
+        .activate_binding(&CanvasBindingActivation {
+            binding: readiness_binding.clone(),
+            platform: conflicting.clone(),
+            activated_at,
+            background_roster_metadata: None,
+        })
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_evidence_sync_targets",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        3
+    );
+    let deactivated = repository
+        .deactivate_binding(&activated, now + chrono::Duration::seconds(16))
+        .await
+        .unwrap()
+        .expect("atomic binding deactivation");
+    assert!(!deactivated.enabled);
+    assert!(deactivated.activated_at.is_none());
+    assert!(!sqlx::query_scalar::<_, bool>(
+        "SELECT enabled FROM issuance_service.canvas_evidence_sync_targets
+         WHERE logical_key = $1",
+    )
+    .bind(format!("roster:{}", readiness_binding.id))
+    .fetch_one(&pool)
+    .await
+    .unwrap());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_evidence_sync_targets
+             WHERE enabled = true",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        2
+    );
+
     let evaluated_at = now + chrono::Duration::minutes(30);
     sqlx::query(
         "UPDATE issuance_service.canvas_oauth_connections
@@ -760,9 +915,10 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
     .unwrap();
     sqlx::query(
         "INSERT INTO issuance_service.canvas_evidence_sync_targets
-             (id, organization_id, platform_id, binding_id, enabled,
+             (id, organization_id, platform_id, binding_id, logical_key, enabled,
               schedule_seconds, next_run_at)
-         VALUES ('target-contract', 'org-management', $1, $2, true, 300, $3)",
+         VALUES ('target-contract', 'org-management', $1, $2,
+                 'contract:readiness', true, 300, $3)",
     )
     .bind(&conflicting.id)
     .bind(&readiness_binding.id)
@@ -985,14 +1141,37 @@ async fn setup_schema(pool: &sqlx::PgPool) {
     .await
     .unwrap();
     sqlx::query(
+        "CREATE TABLE issuance_service.applications (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            application_template_id text NOT NULL,
+            integration_context jsonb NOT NULL DEFAULT '{}'::jsonb,
+            status text NOT NULL,
+            credential_id text)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "CREATE TABLE issuance_service.canvas_evidence_sync_targets (
             id text PRIMARY KEY,
             organization_id text NOT NULL,
             platform_id text NOT NULL,
             binding_id text NOT NULL,
+            target_type text NOT NULL DEFAULT 'learner_application',
+            logical_key text NOT NULL,
+            application_id text,
+            candidate_id text,
             enabled boolean NOT NULL,
             schedule_seconds integer NOT NULL,
-            next_run_at timestamptz NOT NULL)",
+            next_run_at timestamptz NOT NULL,
+            last_enqueued_at timestamptz,
+            last_succeeded_at timestamptz,
+            config_version integer NOT NULL DEFAULT 1,
+            metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            UNIQUE (organization_id, logical_key))",
     )
     .execute(pool)
     .await
@@ -1003,7 +1182,26 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             target_id text NOT NULL,
             organization_id text NOT NULL,
             status text NOT NULL,
-            created_at timestamptz NOT NULL)",
+            attempt_count integer NOT NULL DEFAULT 0,
+            max_attempts integer NOT NULL DEFAULT 8,
+            available_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            lease_owner text,
+            lease_expires_at timestamptz,
+            last_error_code text,
+            last_error_summary text,
+            result jsonb NOT NULL DEFAULT '{}'::jsonb,
+            created_at timestamptz NOT NULL,
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            started_at timestamptz,
+            completed_at timestamptz)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE UNIQUE INDEX ux_canvas_sync_jobs_one_active_target
+         ON issuance_service.canvas_evidence_sync_jobs (target_id)
+         WHERE status IN ('queued', 'leased', 'retry')",
     )
     .execute(pool)
     .await

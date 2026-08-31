@@ -632,7 +632,7 @@ fn required_oauth_capabilities(
     Some(capabilities)
 }
 
-fn verified_binding_capabilities<'a>(
+pub(crate) fn verified_canvas_binding_capabilities<'a>(
     platform: &'a CanvasPlatformRecord,
     binding: &CanvasProgramBindingRecord,
 ) -> Option<&'a Map<String, Value>> {
@@ -667,7 +667,7 @@ fn ags_ready(
     binding: &CanvasProgramBindingRecord,
     requirements: &[CanvasEvidenceRequirementInput],
 ) -> bool {
-    let Some(capabilities) = verified_binding_capabilities(platform, binding) else {
+    let Some(capabilities) = verified_canvas_binding_capabilities(platform, binding) else {
         return false;
     };
     let ags = requirements
@@ -719,7 +719,7 @@ fn nrps_ready(
     binding: &CanvasProgramBindingRecord,
     requirements: &[CanvasEvidenceRequirementInput],
 ) -> bool {
-    let Some(capabilities) = verified_binding_capabilities(platform, binding) else {
+    let Some(capabilities) = verified_canvas_binding_capabilities(platform, binding) else {
         return false;
     };
     let memberships_url = text(capabilities.get("nrps_context_memberships_url"));

@@ -207,7 +207,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.issuer_base_url,
         canvas_lti_jwks_refresh_config.clone(),
     )
-    .with_canvas_credentials_origins(config.canvas_credentials_api_origins.clone());
+    .with_canvas_credentials_origins(config.canvas_credentials_api_origins.clone())
+    .with_activation_policy(
+        config.canvas_portable_enabled,
+        config.canvas_pilot_organizations.clone(),
+        config.canvas_readiness_max_age,
+    );
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
         &config.issuer_base_url,

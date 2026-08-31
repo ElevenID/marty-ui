@@ -868,6 +868,14 @@ fn router_with_optional_services(
                 post(validate_canvas_program_binding),
             )
             .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
+                post(activate_canvas_program_binding),
+            )
+            .route(
+                "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
+                post(deactivate_canvas_program_binding),
+            )
+            .route(
                 "/v1/integrations/canvas/platforms/{platform_id}",
                 get(get_canvas_platform)
                     .put(update_canvas_platform)
@@ -1211,6 +1219,28 @@ async fn validate_canvas_program_binding(
 ) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
     canvas_management(&state)?
         .validate_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn activate_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .activate_binding(&headers, &binding_id)
+        .await
+        .map(Json)
+}
+
+async fn deactivate_canvas_program_binding(
+    State(state): State<IssuanceState>,
+    Path(binding_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CanvasProgramBindingValidationResponse>, CanvasManagementHttpError> {
+    canvas_management(&state)?
+        .deactivate_binding(&headers, &binding_id)
         .await
         .map(Json)
 }

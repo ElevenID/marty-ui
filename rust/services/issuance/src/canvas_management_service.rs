@@ -1,6 +1,6 @@
 //! Application service for the Canvas platform-management lifecycle.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -16,6 +16,7 @@ use crate::{
     canvas_binding_domain::{
         CanvasApplicationTemplateProjection, CanvasBindingDomainError, CanvasProgramBindingRecord,
     },
+    canvas_lti_experience::portable_canvas_pilot_enabled,
     canvas_lti_probe::{
         probe_canvas_lti_metadata, CanvasLtiJwksRefreshConfig, CanvasLtiMetadataProbeError,
         CanvasLtiProbeClient, CanvasLtiProbeResponse, MartyCanvasLtiProbeClient,
@@ -28,8 +29,10 @@ use crate::{
         CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
     },
     canvas_readiness::{
-        apply_canvas_readiness_result, evaluate_canvas_binding_readiness, readiness_timestamp,
-        CanvasBindingReadiness, CanvasReadinessCheck, CanvasReadinessInputs,
+        apply_canvas_readiness_result, canvas_binding_is_ready_for_activation,
+        evaluate_canvas_binding_readiness, readiness_timestamp,
+        verified_canvas_binding_capabilities, CanvasBindingReadiness, CanvasReadinessCheck,
+        CanvasReadinessInputs,
     },
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
@@ -101,6 +104,10 @@ pub enum CanvasPlatformManagementError {
     CanvasCredentialsOriginNotAllowed,
     #[error("A Canvas program binding already exists for this template and scope")]
     BindingConflict,
+    #[error("Portable Canvas integration is not enabled for this organization")]
+    PilotDisabled,
+    #[error("Canvas program binding has blocking readiness checks")]
+    ActivationBlocked(Vec<CanvasReadinessCheck>),
     #[error(transparent)]
     BindingDomain(#[from] CanvasBindingDomainError),
 }
@@ -213,6 +220,17 @@ pub trait CanvasPlatformManagementRepository: Send + Sync {
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
 
+    async fn activate_binding(
+        &self,
+        activation: &CanvasBindingActivation,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+
+    async fn deactivate_binding(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        deactivated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError>;
+
     async fn archive_binding(
         &self,
         organization_id: &str,
@@ -252,6 +270,14 @@ pub struct CanvasBindingValidationResult {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct CanvasBindingActivation {
+    pub binding: CanvasProgramBindingRecord,
+    pub platform: CanvasPlatformRecord,
+    pub activated_at: DateTime<Utc>,
+    pub background_roster_metadata: Option<Map<String, Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct CanvasPlatformReadinessResult {
     pub platform_id: String,
     pub checks: Vec<CanvasReadinessCheck>,
@@ -276,6 +302,9 @@ pub struct CanvasPlatformManagementService {
     lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
     canvas_credentials_origins: Arc<BTreeSet<String>>,
     readiness_input_provider: Option<Arc<dyn CanvasReadinessInputProvider>>,
+    portable_enabled: bool,
+    pilot_organizations: Arc<BTreeSet<String>>,
+    readiness_max_age: Duration,
 }
 
 impl std::fmt::Debug for CanvasPlatformManagementService {
@@ -290,6 +319,9 @@ impl std::fmt::Debug for CanvasPlatformManagementService {
                 "readiness_input_provider_configured",
                 &self.readiness_input_provider.is_some(),
             )
+            .field("portable_enabled", &self.portable_enabled)
+            .field("pilot_organization_count", &self.pilot_organizations.len())
+            .field("readiness_max_age", &self.readiness_max_age)
             .finish_non_exhaustive()
     }
 }
@@ -314,6 +346,9 @@ impl CanvasPlatformManagementService {
                 "https://api.badgr.io".to_owned()
             ])),
             readiness_input_provider: None,
+            portable_enabled: false,
+            pilot_organizations: Arc::new(BTreeSet::new()),
+            readiness_max_age: Duration::from_secs(900),
         }
     }
 
@@ -337,6 +372,9 @@ impl CanvasPlatformManagementService {
                 "https://api.badgr.io".to_owned()
             ])),
             readiness_input_provider: None,
+            portable_enabled: false,
+            pilot_organizations: Arc::new(BTreeSet::new()),
+            readiness_max_age: Duration::from_secs(900),
         }
     }
 
@@ -361,6 +399,19 @@ impl CanvasPlatformManagementService {
         provider: Arc<dyn CanvasReadinessInputProvider>,
     ) -> Self {
         self.readiness_input_provider = Some(provider);
+        self
+    }
+
+    #[must_use]
+    pub fn with_activation_policy(
+        mut self,
+        portable_enabled: bool,
+        pilot_organizations: BTreeSet<String>,
+        readiness_max_age: Duration,
+    ) -> Self {
+        self.portable_enabled = portable_enabled;
+        self.pilot_organizations = Arc::new(pilot_organizations);
+        self.readiness_max_age = readiness_max_age;
         self
     }
 
@@ -632,6 +683,138 @@ impl CanvasPlatformManagementService {
             .await?;
         self.validate_loaded_binding(&platform, binding, Utc::now())
             .await
+    }
+
+    pub async fn activate_binding(
+        &self,
+        binding_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasBindingValidationResult, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let binding = self.active_binding(organization_id, binding_id).await?;
+        if !portable_canvas_pilot_enabled(
+            self.portable_enabled,
+            &self.pilot_organizations,
+            organization_id,
+        ) {
+            return Err(CanvasPlatformManagementError::PilotDisabled);
+        }
+        let platform = self
+            .active_platform(organization_id, &binding.platform_id)
+            .await?;
+        let evaluated_at = Utc::now();
+        let mut validation = self
+            .validate_loaded_binding(&platform, binding, evaluated_at)
+            .await?;
+        if !validation.readiness.ready
+            || !canvas_binding_is_ready_for_activation(
+                &validation.binding,
+                evaluated_at,
+                self.readiness_max_age,
+            )
+        {
+            return Err(CanvasPlatformManagementError::ActivationBlocked(
+                validation
+                    .readiness
+                    .checks
+                    .iter()
+                    .filter(|check| check.blocking && !check.passed())
+                    .cloned()
+                    .collect(),
+            ));
+        }
+        let background_roster_metadata = if validation
+            .binding
+            .feature_flags
+            .get("enable_background_awards")
+            .copied()
+            .unwrap_or(false)
+        {
+            let capabilities = verified_canvas_binding_capabilities(&platform, &validation.binding)
+                .ok_or_else(|| {
+                    CanvasPlatformManagementError::ActivationBlocked(
+                        validation
+                            .readiness
+                            .checks
+                            .iter()
+                            .filter(|check| check.blocking && !check.passed())
+                            .cloned()
+                            .collect(),
+                    )
+                })?;
+            let mut metadata = Map::from_iter([
+                (
+                    "created_from".to_owned(),
+                    Value::String("binding_activation".to_owned()),
+                ),
+                (
+                    "verified_binding_id".to_owned(),
+                    Value::String(validation.binding.id.clone()),
+                ),
+                (
+                    "verified_binding_config_version".to_owned(),
+                    Value::from(validation.binding.config_version),
+                ),
+                (
+                    "verified_course_id".to_owned(),
+                    capabilities
+                        .get("verified_course_id")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                ),
+            ]);
+            if let Some(memberships_url) = capabilities
+                .get("nrps_context_memberships_url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                metadata.insert(
+                    "nrps_context_memberships_url".to_owned(),
+                    Value::String(memberships_url.to_owned()),
+                );
+            }
+            Some(metadata)
+        } else {
+            None
+        };
+        let activation = CanvasBindingActivation {
+            binding: validation.binding,
+            platform,
+            activated_at: Utc::now(),
+            background_roster_metadata,
+        };
+        validation.binding = self
+            .repository
+            .activate_binding(&activation)
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(validation)
+    }
+
+    pub async fn deactivate_binding(
+        &self,
+        binding_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasBindingValidationResult, CanvasPlatformManagementError> {
+        let organization_id = self.authorize(api_key, trusted_organization_id)?;
+        let binding = self.active_binding(organization_id, binding_id).await?;
+        let platform = self
+            .active_platform(organization_id, &binding.platform_id)
+            .await?;
+        let mut validation = self
+            .validate_loaded_binding(&platform, binding, Utc::now())
+            .await?;
+        validation.binding = self
+            .repository
+            .deactivate_binding(&validation.binding, Utc::now())
+            .await
+            .map_err(map_binding_repository_error)?
+            .ok_or(CanvasPlatformManagementError::ConfigurationChanged)?;
+        Ok(validation)
     }
 
     pub async fn platform_readiness(
@@ -1610,6 +1793,59 @@ mod tests {
                 return Ok(None);
             };
             *existing = binding.clone();
+            Ok(Some(existing.clone()))
+        }
+
+        async fn activate_binding(
+            &self,
+            activation: &CanvasBindingActivation,
+        ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            let mut platforms = self.platforms.lock().await;
+            let Some(platform) = platforms.iter_mut().find(|candidate| {
+                candidate.organization_id == activation.platform.organization_id
+                    && candidate.id == activation.platform.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == activation.platform.config_version
+                    && candidate.updated_at == activation.platform.updated_at
+            }) else {
+                return Ok(None);
+            };
+            let mut bindings = self.bindings.lock().await;
+            let Some(binding) = bindings.iter_mut().find(|candidate| {
+                candidate.organization_id == activation.binding.organization_id
+                    && candidate.id == activation.binding.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == activation.binding.config_version
+                    && candidate.updated_at == activation.binding.updated_at
+            }) else {
+                return Ok(None);
+            };
+            platform.enabled = true;
+            platform.updated_at = activation.activated_at;
+            binding.enabled = true;
+            binding.activated_at = Some(activation.activated_at);
+            binding.updated_at = activation.activated_at;
+            Ok(Some(binding.clone()))
+        }
+
+        async fn deactivate_binding(
+            &self,
+            binding: &CanvasProgramBindingRecord,
+            deactivated_at: DateTime<Utc>,
+        ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+            let mut bindings = self.bindings.lock().await;
+            let Some(existing) = bindings.iter_mut().find(|candidate| {
+                candidate.organization_id == binding.organization_id
+                    && candidate.id == binding.id
+                    && candidate.archived_at.is_none()
+                    && candidate.config_version == binding.config_version
+                    && candidate.updated_at == binding.updated_at
+            }) else {
+                return Ok(None);
+            };
+            existing.enabled = false;
+            existing.activated_at = None;
+            existing.updated_at = deactivated_at;
             Ok(Some(existing.clone()))
         }
 

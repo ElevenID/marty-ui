@@ -1,15 +1,16 @@
 //! PostgreSQL persistence for the Canvas management aggregate.
 
 use chrono::{DateTime, Utc};
-use serde_json::{Map, Value};
-use sqlx::{postgres::PgRow, PgPool, Row};
+use serde_json::{json, Map, Value};
+use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
 use crate::{
     canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
     canvas_management_domain::CanvasPlatformRecord,
     canvas_management_service::{
-        CanvasManagementRepositoryError, CanvasPlatformManagementRepository,
+        CanvasBindingActivation, CanvasManagementRepositoryError,
+        CanvasPlatformManagementRepository,
     },
     canvas_oauth_postgres::{
         queue_canvas_oauth_revocation_in_transaction, CanvasOAuthRevocationQueueOutcome,
@@ -132,6 +133,79 @@ const ARCHIVE_BINDING: &str = "UPDATE issuance_service.canvas_program_bindings
      feature_flags, canvas_credentials, config_version, validated_config_version,
      readiness_checks, readiness_validated_at, activated_at, archived_at,
      credential_template_snapshot, enabled, created_at, updated_at";
+
+const ENABLE_PLATFORM_FOR_BINDING: &str = "UPDATE issuance_service.canvas_platforms
+ SET enabled = true, updated_at = $5
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND archived_at IS NULL
+ RETURNING id";
+
+const ACTIVATE_BINDING: &str = "UPDATE issuance_service.canvas_program_bindings
+ SET enabled = true, activated_at = $5, updated_at = $5
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND validated_config_version = $3
+   AND readiness_validated_at IS NOT NULL AND archived_at IS NULL
+ RETURNING id, organization_id, platform_id, application_template_id,
+     credential_template_id, display_name, flow_mode, direct_issue_enabled,
+     auto_approve_on_evidence, evidence_requirements, canvas_scope,
+     delivery_mode, issuer_mode, approval_policy_set_id, deployment_profile_id,
+     feature_flags, canvas_credentials, config_version, validated_config_version,
+     readiness_checks, readiness_validated_at, activated_at, archived_at,
+     credential_template_snapshot, enabled, created_at, updated_at";
+
+const DEACTIVATE_BINDING: &str = "UPDATE issuance_service.canvas_program_bindings
+ SET enabled = false, activated_at = NULL, updated_at = $5
+ WHERE organization_id = $1 AND id = $2 AND config_version = $3
+   AND updated_at = $4 AND archived_at IS NULL
+ RETURNING id, organization_id, platform_id, application_template_id,
+     credential_template_id, display_name, flow_mode, direct_issue_enabled,
+     auto_approve_on_evidence, evidence_requirements, canvas_scope,
+     delivery_mode, issuer_mode, approval_policy_set_id, deployment_profile_id,
+     feature_flags, canvas_credentials, config_version, validated_config_version,
+     readiness_checks, readiness_validated_at, activated_at, archived_at,
+     credential_template_snapshot, enabled, created_at, updated_at";
+
+const UPSERT_SYNC_TARGET: &str = "INSERT INTO issuance_service.canvas_evidence_sync_targets (
+    id, organization_id, platform_id, binding_id, target_type, logical_key,
+    application_id, candidate_id, enabled, schedule_seconds, next_run_at,
+    last_enqueued_at, last_succeeded_at, config_version, metadata,
+    created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, NULL, true, $8, $9,
+    NULL, NULL, $10, $11, $9, $9
+)
+ON CONFLICT (organization_id, logical_key) DO UPDATE SET
+    platform_id = EXCLUDED.platform_id,
+    binding_id = EXCLUDED.binding_id,
+    target_type = EXCLUDED.target_type,
+    application_id = EXCLUDED.application_id,
+    enabled = true,
+    schedule_seconds = EXCLUDED.schedule_seconds,
+    config_version = EXCLUDED.config_version,
+    metadata = COALESCE(issuance_service.canvas_evidence_sync_targets.metadata, '{}'::jsonb)
+        || $12::jsonb,
+    updated_at = EXCLUDED.updated_at
+RETURNING id";
+
+const ENQUEUE_SYNC_JOB: &str = "INSERT INTO issuance_service.canvas_evidence_sync_jobs (
+    id, organization_id, target_id, status, attempt_count, max_attempts,
+    available_at, result, created_at, updated_at
+) VALUES ($1, $2, $3, 'queued', 0, 8, $4, '{}'::jsonb, $4, $4)
+ON CONFLICT DO NOTHING";
+
+const MARK_TARGET_ENQUEUED: &str = "UPDATE issuance_service.canvas_evidence_sync_targets
+ SET last_enqueued_at = $3, updated_at = $3
+ WHERE organization_id = $1 AND id = $2";
+
+const ACTIVATION_APPLICATIONS: &str = "SELECT id, credential_id
+ FROM issuance_service.applications
+ WHERE organization_id = $1 AND application_template_id = $2
+   AND status NOT IN ('rejected', 'withdrawn')
+   AND integration_context->'canvas'->>'canvas_program_binding_id' = $3";
+
+const DISABLE_ROSTER_TARGET: &str = "UPDATE issuance_service.canvas_evidence_sync_targets
+ SET enabled = false, updated_at = $3
+ WHERE organization_id = $1 AND logical_key = $2";
 
 #[cfg(test)]
 const PLATFORM_COLUMNS: &str = "id, organization_id, canvas_account_id,
@@ -856,6 +930,132 @@ impl PostgresCanvasManagementRepository {
             .transpose()
     }
 
+    pub async fn activate_binding(
+        &self,
+        activation: &CanvasBindingActivation,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let binding = &activation.binding;
+        let platform = &activation.platform;
+        let binding_version = version_i32(binding.config_version)?;
+        let platform_version = version_i32(platform.config_version)?;
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+
+        let platform_enabled = sqlx::query(ENABLE_PLATFORM_FOR_BINDING)
+            .bind(&platform.organization_id)
+            .bind(&platform.id)
+            .bind(platform_version)
+            .bind(platform.updated_at)
+            .bind(activation.activated_at)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+        if platform_enabled.is_none() {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Ok(None);
+        }
+
+        let row = sqlx::query(ACTIVATE_BINDING)
+            .bind(&binding.organization_id)
+            .bind(&binding.id)
+            .bind(binding_version)
+            .bind(binding.updated_at)
+            .bind(activation.activated_at)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+        let Some(row) = row else {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Ok(None);
+        };
+
+        if let Some(metadata) = &activation.background_roster_metadata {
+            upsert_and_enqueue_target(
+                &mut transaction,
+                &binding.organization_id,
+                &platform.id,
+                &binding.id,
+                "background_roster",
+                &format!("roster:{}", binding.id),
+                None,
+                15 * 60,
+                binding_version,
+                Value::Object(metadata.clone()),
+                Value::Object(metadata.clone()),
+                activation.activated_at,
+            )
+            .await?;
+        }
+
+        let applications = sqlx::query(ACTIVATION_APPLICATIONS)
+            .bind(&binding.organization_id)
+            .bind(&binding.application_template_id)
+            .bind(&binding.id)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+        for application in applications {
+            let application_id = application
+                .try_get::<String, _>("id")
+                .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+            let issued = application
+                .try_get::<Option<String>, _>("credential_id")
+                .map_err(|_| CanvasManagementRepositoryError::Unavailable)?
+                .is_some();
+            upsert_and_enqueue_target(
+                &mut transaction,
+                &binding.organization_id,
+                &platform.id,
+                &binding.id,
+                if issued {
+                    "issued_drift"
+                } else {
+                    "learner_application"
+                },
+                &format!("application:{application_id}"),
+                Some(&application_id),
+                if issued { 6 * 60 * 60 } else { 15 * 60 },
+                binding_version,
+                json!({"created_from": "application_sync_api"}),
+                json!({"last_requested_from": "application_sync_api"}),
+                activation.activated_at,
+            )
+            .await?;
+        }
+
+        transaction.commit().await.map_err(repository_error)?;
+        binding_from_row(row).map(Some)
+    }
+
+    pub async fn deactivate_binding(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        deactivated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let row = sqlx::query(DEACTIVATE_BINDING)
+            .bind(&binding.organization_id)
+            .bind(&binding.id)
+            .bind(version_i32(binding.config_version)?)
+            .bind(binding.updated_at)
+            .bind(deactivated_at)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+        let Some(row) = row else {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Ok(None);
+        };
+        sqlx::query(DISABLE_ROSTER_TARGET)
+            .bind(&binding.organization_id)
+            .bind(format!("roster:{}", binding.id))
+            .bind(deactivated_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+        transaction.commit().await.map_err(repository_error)?;
+        binding_from_row(row).map(Some)
+    }
+
     pub async fn archive_binding(
         &self,
         organization_id: &str,
@@ -874,6 +1074,59 @@ impl PostgresCanvasManagementRepository {
             .map(binding_from_row)
             .transpose()
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_and_enqueue_target(
+    transaction: &mut Transaction<'_, Postgres>,
+    organization_id: &str,
+    platform_id: &str,
+    binding_id: &str,
+    target_type: &str,
+    logical_key: &str,
+    application_id: Option<&str>,
+    schedule_seconds: i32,
+    config_version: i32,
+    create_metadata: Value,
+    update_metadata: Value,
+    now: DateTime<Utc>,
+) -> Result<(), CanvasManagementRepositoryError> {
+    let target_id = uuid::Uuid::new_v4().to_string();
+    let row = sqlx::query(UPSERT_SYNC_TARGET)
+        .bind(&target_id)
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(binding_id)
+        .bind(target_type)
+        .bind(logical_key)
+        .bind(application_id)
+        .bind(schedule_seconds)
+        .bind(now)
+        .bind(config_version)
+        .bind(create_metadata)
+        .bind(update_metadata)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(repository_error)?;
+    let canonical_target_id = row
+        .try_get::<String, _>("id")
+        .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+    sqlx::query(ENQUEUE_SYNC_JOB)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(organization_id)
+        .bind(&canonical_target_id)
+        .bind(now)
+        .execute(&mut **transaction)
+        .await
+        .map_err(repository_error)?;
+    sqlx::query(MARK_TARGET_ENQUEUED)
+        .bind(organization_id)
+        .bind(canonical_target_id)
+        .bind(now)
+        .execute(&mut **transaction)
+        .await
+        .map_err(repository_error)?;
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -1076,6 +1329,21 @@ impl CanvasPlatformManagementRepository for PostgresCanvasManagementRepository {
             expected_updated_at,
         )
         .await
+    }
+
+    async fn activate_binding(
+        &self,
+        activation: &CanvasBindingActivation,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::activate_binding(self, activation).await
+    }
+
+    async fn deactivate_binding(
+        &self,
+        binding: &CanvasProgramBindingRecord,
+        deactivated_at: DateTime<Utc>,
+    ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        PostgresCanvasManagementRepository::deactivate_binding(self, binding, deactivated_at).await
     }
 
     async fn archive_binding(
