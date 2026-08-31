@@ -6,6 +6,7 @@
 
 pub mod dto;
 pub mod governance;
+pub mod http;
 
 pub use dto::{
     ClaimResult, CreateSessionRequest, PresentationDefinition, PresentationPayload,
@@ -16,3 +17,4 @@ pub use governance::{
     GovernanceEngine, GovernanceError, GovernancePurpose, GovernanceSnapshot, PolicyAuthority,
     TrustAuthority,
 };
+pub use http::{router, CompatibilityError, CompatibilityState, CompatibilityUseCases};
