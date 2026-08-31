@@ -1,8 +1,11 @@
-use std::{collections::BTreeMap, fmt};
+use std::fmt;
 
 use marty_verification::{
     governance::canonical_digest_json,
-    verification::{VerificationCheckOutcome, VerificationDecisionResult},
+    verification::{
+        build_verification_decision_result, VerificationCheckOutcome, VerificationDecision,
+        VerificationDecisionResult, VerificationDecisionResultInput, VerificationProcessingStatus,
+    },
 };
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -30,20 +33,46 @@ impl EvidenceFailureReason {
 pub enum PersistedEvidenceError {
     #[error("canonical evidence is not bound to its governed authority")]
     AuthorityMismatch,
+    #[error("canonical evidence is not bound to the session")]
+    SessionMismatch,
+    #[error("canonical evidence is not bound to the submitted presentation")]
+    PresentationMismatch,
     #[error("canonical evidence-record digest is inconsistent")]
     DigestMismatch,
     #[error("canonical evidence serialization failed")]
     Serialization,
-    #[error("a verified terminal decision requires canonical Core evidence")]
-    CanonicalRequired,
+    #[error("a verified terminal decision requires a canonical Core PASS")]
+    CanonicalPassRequired,
+    #[error("a failed terminal decision cannot contain a canonical Core PASS")]
+    FailureEvidenceRequired,
+    #[error("persisted evidence is invalid for a terminal decision")]
+    InvalidTerminalEvidence,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum EvidenceKind {
+    Pending,
+    Canonical {
+        session_id: String,
+        presentation_digest: Sha256Digest,
+        passed: bool,
+    },
+    FailClosed {
+        presentation_digest: Sha256Digest,
+    },
+    Invalid,
 }
 
 /// Opaque, claim-free evidence permitted at the durable session boundary.
 ///
 /// Constructors accept only Core's immutable decision type and a Core-validated
-/// governance snapshot. No arbitrary JSON constructor is exposed.
+/// governance snapshot. Database values are re-derived through Core before they
+/// may participate in a terminal transition.
 #[derive(Clone, PartialEq)]
-pub struct PersistedEvidence(Value);
+pub struct PersistedEvidence {
+    value: Value,
+    kind: EvidenceKind,
+}
 
 impl fmt::Debug for PersistedEvidence {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,92 +83,240 @@ impl fmt::Debug for PersistedEvidence {
 impl PersistedEvidence {
     #[must_use]
     pub fn pending(governance: &GovernanceSnapshot) -> Self {
-        Self(json!({
-            "schema_version": EVIDENCE_SCHEMA_VERSION,
-            "state": "PENDING",
-            "governance": governance.value(),
-        }))
+        Self {
+            value: json!({
+                "schema_version": EVIDENCE_SCHEMA_VERSION,
+                "state": "PENDING",
+                "governance": governance.value(),
+            }),
+            kind: EvidenceKind::Pending,
+        }
     }
 
     pub fn canonical(
         governance: &GovernanceSnapshot,
+        session_id: &str,
+        presentation_digest: &Sha256Digest,
         result: &VerificationDecisionResult,
     ) -> Result<Self, PersistedEvidenceError> {
-        validate_typed_binding(governance, result)?;
-        let records = result
-            .checks()
-            .iter()
-            .filter(|check| {
-                matches!(
-                    check.outcome,
-                    VerificationCheckOutcome::Passed | VerificationCheckOutcome::Failed
-                )
-            })
-            .flat_map(|check| {
-                check.evidence_refs.iter().map(|evidence_ref| {
-                    json!({
-                        "id": evidence_ref,
-                        "check_id": check.check_id,
-                        "outcome": check.outcome,
-                        "code": check.code,
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        let records_json =
-            serde_json::to_string(&records).map_err(|_| PersistedEvidenceError::Serialization)?;
-        let digest = canonical_digest_json(&records_json)
-            .map_err(|_| PersistedEvidenceError::Serialization)?;
-        if digest != result.evidence_digest() {
-            return Err(PersistedEvidenceError::DigestMismatch);
-        }
-        Ok(Self(json!({
-            "schema_version": EVIDENCE_SCHEMA_VERSION,
-            "governance": governance.value(),
-            "canonical_result": result,
-            "evidence_records": records,
-        })))
+        validate_typed_binding(governance, session_id, presentation_digest, result)?;
+        let records = evidence_records(result);
+        validate_evidence_digest(&records, result.evidence_digest())?;
+        let passed = canonical_passed(result);
+        Ok(Self {
+            value: json!({
+                "schema_version": EVIDENCE_SCHEMA_VERSION,
+                "governance": governance.value(),
+                "canonical_result": result,
+                "evidence_records": records,
+            }),
+            kind: EvidenceKind::Canonical {
+                session_id: session_id.to_owned(),
+                presentation_digest: presentation_digest.clone(),
+                passed,
+            },
+        })
     }
 
     #[must_use]
     pub fn fail_closed(digest: &Sha256Digest, reason: EvidenceFailureReason) -> Self {
-        Self(json!({
-            "schema_version": 1,
-            "legacy": true,
-            "reason_code": reason.as_str(),
-            "presentation_sha256": digest.as_str(),
-        }))
+        Self {
+            value: json!({
+                "schema_version": 1,
+                "legacy": true,
+                "reason_code": reason.as_str(),
+                "presentation_sha256": digest.as_str(),
+            }),
+            kind: EvidenceKind::FailClosed {
+                presentation_digest: digest.clone(),
+            },
+        }
     }
 
     #[must_use]
     pub(crate) fn as_value(&self) -> &Value {
-        &self.0
+        &self.value
     }
 
     pub(crate) fn from_database(value: Value) -> Self {
-        if valid_persisted_value(&value) {
-            Self(value)
-        } else {
-            // Never return or re-persist untrusted historical JSON. It may
-            // contain credential-bearing material from older deployments.
-            Self(json!({
-                "schema_version": 1,
-                "legacy": true,
-                "reason_code": "INVALID_PERSISTED_EVIDENCE",
-            }))
+        parse_persisted_value(value).unwrap_or_else(invalid_evidence)
+    }
+
+    pub(crate) fn require_verified(&self) -> Result<(), PersistedEvidenceError> {
+        match self.kind {
+            EvidenceKind::Canonical { passed: true, .. } => Ok(()),
+            _ => Err(PersistedEvidenceError::CanonicalPassRequired),
         }
     }
 
-    pub(crate) fn is_canonical(&self) -> bool {
-        self.0
-            .as_object()
-            .is_some_and(|object| object.contains_key("canonical_result"))
-            && valid_persisted_value(&self.0)
+    pub(crate) fn require_failed(&self) -> Result<(), PersistedEvidenceError> {
+        match self.kind {
+            EvidenceKind::Canonical { passed: false, .. } | EvidenceKind::FailClosed { .. } => {
+                Ok(())
+            }
+            EvidenceKind::Canonical { passed: true, .. } => {
+                Err(PersistedEvidenceError::FailureEvidenceRequired)
+            }
+            EvidenceKind::Pending | EvidenceKind::Invalid => {
+                Err(PersistedEvidenceError::InvalidTerminalEvidence)
+            }
+        }
+    }
+
+    pub(crate) fn validate_terminal_binding(
+        &self,
+        session_id: &str,
+        presentation_digest: &Sha256Digest,
+    ) -> Result<(), PersistedEvidenceError> {
+        let (bound_session, bound_digest) = match &self.kind {
+            EvidenceKind::Canonical {
+                session_id,
+                presentation_digest,
+                ..
+            } => (Some(session_id.as_str()), presentation_digest),
+            EvidenceKind::FailClosed {
+                presentation_digest,
+            } => (None, presentation_digest),
+            EvidenceKind::Pending | EvidenceKind::Invalid => {
+                return Err(PersistedEvidenceError::InvalidTerminalEvidence);
+            }
+        };
+        if bound_session.is_some_and(|bound| bound != session_id) {
+            return Err(PersistedEvidenceError::SessionMismatch);
+        }
+        if bound_digest != presentation_digest {
+            return Err(PersistedEvidenceError::PresentationMismatch);
+        }
+        Ok(())
+    }
+}
+
+fn parse_persisted_value(value: Value) -> Option<PersistedEvidence> {
+    let object = value.as_object()?;
+    let schema_version = object.get("schema_version").and_then(Value::as_u64);
+    let pending = object.get("state") == Some(&json!("PENDING"));
+    match (schema_version, pending) {
+        (Some(EVIDENCE_SCHEMA_VERSION), true) => parse_pending(value),
+        (Some(EVIDENCE_SCHEMA_VERSION), false) => parse_canonical(value),
+        (Some(1), _) => parse_fail_closed(value),
+        _ => None,
+    }
+}
+
+fn parse_pending(value: Value) -> Option<PersistedEvidence> {
+    let object = value.as_object()?;
+    if !exact_keys(object, &["schema_version", "state", "governance"])
+        || validated_governance(object).is_none()
+    {
+        return None;
+    }
+    Some(PersistedEvidence {
+        value,
+        kind: EvidenceKind::Pending,
+    })
+}
+
+fn parse_canonical(value: Value) -> Option<PersistedEvidence> {
+    let object = value.as_object()?;
+    if !exact_keys(
+        object,
+        &[
+            "schema_version",
+            "governance",
+            "canonical_result",
+            "evidence_records",
+        ],
+    ) {
+        return None;
+    }
+    let governance = validated_governance(object)?;
+    let raw_result = object.get("canonical_result")?;
+    let result = rebuild_canonical_result(raw_result)?;
+    if serde_json::to_value(&result).ok().as_ref() != Some(raw_result) {
+        return None;
+    }
+    let session_id = result
+        .verification_id()
+        .strip_prefix("verification:")?
+        .to_owned();
+    let digest = Sha256Digest::parse(result.input_digest().strip_prefix("sha256:")?).ok()?;
+    validate_typed_binding(&governance, &session_id, &digest, &result).ok()?;
+    let records = evidence_records(&result);
+    if object.get("evidence_records") != Some(&Value::Array(records.clone())) {
+        return None;
+    }
+    validate_evidence_digest(&records, result.evidence_digest()).ok()?;
+    let passed = canonical_passed(&result);
+    Some(PersistedEvidence {
+        value,
+        kind: EvidenceKind::Canonical {
+            session_id,
+            presentation_digest: digest,
+            passed,
+        },
+    })
+}
+
+fn rebuild_canonical_result(raw: &Value) -> Option<VerificationDecisionResult> {
+    let raw = raw.as_object()?;
+    let input = json!({
+        "verification_id": raw.get("verification_id")?,
+        "context": raw.get("context")?,
+        "processing_status": raw.get("processing_status")?,
+        "evaluated_at": raw.get("evaluated_at")?,
+        "input_digest": raw.get("input_digest")?,
+        "evidence_digest": raw.get("evidence_digest")?,
+        "policy": raw.get("policy")?,
+        "trust_profile": raw.get("trust_profile")?,
+        "components": raw.get("components")?,
+        "checks": raw.get("checks")?,
+    });
+    let input: VerificationDecisionResultInput = serde_json::from_value(input).ok()?;
+    build_verification_decision_result(input).ok()
+}
+
+fn parse_fail_closed(value: Value) -> Option<PersistedEvidence> {
+    let object = value.as_object()?;
+    if !exact_keys(
+        object,
+        &[
+            "schema_version",
+            "legacy",
+            "reason_code",
+            "presentation_sha256",
+        ],
+    ) || object.get("legacy") != Some(&Value::Bool(true))
+        || !matches!(
+            object.get("reason_code").and_then(Value::as_str),
+            Some("MISSING_GOVERNANCE_PROVENANCE" | "CANONICAL_RESULT_BUILD_FAILED")
+        )
+    {
+        return None;
+    }
+    let digest = Sha256Digest::parse(object.get("presentation_sha256")?.as_str()?).ok()?;
+    Some(PersistedEvidence {
+        value,
+        kind: EvidenceKind::FailClosed {
+            presentation_digest: digest,
+        },
+    })
+}
+
+fn invalid_evidence() -> PersistedEvidence {
+    PersistedEvidence {
+        value: json!({
+            "schema_version": 1,
+            "legacy": true,
+            "reason_code": "INVALID_PERSISTED_EVIDENCE",
+        }),
+        kind: EvidenceKind::Invalid,
     }
 }
 
 fn validate_typed_binding(
     governance: &GovernanceSnapshot,
+    session_id: &str,
+    presentation_digest: &Sha256Digest,
     result: &VerificationDecisionResult,
 ) -> Result<(), PersistedEvidenceError> {
     let context = result.context();
@@ -177,197 +354,62 @@ fn validate_typed_binding(
     {
         return Err(PersistedEvidenceError::AuthorityMismatch);
     }
+    if result.verification_id() != format!("verification:{session_id}")
+        || context.transaction_id.as_deref() != Some(session_id)
+    {
+        return Err(PersistedEvidenceError::SessionMismatch);
+    }
+    if result.input_digest() != format!("sha256:{}", presentation_digest.as_str()) {
+        return Err(PersistedEvidenceError::PresentationMismatch);
+    }
     Ok(())
 }
 
-fn valid_persisted_value(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    match object.get("schema_version").and_then(Value::as_u64) {
-        Some(EVIDENCE_SCHEMA_VERSION) if object.get("state") == Some(&json!("PENDING")) => {
-            exact_keys(object, &["schema_version", "state", "governance"])
-                && validated_governance(object).is_some()
-        }
-        Some(EVIDENCE_SCHEMA_VERSION) => valid_canonical_value(object),
-        Some(1) => valid_legacy_value(object),
-        _ => false,
-    }
+fn canonical_passed(result: &VerificationDecisionResult) -> bool {
+    result.processing_status() == VerificationProcessingStatus::Completed
+        && result.decision() == VerificationDecision::Pass
+        && result.is_valid()
 }
 
-fn valid_canonical_value(object: &Map<String, Value>) -> bool {
-    if !exact_keys(
-        object,
-        &[
-            "schema_version",
-            "governance",
-            "canonical_result",
-            "evidence_records",
-        ],
-    ) {
-        return false;
-    }
-    let Some(governance) = validated_governance(object) else {
-        return false;
-    };
-    let Some(result) = object.get("canonical_result").and_then(Value::as_object) else {
-        return false;
-    };
-    let Some(records) = object.get("evidence_records").and_then(Value::as_array) else {
-        return false;
-    };
-    if !exact_keys(
-        result,
-        &[
-            "schema_version",
-            "verification_id",
-            "context",
-            "processing_status",
-            "decision",
-            "decision_code",
-            "valid",
-            "evaluated_at",
-            "input_digest",
-            "evidence_digest",
-            "policy",
-            "trust_profile",
-            "reducer",
-            "components",
-            "checks",
-            "category_summaries",
-        ],
-    ) {
-        return false;
-    }
-    let context_matches = result
-        .get("context")
-        .and_then(Value::as_object)
-        .is_some_and(|context| {
-            context.get("organization_id").and_then(Value::as_str)
-                == Some(governance.organization_id())
-                && context.get("verifier_id").and_then(Value::as_str)
-                    == Some(governance.policy().verifier_id())
-        });
-    if !context_matches
-        || result.get("policy")
-            != serde_json::to_value(governance.policy().reference())
-                .ok()
-                .as_ref()
-        || result.get("trust_profile")
-            != serde_json::to_value(governance.trust_profile().reference())
-                .ok()
-                .as_ref()
-        || result.get("components").and_then(Value::as_array)
-            != Some(&vec![
-                serde_json::to_value(governance.component()).unwrap_or(Value::Null)
-            ])
-    {
-        return false;
-    }
-    let Some(checks) = result.get("checks").and_then(Value::as_array) else {
-        return false;
-    };
-    let expected_checks = governance.policy().required_checks();
-    if checks.len() != expected_checks.len()
-        || checks.iter().zip(expected_checks).any(|(check, expected)| {
-            check.get("check_id").and_then(Value::as_str) != Some(expected)
-                || check.as_object().is_none_or(|check| {
-                    !exact_keys(
-                        check,
-                        &[
-                            "check_id",
-                            "category",
-                            "required",
-                            "outcome",
-                            "code",
-                            "component_id",
-                            "evaluated_at",
-                            "evidence_refs",
-                        ],
-                    )
-                })
+fn evidence_records(result: &VerificationDecisionResult) -> Vec<Value> {
+    result
+        .checks()
+        .iter()
+        .filter(|check| {
+            matches!(
+                check.outcome,
+                VerificationCheckOutcome::Passed | VerificationCheckOutcome::Failed
+            )
         })
-    {
-        return false;
+        .flat_map(|check| {
+            check.evidence_refs.iter().map(|evidence_ref| {
+                json!({
+                    "id": evidence_ref,
+                    "check_id": check.check_id,
+                    "outcome": check.outcome,
+                    "code": check.code,
+                })
+            })
+        })
+        .collect()
+}
+
+fn validate_evidence_digest(
+    records: &[Value],
+    expected: &str,
+) -> Result<(), PersistedEvidenceError> {
+    let records_json =
+        serde_json::to_string(records).map_err(|_| PersistedEvidenceError::Serialization)?;
+    let digest =
+        canonical_digest_json(&records_json).map_err(|_| PersistedEvidenceError::Serialization)?;
+    if digest != expected {
+        return Err(PersistedEvidenceError::DigestMismatch);
     }
-    let mut records_by_id = BTreeMap::new();
-    for record in records {
-        let Some(record) = record.as_object() else {
-            return false;
-        };
-        if !exact_keys(record, &["id", "check_id", "outcome", "code"])
-            || record.values().any(|value| !value.is_string())
-        {
-            return false;
-        }
-        let Some(id) = record.get("id").and_then(Value::as_str) else {
-            return false;
-        };
-        if records_by_id.insert(id, record).is_some() {
-            return false;
-        }
-    }
-    let mut referenced = Vec::new();
-    for check in checks {
-        let Some(check) = check.as_object() else {
-            return false;
-        };
-        let refs = check
-            .get("evidence_refs")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten();
-        for evidence_ref in refs {
-            let Some(evidence_ref) = evidence_ref.as_str() else {
-                return false;
-            };
-            let Some(record) = records_by_id.get(evidence_ref) else {
-                return false;
-            };
-            if record.get("check_id") != check.get("check_id")
-                || record.get("outcome") != check.get("outcome")
-                || record.get("code") != check.get("code")
-            {
-                return false;
-            }
-            referenced.push(evidence_ref);
-        }
-    }
-    referenced.sort_unstable();
-    let mut record_ids = records_by_id.keys().copied().collect::<Vec<_>>();
-    record_ids.sort_unstable();
-    if referenced != record_ids {
-        return false;
-    }
-    serde_json::to_string(records)
-        .ok()
-        .and_then(|records| canonical_digest_json(&records).ok())
-        .as_deref()
-        == result.get("evidence_digest").and_then(Value::as_str)
+    Ok(())
 }
 
 fn validated_governance(object: &Map<String, Value>) -> Option<GovernanceSnapshot> {
     GovernanceSnapshot::validate_frozen_evidence(object.get("governance")?.clone()).ok()
-}
-
-fn valid_legacy_value(object: &Map<String, Value>) -> bool {
-    let keys_with_digest = [
-        "schema_version",
-        "legacy",
-        "reason_code",
-        "presentation_sha256",
-    ];
-    let reason = object.get("reason_code").and_then(Value::as_str);
-    object.get("legacy") == Some(&Value::Bool(true))
-        && matches!(
-            reason,
-            Some("MISSING_GOVERNANCE_PROVENANCE" | "CANONICAL_RESULT_BUILD_FAILED")
-        )
-        && exact_keys(object, &keys_with_digest)
-        && object
-            .get("presentation_sha256")
-            .and_then(Value::as_str)
-            .is_some_and(|value| Sha256Digest::parse(value).is_ok())
 }
 
 fn exact_keys(object: &Map<String, Value>, keys: &[&str]) -> bool {
@@ -376,10 +418,20 @@ fn exact_keys(object: &Map<String, Value>, keys: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use marty_verification::governance::behavior_fixture_json;
+    use marty_verification::{
+        governance::{behavior_fixture_json, canonical_digest_json},
+        verification::{
+            build_verification_decision_result, VerificationCheckCategory,
+            VerificationCheckOutcome, VerificationCheckResult, VerificationComponentVersion,
+            VerificationContextMode, VerificationDecisionContext, VerificationDecisionResultInput,
+            VerificationProcessingStatus, VerificationProfileReference,
+        },
+    };
 
     use super::*;
     use crate::credentials_compat::{GovernanceEngine, GovernancePurpose};
+
+    const SESSION_ID: &str = "session-001";
 
     fn governance() -> GovernanceSnapshot {
         let fixture: Value = serde_json::from_str(behavior_fixture_json()).unwrap();
@@ -389,21 +441,179 @@ mod tests {
             .unwrap()
     }
 
+    fn canonical_result(
+        governance: &GovernanceSnapshot,
+        digest: &Sha256Digest,
+        failed: bool,
+    ) -> VerificationDecisionResult {
+        let evaluated_at = "2026-08-30T12:00:00Z";
+        let checks = governance
+            .policy()
+            .required_checks()
+            .iter()
+            .enumerate()
+            .map(|(index, check_id)| VerificationCheckResult {
+                check_id: check_id.clone(),
+                category: VerificationCheckCategory::Policy,
+                required: true,
+                outcome: if failed && index == 0 {
+                    VerificationCheckOutcome::Failed
+                } else {
+                    VerificationCheckOutcome::Passed
+                },
+                code: if failed && index == 0 {
+                    "CHECK_FAILED".into()
+                } else {
+                    "CHECK_PASSED".into()
+                },
+                component_id: governance.component().component_id.clone(),
+                evaluated_at: evaluated_at.into(),
+                evidence_refs: vec![format!(
+                    "urn:marty:evidence:123e4567-e89b-42d3-a456-{index:012}"
+                )],
+            })
+            .collect::<Vec<_>>();
+        let provisional = VerificationDecisionResultInput {
+            verification_id: format!("verification:{SESSION_ID}"),
+            context: VerificationDecisionContext {
+                mode: VerificationContextMode::Online,
+                verifier_id: governance.policy().verifier_id().into(),
+                organization_id: Some(governance.organization_id().into()),
+                transaction_id: Some(SESSION_ID.into()),
+                audience: Some(governance.policy().verifier_id().into()),
+                offline_profile_id: None,
+            },
+            processing_status: VerificationProcessingStatus::Completed,
+            evaluated_at: evaluated_at.into(),
+            input_digest: format!("sha256:{}", digest.as_str()),
+            evidence_digest: format!("sha256:{}", "0".repeat(64)),
+            policy: VerificationProfileReference {
+                id: governance.policy().reference().id.clone(),
+                version: governance.policy().reference().version.clone(),
+                content_digest: governance.policy().reference().content_digest.clone(),
+            },
+            trust_profile: VerificationProfileReference {
+                id: governance.trust_profile().reference().id.clone(),
+                version: governance.trust_profile().reference().version.clone(),
+                content_digest: governance
+                    .trust_profile()
+                    .reference()
+                    .content_digest
+                    .clone(),
+            },
+            components: vec![VerificationComponentVersion {
+                component_id: governance.component().component_id.clone(),
+                version: governance.component().version.clone(),
+                artifact_digest: governance.component().artifact_digest.clone(),
+                adapter_id: Some(governance.component().adapter_id.clone()),
+                adapter_version: Some(governance.component().adapter_version.clone()),
+            }],
+            checks,
+        };
+        let provisional_result = build_verification_decision_result(provisional.clone()).unwrap();
+        let records = evidence_records(&provisional_result);
+        let evidence_digest =
+            canonical_digest_json(&serde_json::to_string(&records).unwrap()).unwrap();
+        build_verification_decision_result(VerificationDecisionResultInput {
+            evidence_digest,
+            ..provisional
+        })
+        .unwrap()
+    }
+
     #[test]
     fn pending_and_fail_closed_evidence_have_fixed_claim_free_shapes() {
         let pending = PersistedEvidence::pending(&governance());
-        assert!(valid_persisted_value(pending.as_value()));
+        assert!(matches!(pending.kind, EvidenceKind::Pending));
         assert_eq!(pending.as_value().as_object().unwrap().len(), 3);
 
         let raw = "raw.presentation.secret";
+        let digest = Sha256Digest::calculate(raw);
         let failed = PersistedEvidence::fail_closed(
-            &Sha256Digest::calculate(raw),
+            &digest,
             EvidenceFailureReason::CanonicalResultBuildFailed,
         );
-        assert!(valid_persisted_value(failed.as_value()));
+        failed
+            .validate_terminal_binding("any-session", &digest)
+            .unwrap();
+        failed.require_failed().unwrap();
         let encoded = failed.as_value().to_string();
         assert!(!encoded.contains(raw));
         assert!(!encoded.contains("credential"));
+    }
+
+    #[test]
+    fn canonical_terminal_status_and_bindings_are_enforced() {
+        let governance = governance();
+        let digest = Sha256Digest::calculate("presentation");
+        let passed = PersistedEvidence::canonical(
+            &governance,
+            SESSION_ID,
+            &digest,
+            &canonical_result(&governance, &digest, false),
+        )
+        .unwrap();
+        passed.require_verified().unwrap();
+        assert_eq!(
+            passed.require_failed(),
+            Err(PersistedEvidenceError::FailureEvidenceRequired)
+        );
+        passed
+            .validate_terminal_binding(SESSION_ID, &digest)
+            .unwrap();
+        assert_eq!(
+            passed.validate_terminal_binding("other-session", &digest),
+            Err(PersistedEvidenceError::SessionMismatch)
+        );
+        assert_eq!(
+            passed.validate_terminal_binding(SESSION_ID, &Sha256Digest::calculate("other")),
+            Err(PersistedEvidenceError::PresentationMismatch)
+        );
+
+        let failed = PersistedEvidence::canonical(
+            &governance,
+            SESSION_ID,
+            &digest,
+            &canonical_result(&governance, &digest, true),
+        )
+        .unwrap();
+        failed.require_failed().unwrap();
+        assert_eq!(
+            failed.require_verified(),
+            Err(PersistedEvidenceError::CanonicalPassRequired)
+        );
+    }
+
+    #[test]
+    fn database_canonical_results_are_reduced_again_and_tampering_is_sanitized() {
+        let governance = governance();
+        let digest = Sha256Digest::calculate("presentation");
+        let evidence = PersistedEvidence::canonical(
+            &governance,
+            SESSION_ID,
+            &digest,
+            &canonical_result(&governance, &digest, false),
+        )
+        .unwrap();
+        let reloaded = PersistedEvidence::from_database(evidence.as_value().clone());
+        reloaded.require_verified().unwrap();
+
+        for pointer in [
+            "decision",
+            "valid",
+            "decision_code",
+            "reducer",
+            "category_summaries",
+        ] {
+            let mut tampered = evidence.as_value().clone();
+            tampered["canonical_result"][pointer] = json!("attacker-controlled");
+            let sanitized = PersistedEvidence::from_database(tampered);
+            assert!(matches!(sanitized.kind, EvidenceKind::Invalid));
+            assert_eq!(
+                sanitized.as_value()["reason_code"],
+                "INVALID_PERSISTED_EVIDENCE"
+            );
+        }
     }
 
     #[test]

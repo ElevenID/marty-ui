@@ -7,9 +7,9 @@ use thiserror::Error;
 
 use super::session::TerminalDecisionKind;
 use super::{
-    ClaimState, PersistedEvidence, ProcessingLease, ProcessingToken, SessionDraft,
-    SessionDurationSeconds, SessionRecord, SessionStatus, Sha256Digest, SubmissionClaim,
-    TerminalDecision, VerificationMethod, VerifierNonce,
+    ClaimState, PersistedEvidence, PersistedEvidenceError, ProcessingLease, ProcessingToken,
+    SessionDraft, SessionDurationSeconds, SessionRecord, SessionStatus, Sha256Digest,
+    SubmissionClaim, TerminalDecision, VerificationMethod, VerifierNonce,
 };
 
 // All SQL assembled with this fragment interpolates only this compile-time
@@ -22,6 +22,8 @@ pub enum SessionPersistenceError {
     Database(#[source] sqlx::Error),
     #[error("VERIFICATION.SESSION_CORRUPT: {0}")]
     Corrupt(&'static str),
+    #[error("VERIFICATION.SESSION_EVIDENCE: terminal evidence is invalid")]
+    InvalidEvidence(#[source] PersistedEvidenceError),
 }
 
 impl From<sqlx::Error> for SessionPersistenceError {
@@ -256,6 +258,9 @@ impl SessionRepository for PostgresSessionRepository {
         processing_token: &ProcessingToken,
         decision: TerminalDecision,
     ) -> Result<SubmissionClaim, SessionPersistenceError> {
+        decision
+            .validate_binding(session_id, presentation_digest)
+            .map_err(SessionPersistenceError::InvalidEvidence)?;
         let mut transaction = self.pool.begin().await?;
         let Some(row) = locked_row(&mut transaction, session_id).await? else {
             transaction.rollback().await?;

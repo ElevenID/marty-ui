@@ -36,11 +36,10 @@ fn token(value: &str) -> ProcessingToken {
 }
 
 #[tokio::test]
+#[ignore = "requires an isolated PostgreSQL database"]
 async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
-    let Some(database_url) = std::env::var("VERIFICATION_SESSION_TEST_DATABASE_URL").ok() else {
-        eprintln!("VERIFICATION_SESSION_TEST_DATABASE_URL is not configured; skipping");
-        return;
-    };
+    let database_url = std::env::var("VERIFICATION_SESSION_TEST_DATABASE_URL")
+        .expect("ignored PostgreSQL contract requires VERIFICATION_SESSION_TEST_DATABASE_URL");
     let pool = PgPoolOptions::new()
         .max_connections(12)
         .connect(&database_url)
@@ -51,7 +50,10 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
         "DROP TABLE IF EXISTS public.verification_sessions;
          DROP SCHEMA IF EXISTS verification_service CASCADE;
          CREATE SCHEMA verification_service;
-         CREATE TABLE verification_service.alembic_version(version_num VARCHAR(32) NOT NULL);
+         CREATE TABLE verification_service.alembic_version(
+             version_num VARCHAR(32) NOT NULL,
+             CONSTRAINT alembic_version_pkc PRIMARY KEY(version_num)
+         );
          INSERT INTO verification_service.alembic_version(version_num) VALUES('202608081900');",
     )
     .execute(&pool)
@@ -181,7 +183,8 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                 ),
                 Some(VerificationMethod::JwtVp),
                 "Verification failed".into(),
-            ),
+            )
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -198,7 +201,8 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                 ),
                 Some(VerificationMethod::JwtVp),
                 "Verification failed".into(),
-            ),
+            )
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -271,7 +275,8 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                 ),
                 Some(VerificationMethod::JwtVp),
                 "late".into(),
-            ),
+            )
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -297,7 +302,8 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                     ),
                     Some(VerificationMethod::JwtVp),
                     "stale".into(),
-                ),
+                )
+                .unwrap(),
             )
             .await
             .unwrap()
@@ -317,12 +323,55 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                     ),
                     Some(VerificationMethod::JwtVp),
                     "Verification failed".into(),
-                ),
+                )
+                .unwrap(),
             )
             .await
             .unwrap()
             .state,
         ClaimState::Finalized
+    );
+
+    repository
+        .create(draft("binding-session", 'b'), lifetime)
+        .await
+        .unwrap();
+    let binding_digest = Sha256Digest::calculate("bound-presentation");
+    let binding_token = token("binding-token");
+    assert_eq!(
+        repository
+            .claim("binding-session", &binding_digest, &binding_token, lease,)
+            .await
+            .unwrap()
+            .state,
+        ClaimState::Claimed
+    );
+    let other_digest = Sha256Digest::calculate("other-presentation");
+    assert!(repository
+        .finalize(
+            "binding-session",
+            &binding_digest,
+            &binding_token,
+            TerminalDecision::failed(
+                PersistedEvidence::fail_closed(
+                    &other_digest,
+                    EvidenceFailureReason::CanonicalResultBuildFailed,
+                ),
+                Some(VerificationMethod::JwtVp),
+                "must not persist".into(),
+            )
+            .unwrap(),
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        repository
+            .get("binding-session")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        SessionStatus::InProgress
     );
 
     repository
@@ -450,6 +499,148 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
             .unwrap()
             .state,
         ClaimState::Conflict
+    );
+
+    // Head mode scrubs any raw value written by a rolling old process without
+    // replaying the atomic transform over a valid terminal decision.
+    sqlx::query(
+        "UPDATE public.verification_sessions SET presentation_data='{\"raw\":true}'
+         WHERE id='race-session'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migrate_session_schema(&pool).await.unwrap();
+    let privacy_at_head: (String, Option<Value>) = sqlx::query_as(
+        "SELECT status,presentation_data FROM public.verification_sessions
+         WHERE id='race-session'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(privacy_at_head, ("FAILED".into(), None));
+
+    // Lost history may be adopted only when the complete final guards behave
+    // correctly, and adoption must not expire a currently fenced worker.
+    sqlx::query("DELETE FROM verification_service.alembic_version")
+        .execute(&pool)
+        .await
+        .unwrap();
+    migrate_session_schema(&pool).await.unwrap();
+    assert_eq!(
+        repository.get("lease-cap").await.unwrap().unwrap().status,
+        SessionStatus::InProgress
+    );
+
+    sqlx::query("UPDATE verification_service.alembic_version SET version_num='unknown-revision'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+    sqlx::raw_sql(
+        "DELETE FROM verification_service.alembic_version;
+         INSERT INTO verification_service.alembic_version(version_num)
+         VALUES('202608081900'),('202608091200');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+    sqlx::raw_sql(
+        "DELETE FROM verification_service.alembic_version;
+         INSERT INTO verification_service.alembic_version(version_num) VALUES('202608091200');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A same-named index on the wrong key must never be adopted.
+    sqlx::raw_sql(
+        "DELETE FROM verification_service.alembic_version;
+         DROP INDEX public.ux_verification_sessions_live_nonce;
+         CREATE UNIQUE INDEX ux_verification_sessions_live_nonce
+             ON public.verification_sessions(id) WHERE nonce IS NOT NULL;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+    sqlx::raw_sql(
+        "DROP INDEX public.ux_verification_sessions_live_nonce;
+         CREATE UNIQUE INDEX ux_verification_sessions_live_nonce
+             ON public.verification_sessions(nonce) WHERE nonce IS NOT NULL;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Fragment-preserving but weakened guards must fail behavioral adoption.
+    sqlx::raw_sql(
+        "ALTER TABLE public.verification_sessions
+             DROP CONSTRAINT ck_verification_processing_lease;
+         ALTER TABLE public.verification_sessions
+             ADD CONSTRAINT ck_verification_processing_lease CHECK (
+                 processing_started_at IS NULL
+                 OR processing_expires_at >= processing_started_at
+             );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+    sqlx::raw_sql(
+        "ALTER TABLE public.verification_sessions
+             DROP CONSTRAINT ck_verification_processing_lease;
+         ALTER TABLE public.verification_sessions
+             ADD CONSTRAINT ck_verification_processing_lease CHECK (
+                 processing_started_at IS NULL
+                 OR processing_expires_at > processing_started_at
+             );
+         ALTER TABLE public.verification_sessions
+             DROP CONSTRAINT ck_verification_atomic_state;
+         ALTER TABLE public.verification_sessions
+             ADD CONSTRAINT ck_verification_atomic_state CHECK (
+                 (upper(status)='PENDING' AND nonce IS NOT NULL
+                  AND submission_sha256 IS NULL AND processing_token_sha256 IS NULL
+                  AND processing_started_at IS NULL AND processing_expires_at IS NULL)
+                 OR upper(status)='IN_PROGRESS'
+                 OR upper(status)='VERIFIED'
+                 OR upper(status)='FAILED'
+                 OR upper(status)='EXPIRED'
+             );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(migrate_session_schema(&pool).await.is_err());
+
+    // Fresh Rust ownership and concurrent runners converge on the one exact
+    // Alembic head under the advisory lock.
+    sqlx::raw_sql(
+        "DROP TABLE public.verification_sessions;
+         DROP SCHEMA verification_service CASCADE;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (first_migration, second_migration) =
+        tokio::join!(migrate_session_schema(&pool), migrate_session_schema(&pool));
+    first_migration.unwrap();
+    second_migration.unwrap();
+    let history: (String, String) = sqlx::query_as(
+        "SELECT version_num, constraint_name
+         FROM verification_service.alembic_version
+         JOIN information_schema.table_constraints
+           ON table_schema='verification_service'
+          AND table_name='alembic_version'
+          AND constraint_type='PRIMARY KEY'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        history,
+        ("202608091200".into(), "alembic_version_pkc".into())
     );
 
     pool.close().await;

@@ -266,26 +266,24 @@ impl TerminalDecision {
         verification_evidence: PersistedEvidence,
         method: VerificationMethod,
     ) -> Result<Self, PersistedEvidenceError> {
-        if !verification_evidence.is_canonical() {
-            return Err(PersistedEvidenceError::CanonicalRequired);
-        }
+        verification_evidence.require_verified()?;
         Ok(Self(TerminalDecisionKind::Verified {
             verification_evidence,
             method,
         }))
     }
 
-    #[must_use]
-    pub const fn failed(
+    pub fn failed(
         verification_evidence: PersistedEvidence,
         method: Option<VerificationMethod>,
         error_message: String,
-    ) -> Self {
-        Self(TerminalDecisionKind::Failed {
+    ) -> Result<Self, PersistedEvidenceError> {
+        verification_evidence.require_failed()?;
+        Ok(Self(TerminalDecisionKind::Failed {
             verification_evidence,
             method,
             error_message,
-        })
+        }))
     }
 
     #[must_use]
@@ -298,6 +296,23 @@ impl TerminalDecision {
 
     pub(crate) fn into_kind(self) -> TerminalDecisionKind {
         self.0
+    }
+
+    pub(crate) fn validate_binding(
+        &self,
+        session_id: &str,
+        presentation_digest: &Sha256Digest,
+    ) -> Result<(), PersistedEvidenceError> {
+        match &self.0 {
+            TerminalDecisionKind::Verified {
+                verification_evidence,
+                ..
+            }
+            | TerminalDecisionKind::Failed {
+                verification_evidence,
+                ..
+            } => verification_evidence.validate_terminal_binding(session_id, presentation_digest),
+        }
     }
 }
 
@@ -384,11 +399,12 @@ mod tests {
         let evidence = PersistedEvidence::from_database(Value::Object(Map::new()));
         assert_eq!(
             TerminalDecision::verified(evidence.clone(), VerificationMethod::JwtVp),
-            Err(PersistedEvidenceError::CanonicalRequired)
+            Err(PersistedEvidenceError::CanonicalPassRequired)
         );
-        let decision =
-            TerminalDecision::failed(evidence, Some(VerificationMethod::JwtVp), "failed".into());
-        assert_eq!(decision.status(), SessionStatus::Failed);
+        assert_eq!(
+            TerminalDecision::failed(evidence, Some(VerificationMethod::JwtVp), "failed".into()),
+            Err(PersistedEvidenceError::InvalidTerminalEvidence)
+        );
         assert_eq!(
             SessionStatus::parse_database("verified"),
             Some(SessionStatus::Verified)
