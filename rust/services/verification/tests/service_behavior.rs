@@ -344,6 +344,7 @@ async fn http_adapter_preserves_management_and_public_wallet_boundaries() {
             }),
             release_version: "test".into(),
             build_revision: "test".into(),
+            credentials_compat_enabled: false,
         });
     let unauthorized = app
         .clone()

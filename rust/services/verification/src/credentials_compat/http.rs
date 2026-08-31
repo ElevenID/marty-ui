@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
+    body::Bytes,
     extract::{rejection::JsonRejection, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -161,15 +162,19 @@ pub fn router(state: CompatibilityState) -> Router {
 async fn create_session(
     State(state): State<CompatibilityState>,
     headers: HeaderMap,
-    request: Result<Json<CreateSessionRequest>, JsonRejection>,
+    body: Bytes,
 ) -> Response {
-    let request = match request {
-        Ok(Json(request)) => request,
-        Err(_) => return validation_response(),
+    let value = match parse_json_syntax(&body) {
+        Ok(value) => value,
+        Err(response) => return response,
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::SessionCreate) {
         Ok(governance) => governance,
         Err(error) => return error.into_response(),
+    };
+    let request = match serde_json::from_value::<CreateSessionRequest>(value) {
+        Ok(request) => request,
+        Err(_) => return validation_response(),
     };
     match state.use_cases.create_session(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -209,15 +214,19 @@ async fn get_session(
 async fn verify_direct(
     State(state): State<CompatibilityState>,
     headers: HeaderMap,
-    request: Result<Json<VerifyDirectRequest>, JsonRejection>,
+    body: Bytes,
 ) -> Response {
-    let request = match request {
-        Ok(Json(request)) => request,
-        Err(_) => return validation_response(),
+    let value = match parse_json_syntax(&body) {
+        Ok(value) => value,
+        Err(response) => return response,
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::Direct) {
         Ok(governance) => governance,
         Err(error) => return error.into_response(),
+    };
+    let request = match serde_json::from_value::<VerifyDirectRequest>(value) {
+        Ok(request) => request,
+        Err(_) => return validation_response(),
     };
     match state.use_cases.verify_direct(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -228,15 +237,19 @@ async fn verify_direct(
 async fn verify_vds_nc(
     State(state): State<CompatibilityState>,
     headers: HeaderMap,
-    request: Result<Json<VerifyVdsNcRequest>, JsonRejection>,
+    body: Bytes,
 ) -> Response {
-    let request = match request {
-        Ok(Json(request)) => request,
-        Err(_) => return validation_response(),
+    let value = match parse_json_syntax(&body) {
+        Ok(value) => value,
+        Err(response) => return response,
     };
     let governance = match authorize(&state, &headers, GovernancePurpose::VdsNc) {
         Ok(governance) => governance,
         Err(error) => return error.into_response(),
+    };
+    let request = match serde_json::from_value::<VerifyVdsNcRequest>(value) {
+        Ok(request) => request,
+        Err(_) => return validation_response(),
     };
     match state.use_cases.verify_vds_nc(request, governance).await {
         Ok(response) => Json(response).into_response(),
@@ -280,6 +293,10 @@ fn validation_response() -> Response {
         Json(json!({"detail": "Request validation failed"})),
     )
         .into_response()
+}
+
+fn parse_json_syntax(body: &[u8]) -> Result<serde_json::Value, Response> {
+    serde_json::from_slice(body).map_err(|_| validation_response())
 }
 
 #[cfg(test)]
@@ -574,6 +591,45 @@ mod tests {
             response_json(response).await["detail"],
             "Invalid or unauthorized API key"
         );
+    }
+
+    #[tokio::test]
+    async fn protected_routes_parse_syntax_then_authorize_then_validate_schema() {
+        for path in [
+            "/v1/verification/sessions",
+            "/v1/verification/verify",
+            "/v1/verification/verify/vds-nc",
+        ] {
+            let response = app(true)
+                .oneshot(json_request(
+                    "POST",
+                    path,
+                    json!({"well_formed_but_invalid":true}),
+                    false,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(
+                response_json(response).await,
+                json!({"detail":"X-API-Key header is missing"})
+            );
+
+            let response = app(true)
+                .oneshot(
+                    Request::post(path)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{path}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -71,6 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runtime: runtime.state(),
         release_version: config.release_version.clone(),
         build_revision: config.build_revision.clone(),
+        credentials_compat_enabled: config.credentials_compat_enabled,
     })
     .layer(TraceLayer::new_for_http());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
