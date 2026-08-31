@@ -5,6 +5,7 @@
 //! governance, cryptographic, DID, policy, or framework implementation.
 
 pub mod dto;
+pub mod evidence;
 pub mod governance;
 pub mod http;
 pub mod migration;
@@ -16,6 +17,7 @@ pub use dto::{
     RequestValidationError, SessionDurationSeconds, SessionResponse, SubmitPresentationRequest,
     VerificationResult, VerifyDirectRequest, VerifyVdsNcRequest,
 };
+pub use evidence::{EvidenceFailureReason, PersistedEvidence, PersistedEvidenceError};
 pub use governance::{
     GovernanceEngine, GovernanceError, GovernancePurpose, GovernanceSnapshot, PolicyAuthority,
     TrustAuthority,

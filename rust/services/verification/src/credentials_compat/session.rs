@@ -3,9 +3,11 @@ use std::{fmt, time::Duration};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::NaiveDateTime;
 use rand::RngCore;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use super::{PersistedEvidence, PersistedEvidenceError};
 
 const SECRET_BYTES: usize = 32;
 const ENCODED_NONCE_LENGTH: usize = 43;
@@ -65,11 +67,16 @@ impl VerifierNonce {
 
     pub fn parse(value: impl Into<String>) -> Result<Self, SessionInvariantError> {
         let value = value.into();
-        if value.is_ascii() && value.len() == ENCODED_NONCE_LENGTH {
-            Ok(Self(value))
-        } else {
-            Err(SessionInvariantError::Nonce)
+        let decoded = URL_SAFE_NO_PAD
+            .decode(&value)
+            .map_err(|_| SessionInvariantError::Nonce)?;
+        if value.len() != ENCODED_NONCE_LENGTH
+            || decoded.len() != SECRET_BYTES
+            || URL_SAFE_NO_PAD.encode(decoded) != value
+        {
+            return Err(SessionInvariantError::Nonce);
         }
+        Ok(Self(value))
     }
 
     #[must_use]
@@ -209,7 +216,7 @@ pub struct SessionDraft {
     pub required_credential_types: Vec<String>,
     pub trusted_issuers: Vec<String>,
     pub required_claims: Vec<String>,
-    pub verification_evidence: Value,
+    pub verification_evidence: PersistedEvidence,
     pub request_uri: String,
     pub nonce: VerifierNonce,
 }
@@ -224,8 +231,7 @@ pub struct SessionRecord {
     pub required_credential_types: Vec<String>,
     pub trusted_issuers: Vec<String>,
     pub required_claims: Vec<String>,
-    pub verified_claims: Option<Map<String, Value>>,
-    pub verification_evidence: Value,
+    pub verification_evidence: PersistedEvidence,
     pub verification_method: Option<VerificationMethod>,
     pub verified_at: Option<NaiveDateTime>,
     pub created_at: NaiveDateTime,
@@ -240,26 +246,58 @@ pub struct SessionRecord {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum TerminalDecision {
+pub struct TerminalDecision(TerminalDecisionKind);
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TerminalDecisionKind {
     Verified {
-        verified_claims: Map<String, Value>,
-        verification_evidence: Value,
+        verification_evidence: PersistedEvidence,
         method: VerificationMethod,
     },
     Failed {
-        verification_evidence: Value,
+        verification_evidence: PersistedEvidence,
         method: Option<VerificationMethod>,
         error_message: String,
     },
 }
 
 impl TerminalDecision {
+    pub fn verified(
+        verification_evidence: PersistedEvidence,
+        method: VerificationMethod,
+    ) -> Result<Self, PersistedEvidenceError> {
+        if !verification_evidence.is_canonical() {
+            return Err(PersistedEvidenceError::CanonicalRequired);
+        }
+        Ok(Self(TerminalDecisionKind::Verified {
+            verification_evidence,
+            method,
+        }))
+    }
+
+    #[must_use]
+    pub const fn failed(
+        verification_evidence: PersistedEvidence,
+        method: Option<VerificationMethod>,
+        error_message: String,
+    ) -> Self {
+        Self(TerminalDecisionKind::Failed {
+            verification_evidence,
+            method,
+            error_message,
+        })
+    }
+
     #[must_use]
     pub const fn status(&self) -> SessionStatus {
-        match self {
-            Self::Verified { .. } => SessionStatus::Verified,
-            Self::Failed { .. } => SessionStatus::Failed,
+        match self.0 {
+            TerminalDecisionKind::Verified { .. } => SessionStatus::Verified,
+            TerminalDecisionKind::Failed { .. } => SessionStatus::Failed,
         }
+    }
+
+    pub(crate) fn into_kind(self) -> TerminalDecisionKind {
+        self.0
     }
 }
 
@@ -313,6 +351,8 @@ impl SubmissionClaim {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Map;
+
     use super::*;
 
     #[test]
@@ -341,12 +381,14 @@ mod tests {
 
     #[test]
     fn terminal_decisions_cannot_represent_nonterminal_states_or_raw_presentations() {
-        let decision = TerminalDecision::Verified {
-            verified_claims: Map::new(),
-            verification_evidence: Value::Object(Map::new()),
-            method: VerificationMethod::JwtVp,
-        };
-        assert_eq!(decision.status(), SessionStatus::Verified);
+        let evidence = PersistedEvidence::from_database(Value::Object(Map::new()));
+        assert_eq!(
+            TerminalDecision::verified(evidence.clone(), VerificationMethod::JwtVp),
+            Err(PersistedEvidenceError::CanonicalRequired)
+        );
+        let decision =
+            TerminalDecision::failed(evidence, Some(VerificationMethod::JwtVp), "failed".into());
+        assert_eq!(decision.status(), SessionStatus::Failed);
         assert_eq!(
             SessionStatus::parse_database("verified"),
             Some(SessionStatus::Verified)
@@ -354,6 +396,24 @@ mod tests {
         assert_eq!(
             VerificationMethod::parse_database("jwt_vp"),
             Some(VerificationMethod::JwtVp)
+        );
+    }
+
+    #[test]
+    fn nonce_requires_canonical_base64url_encoding_of_exactly_32_bytes() {
+        for invalid in [
+            " ".repeat(43),
+            "!".repeat(43),
+            URL_SAFE_NO_PAD.encode([0_u8; 31]),
+            URL_SAFE_NO_PAD.encode([0_u8; 33]),
+            format!("{}=", URL_SAFE_NO_PAD.encode([0_u8; 32])),
+        ] {
+            assert!(VerifierNonce::parse(invalid).is_err());
+        }
+        let canonical = URL_SAFE_NO_PAD.encode([7_u8; 32]);
+        assert_eq!(
+            VerifierNonce::parse(&canonical).unwrap().as_str(),
+            canonical
         );
     }
 }

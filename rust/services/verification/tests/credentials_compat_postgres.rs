@@ -1,14 +1,22 @@
 use std::collections::BTreeMap;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use marty_verification_service::credentials_compat::{
-    migrate_session_schema, ClaimState, PostgresSessionRepository, ProcessingLease,
-    ProcessingToken, SessionDraft, SessionDurationSeconds, SessionRepository, SessionStatus,
-    Sha256Digest, TerminalDecision, VerificationMethod, VerifierNonce,
+    migrate_session_schema, ClaimState, EvidenceFailureReason, GovernanceEngine, GovernancePurpose,
+    PersistedEvidence, PostgresSessionRepository, ProcessingLease, ProcessingToken, SessionDraft,
+    SessionDurationSeconds, SessionRepository, SessionStatus, Sha256Digest, TerminalDecision,
+    VerificationMethod, VerifierNonce,
 };
-use serde_json::{json, Map};
+use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, Row};
 
 fn draft(id: &str, nonce_character: char) -> SessionDraft {
+    let fixture: Value =
+        serde_json::from_str(marty_verification::governance::behavior_fixture_json()).unwrap();
+    let governance = GovernanceEngine::new(&fixture["governance"].to_string())
+        .unwrap()
+        .authorize("purpose-scoped-test-key", GovernancePurpose::SessionCreate)
+        .unwrap();
     SessionDraft {
         id: id.into(),
         organization_id: "org-1".into(),
@@ -17,9 +25,9 @@ fn draft(id: &str, nonce_character: char) -> SessionDraft {
         required_credential_types: Vec::new(),
         trusted_issuers: vec!["did:web:issuer.example".into()],
         required_claims: Vec::new(),
-        verification_evidence: json!({"governance":{"frozen":true}}),
+        verification_evidence: PersistedEvidence::pending(&governance),
         request_uri: format!("https://verifier.example/request/{id}"),
-        nonce: VerifierNonce::parse(nonce_character.to_string().repeat(43)).unwrap(),
+        nonce: VerifierNonce::parse(URL_SAFE_NO_PAD.encode([nonce_character as u8; 32])).unwrap(),
     }
 }
 
@@ -166,32 +174,36 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
             "race-session",
             &race_digest,
             loser,
-            TerminalDecision::Failed {
-                verification_evidence: json!({"decision":"FAIL"}),
-                method: Some(VerificationMethod::JwtVp),
-                error_message: "Verification failed".into(),
-            },
+            TerminalDecision::failed(
+                PersistedEvidence::fail_closed(
+                    &race_digest,
+                    EvidenceFailureReason::CanonicalResultBuildFailed,
+                ),
+                Some(VerificationMethod::JwtVp),
+                "Verification failed".into(),
+            ),
         )
         .await
         .unwrap();
     assert_eq!(stale.state, ClaimState::Stale);
-    let mut claims = Map::new();
-    claims.insert("role".into(), json!("member"));
     let finalized = repository
         .finalize(
             "race-session",
             &race_digest,
             winner,
-            TerminalDecision::Verified {
-                verified_claims: claims,
-                verification_evidence: json!({"decision":"PASS"}),
-                method: VerificationMethod::JwtVp,
-            },
+            TerminalDecision::failed(
+                PersistedEvidence::fail_closed(
+                    &race_digest,
+                    EvidenceFailureReason::CanonicalResultBuildFailed,
+                ),
+                Some(VerificationMethod::JwtVp),
+                "Verification failed".into(),
+            ),
         )
         .await
         .unwrap();
     assert_eq!(finalized.state, ClaimState::Finalized);
-    assert_eq!(finalized.session.unwrap().status, SessionStatus::Verified);
+    assert_eq!(finalized.session.unwrap().status, SessionStatus::Failed);
 
     sqlx::query(
         "UPDATE public.verification_sessions
@@ -252,11 +264,14 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
             "recovery-session",
             &recovery_digest,
             &original_token,
-            TerminalDecision::Failed {
-                verification_evidence: json!({"decision":"FAIL"}),
-                method: Some(VerificationMethod::JwtVp),
-                error_message: "late".into(),
-            },
+            TerminalDecision::failed(
+                PersistedEvidence::fail_closed(
+                    &recovery_digest,
+                    EvidenceFailureReason::CanonicalResultBuildFailed,
+                ),
+                Some(VerificationMethod::JwtVp),
+                "late".into(),
+            ),
         )
         .await
         .unwrap();
@@ -275,11 +290,14 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                 "recovery-session",
                 &recovery_digest,
                 &original_token,
-                TerminalDecision::Verified {
-                    verified_claims: Map::new(),
-                    verification_evidence: json!({"decision":"PASS"}),
-                    method: VerificationMethod::JwtVp,
-                },
+                TerminalDecision::failed(
+                    PersistedEvidence::fail_closed(
+                        &recovery_digest,
+                        EvidenceFailureReason::CanonicalResultBuildFailed,
+                    ),
+                    Some(VerificationMethod::JwtVp),
+                    "stale".into(),
+                ),
             )
             .await
             .unwrap()
@@ -292,11 +310,14 @@ async fn released_migration_and_atomic_repository_contract_hold_on_postgres() {
                 "recovery-session",
                 &recovery_digest,
                 &recovery_token,
-                TerminalDecision::Failed {
-                    verification_evidence: json!({"decision":"FAIL"}),
-                    method: Some(VerificationMethod::JwtVp),
-                    error_message: "Verification failed".into(),
-                },
+                TerminalDecision::failed(
+                    PersistedEvidence::fail_closed(
+                        &recovery_digest,
+                        EvidenceFailureReason::CanonicalResultBuildFailed,
+                    ),
+                    Some(VerificationMethod::JwtVp),
+                    "Verification failed".into(),
+                ),
             )
             .await
             .unwrap()

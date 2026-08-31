@@ -5,10 +5,11 @@ use sqlx::{postgres::PgRow, AssertSqlSafe, PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
+use super::session::TerminalDecisionKind;
 use super::{
-    ClaimState, ProcessingLease, ProcessingToken, SessionDraft, SessionDurationSeconds,
-    SessionRecord, SessionStatus, Sha256Digest, SubmissionClaim, TerminalDecision,
-    VerificationMethod, VerifierNonce,
+    ClaimState, PersistedEvidence, ProcessingLease, ProcessingToken, SessionDraft,
+    SessionDurationSeconds, SessionRecord, SessionStatus, Sha256Digest, SubmissionClaim,
+    TerminalDecision, VerificationMethod, VerifierNonce,
 };
 
 // All SQL assembled with this fragment interpolates only this compile-time
@@ -129,7 +130,7 @@ impl SessionRepository for PostgresSessionRepository {
                 .map(Value::String)
                 .collect(),
         ))
-        .bind(&draft.verification_evidence)
+        .bind(draft.verification_evidence.as_value())
         .bind(now)
         .bind(expires_at)
         .bind(&draft.request_uri)
@@ -307,30 +308,30 @@ impl SessionRepository for PostgresSessionRepository {
         }
 
         let status = decision.status();
-        let (verified_claims, evidence, method, error_message, verified_at) = match decision {
-            TerminalDecision::Verified {
-                verified_claims,
-                verification_evidence,
-                method,
-            } => (
-                Some(Value::Object(verified_claims)),
-                verification_evidence,
-                Some(method.as_database_str()),
-                None,
-                Some(now),
-            ),
-            TerminalDecision::Failed {
-                verification_evidence,
-                method,
-                error_message,
-            } => (
-                None,
-                verification_evidence,
-                method.map(VerificationMethod::as_database_str),
-                Some(error_message),
-                None,
-            ),
-        };
+        let (verified_claims, evidence, method, error_message, verified_at) =
+            match decision.into_kind() {
+                TerminalDecisionKind::Verified {
+                    verification_evidence,
+                    method,
+                } => (
+                    Some(Value::Object(Default::default())),
+                    verification_evidence,
+                    Some(method.as_database_str()),
+                    None,
+                    Some(now),
+                ),
+                TerminalDecisionKind::Failed {
+                    verification_evidence,
+                    method,
+                    error_message,
+                } => (
+                    None,
+                    verification_evidence,
+                    method.map(VerificationMethod::as_database_str),
+                    Some(error_message),
+                    None,
+                ),
+            };
         let row = sqlx::query(AssertSqlSafe(format!(
             "UPDATE public.verification_sessions
              SET status=$2, presentation_data=NULL, verified_claims=$3,
@@ -343,7 +344,7 @@ impl SessionRepository for PostgresSessionRepository {
         .bind(session_id)
         .bind(status.as_database_str())
         .bind(verified_claims)
-        .bind(evidence)
+        .bind(evidence.as_value())
         .bind(method)
         .bind(verified_at)
         .bind(now)
@@ -449,17 +450,6 @@ fn record(row: PgRow) -> Result<SessionRecord, SessionPersistenceError> {
         .map(Sha256Digest::parse)
         .transpose()
         .map_err(|_| SessionPersistenceError::Corrupt("invalid presentation digest"))?;
-    let verified_claims = row
-        .try_get::<Option<Value>, _>("verified_claims")?
-        .map(|value| {
-            value
-                .as_object()
-                .cloned()
-                .ok_or(SessionPersistenceError::Corrupt(
-                    "verified claims are not an object",
-                ))
-        })
-        .transpose()?;
     Ok(SessionRecord {
         id: row.try_get("id")?,
         organization_id: row.try_get("organization_id")?,
@@ -469,8 +459,9 @@ fn record(row: PgRow) -> Result<SessionRecord, SessionPersistenceError> {
         required_credential_types: string_array(row.try_get("required_credential_types")?)?,
         trusted_issuers: string_array(row.try_get("trusted_issuers")?)?,
         required_claims: string_array(row.try_get("required_claims")?)?,
-        verified_claims,
-        verification_evidence: row.try_get("verification_evidence")?,
+        verification_evidence: PersistedEvidence::from_database(
+            row.try_get("verification_evidence")?,
+        ),
         verification_method,
         verified_at: row.try_get("verified_at")?,
         created_at: row.try_get("created_at")?,
