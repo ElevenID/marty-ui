@@ -12,6 +12,9 @@ use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
 use crate::{
+    canvas_award_candidate_approval::{
+        CanvasApplicationApprovalError, CanvasApplicationApprovalService,
+    },
     canvas_binding_domain::{CanvasBindingDomainError, CanvasProgramBindingRecord},
     canvas_catalog::{
         discover_canvas_scope, CanvasCatalogOAuth, CanvasCatalogProvider,
@@ -19,7 +22,8 @@ use crate::{
     },
     canvas_credentials_validation::CanvasCredentialsValidationResult,
     canvas_management::{
-        CanvasCredentialsValidationRequest, CanvasIntegrationSecretCreate,
+        CanvasApplicationApprovalRequest, CanvasCredentialsValidationRequest,
+        CanvasIntegrationSecretCreate,
         CanvasIntegrationSecretUpdate, CanvasLtiInstallationRequest, CanvasPlatformRequest,
         CanvasProgramBindingRequest, CanvasScopeDiscoveryRequest, ValidateCanvasRequest,
     },
@@ -49,6 +53,7 @@ const SAFE_CONNECTION_CONFIG_KEYS: &[&str] = &[
 pub struct CanvasPlatformManagementHttpService {
     management: CanvasPlatformManagementService,
     catalog: Option<CanvasCatalogRuntime>,
+    application_approval: Option<CanvasApplicationApprovalService>,
 }
 
 #[derive(Clone)]
@@ -64,6 +69,10 @@ impl std::fmt::Debug for CanvasPlatformManagementHttpService {
             .debug_struct("CanvasPlatformManagementHttpService")
             .field("management", &self.management)
             .field("catalog_configured", &self.catalog.is_some())
+            .field(
+                "application_approval_configured",
+                &self.application_approval.is_some(),
+            )
             .finish()
     }
 }
@@ -74,6 +83,7 @@ impl CanvasPlatformManagementHttpService {
         Self {
             management,
             catalog: None,
+            application_approval: None,
         }
     }
 
@@ -100,7 +110,17 @@ impl CanvasPlatformManagementHttpService {
                 provider,
                 local_admin_token,
             }),
+            application_approval: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_application_approval(
+        mut self,
+        application_approval: CanvasApplicationApprovalService,
+    ) -> Self {
+        self.application_approval = Some(application_approval);
+        self
     }
 
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), CanvasManagementHttpError> {
@@ -110,6 +130,37 @@ impl CanvasPlatformManagementHttpService {
                 header(headers, "X-Organization-ID"),
             )
             .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    pub async fn approve_application(
+        &self,
+        headers: &HeaderMap,
+        application_id: &str,
+        request: CanvasApplicationApprovalRequest,
+    ) -> Result<CanvasApplicationApprovalResponse, CanvasManagementHttpError> {
+        request.validate().map_err(|error| {
+            CanvasManagementHttpError::Validation(vec![json!({
+                "type": "value_error",
+                "loc": ["body"],
+                "msg": error.to_string(),
+                "input": null,
+            })])
+        })?;
+        let organization_id = self.management.authorize_request(
+            header(headers, "X-API-Key"),
+            header(headers, "X-Organization-ID"),
+        )?;
+        self.application_approval
+            .as_ref()
+            .ok_or(CanvasApplicationApprovalError::Unavailable)?
+            .approve(
+                organization_id,
+                application_id,
+                request.review_notes.as_deref(),
+            )
+            .await
+            .map(CanvasApplicationApprovalResponse::from)
             .map_err(Into::into)
     }
 
@@ -678,6 +729,27 @@ pub struct CanvasIntegrationSecretResponse {
     pub last_used_at: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CanvasApplicationApprovalResponse {
+    pub application_id: String,
+    pub status: &'static str,
+    pub issuance_transaction_id: String,
+}
+
+impl From<crate::canvas_award_candidate_approval::CanvasApplicationApprovalResult>
+    for CanvasApplicationApprovalResponse
+{
+    fn from(
+        result: crate::canvas_award_candidate_approval::CanvasApplicationApprovalResult,
+    ) -> Self {
+        Self {
+            application_id: result.application_id,
+            status: "approved",
+            issuance_transaction_id: result.issuance_transaction_id,
+        }
+    }
+}
+
 impl From<ManagedIntegrationSecret> for CanvasIntegrationSecretResponse {
     fn from(secret: ManagedIntegrationSecret) -> Self {
         Self {
@@ -844,6 +916,7 @@ impl From<CanvasPlatformRecord> for CanvasPlatformResponse {
 #[derive(Debug, PartialEq)]
 pub enum CanvasManagementHttpError {
     Service(CanvasPlatformManagementError),
+    ApplicationApproval(CanvasApplicationApprovalError),
     Validation(Vec<Value>),
     BodyTooLarge,
     DiscoveryOAuthRequired,
@@ -860,9 +933,16 @@ impl From<CanvasPlatformManagementError> for CanvasManagementHttpError {
     }
 }
 
+impl From<CanvasApplicationApprovalError> for CanvasManagementHttpError {
+    fn from(error: CanvasApplicationApprovalError) -> Self {
+        Self::ApplicationApproval(error)
+    }
+}
+
 impl IntoResponse for CanvasManagementHttpError {
     fn into_response(self) -> Response {
         match self {
+            Self::ApplicationApproval(error) => application_approval_failure(error),
             Self::Validation(errors) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(json!({"detail": errors})),
@@ -1004,6 +1084,43 @@ pub async fn parse_program_binding_request(
         })])
     })?;
     Ok(parsed)
+}
+
+pub async fn parse_application_approval(
+    request: axum::extract::Request,
+) -> Result<CanvasApplicationApprovalRequest, CanvasManagementHttpError> {
+    let value = parse_management_json(request).await?;
+    let Some(object) = value.as_object() else {
+        return Err(CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "input": value,
+        })]));
+    };
+    let mut errors = Vec::new();
+    validate_optional_string(object, "review_notes", 4_000, &mut errors);
+    for (field, input) in object {
+        if field != "review_notes" {
+            errors.push(json!({
+                "type": "extra_forbidden",
+                "loc": ["body", field],
+                "msg": "Extra inputs are not permitted",
+                "input": input,
+            }));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(CanvasManagementHttpError::Validation(errors));
+    }
+    serde_json::from_value(value).map_err(|_| {
+        CanvasManagementHttpError::Validation(vec![json!({
+            "type": "model_attributes_type",
+            "loc": ["body"],
+            "msg": "Input should be a valid Canvas application approval request",
+            "input": null,
+        })])
+    })
 }
 
 pub async fn parse_integration_secret_create(
@@ -1625,6 +1742,31 @@ fn validate_string(
             "ctx": {"max_length": max},
         }));
     }
+}
+
+fn application_approval_failure(error: CanvasApplicationApprovalError) -> Response {
+    let (status, detail) = match error {
+        CanvasApplicationApprovalError::NotFound => {
+            (StatusCode::NOT_FOUND, "Canvas application not found")
+        }
+        CanvasApplicationApprovalError::RolloutDisabled => (
+            StatusCode::NOT_FOUND,
+            "Portable Canvas integration is not enabled for this organization",
+        ),
+        CanvasApplicationApprovalError::InvalidStatus => (
+            StatusCode::CONFLICT,
+            "Canvas application cannot be approved in its current status",
+        ),
+        CanvasApplicationApprovalError::NotReady => (
+            StatusCode::CONFLICT,
+            "Canvas application is not ready for approval",
+        ),
+        CanvasApplicationApprovalError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Canvas application approval is temporarily unavailable",
+        ),
+    };
+    (status, Json(json!({"detail": detail}))).into_response()
 }
 
 fn service_failure(error: CanvasPlatformManagementError) -> Response {

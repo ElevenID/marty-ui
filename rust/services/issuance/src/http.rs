@@ -41,18 +41,19 @@ use crate::{
     },
     canvas_lti_tool_signing::{CanvasLtiToolJwtSigner, CanvasLtiToolSigningError},
     canvas_management::{
-        CanvasCredentialsValidationRequest, CanvasIntegrationSecretCreate,
+        CanvasApplicationApprovalRequest, CanvasCredentialsValidationRequest,
+        CanvasIntegrationSecretCreate,
         CanvasIntegrationSecretUpdate, CanvasPlatformRequest, CanvasProgramBindingRequest,
         CanvasScopeDiscoveryRequest,
     },
     canvas_management_http::{
-        integration_secret_query, organization_id_from_query,
+        integration_secret_query, organization_id_from_query, parse_application_approval,
         parse_canvas_credentials_validation_request, parse_integration_secret_create,
         parse_integration_secret_update, parse_lti_installation_request, parse_platform_request,
         parse_program_binding_request, parse_scope_discovery_query, parse_scope_discovery_request,
-        program_binding_query, CanvasIntegrationSecretResponse, CanvasManagementHttpError,
-        CanvasPlatformManagementHttpService, CanvasPlatformReadinessResponse,
-        CanvasPlatformResponse, CanvasProgramBindingResponse,
+        program_binding_query, CanvasApplicationApprovalResponse, CanvasIntegrationSecretResponse,
+        CanvasManagementHttpError, CanvasPlatformManagementHttpService,
+        CanvasPlatformReadinessResponse, CanvasPlatformResponse, CanvasProgramBindingResponse,
         CanvasProgramBindingValidationResponse,
     },
     canvas_oauth::{
@@ -819,6 +820,10 @@ fn router_with_optional_services(
     if services.canvas_management.is_some() {
         api = api
             .route(
+                "/v1/integrations/canvas/applications/{application_id}/approve",
+                post(approve_canvas_application),
+            )
+            .route(
                 "/v1/integrations/canvas/lti/config/{token}",
                 get(get_public_canvas_lti_config),
             )
@@ -1001,6 +1006,21 @@ async fn create_canvas_platform(
     let headers = request.headers().clone();
     let request = parse_platform_request(request).await?;
     service.create(&headers, request).await.map(Json)
+}
+
+async fn approve_canvas_application(
+    State(state): State<IssuanceState>,
+    Path(application_id): Path<String>,
+    request: Request,
+) -> Result<Json<CanvasApplicationApprovalResponse>, CanvasManagementHttpError> {
+    let service = canvas_management(&state)?;
+    service.authorize(request.headers())?;
+    let headers = request.headers().clone();
+    let request: CanvasApplicationApprovalRequest = parse_application_approval(request).await?;
+    service
+        .approve_application(&headers, &application_id, request)
+        .await
+        .map(Json)
 }
 
 async fn list_canvas_platforms(

@@ -5,7 +5,11 @@ use tracing::error;
 
 use crate::{
     canvas_award_candidate::CanvasAwardCandidateMaterializationPlan,
-    canvas_award_candidate_approval::{CanvasAwardApprovalRepository, CanvasAwardApprovalSnapshot},
+    canvas_award_candidate_approval::{
+        CanvasApplicationApprovalError, CanvasApplicationApprovalRepository,
+        CanvasApplicationApprovalSnapshot, CanvasAwardApprovalRepository,
+        CanvasAwardApprovalSnapshot,
+    },
     canvas_award_candidate_postgres::{
         LOAD_APPLICATION_TEMPLATE, LOAD_BINDING, LOAD_PLATFORM_DEPLOYMENT,
     },
@@ -23,6 +27,72 @@ const LOAD_APPLICATION: &str = "SELECT jsonb_build_object(
         'issuance_transaction_id', issuance_transaction_id, 'credential_id', credential_id
     ) FROM issuance_service.applications
     WHERE id = $1 AND organization_id = $2";
+
+const LOAD_APPROVAL_PLATFORM: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id,
+        'canvas_account_id', canvas_account_id,
+        'registration_status', registration_status,
+        'enabled', enabled, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_platforms
+    WHERE id = $1 AND organization_id = $2";
+
+const LOAD_APPROVAL_BINDING: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id, 'platform_id', platform_id,
+        'application_template_id', application_template_id,
+        'credential_template_id', credential_template_id,
+        'approval_policy_set_id', approval_policy_set_id,
+        'auto_approve_on_evidence', auto_approve_on_evidence,
+        'evidence_requirements', evidence_requirements,
+        'feature_flags', feature_flags, 'enabled', enabled,
+        'config_version', config_version,
+        'validated_config_version', validated_config_version,
+        'readiness_checks', readiness_checks,
+        'readiness_validated_at', readiness_validated_at,
+        'credential_template_snapshot', credential_template_snapshot,
+        'activated_at', activated_at, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2";
+
+const LOCK_APPROVAL_APPLICATION: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id,
+        'application_template_id', application_template_id,
+        'applicant_identifier', applicant_identifier, 'form_data', form_data,
+        'integration_context', integration_context, 'status', status,
+        'issuance_transaction_id', issuance_transaction_id, 'credential_id', credential_id
+    ) FROM issuance_service.applications
+    WHERE id = $1 AND organization_id = $2 FOR UPDATE";
+
+const LOCK_APPROVAL_PLATFORM: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id,
+        'canvas_account_id', canvas_account_id,
+        'registration_status', registration_status,
+        'enabled', enabled, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_platforms
+    WHERE id = $1 AND organization_id = $2 FOR SHARE";
+
+const LOCK_APPROVAL_BINDING: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id, 'platform_id', platform_id,
+        'application_template_id', application_template_id,
+        'credential_template_id', credential_template_id,
+        'approval_policy_set_id', approval_policy_set_id,
+        'auto_approve_on_evidence', auto_approve_on_evidence,
+        'evidence_requirements', evidence_requirements,
+        'feature_flags', feature_flags, 'enabled', enabled,
+        'config_version', config_version,
+        'validated_config_version', validated_config_version,
+        'readiness_checks', readiness_checks,
+        'readiness_validated_at', readiness_validated_at,
+        'credential_template_snapshot', credential_template_snapshot,
+        'activated_at', activated_at, 'archived_at', archived_at
+    ) FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2 FOR SHARE";
+
+const LOCK_APPROVAL_TEMPLATE: &str = "SELECT jsonb_build_object(
+        'id', id, 'organization_id', organization_id,
+        'credential_template_id', credential_template_id,
+        'approval_policy_set_id', approval_policy_set_id, 'status', status
+    ) FROM issuance_service.application_templates
+    WHERE id = $1 AND organization_id = $2 FOR SHARE";
 
 #[derive(Clone, Debug)]
 pub struct PostgresCanvasAwardApprovalRepository {
@@ -136,6 +206,273 @@ impl CanvasAwardApprovalRepository for PostgresCanvasAwardApprovalRepository {
     ) -> Result<(), CanvasAwardCandidateApprovalError> {
         reserve_canvas_issuance(&self.pool, transaction, context, plan, &snapshot.binding).await
     }
+}
+
+#[async_trait]
+impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalRepository {
+    async fn load_application_approval_snapshot(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<Option<CanvasApplicationApprovalSnapshot>, CanvasApplicationApprovalError> {
+        let application = sqlx::query_scalar::<_, Value>(LOAD_APPLICATION)
+            .bind(application_id)
+            .bind(organization_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(manual_approval_repository_error)?;
+        let Some(application) = application.and_then(|value| value.as_object().cloned()) else {
+            return Ok(None);
+        };
+        let Some(canvas) = application
+            .get("integration_context")
+            .and_then(Value::as_object)
+            .and_then(|integration| integration.get("canvas"))
+            .and_then(Value::as_object)
+        else {
+            return Ok(None);
+        };
+        let platform_id = text(canvas.get("canvas_platform_id"));
+        let binding_id = text(canvas.get("canvas_program_binding_id"));
+        let template_id = text(application.get("application_template_id"));
+        if platform_id.is_empty() || binding_id.is_empty() {
+            return Ok(Some(CanvasApplicationApprovalSnapshot {
+                application,
+                application_template: serde_json::Map::new(),
+                platform: serde_json::Map::new(),
+                binding: serde_json::Map::new(),
+            }));
+        }
+        let (platform, binding, template) = tokio::try_join!(
+            sqlx::query_scalar::<_, Value>(LOAD_APPROVAL_PLATFORM)
+                .bind(&platform_id)
+                .bind(organization_id)
+                .fetch_optional(&self.pool),
+            sqlx::query_scalar::<_, Value>(LOAD_APPROVAL_BINDING)
+                .bind(&binding_id)
+                .bind(organization_id)
+                .fetch_optional(&self.pool),
+            sqlx::query_scalar::<_, Value>(LOAD_APPLICATION_TEMPLATE)
+                .bind(&template_id)
+                .bind(organization_id)
+                .fetch_optional(&self.pool),
+        )
+        .map_err(manual_approval_repository_error)?;
+        let Some((platform, binding, application_template)) = platform
+            .and_then(|value| value.as_object().cloned())
+            .zip(binding.and_then(|value| value.as_object().cloned()))
+            .zip(template.and_then(|value| value.as_object().cloned()))
+            .map(|((platform, binding), template)| (platform, binding, template))
+        else {
+            return Ok(None);
+        };
+        if platform
+            .get("archived_at")
+            .is_some_and(|value| !value.is_null())
+            || binding
+                .get("archived_at")
+                .is_some_and(|value| !value.is_null())
+            || text(application_template.get("id")) != template_id
+            || text(application_template.get("id")) != text(binding.get("application_template_id"))
+            || text(application_template.get("credential_template_id")).is_empty()
+        {
+            return Ok(None);
+        }
+        Ok(Some(CanvasApplicationApprovalSnapshot {
+            application,
+            application_template,
+            platform,
+            binding,
+        }))
+    }
+
+    async fn reserve_application_issuance(
+        &self,
+        transaction: &CredentialTransaction,
+        snapshot: &CanvasApplicationApprovalSnapshot,
+        reviewer_id: &str,
+        review_notes: &str,
+        reviewed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<String, CanvasApplicationApprovalError> {
+        reserve_management_canvas_issuance(
+            &self.pool,
+            transaction,
+            snapshot,
+            reviewer_id,
+            review_notes,
+            reviewed_at,
+        )
+        .await
+    }
+}
+
+async fn reserve_management_canvas_issuance(
+    pool: &PgPool,
+    prepared: &CredentialTransaction,
+    snapshot: &CanvasApplicationApprovalSnapshot,
+    reviewer_id: &str,
+    review_notes: &str,
+    reviewed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<String, CanvasApplicationApprovalError> {
+    let application_id = prepared
+        .application_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+    let mut database = pool
+        .begin()
+        .await
+        .map_err(manual_approval_repository_error)?;
+    let current = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_APPLICATION)
+        .bind(application_id)
+        .bind(&prepared.organization_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(manual_approval_repository_error)?
+        .and_then(|value| value.as_object().cloned())
+        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+    if !application_approval_snapshot_is_current(&current, &snapshot.application)
+        || !matches!(text(current.get("status")).as_str(), "pending" | "approved")
+        || current
+            .get("credential_id")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(CanvasApplicationApprovalError::NotReady);
+    }
+    lock_manual_approval_dependencies(&mut database, prepared, snapshot).await?;
+
+    let current_transaction_id = optional_text(current.get("issuance_transaction_id"));
+    let current_transaction = if let Some(current_id) = current_transaction_id.as_deref() {
+        sqlx::query(
+            "SELECT id, status, expires_at FROM issuance_service.issuance_transactions
+             WHERE id = $1 AND organization_id = $2 AND application_id = $3 FOR UPDATE",
+        )
+        .bind(current_id)
+        .bind(&prepared.organization_id)
+        .bind(application_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(manual_approval_repository_error)?
+    } else {
+        None
+    };
+    let reserved_id = if let Some(current_transaction) = current_transaction {
+        let status: String = current_transaction
+            .try_get("status")
+            .map_err(manual_approval_repository_error)?;
+        match status.as_str() {
+            "authorized" | "signing" | "issued" => {
+                return Err(CanvasApplicationApprovalError::NotReady);
+            }
+            "pending"
+                if current_transaction
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("expires_at")
+                    .map_err(manual_approval_repository_error)?
+                    > reviewed_at =>
+            {
+                current_transaction
+                    .try_get("id")
+                    .map_err(manual_approval_repository_error)?
+            }
+            _ => {
+                insert_transaction(&mut database, prepared)
+                    .await
+                    .map_err(map_candidate_approval_error)?;
+                prepared.id.clone()
+            }
+        }
+    } else {
+        insert_transaction(&mut database, prepared)
+            .await
+            .map_err(map_candidate_approval_error)?;
+        prepared.id.clone()
+    };
+    let updated = sqlx::query(
+        "UPDATE issuance_service.applications
+         SET status = 'approved', review_notes = $3, reviewer_id = $4,
+             reviewed_at = $5, issuance_transaction_id = $6,
+             updated_at = $5
+         WHERE id = $1 AND organization_id = $2
+           AND status IN ('pending', 'approved') AND credential_id IS NULL",
+    )
+    .bind(application_id)
+    .bind(&prepared.organization_id)
+    .bind(review_notes)
+    .bind(reviewer_id)
+    .bind(reviewed_at)
+    .bind(&reserved_id)
+    .execute(&mut *database)
+    .await
+    .map_err(manual_approval_repository_error)?;
+    if updated.rows_affected() != 1 {
+        return Err(CanvasApplicationApprovalError::NotReady);
+    }
+    database
+        .commit()
+        .await
+        .map_err(manual_approval_repository_error)?;
+    Ok(reserved_id)
+}
+
+async fn lock_manual_approval_dependencies(
+    database: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    prepared: &CredentialTransaction,
+    snapshot: &CanvasApplicationApprovalSnapshot,
+) -> Result<(), CanvasApplicationApprovalError> {
+    let canvas = snapshot
+        .application
+        .get("integration_context")
+        .and_then(Value::as_object)
+        .and_then(|integration| integration.get("canvas"))
+        .and_then(Value::as_object)
+        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+    let platform_id = text(canvas.get("canvas_platform_id"));
+    let binding_id = text(canvas.get("canvas_program_binding_id"));
+    let template_id = text(snapshot.application.get("application_template_id"));
+    let platform = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_PLATFORM)
+        .bind(&platform_id)
+        .bind(&prepared.organization_id)
+        .fetch_optional(&mut **database)
+        .await
+        .map_err(manual_approval_repository_error)?
+        .and_then(|value| value.as_object().cloned());
+    let binding = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_BINDING)
+        .bind(&binding_id)
+        .bind(&prepared.organization_id)
+        .fetch_optional(&mut **database)
+        .await
+        .map_err(manual_approval_repository_error)?
+        .and_then(|value| value.as_object().cloned());
+    let template = sqlx::query_scalar::<_, Value>(LOCK_APPROVAL_TEMPLATE)
+        .bind(&template_id)
+        .bind(&prepared.organization_id)
+        .fetch_optional(&mut **database)
+        .await
+        .map_err(manual_approval_repository_error)?
+        .and_then(|value| value.as_object().cloned());
+    if platform.as_ref() != Some(&snapshot.platform)
+        || binding.as_ref() != Some(&snapshot.binding)
+        || template.as_ref() != Some(&snapshot.application_template)
+    {
+        return Err(CanvasApplicationApprovalError::NotReady);
+    }
+    Ok(())
+}
+
+fn application_approval_snapshot_is_current(
+    current: &serde_json::Map<String, Value>,
+    expected: &serde_json::Map<String, Value>,
+) -> bool {
+    [
+        "id",
+        "organization_id",
+        "application_template_id",
+        "applicant_identifier",
+        "form_data",
+        "integration_context",
+    ]
+    .iter()
+    .all(|field| current.get(*field) == expected.get(*field))
 }
 
 async fn candidate_link_is_current(
@@ -498,6 +835,10 @@ fn has_canvas_marker(integration: &Value) -> bool {
     let Some(canvas) = integration.get("canvas").and_then(Value::as_object) else {
         return false;
     };
+    canvas_object_has_marker(canvas)
+}
+
+fn canvas_object_has_marker(canvas: &serde_json::Map<String, Value>) -> bool {
     [
         "canvas_platform_id",
         "canvas_program_binding_id",
@@ -508,6 +849,11 @@ fn has_canvas_marker(integration: &Value) -> bool {
         || text(canvas.get("source"))
             .to_ascii_lowercase()
             .starts_with("canvas")
+}
+
+fn optional_text(value: Option<&Value>) -> Option<String> {
+    let value = text(value);
+    (!value.is_empty()).then_some(value)
 }
 
 fn text(value: Option<&Value>) -> String {
@@ -521,4 +867,22 @@ fn text(value: Option<&Value>) -> String {
 fn approval_repository_error(cause: sqlx::Error) -> CanvasAwardCandidateApprovalError {
     error!(%cause, "Canvas award approval repository query failed");
     CanvasAwardCandidateApprovalError::Unavailable
+}
+
+fn manual_approval_repository_error(cause: sqlx::Error) -> CanvasApplicationApprovalError {
+    error!(%cause, "Canvas application approval repository query failed");
+    CanvasApplicationApprovalError::Unavailable
+}
+
+fn map_candidate_approval_error(
+    error: CanvasAwardCandidateApprovalError,
+) -> CanvasApplicationApprovalError {
+    match error {
+        CanvasAwardCandidateApprovalError::Unavailable => {
+            CanvasApplicationApprovalError::Unavailable
+        }
+        CanvasAwardCandidateApprovalError::ReadinessDrift => {
+            CanvasApplicationApprovalError::NotReady
+        }
+    }
 }

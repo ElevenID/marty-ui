@@ -4,13 +4,17 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::RngCore;
 use serde_json::{Map, Value};
+use thiserror::Error;
 
 use crate::{
     canvas_award_candidate::{canvas_auto_approval_ready, CanvasAwardCandidateMaterializationPlan},
     canvas_award_candidate_service::{
         CanvasAwardCandidateApprovalError, CanvasAwardCandidateApprover,
     },
-    canvas_issuance_guard::{credential_snapshot, resolved_issuer_matches},
+    canvas_issuance_guard::{
+        credential_snapshot, evaluate_canvas_approval_snapshot, resolved_issuer_matches,
+        CanvasGuardConfig, CanvasGuardSnapshot,
+    },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
     canvas_lti_launch::CanvasLtiClock,
@@ -21,6 +25,9 @@ use crate::{
 };
 
 const REDACTED: &str = "[REDACTED]";
+pub const CANVAS_MANAGEMENT_REVIEWER_ID: &str = "canvas-integration-management-api";
+pub const DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES: &str =
+    "Approved through Canvas integration operations";
 
 #[derive(Clone, PartialEq)]
 pub struct CanvasAwardApprovalSnapshot {
@@ -78,6 +85,64 @@ pub trait CanvasAwardApprovalRepository: Send + Sync {
 
 pub trait CanvasAwardApprovalSeedGenerator: Send + Sync {
     fn generate(&self) -> CanvasAwardApprovalSeed;
+}
+
+#[derive(Clone, PartialEq)]
+pub struct CanvasApplicationApprovalSnapshot {
+    pub application: Map<String, Value>,
+    pub application_template: Map<String, Value>,
+    pub platform: Map<String, Value>,
+    pub binding: Map<String, Value>,
+}
+
+impl fmt::Debug for CanvasApplicationApprovalSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasApplicationApprovalSnapshot")
+            .field("application", &REDACTED)
+            .field("application_template", &REDACTED)
+            .field("platform", &REDACTED)
+            .field("binding", &REDACTED)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasApplicationApprovalResult {
+    pub application_id: String,
+    pub issuance_transaction_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum CanvasApplicationApprovalError {
+    #[error("Canvas application not found")]
+    NotFound,
+    #[error("Portable Canvas integration is not enabled for this organization")]
+    RolloutDisabled,
+    #[error("Canvas application cannot be approved in its current status")]
+    InvalidStatus,
+    #[error("Canvas application is not ready for approval")]
+    NotReady,
+    #[error("Canvas application approval is temporarily unavailable")]
+    Unavailable,
+}
+
+#[async_trait]
+pub trait CanvasApplicationApprovalRepository: Send + Sync {
+    async fn load_application_approval_snapshot(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<Option<CanvasApplicationApprovalSnapshot>, CanvasApplicationApprovalError>;
+
+    async fn reserve_application_issuance(
+        &self,
+        transaction: &CredentialTransaction,
+        snapshot: &CanvasApplicationApprovalSnapshot,
+        reviewer_id: &str,
+        review_notes: &str,
+        reviewed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<String, CanvasApplicationApprovalError>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -158,20 +223,115 @@ impl CanvasAwardCandidateApprovalService {
         ) else {
             return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
         };
-        let remote_format = remote_credential_format(&transaction.credential_payload_format)
-            .map_err(|_| CanvasAwardCandidateApprovalError::ReadinessDrift)?;
-        let issuer = self
-            .issuer_resolver
-            .resolve(&transaction, &remote_format, true)
-            .await
-            .map_err(approval_issuer_error)?;
-        if !kms_issuer_context_matches(&snapshot.binding, &issuer) {
-            return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
-        }
-        attach_issuer_context(&mut transaction, &issuer);
+        resolve_and_attach_canvas_issuer(
+            self.issuer_resolver.as_ref(),
+            &snapshot.binding,
+            &mut transaction,
+        )
+        .await?;
         self.repository
             .reserve_issuance(&transaction, context, plan, &snapshot)
             .await
+    }
+}
+
+#[derive(Clone)]
+pub struct CanvasApplicationApprovalService {
+    repository: Arc<dyn CanvasApplicationApprovalRepository>,
+    issuer_resolver: Arc<dyn IssuerContextResolver>,
+    seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
+    clock: Arc<dyn CanvasLtiClock>,
+    guard_config: CanvasGuardConfig,
+}
+
+impl fmt::Debug for CanvasApplicationApprovalService {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasApplicationApprovalService")
+            .field("guard_config", &self.guard_config)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasApplicationApprovalService {
+    #[must_use]
+    pub fn new(
+        repository: Arc<dyn CanvasApplicationApprovalRepository>,
+        issuer_resolver: Arc<dyn IssuerContextResolver>,
+        seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
+        clock: Arc<dyn CanvasLtiClock>,
+        guard_config: CanvasGuardConfig,
+    ) -> Self {
+        Self {
+            repository,
+            issuer_resolver,
+            seeds,
+            clock,
+            guard_config,
+        }
+    }
+
+    pub async fn approve(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<CanvasApplicationApprovalResult, CanvasApplicationApprovalError> {
+        let snapshot = self
+            .repository
+            .load_application_approval_snapshot(organization_id, application_id)
+            .await?
+            .ok_or(CanvasApplicationApprovalError::NotFound)?;
+        let guard = CanvasGuardSnapshot {
+            application: Value::Object(snapshot.application.clone()),
+            application_template: Value::Object(snapshot.application_template.clone()),
+            platform: Value::Object(snapshot.platform.clone()),
+            binding: Value::Object(snapshot.binding.clone()),
+            evidence_facts: Vec::new(),
+            policy_set: None,
+        };
+        let now = self.clock.now();
+        evaluate_canvas_approval_snapshot(
+            organization_id,
+            application_id,
+            &guard,
+            &self.guard_config,
+            now,
+        )
+        .map_err(map_manual_guard_error)?;
+        let mut transaction = plan_canvas_approval_transaction(
+            &snapshot.application,
+            &snapshot.binding,
+            &self.seeds.generate(),
+            now,
+        )
+        .ok_or(CanvasApplicationApprovalError::NotReady)?;
+        // The Python boundary intentionally collapses every KMS/provider
+        // failure to one non-sensitive readiness conflict.
+        resolve_and_attach_canvas_issuer(
+            self.issuer_resolver.as_ref(),
+            &snapshot.binding,
+            &mut transaction,
+        )
+        .await
+        .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
+        let issuance_transaction_id = self
+            .repository
+            .reserve_application_issuance(
+                &transaction,
+                &snapshot,
+                CANVAS_MANAGEMENT_REVIEWER_ID,
+                match review_notes {
+                    None | Some("") => DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES,
+                    Some(notes) => notes,
+                },
+                now,
+            )
+            .await?;
+        Ok(CanvasApplicationApprovalResult {
+            application_id: application_id.to_owned(),
+            issuance_transaction_id,
+        })
     }
 }
 
@@ -221,7 +381,27 @@ pub fn plan_canvas_award_approval(
     {
         return None;
     }
-    let credential = credential_snapshot(binding, &application.organization_id).ok()?;
+    plan_canvas_approval_transaction(current, binding, seed, now)
+}
+
+/// Build the canonical pending issuance transaction from the exact persisted
+/// application and binding snapshot. Both automatic candidate materialization
+/// and administrator approval use this one transaction-planning kernel.
+pub fn plan_canvas_approval_transaction(
+    application: &Map<String, Value>,
+    binding: &Map<String, Value>,
+    seed: &CanvasAwardApprovalSeed,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<CredentialTransaction> {
+    let organization_id = text(application.get("organization_id"));
+    let application_id = text(application.get("id"));
+    if organization_id.is_empty()
+        || application_id.is_empty()
+        || !text(application.get("status")).eq_ignore_ascii_case("pending")
+    {
+        return None;
+    }
+    let credential = credential_snapshot(binding, &organization_id).ok()?;
     let credential_type = text(credential.get("credential_type"));
     let credential_payload_format = text(credential.get("credential_payload_format"));
     let revocation_profile_id = optional_text(credential.get("revocation_profile_id"));
@@ -236,7 +416,7 @@ pub fn plan_canvas_award_approval(
         return None;
     }
     remote_credential_format(&credential_payload_format).ok()?;
-    let mut claims = current
+    let mut claims = application
         .get("form_data")
         .and_then(Value::as_object)
         .cloned()
@@ -247,12 +427,12 @@ pub fn plan_canvas_award_approval(
     let validity = credential.get("validity_rules").and_then(Value::as_object);
     Some(CredentialTransaction {
         id: seed.transaction_id.clone(),
-        organization_id: application.organization_id.clone(),
+        organization_id,
         credential_template_id: text(binding.get("credential_template_id")),
         revocation_profile_id,
         renewal_of_credential_id: None,
-        applicant_id: optional_text(current.get("applicant_identifier")),
-        application_id: Some(application.id.clone()),
+        applicant_id: optional_text(application.get("applicant_identifier")),
+        application_id: Some(application_id),
         subject_did: None,
         idempotency_key_hash: None,
         idempotency_request_hash: None,
@@ -277,7 +457,7 @@ pub fn plan_canvas_award_approval(
             validity.and_then(|value| value.get("renewal_window_days")),
             30,
         ),
-        delivery_mode: delivery_mode(current.get("integration_context")),
+        delivery_mode: delivery_mode(application.get("integration_context")),
         issuer_profile_id: None,
         issuer_mode: "org_managed".to_owned(),
         issuer_did,
@@ -288,6 +468,33 @@ pub fn plan_canvas_award_approval(
         created_at: now,
         expires_at: now + chrono::Duration::days(7),
     })
+}
+
+async fn resolve_and_attach_canvas_issuer(
+    issuer_resolver: &dyn IssuerContextResolver,
+    binding: &Map<String, Value>,
+    transaction: &mut CredentialTransaction,
+) -> Result<(), CanvasAwardCandidateApprovalError> {
+    let remote_format = remote_credential_format(&transaction.credential_payload_format)
+        .map_err(|_| CanvasAwardCandidateApprovalError::ReadinessDrift)?;
+    let issuer = issuer_resolver
+        .resolve(transaction, &remote_format, true)
+        .await
+        .map_err(approval_issuer_error)?;
+    if !kms_issuer_context_matches(binding, &issuer) {
+        return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
+    }
+    attach_issuer_context(transaction, &issuer);
+    Ok(())
+}
+
+fn map_manual_guard_error(code: &'static str) -> CanvasApplicationApprovalError {
+    match code {
+        "canvas_application_not_found" => CanvasApplicationApprovalError::NotFound,
+        "canvas_rollout_disabled" => CanvasApplicationApprovalError::RolloutDisabled,
+        "canvas_application_invalid_status" => CanvasApplicationApprovalError::InvalidStatus,
+        _ => CanvasApplicationApprovalError::NotReady,
+    }
 }
 
 fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerContext) -> bool {

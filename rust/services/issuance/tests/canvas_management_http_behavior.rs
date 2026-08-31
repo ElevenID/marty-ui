@@ -12,13 +12,20 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use marty_issuance_service::{
+    canvas_award_candidate_approval::{
+        CanvasApplicationApprovalError, CanvasApplicationApprovalRepository,
+        CanvasApplicationApprovalService, CanvasApplicationApprovalSnapshot,
+        CanvasAwardApprovalSeed, CanvasAwardApprovalSeedGenerator,
+    },
     canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
     canvas_catalog::{CanvasCatalogOAuth, CanvasCatalogProvider, CanvasCatalogProviderError},
     canvas_credentials_validation::{
         CanvasCredentialsValidationResult, CanvasCredentialsValidator,
     },
+    canvas_issuance_guard::CanvasGuardConfig,
+    canvas_lti_launch::CanvasLtiClock,
     canvas_lti_probe::{CanvasLtiJwksRefreshConfig, CanvasLtiProbeClient},
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_http::CanvasPlatformManagementHttpService,
@@ -30,6 +37,9 @@ use marty_issuance_service::{
     canvas_oauth::CanvasOAuthError,
     canvas_readiness::{
         CanvasOAuthReadinessConnection, CanvasReadinessInputs, CanvasSyncReadiness,
+    },
+    credential::{
+        CredentialIssuanceError, CredentialTransaction, IssuerContext, IssuerContextResolver,
     },
     http::router_with_canvas_management,
     integration_secret::ManagedIntegrationSecret,
@@ -54,6 +64,217 @@ struct MemoryRepository {
     secrets: Mutex<Vec<ManagedIntegrationSecret>>,
     secret_update_plaintexts: Mutex<Vec<Option<String>>>,
     canvas_credentials_secret_checks: AtomicUsize,
+}
+
+type ApprovalReservation = (CredentialTransaction, String, String, DateTime<Utc>);
+
+struct ApprovalRepository {
+    snapshot: Mutex<Option<CanvasApplicationApprovalSnapshot>>,
+    reservations: Mutex<Vec<ApprovalReservation>>,
+    result: Mutex<Result<String, CanvasApplicationApprovalError>>,
+}
+
+#[async_trait]
+impl CanvasApplicationApprovalRepository for ApprovalRepository {
+    async fn load_application_approval_snapshot(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<Option<CanvasApplicationApprovalSnapshot>, CanvasApplicationApprovalError> {
+        Ok(self
+            .snapshot
+            .lock()
+            .expect("approval snapshot")
+            .clone()
+            .filter(|snapshot| {
+                snapshot.application.get("organization_id") == Some(&json!(organization_id))
+                    && snapshot.application.get("id") == Some(&json!(application_id))
+            }))
+    }
+
+    async fn reserve_application_issuance(
+        &self,
+        transaction: &CredentialTransaction,
+        _snapshot: &CanvasApplicationApprovalSnapshot,
+        reviewer_id: &str,
+        review_notes: &str,
+        reviewed_at: DateTime<Utc>,
+    ) -> Result<String, CanvasApplicationApprovalError> {
+        self.reservations
+            .lock()
+            .expect("approval reservations")
+            .push((
+                transaction.clone(),
+                reviewer_id.to_owned(),
+                review_notes.to_owned(),
+                reviewed_at,
+            ));
+        self.result.lock().expect("approval result").clone()
+    }
+}
+
+struct ApprovalIssuerResolver {
+    result: Result<IssuerContext, CredentialIssuanceError>,
+}
+
+#[async_trait]
+impl IssuerContextResolver for ApprovalIssuerResolver {
+    async fn resolve(
+        &self,
+        _transaction: &CredentialTransaction,
+        _credential_format: &str,
+        _force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        self.result.clone()
+    }
+}
+
+struct ApprovalSeeds;
+
+impl CanvasAwardApprovalSeedGenerator for ApprovalSeeds {
+    fn generate(&self) -> CanvasAwardApprovalSeed {
+        CanvasAwardApprovalSeed {
+            transaction_id: "transaction-approval-1".to_owned(),
+            pre_authorized_code: "private-pre-authorized-code".to_owned(),
+        }
+    }
+}
+
+struct ApprovalClock;
+
+impl CanvasLtiClock for ApprovalClock {
+    fn now(&self) -> DateTime<Utc> {
+        approval_now()
+    }
+}
+
+fn approval_now() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 8, 30, 23, 0, 0)
+        .single()
+        .expect("approval time")
+}
+
+fn approval_object(value: Value) -> Map<String, Value> {
+    value.as_object().expect("object").clone()
+}
+
+fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
+    CanvasApplicationApprovalSnapshot {
+        application: approval_object(json!({
+            "id": "application-approval-1",
+            "organization_id": "org-1",
+            "application_template_id": "application-template-1",
+            "applicant_identifier": "canvas_lti:learner-subject-1",
+            "form_data": {"achievement": "Portable Canvas"},
+            "integration_context": {
+                "delivery_mode": "wallet_plus_canvas_mirror",
+                "canvas": {
+                    "source": "canvas_lti_bootstrap",
+                    "canvas_platform_id": "platform-1",
+                    "canvas_program_binding_id": "binding-1",
+                    "canvas_account_id": "account-1",
+                    "application_template_id": "application-template-1",
+                    "credential_template_id": "credential-template-1",
+                    "lti_subject": "opaque-learner-subject"
+                }
+            },
+            "status": "pending",
+            "issuance_transaction_id": null,
+            "credential_id": null
+        })),
+        application_template: approval_object(json!({
+            "id": "application-template-1",
+            "organization_id": "org-1",
+            "credential_template_id": "credential-template-1",
+            "approval_policy_set_id": null,
+            "status": "active"
+        })),
+        platform: approval_object(json!({
+            "id": "platform-1",
+            "organization_id": "org-1",
+            "canvas_account_id": "account-1",
+            "registration_status": "verified",
+            "enabled": true,
+            "archived_at": null
+        })),
+        binding: approval_object(json!({
+            "id": "binding-1",
+            "organization_id": "org-1",
+            "platform_id": "platform-1",
+            "application_template_id": "application-template-1",
+            "credential_template_id": "credential-template-1",
+            "approval_policy_set_id": null,
+            "auto_approve_on_evidence": false,
+            "evidence_requirements": [{
+                "requirement_id": "canvas_req_1",
+                "source": "canvas_rest",
+                "fact_type": "canvas.course_completion",
+                "scope": {"course_id": "course-1"},
+                "pass_rule": {"completed": true},
+                "required": true
+            }],
+            "feature_flags": {"enable_canvas_evidence": true},
+            "enabled": true,
+            "config_version": 4,
+            "validated_config_version": 4,
+            "readiness_checks": [{"code":"kms","status":"ready","blocking":true}],
+            "readiness_validated_at": "2026-08-30T22:59:00Z",
+            "activated_at": "2026-08-30T22:58:00Z",
+            "archived_at": null,
+            "credential_template_snapshot": {
+                "id": "credential-template-1",
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_type": "OpenBadgeCredential",
+                "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+                "revocation_profile_id": "status-profile-1",
+                "issuer_did": "did:web:issuer.example.edu:orgs:org-1",
+                "issuer_algorithm": "ES256",
+                "vct": "https://credentials.example.edu/open-badge",
+                "wallet_configs": [{"wallet_id":"wallet-1"}],
+                "selective_disclosure_fields": ["achievement"],
+                "zk_predicate_claims": [],
+                "validity_rules": {
+                    "default_validity_days": 365,
+                    "renewable": true,
+                    "renewal_window_days": 30
+                }
+            }
+        })),
+    }
+}
+
+fn approval_issuer() -> IssuerContext {
+    let issuer_did = "did:web:issuer.example.edu:orgs:org-1";
+    IssuerContext {
+        issuer_profile_id: "issuer-profile-1".to_owned(),
+        issuer_did: issuer_did.to_owned(),
+        signing_service_id: "kms-service-1".to_owned(),
+        algorithm: "ES256".to_owned(),
+        verification_method_id: Some(format!("{issuer_did}#badge-key-1")),
+        public_jwk: Some(json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
+        certificate_chain: Vec::new(),
+        raw_context: json!({
+            "organization_id": "org-1",
+            "issuer_did": issuer_did,
+            "algorithm": "ES256",
+            "issuer_profile_id": "issuer-profile-1",
+            "signing_service_id": "kms-service-1",
+            "signing_key_reference": "org_secret://org-1/badge-key",
+            "verification_method_id": format!("{issuer_did}#badge-key-1"),
+            "key_purpose": "vc_jwt_issuer",
+            "public_jwk": {"kty":"EC","crv":"P-256","x":"x","y":"y"},
+            "issuer_profile": {
+                "id": "issuer-profile-1",
+                "status": "active",
+                "organization_id": "org-1",
+                "issuer_did": issuer_did,
+                "verification_method_id": format!("{issuer_did}#badge-key-1"),
+                "key_purpose": "vc_jwt_issuer"
+            },
+            "service": {"id":"kms-service-1","algorithm":"ES256"}
+        }),
+    }
 }
 
 struct SuccessfulProbe;
@@ -830,6 +1051,52 @@ fn app_with_probe(
         StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
         TransportPolicy::new(Vec::new()),
         service,
+    )
+}
+
+fn app_with_approval(
+    approval_repository: Arc<ApprovalRepository>,
+    issuer_result: Result<IssuerContext, CredentialIssuanceError>,
+    rollout_enabled: bool,
+) -> axum::Router {
+    let management_repository = Arc::new(MemoryRepository::default());
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    let management = CanvasPlatformManagementService::with_probe_client(
+        management_repository.clone(),
+        Some("management-key"),
+        CanvasOriginPolicy::default(),
+        "https://issuer.example.edu",
+        CanvasLtiJwksRefreshConfig {
+            timeout: Duration::from_secs(10),
+            ttl: Duration::from_secs(3_600),
+            self_managed_origins: Vec::new(),
+            allow_private_networks: false,
+            allow_http_localhost: false,
+        },
+        Arc::new(SuccessfulProbe),
+    )
+    .with_integration_secret_repository(management_repository);
+    let approval = CanvasApplicationApprovalService::new(
+        approval_repository,
+        Arc::new(ApprovalIssuerResolver {
+            result: issuer_result,
+        }),
+        Arc::new(ApprovalSeeds),
+        Arc::new(ApprovalClock),
+        CanvasGuardConfig {
+            enabled: rollout_enabled,
+            pilot_organizations: BTreeSet::from(["org-1".to_owned()]),
+            evidence_max_age: Duration::from_secs(900),
+            readiness_max_age: Duration::from_secs(900),
+        },
+    );
+    router_with_canvas_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.edu", "Issuer"),
+        TransportPolicy::new(Vec::new()),
+        CanvasPlatformManagementHttpService::new(management).with_application_approval(approval),
     )
 }
 
@@ -2900,4 +3167,229 @@ async fn canvas_credentials_validation_is_tenant_bound_read_only_and_safely_proj
             .load(Ordering::SeqCst),
         2
     );
+}
+
+#[tokio::test]
+async fn application_approval_uses_canonical_snapshot_and_returns_only_safe_fields() {
+    let repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(approval_snapshot())),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-approval-1".to_owned())),
+    });
+    let app = app_with_approval(repository.clone(), Ok(approval_issuer()), true);
+    let response = app
+        .oneshot(management_request(
+            Request::post("/v1/integrations/canvas/applications/application-approval-1/approve"),
+            json!({"review_notes":""}),
+        ))
+        .await
+        .expect("approval response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(
+        body,
+        json!({
+            "application_id": "application-approval-1",
+            "status": "approved",
+            "issuance_transaction_id": "transaction-approval-1"
+        })
+    );
+    let serialized = body.to_string();
+    for forbidden in [
+        "private-pre-authorized-code",
+        "Portable Canvas",
+        "org_secret://",
+        "issuer_profile_id",
+        "signing_service_id",
+    ] {
+        assert!(!serialized.contains(forbidden));
+    }
+
+    let reservations = repository.reservations.lock().expect("reservations");
+    assert_eq!(reservations.len(), 1);
+    let (transaction, reviewer_id, review_notes, reviewed_at) = &reservations[0];
+    assert_eq!(transaction.organization_id, "org-1");
+    assert_eq!(
+        transaction.application_id.as_deref(),
+        Some("application-approval-1")
+    );
+    assert_eq!(transaction.credential_template_id, "credential-template-1");
+    assert_eq!(
+        transaction.issuer_profile_id.as_deref(),
+        Some("issuer-profile-1")
+    );
+    assert_eq!(
+        transaction.signing_service_id.as_deref(),
+        Some("kms-service-1")
+    );
+    assert_eq!(reviewer_id, "canvas-integration-management-api");
+    assert_eq!(
+        review_notes,
+        "Approved through Canvas integration operations"
+    );
+    assert_eq!(*reviewed_at, approval_now());
+}
+
+#[tokio::test]
+async fn application_approval_hides_tenants_rejects_invalid_input_and_preserves_status_errors() {
+    let repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(approval_snapshot())),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-approval-1".to_owned())),
+    });
+    let app = app_with_approval(repository.clone(), Ok(approval_issuer()), true);
+    let path = "/v1/integrations/canvas/applications/application-approval-1/approve";
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .header("x-api-key", "management-key")
+                .header("x-organization-id", "org-foreign")
+                .body(Body::from("{}"))
+                .expect("foreign request"),
+        )
+        .await
+        .expect("foreign response");
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(foreign).await,
+        json!({"detail":"Canvas application not found"})
+    );
+
+    let missing_organization = app
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .header("x-api-key", "management-key")
+                .body(Body::from("{}"))
+                .expect("missing organization request"),
+        )
+        .await
+        .expect("missing organization response");
+    assert_eq!(missing_organization.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(missing_organization).await,
+        json!({"detail":"X-Organization-ID is required for Canvas management"})
+    );
+
+    let caller_owned_organization = app
+        .clone()
+        .oneshot(management_request(
+            Request::post(path),
+            json!({"organization_id":"org-foreign"}),
+        ))
+        .await
+        .expect("forged organization response");
+    assert_eq!(
+        caller_owned_organization.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        response_json(caller_owned_organization).await["detail"][0]["type"],
+        "extra_forbidden"
+    );
+
+    {
+        let mut stored = repository.snapshot.lock().expect("snapshot");
+        stored
+            .as_mut()
+            .expect("snapshot")
+            .application
+            .get_mut("integration_context")
+            .expect("integration context")["canvas"] = json!({});
+    }
+    let incomplete_context = app
+        .clone()
+        .oneshot(management_request(Request::post(path), json!({})))
+        .await
+        .expect("incomplete context response");
+    assert_eq!(incomplete_context.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(incomplete_context).await,
+        json!({"detail":"Canvas application is not ready for approval"})
+    );
+
+    {
+        let mut stored = repository.snapshot.lock().expect("snapshot");
+        *stored = Some(approval_snapshot());
+        stored
+            .as_mut()
+            .expect("snapshot")
+            .application
+            .insert("status".to_owned(), json!("approved"));
+    }
+    let wrong_status = app
+        .oneshot(management_request(Request::post(path), json!({})))
+        .await
+        .expect("wrong status response");
+    assert_eq!(wrong_status.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response_json(wrong_status).await,
+        json!({"detail":"Canvas application cannot be approved in its current status"})
+    );
+    assert!(repository
+        .reservations
+        .lock()
+        .expect("reservations")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn application_approval_redacts_provider_failures_and_honors_rollout_gate() {
+    let signing_repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(approval_snapshot())),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-approval-1".to_owned())),
+    });
+    let signing_app = app_with_approval(
+        signing_repository.clone(),
+        Err(CredentialIssuanceError::SigningUnavailable(
+            "remote signer bearer secret".to_owned(),
+        )),
+        true,
+    );
+    let path = "/v1/integrations/canvas/applications/application-approval-1/approve";
+    let signing_failure = signing_app
+        .oneshot(management_request(
+            Request::post(path),
+            json!({"review_notes":"Operator reviewed current evidence"}),
+        ))
+        .await
+        .expect("signing failure response");
+    assert_eq!(signing_failure.status(), StatusCode::CONFLICT);
+    let signing_body = response_json(signing_failure).await;
+    assert_eq!(
+        signing_body,
+        json!({"detail":"Canvas application is not ready for approval"})
+    );
+    assert!(!signing_body.to_string().contains("bearer secret"));
+    assert!(signing_repository
+        .reservations
+        .lock()
+        .expect("reservations")
+        .is_empty());
+
+    let disabled_repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(approval_snapshot())),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-approval-1".to_owned())),
+    });
+    let disabled_app = app_with_approval(disabled_repository.clone(), Ok(approval_issuer()), false);
+    let disabled = disabled_app
+        .oneshot(management_request(Request::post(path), json!({})))
+        .await
+        .expect("disabled response");
+    assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(disabled).await,
+        json!({"detail":"Portable Canvas integration is not enabled for this organization"})
+    );
+    assert!(disabled_repository
+        .reservations
+        .lock()
+        .expect("reservations")
+        .is_empty());
 }

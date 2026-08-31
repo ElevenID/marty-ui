@@ -228,13 +228,38 @@
   },
   "application_approval": {
     "canvas_application_only": true,
+    "request": {
+      "fields": ["review_notes"],
+      "extra_fields": "forbidden",
+      "review_notes_max_length": 4000
+    },
     "required_initial_status": "pending",
     "reviewer_id": "canvas-integration-management-api",
     "default_review_notes": "Approved through Canvas integration operations",
     "uses_canonical_issuance_guard": true,
+    "evidence_policy_evaluation": "deferred-to-canonical-pre-signing-guard",
     "uses_required_remote_issuer_context": true,
-    "success": {"status_code": 200, "status": "approved"},
+    "success": {
+      "status_code": 200,
+      "status": "approved",
+      "response_fields": ["application_id", "status", "issuance_transaction_id"]
+    },
+    "resource_not_found": {"status_code": 404, "detail": "Canvas application not found"},
+    "rollout_disabled": {
+      "status_code": 404,
+      "detail": "Portable Canvas integration is not enabled for this organization"
+    },
+    "invalid_initial_status": {
+      "status_code": 409,
+      "detail": "Canvas application cannot be approved in its current status"
+    },
     "not_ready": {"status_code": 409, "detail": "Canvas application is not ready for approval"},
+    "transaction_reservation": {
+      "application_lock": true,
+      "approval_and_transaction_link_are_atomic": true,
+      "reuse_unexpired_pending_transaction": true,
+      "authorized_signing_issued_or_claimed_conflicts_fail_closed": true
+    },
     "provider_and_signing_error_details_redacted": true
   },
   "catalog_and_probe": {

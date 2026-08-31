@@ -3,7 +3,8 @@ use std::{error::Error, sync::Arc, time::Duration};
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
     canvas_award_candidate_approval::{
-        CanvasAwardCandidateApprovalService, SecureCanvasAwardApprovalSeedGenerator,
+        CanvasApplicationApprovalService, CanvasAwardCandidateApprovalService,
+        SecureCanvasAwardApprovalSeedGenerator,
     },
     canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
     canvas_award_candidate_postgres::PostgresCanvasAwardCandidateRepository,
@@ -281,13 +282,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.signing_keys_internal_api_key.as_deref(),
         config.dependency_timeout,
     )?);
+    let canvas_guard_config = CanvasGuardConfig {
+        enabled: config.canvas_portable_enabled,
+        pilot_organizations: config.canvas_pilot_organizations.clone(),
+        evidence_max_age: config.canvas_evidence_max_age,
+        readiness_max_age: config.canvas_readiness_max_age,
+    };
+    let canvas_approval_repository =
+        Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone()));
     let canvas_award_approver = Arc::new(CanvasAwardCandidateApprovalService::new(
-        Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone())),
+        canvas_approval_repository.clone(),
         issuer_resolver.clone(),
         Arc::new(SecureCanvasAwardApprovalSeedGenerator),
         canvas_lti_clock.clone(),
         config.canvas_readiness_max_age,
     ));
+    let canvas_application_approval = CanvasApplicationApprovalService::new(
+        canvas_approval_repository,
+        issuer_resolver.clone(),
+        Arc::new(SecureCanvasAwardApprovalSeedGenerator),
+        canvas_lti_clock.clone(),
+        canvas_guard_config.clone(),
+    );
     let canvas_award_materializer = Arc::new(CanvasAwardCandidateMaterializerService::new(
         Arc::new(PostgresCanvasAwardCandidateRepository::new(pool.clone())),
         canvas_award_approver,
@@ -361,7 +377,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.canvas_allow_http_localhost_base_urls,
         )),
         config.canvas_local_admin_token.clone(),
-    );
+    )
+    .with_application_approval(canvas_application_approval);
     let canvas_lti_deep_linking = CanvasLtiDeepLinkingService::new(
         canvas_lti_experience_session.clone(),
         Arc::new(PostgresCanvasLtiDeepLinkingRepository::new(pool.clone())),
@@ -396,12 +413,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.revocation_profile_service_url.clone(),
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
-        CanvasGuardConfig {
-            enabled: config.canvas_portable_enabled,
-            pilot_organizations: config.canvas_pilot_organizations.clone(),
-            evidence_max_age: config.canvas_evidence_max_age,
-            readiness_max_age: config.canvas_readiness_max_age,
-        },
+        canvas_guard_config,
     )?);
     let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
         NativeInitiationDidcommPorts {

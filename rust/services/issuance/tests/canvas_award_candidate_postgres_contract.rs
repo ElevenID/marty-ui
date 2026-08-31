@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
@@ -8,7 +8,9 @@ use marty_issuance_service::{
         CanvasIdentityJoin,
     },
     canvas_award_candidate_approval::{
-        plan_canvas_award_approval, CanvasAwardApprovalRepository, CanvasAwardApprovalSeed,
+        plan_canvas_approval_transaction, plan_canvas_award_approval,
+        CanvasApplicationApprovalError, CanvasApplicationApprovalRepository,
+        CanvasApplicationApprovalService, CanvasAwardApprovalRepository, CanvasAwardApprovalSeed,
         CanvasAwardApprovalSeedGenerator, CanvasAwardCandidateApprovalService,
     },
     canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
@@ -17,6 +19,7 @@ use marty_issuance_service::{
         CanvasAwardCandidateApprover, CanvasAwardCandidateRepository,
         CanvasAwardCandidateRepositoryError,
     },
+    canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::{
         canvas_lti_experience_session_context, CanvasLtiExperienceSessionContext,
@@ -111,6 +114,17 @@ impl CanvasAwardApprovalSeedGenerator for ApprovalSeeds {
         CanvasAwardApprovalSeed {
             transaction_id: "transaction-1".to_owned(),
             pre_authorized_code: "pre-authorized-code-1".to_owned(),
+        }
+    }
+}
+
+struct ManualApprovalSeeds;
+
+impl CanvasAwardApprovalSeedGenerator for ManualApprovalSeeds {
+    fn generate(&self) -> CanvasAwardApprovalSeed {
+        CanvasAwardApprovalSeed {
+            transaction_id: "transaction-manual-1".to_owned(),
+            pre_authorized_code: "pre-authorized-code-manual-1".to_owned(),
         }
     }
 }
@@ -345,6 +359,242 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         "pre-authorized-code-1"
     );
     assert!(transaction.get::<bool, _>("future_expiry"));
+
+    // Management approval shares the exact repository, KMS context and
+    // transaction planner while preserving the route's distinct reviewer.
+    sqlx::query(
+        "INSERT INTO issuance_service.applications
+         (id, organization_id, application_template_id, applicant_identifier,
+          form_data, integration_context, status, updated_at)
+         VALUES ('application-manual-1', 'org-1', 'application-template-1',
+                 'canvas_lti:manual-subject',
+                 '{\"achievement\":\"Manual Canvas\"}'::json,
+                 '{\"delivery_mode\":\"wallet_only\",\"canvas\":{
+                    \"source\":\"canvas_lti_bootstrap\",
+                    \"canvas_platform_id\":\"platform-1\",
+                    \"canvas_program_binding_id\":\"binding-1\",
+                    \"canvas_account_id\":\"account-1\",
+                    \"application_template_id\":\"application-template-1\",
+                    \"credential_template_id\":\"credential-template-1\",
+                    \"lti_subject\":\"manual-subject\"}}'::json,
+                 'pending', clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let management_repository = Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone()));
+    let manual_approval = CanvasApplicationApprovalService::new(
+        management_repository.clone(),
+        Arc::new(ApprovalIssuer),
+        Arc::new(ManualApprovalSeeds),
+        Arc::new(ApprovalClock),
+        CanvasGuardConfig {
+            enabled: true,
+            pilot_organizations: BTreeSet::from(["org-1".to_owned()]),
+            evidence_max_age: Duration::from_secs(900),
+            readiness_max_age: Duration::from_secs(900),
+        },
+    );
+    let manual_result = manual_approval
+        .approve("org-1", "application-manual-1", Some(""))
+        .await
+        .unwrap();
+    assert_eq!(
+        manual_result.issuance_transaction_id,
+        "transaction-manual-1"
+    );
+    let manual_application = sqlx::query(
+        "SELECT status, reviewer_id, review_notes, issuance_transaction_id
+         FROM issuance_service.applications WHERE id = 'application-manual-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(manual_application.get::<String, _>("status"), "approved");
+    assert_eq!(
+        manual_application
+            .get::<Option<String>, _>("reviewer_id")
+            .as_deref(),
+        Some("canvas-integration-management-api")
+    );
+    assert_eq!(
+        manual_application
+            .get::<Option<String>, _>("review_notes")
+            .as_deref(),
+        Some("Approved through Canvas integration operations")
+    );
+    assert_eq!(
+        manual_application
+            .get::<Option<String>, _>("issuance_transaction_id")
+            .as_deref(),
+        Some("transaction-manual-1")
+    );
+
+    // Two approvers that both observed pending state serialize on the
+    // application row and converge on one active transaction.
+    sqlx::query(
+        "INSERT INTO issuance_service.applications
+         (id, organization_id, application_template_id, applicant_identifier,
+          form_data, integration_context, status, updated_at)
+         SELECT 'application-manual-race', organization_id,
+                application_template_id, applicant_identifier, form_data,
+                jsonb_set(integration_context::jsonb,
+                          '{canvas,lti_subject}', '\"manual-race\"'::jsonb)::json,
+                'pending', clock_timestamp()
+         FROM issuance_service.applications WHERE id = 'application-manual-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let race_snapshot = management_repository
+        .load_application_approval_snapshot("org-1", "application-manual-race")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut race_a = plan_canvas_approval_transaction(
+        &race_snapshot.application,
+        &race_snapshot.binding,
+        &CanvasAwardApprovalSeed {
+            transaction_id: "transaction-manual-race-a".to_owned(),
+            pre_authorized_code: "pre-authorized-code-manual-race-a".to_owned(),
+        },
+        now(),
+    )
+    .unwrap();
+    let mut race_b = plan_canvas_approval_transaction(
+        &race_snapshot.application,
+        &race_snapshot.binding,
+        &CanvasAwardApprovalSeed {
+            transaction_id: "transaction-manual-race-b".to_owned(),
+            pre_authorized_code: "pre-authorized-code-manual-race-b".to_owned(),
+        },
+        now(),
+    )
+    .unwrap();
+    for transaction in [&mut race_a, &mut race_b] {
+        transaction.issuer_profile_id = Some("issuer-profile-1".to_owned());
+        transaction.signing_service_id = Some("kms-service-1".to_owned());
+    }
+    let (reserved_a, reserved_b) = tokio::join!(
+        management_repository.reserve_application_issuance(
+            &race_a,
+            &race_snapshot,
+            "canvas-integration-management-api",
+            "review-a",
+            now(),
+        ),
+        management_repository.reserve_application_issuance(
+            &race_b,
+            &race_snapshot,
+            "canvas-integration-management-api",
+            "review-b",
+            now(),
+        ),
+    );
+    let reserved_a = reserved_a.unwrap();
+    let reserved_b = reserved_b.unwrap();
+    assert_eq!(reserved_a, reserved_b);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_transactions
+             WHERE application_id = 'application-manual-race'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT issuance_transaction_id FROM issuance_service.applications
+             WHERE id = 'application-manual-race'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .as_deref(),
+        Some(reserved_a.as_str())
+    );
+
+    // Dependency drift after snapshot load rolls back both transaction insert
+    // and application approval.
+    sqlx::query(
+        "INSERT INTO issuance_service.applications
+         (id, organization_id, application_template_id, applicant_identifier,
+          form_data, integration_context, status, updated_at)
+         SELECT 'application-manual-drift', organization_id,
+                application_template_id, applicant_identifier, form_data,
+                jsonb_set(integration_context::jsonb,
+                          '{canvas,lti_subject}', '\"manual-drift\"'::jsonb)::json,
+                'pending', clock_timestamp()
+         FROM issuance_service.applications WHERE id = 'application-manual-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let drift_snapshot = management_repository
+        .load_application_approval_snapshot("org-1", "application-manual-drift")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut drift_transaction = plan_canvas_approval_transaction(
+        &drift_snapshot.application,
+        &drift_snapshot.binding,
+        &CanvasAwardApprovalSeed {
+            transaction_id: "transaction-manual-drift".to_owned(),
+            pre_authorized_code: "pre-authorized-code-manual-drift".to_owned(),
+        },
+        now(),
+    )
+    .unwrap();
+    drift_transaction.issuer_profile_id = Some("issuer-profile-1".to_owned());
+    drift_transaction.signing_service_id = Some("kms-service-1".to_owned());
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings
+         SET config_version = config_version + 1 WHERE id = 'binding-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        management_repository
+            .reserve_application_issuance(
+                &drift_transaction,
+                &drift_snapshot,
+                "canvas-integration-management-api",
+                "must-not-commit",
+                now(),
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.applications
+             WHERE id = 'application-manual-drift'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_transactions
+             WHERE id = 'transaction-manual-drift'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings SET config_version = 3
+         WHERE id = 'binding-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     // Same payload and same identifier are both replay-safe no-ops.
     assert!(repository
@@ -633,7 +883,9 @@ async fn setup_schema(pool: &sqlx::PgPool) {
     for statement in [
         "CREATE TABLE issuance_service.canvas_platforms (
             id text PRIMARY KEY, organization_id text NOT NULL,
-            lti_deployment_id text)",
+            lti_deployment_id text, canvas_account_id text NOT NULL,
+            registration_status text NOT NULL, enabled boolean NOT NULL,
+            archived_at timestamptz)",
         "CREATE TABLE issuance_service.application_templates (
             id text PRIMARY KEY, organization_id text NOT NULL,
             credential_template_id text, approval_policy_set_id text, status text NOT NULL)",
@@ -716,7 +968,10 @@ async fn setup_schema(pool: &sqlx::PgPool) {
 async fn seed_candidate(pool: &sqlx::PgPool) {
     for statement in [
         "INSERT INTO issuance_service.canvas_platforms
-         VALUES ('platform-1', 'org-1', 'deployment-123')",
+         (id, organization_id, lti_deployment_id, canvas_account_id,
+          registration_status, enabled, archived_at)
+         VALUES ('platform-1', 'org-1', 'deployment-123', 'account-1',
+                 'verified', true, NULL)",
         "INSERT INTO issuance_service.application_templates
          VALUES ('application-template-1', 'org-1', 'credential-template-1', NULL, 'active')",
         "INSERT INTO issuance_service.canvas_program_bindings

@@ -363,6 +363,80 @@ pub fn evaluate_canvas_guard_snapshot(
     Ok(())
 }
 
+/// Evaluate the same persisted Canvas ownership, readiness and credential
+/// snapshot used by the pre-signing guard before a management approval is
+/// allowed to reserve an issuance transaction.
+///
+/// Evidence and policy are deliberately evaluated by the canonical
+/// pre-signing guard after approval. Manual approval only establishes the
+/// claimable transaction; it does not bypass the later issuance decision.
+pub fn evaluate_canvas_approval_snapshot(
+    organization_id: &str,
+    application_id: &str,
+    snapshot: &CanvasGuardSnapshot,
+    config: &CanvasGuardConfig,
+    now: DateTime<Utc>,
+) -> Result<(), &'static str> {
+    let application = object(&snapshot.application, "canvas_application_not_found")?;
+    let canvas = application
+        .get("integration_context")
+        .and_then(Value::as_object)
+        .and_then(|integration| integration.get("canvas"))
+        .and_then(Value::as_object)
+        .ok_or("canvas_application_not_found")?;
+    if !config.enabled || !config.pilot_organizations.contains(organization_id) {
+        return Err("canvas_rollout_disabled");
+    }
+    if text(application.get("id")) != application_id
+        || text(application.get("organization_id")) != organization_id
+    {
+        return Err("canvas_application_not_found");
+    }
+    if !text(application.get("status")).eq_ignore_ascii_case("pending") {
+        return Err("canvas_application_invalid_status");
+    }
+    let platform_id = text(canvas.get("canvas_platform_id"));
+    let binding_id = text(canvas.get("canvas_program_binding_id"));
+    if platform_id.is_empty() || binding_id.is_empty() || organization_id.is_empty() {
+        return Err("canvas_application_not_ready");
+    }
+    let platform = object(&snapshot.platform, "canvas_application_not_found")?;
+    let binding = object(&snapshot.binding, "canvas_application_not_found")?;
+    if text(platform.get("id")) != platform_id
+        || text(binding.get("id")) != binding_id
+        || text(platform.get("organization_id")) != organization_id
+        || text(binding.get("organization_id")) != organization_id
+    {
+        return Err("canvas_application_not_found");
+    }
+    if !canvas_resources_active(platform, binding)
+        || !binding_readiness_is_current(binding, config.readiness_max_age, now)
+    {
+        return Err("canvas_application_not_ready");
+    }
+    let template = object(
+        &snapshot.application_template,
+        "canvas_application_not_found",
+    )?;
+    if text(template.get("id")) != text(application.get("application_template_id"))
+        || text(template.get("id")) != text(binding.get("application_template_id"))
+        || text(template.get("organization_id")) != organization_id
+        || !text(template.get("status")).eq_ignore_ascii_case("active")
+        || text(template.get("credential_template_id"))
+            != text(binding.get("credential_template_id"))
+        || text(binding.get("platform_id")) != text(platform.get("id"))
+        || text(canvas.get("canvas_account_id")) != text(platform.get("canvas_account_id"))
+        || text(canvas.get("application_template_id"))
+            != text(binding.get("application_template_id"))
+        || text(canvas.get("credential_template_id")) != text(binding.get("credential_template_id"))
+        || text(canvas.get("lti_subject")).is_empty()
+        || credential_snapshot(binding, organization_id).is_err()
+    {
+        return Err("canvas_application_not_ready");
+    }
+    Ok(())
+}
+
 fn object<'a>(
     value: &'a Value,
     code: &'static str,
