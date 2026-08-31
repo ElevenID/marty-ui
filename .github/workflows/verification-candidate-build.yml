@@ -72,7 +72,8 @@ jobs:
           set -euxo pipefail
           test "$(docker version --format '{{.Server.Version}}')" = "29.7.2"
           test "$(docker buildx version | awk '{print $2}')" = "v0.36.1"
-          docker buildx inspect --bootstrap | grep --fixed-strings "BuildKit version: v0.32.2"
+          test "$(docker buildx inspect --bootstrap \
+            | awk '$1 == "BuildKit" && $2 == "version:" { print $3 }')" = "v0.32.2"
           test "$(docker info --format '{{ .DriverStatus }}')" = \
             '[[driver-type io.containerd.snapshotter.v1]]'
 

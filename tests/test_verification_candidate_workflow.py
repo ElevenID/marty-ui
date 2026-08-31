@@ -39,7 +39,9 @@ def assert_supported_backend(job: dict[str, object]) -> None:
     commands = "\n".join(str(step.get("run", "")) for step in steps)
     assert "docker version --format '{{.Server.Version}}')\" = \"29.7.2" in commands
     assert "docker buildx version | awk '{print $2}')\" = \"v0.36.1" in commands
-    assert "BuildKit version: v0.32.2" in commands
+    assert "docker buildx inspect --bootstrap" in commands
+    assert '$1 == "BuildKit" && $2 == "version:" { print $3 }' in commands
+    assert '")" = "v0.32.2"' in commands
     assert "[[driver-type io.containerd.snapshotter.v1]]" in commands
     assert "docker info --format '{{ .DriverStatus }}'" in commands
 
