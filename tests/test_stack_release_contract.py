@@ -448,6 +448,23 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     assert "actions: read" in workflow
 
 
+def test_stack_tag_and_release_require_explicit_eligibility() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+    prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    lock = json.loads(_text("release/stack-lock.json"))
+    example_lock = json.loads(_text("release/stack-lock.example.json"))
+
+    assert lock["release_state"] == "hold"
+    assert example_lock["release_state"] == "hold"
+    assert "scripts/stack_tag_gate.py prepare" in prepare
+    assert "--repository ." in prepare
+    assert "scripts/stack_tag_gate.py validate-release" in workflow
+    assert "--repository ." in workflow
+    assert workflow.index("scripts/stack_tag_gate.py validate-release") < workflow.index(
+        "scripts/build_stack_manifest.py"
+    )
+
+
 def test_python_migration_image_installs_every_required_native_backend() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "elevenid.stack-tag-preparation/v1"
+STACK_LOCK_SCHEMA = "marty.stack-lock/v1"
+RELEASE_ELIGIBLE_STATE = "eligible"
 TAG_PATTERN = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PREPARATION_WORKFLOW = ".github/workflows/prepare-stack-tag.yml"
@@ -56,13 +58,24 @@ def _git(repository: Path, *arguments: str) -> str:
         ) from error
 
 
+def require_release_eligible(repository: Path, tag: str) -> None:
+    version = version_from_tag(tag)
+    lock = _load_json(repository / "release" / "stack-lock.json", "stack lock")
+    document = _object(lock, "stack lock")
+    if document.get("schema") != STACK_LOCK_SCHEMA:
+        raise StackTagGateError("stack-lock schema is invalid")
+    if document.get("release") != f"marty-ui@{version}":
+        raise StackTagGateError("stack-lock release does not match the stable tag")
+    if document.get("release_state") != RELEASE_ELIGIBLE_STATE:
+        raise StackTagGateError(
+            "stack-lock release_state must be exactly 'eligible'"
+        )
+
+
 def validate_source(repository: Path, tag: str, expected_commit: str) -> None:
     if not SHA_PATTERN.fullmatch(expected_commit):
         raise StackTagGateError("source commit must be a full lowercase SHA")
-    version = version_from_tag(tag)
-    lock = _load_json(repository / "release" / "stack-lock.json", "stack lock")
-    if _object(lock, "stack lock").get("release") != f"marty-ui@{version}":
-        raise StackTagGateError("stack-lock release does not match the stable tag")
+    require_release_eligible(repository, tag)
     head = _git(repository, "rev-parse", "HEAD^{commit}")
     main = _git(repository, "rev-parse", "refs/remotes/origin/main^{commit}")
     if head != expected_commit or main != expected_commit:
@@ -190,6 +203,7 @@ def parse_tag_message(message: str) -> dict[str, str]:
 
 
 def validate_release_proof(
+    repository: Path,
     repository_name: str,
     tag: str,
     commit: str,
@@ -199,7 +213,7 @@ def validate_release_proof(
     run_payload: Any,
     evidence: Any,
 ) -> None:
-    version_from_tag(tag)
+    require_release_eligible(repository, tag)
     if tag_type != "tag":
         raise StackTagGateError("stable release ref must be an annotated tag object")
     if not SHA_PATTERN.fullmatch(commit) or not SHA_PATTERN.fullmatch(tag_object):
@@ -263,6 +277,7 @@ def _parser() -> argparse.ArgumentParser:
     record.add_argument("--tag-object", required=True)
     record.add_argument("--peeled-commit", required=True)
     release = subparsers.add_parser("validate-release")
+    release.add_argument("--repository", type=Path, required=True)
     release.add_argument("--repository-name", required=True)
     release.add_argument("--tag", required=True)
     release.add_argument("--commit", required=True)
@@ -302,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             validate_release_proof(
+                args.repository,
                 args.repository_name,
                 args.tag,
                 args.commit,
