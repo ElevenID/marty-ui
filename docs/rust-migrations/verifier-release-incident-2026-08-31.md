@@ -44,6 +44,12 @@ reusing a coordinate after any versioned image has been published.
 - Credentials adapter-retirement guard PR `ElevenID/marty-credentials#253`
   merged at `cbda2ac7e3376b858c1e8d5d010a304474c659cf`; it preserves the separate
   still-used adapter and does not change the issuance-only `v0.1.72` decision.
+- Protected integration PR `#404` packaged the reviewed `#400`-`#403` harness
+  lineage as immutable `marty-integration-tests@v1.2.78` at merge commit
+  `3baad4b5dbccc720a50ff9ae5a280349180c02a8`. This preliminary harness release
+  remains non-activating and explicitly blocked on
+  `canonical.oid4vp-positive-runtime-not-exercised`; it does not pin a
+  corrected Rust services image or authorize publication or deployment.
 
 ## Containment decision
 
@@ -53,19 +59,22 @@ but no tag, registry coordinate, or release reserves that version. It must not
 be published through the current direct-tag workflow while the release lock is
 held.
 
-Before the next versioned write, implement and test:
+Before the next UI/services artifact write or activating stack write, implement
+and test:
 
 1. A read-only, non-publishing candidate lane that builds the exact services
    Dockerfile and arguments from an exact protected-main commit, exports an OCI
    archive plus SBOM/source/config digests, verifies the archive and image
    labels without pulling a substitute, and runs both the retained Python
    oracle and Rust candidate.
-2. The current hardened 17-group differential plus its missing
-   artifact-differential gates: a trusted positive OID4VP
-   PASS fixture with claim projection, migration idempotence by applying the
-   release twice, explicit default-disabled and enabled compatibility behavior,
-   and exact candidate/oracle evidence-set comparison with only documented
-   language-neutral differences.
+2. Retain the current hardened 19-check portable differential, its Rust-only
+   default-disabled compatibility check, and the landed artifact-differential
+   gates: trusted-positive OID4VP claim projection, migration idempotence by
+   applying the release twice, explicit default-disabled and enabled
+   compatibility behavior, and exact candidate/oracle evidence-set comparison
+   with only documented language-neutral differences. The eligible runtime
+   must actually exercise the positive OID4VP path; the deterministic fixture
+   contract alone is not runtime evidence.
 3. A digest-first, resumable release transaction. Create the durable draft claim
    only after eligibility, tag, environment, and exact no-`v` registry absence
    checks. Push and attest content-addressed images, run the public stack and

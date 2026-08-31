@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tag `v1.1.210` is quarantined because it did not publish a complete stack release. The comprehensive Python-oracle/Rust-negative-control differential is merged and published as verified `marty-integration-tests@v1.2.77`, the fail-closed stack eligibility interlock is merged, and protected integration PR `#403` has landed the missing artifact parity gates. Those gates correctly block release clearance because neither published runtime exercises the trusted positive OID4VP path. Exact partial-publication evidence is retained in [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md). Cutover remains on repair hold pending that runtime capability, a non-publishing candidate lane, digest-first resumable publication, the next corrected Rust artifact, its exact positive differential release, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tag `v1.1.210` is quarantined because it did not publish a complete stack release. The comprehensive Python-oracle/Rust-negative-control differential is published as verified `marty-integration-tests@v1.2.77`; its protected parity hardening through PR `#403` is now packaged as non-activating harness release `v1.2.78`. Both releases correctly block cutover because neither published runtime exercises the trusted positive OID4VP path. Exact partial-publication evidence is retained in [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md). Cutover remains on repair hold pending that runtime capability, a complete non-publishing candidate lane, digest-first resumable publication, the next corrected Rust artifact, its exact positive differential release, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged.
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -57,6 +57,15 @@ Rust `v1.1.208` fails only the expected session transaction-ID scoping gate.
 It is a trustworthy differential harness, not authorization to deploy the
 rejected Rust candidate.
 
+Protected integration PRs `#400` through `#403` then closed the identified
+privacy, evidence-comparison, session-identifier, migration and compatibility
+gaps. PR `#404` packaged that protected tree as immutable
+`marty-integration-tests@v1.2.78` at merge commit
+`3baad4b5dbccc720a50ff9ae5a280349180c02a8`. This is a preliminary harness
+release only: it retains `release_clearance=blocked` with
+`canonical.oid4vp-positive-runtime-not-exercised`, does not pin a corrected
+Rust services image, and does not select or activate a product release.
+
 Protected `ElevenID/marty-ui#727` merged the fail-closed `release_state`
 decision at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`. Tag preparation and
 tag/dispatch publication now share the same decision. The current aggregate
@@ -74,8 +83,9 @@ in scope and its deployment configuration remains unchanged.
 | `marty-ui@v1.1.209` | Quarantined partial publication | UI-only registry coordinate; no services/migrations image or GitHub release |
 | `marty-ui@v1.1.210` | Quarantined partial publication | Pre-interlock UI-only registry coordinate; no services/migrations image or GitHub release and never deployable |
 | `marty-integration-tests@v1.2.77` | Published and independently verified | Trustworthy immutable Python baseline plus `v1.1.208` bounded negative control; historical evidence, not cutover clearance |
+| `marty-integration-tests@v1.2.78` | Published harness-only evidence | Packages protected PRs `#400`-`#403`; remains blocked and does not pin a corrected Rust runtime |
 | next corrected `marty-ui` artifact (expected `v1.1.211`) | Local candidate; held and unreserved | Must first pass the non-publishing candidate and trusted-positive OID4VP runtime gates, then use the hardened digest-first release transaction; no tag, image or release exists |
-| later integration release (expected `v1.2.78`) | Not started | Must pin the corrected services image and convert the negative control to a completely passing Rust candidate |
+| later corrected-Rust-pinned integration release | Not started | Must use a new version, pin the corrected services image and convert the negative control to a completely passing Rust candidate |
 | later aggregate `marty-ui` release (expected `v1.1.212`) | Not started | Only artifact eligible for the single beta deployment and soak |
 
 The 31-route language-neutral Canvas management floor is
@@ -129,7 +139,8 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    services image and SBOM. Replace the bounded `v1.1.208` expected failure
    with a fully passing Rust candidate, run every oracle/candidate group,
    merge through protection, and publish a new immutable integration release
-   (expected `v1.2.78`). `v1.2.76` and the negative-control half of `v1.2.77`
+   using a version after the harness-only `v1.2.78`. `v1.2.76`, the
+   negative-control half of `v1.2.77`, and preliminary harness `v1.2.78`
    remain evidence for the rejected bootstrap candidate, not cutover
    authorization. Protected `ElevenID/marty-integration-tests#400` already
    merged the post-`v1.2.77` strengthening at
@@ -146,7 +157,9 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    only for exact frozen artifacts whose generated session identifiers violate
    the downstream grammar. Future Rust artifacts remain fail-closed with no
    allowance. Base the corrected repin on that protected-main tree rather than
-   reapplying any superseded local commit.
+   reapplying any superseded local commit. PR `#404` published those merged
+   harness corrections as `v1.2.78`; it did not perform this corrected-image
+   repin and therefore did not complete this step.
 3. Treat the already-merged standalone Python verifier deletion as provisional
    until step 2 passes. Preserve the immutable legacy image as the differential
    oracle and fix Rust if any corrected-artifact comparison fails. Continue to
@@ -282,9 +295,12 @@ merged and no beta or production deployment occurred. Pre-interlock
 complete stack release. Comprehensive differential PR
 `marty-integration-tests#398` and independently verified release `v1.2.77`
 preserve the Python passing oracle and expose the rejected `v1.1.208` session
-scoping defect as a bounded negative control. The eligibility interlock is
-merged. The remaining repair gate is to implement and pass the candidate,
-missing artifact-differential parity, and digest-first resumable release
+scoping defect as a bounded negative control. Release `v1.2.78` packages the
+protected post-release harness corrections through PR `#403` but deliberately
+remains non-activating and blocked. The eligibility interlock is merged. The
+remaining repair gate is to implement the trusted-positive OID4VP runtime,
+pass the candidate through the landed artifact-differential parity gates, and
+complete the digest-first resumable release
 requirements in the incident record; publish the next eligible corrected
 artifact only afterward; pin and execute every differential group against its
 exact image/SBOM/provenance; publish the fully passing integration release; and
