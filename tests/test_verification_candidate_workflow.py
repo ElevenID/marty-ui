@@ -40,7 +40,8 @@ def assert_supported_backend(job: dict[str, object]) -> None:
     assert "docker version --format '{{.Server.Version}}')\" = \"29.7.2" in commands
     assert "docker buildx version | awk '{print $2}')\" = \"v0.36.1" in commands
     assert "BuildKit version: v0.32.2" in commands
-    assert '["driver-type","io.containerd.snapshotter.v1"]' in commands
+    assert "[[driver-type io.containerd.snapshotter.v1]]" in commands
+    assert "docker info --format '{{ .DriverStatus }}'" in commands
 
 
 def test_candidate_workflow_is_manual_nonpublishing_and_least_privilege() -> None:

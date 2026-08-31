@@ -1541,12 +1541,12 @@ jobs:
       - name: Require the exact supported OCI backend
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           test "$(docker version --format '{{.Server.Version}}')" = "29.7.2"
           test "$(docker buildx version | awk '{print $2}')" = "v0.36.1"
           docker buildx inspect --bootstrap | grep --fixed-strings "BuildKit version: v0.32.2"
-          docker info --format '{{json .DriverStatus}}' \
-            | grep --fixed-strings '["driver-type","io.containerd.snapshotter.v1"]'
+          test "$(docker info --format '{{ .DriverStatus }}')" = \
+            '[[driver-type io.containerd.snapshotter.v1]]'
       - name: Install exact candidate contract dependencies
         run: uv pip install --system pytest==9.1.1 pyyaml==6.0.3
       - name: Prove the same OCI archive through the future consumer path
