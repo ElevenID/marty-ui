@@ -306,7 +306,7 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     assert "grep -v '^migrations$' || true" not in workflow
 
 
-def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
+def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate_overlay() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
     assert "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml" in workflow
@@ -318,10 +318,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.74"
-    assert integration["commit"] == "ab7721ef6ae5d2a8fc7eba0730c5716188ebeb31"
+    assert integration["version"] == "1.2.75"
+    assert integration["commit"] == "60b58b0812b92319ab67129dca22cae733d916d4"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:943469e27c31fb66d28685ab0b2161c22a63395a07b4b8a54ec3da88adc45632"
+        "sha256:426a281c6c19fb0a61b1f0325b3d01cfb24d998df3509f6ef8ef73e8cbd7620e"
     )
 
     issuance = next(
