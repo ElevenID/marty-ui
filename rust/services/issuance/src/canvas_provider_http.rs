@@ -1,7 +1,7 @@
 //! Shared bounded HTTP client construction for Canvas provider traffic.
 
 use std::{
-    net::{IpAddr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::{Duration, SystemTime},
 };
 
@@ -169,6 +169,14 @@ fn is_globally_routable_ipv6(value: Ipv6Addr) -> bool {
 
     let segments = value.segments();
 
+    // The well-known NAT64 prefix carries an IPv4 destination in its final
+    // 32 bits. Preserve public IPv4 reachability on IPv6-only networks while
+    // preventing the prefix from bypassing the IPv4 private-address guard.
+    if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
+        let embedded = Ipv4Addr::from((u32::from(segments[6]) << 16) | u32::from(segments[7]));
+        return !is_private_ip(IpAddr::V4(embedded));
+    }
+
     if (segments[0] & 0xe000) != 0x2000 {
         return false;
     }
@@ -239,6 +247,7 @@ mod tests {
             "2001:30::1",
             "2001:4860::1",
             "2606:4700:4700::1111",
+            "64:ff9b::808:808",
             "::ffff:8.8.8.8",
         ] {
             let ip = raw.parse::<IpAddr>().expect("valid global IPv6");
@@ -267,6 +276,9 @@ mod tests {
             ("3fff:fff::1", true),
             ("3fff:1000::1", false),
             ("4000::1", true),
+            ("64:ff9b::a00:1", true),
+            ("64:ff9b::6440:1", true),
+            ("64:ff9b::808:808", false),
             ("::ffff:10.0.0.1", true),
             ("::ffff:100.64.0.1", true),
         ] {
