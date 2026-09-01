@@ -4,7 +4,10 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use marty_oid4vci::lti::validate_canvas_lti_service_url;
+use marty_oid4vci::lti::{
+    canvas_lti_trust_profile, validate_canvas_lti_service_url,
+    CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
+};
 use reqwest::{
     header::{LINK, WWW_AUTHENTICATE},
     Response,
@@ -162,13 +165,13 @@ impl HttpCanvasAuthoritativeProvider {
         resources: &CanvasSyncResources,
         scope: &str,
     ) -> Result<String, CanvasProviderReadError> {
+        let expected = self.expected_lti_trust(resources)?;
         let endpoint = validate_canvas_lti_service_url(
-            &resources.platform.lti_auth_token_url,
+            &expected.token_endpoint,
             &self.policy.private_origin_allowlist,
         )
         .await
         .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
-        self.enforce_self_managed_same_origin(resources, &endpoint)?;
         if resources.platform.lti_client_id.trim().is_empty() {
             return Err(CanvasProviderReadError::InvalidConfiguration);
         }
@@ -209,28 +212,29 @@ impl HttpCanvasAuthoritativeProvider {
         accept: &str,
         user_id: Option<&str>,
         limit: usize,
+        limit_error: CanvasProviderReadError,
     ) -> Result<Vec<Value>, CanvasProviderReadError> {
         let validated = validate_canvas_lti_service_url(url, &self.policy.private_origin_allowlist)
             .await
             .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
-        self.enforce_self_managed_same_origin(resources, &validated)?;
+        self.enforce_lti_service_trust(resources, &validated)?;
         let token = self.lti_access_token(resources, scope).await?;
         let mut next =
             Url::parse(&validated).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         if let Some(user_id) = user_id {
             next.query_pairs_mut().append_pair("user_id", user_id);
         }
-        self.collection(resources, next, &token, accept, limit)
+        self.collection(next, &token, accept, limit, limit_error)
             .await
     }
 
     async fn collection(
         &self,
-        resources: &CanvasSyncResources,
         mut next: Url,
         token: &str,
         accept: &str,
         limit: usize,
+        limit_error: CanvasProviderReadError,
     ) -> Result<Vec<Value>, CanvasProviderReadError> {
         let expected_origin = origin_url(&next)?;
         reject_embedded_credentials(&next)?;
@@ -258,21 +262,20 @@ impl HttpCanvasAuthoritativeProvider {
             }
             let remaining = limit.saturating_sub(output.len());
             if rows.len() > remaining {
-                return Err(CanvasProviderReadError::Unavailable);
+                return Err(limit_error);
             }
             output.extend(rows.iter().cloned());
             let Some(candidate) = next_link(&link)? else {
                 return Ok(output);
             };
             if output.len() >= limit {
-                return Err(CanvasProviderReadError::Unavailable);
+                return Err(limit_error);
             }
             next = Url::parse(&candidate)
                 .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
             reject_embedded_credentials(&next)?;
         }
-        let _ = resources;
-        Err(CanvasProviderReadError::InvalidConfiguration)
+        Err(limit_error)
     }
 }
 
@@ -302,6 +305,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     AGS_RESULT_ACCEPT,
                     Some(subject),
                     100,
+                    CanvasProviderReadError::Unavailable,
                 )
                 .await?;
             let record = results.first().cloned().unwrap_or_else(|| json!({}));
@@ -353,7 +357,13 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
             .any(|value| text(value.get("source")) == "ags_result");
         let mut snapshot = CanvasRosterSnapshot::default();
         if has_rest {
-            let token = self.oauth_token(resources).await?;
+            let token = self
+                .oauth_token(resources)
+                .await
+                .map_err(|error| match error {
+                    CanvasProviderReadError::RateLimited { .. } => error,
+                    _ => CanvasProviderReadError::RosterOAuthUnavailable,
+                })?;
             let (_, base) =
                 client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
                     .await
@@ -370,7 +380,13 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 url.query_pairs_mut()
                     .append_pair("enrollment_type[]", "student");
                 for user in self
-                    .collection(resources, url, &token, "application/json", limit)
+                    .collection(
+                        url,
+                        &token,
+                        "application/json",
+                        limit,
+                        CanvasProviderReadError::RosterCollectionTooLarge,
+                    )
                     .await?
                 {
                     if let Some(id) = user.get("id").and_then(value_identifier) {
@@ -397,7 +413,13 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     &format!("courses/{}/bulk_user_progress", encoded(course)?),
                 )?;
                 let rows = self
-                    .collection(resources, url, &token, "application/json", limit)
+                    .collection(
+                        url,
+                        &token,
+                        "application/json",
+                        limit,
+                        CanvasProviderReadError::RosterCollectionTooLarge,
+                    )
                     .await?;
                 let by_user = validated_course_completion_by_user(rows)?;
                 for user in &snapshot.canvas_user_ids {
@@ -432,7 +454,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
             let memberships = verified
                 .then(|| text(target.metadata.get("nrps_context_memberships_url")))
                 .filter(|value| !value.is_empty())
-                .ok_or(CanvasProviderReadError::InvalidConfiguration)?;
+                .ok_or(CanvasProviderReadError::NrpsRosterUnavailable)?;
             for member in self
                 .lti_collection(
                     resources,
@@ -441,6 +463,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     NRPS_MEMBERSHIP_ACCEPT,
                     None,
                     limit,
+                    CanvasProviderReadError::RosterCollectionTooLarge,
                 )
                 .await?
             {
@@ -465,17 +488,43 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
 }
 
 impl HttpCanvasAuthoritativeProvider {
-    fn enforce_self_managed_same_origin(
+    fn expected_lti_trust(
+        &self,
+        resources: &CanvasSyncResources,
+    ) -> Result<marty_oid4vci::lti::CanvasLtiTrustProfile, CanvasProviderReadError> {
+        expected_lti_trust(&resources.platform, &self.self_managed_origin_allowlist)
+    }
+
+    fn enforce_lti_service_trust(
         &self,
         resources: &CanvasSyncResources,
         service_url: &str,
     ) -> Result<(), CanvasProviderReadError> {
-        enforce_self_managed_origin(
+        let _expected = self.expected_lti_trust(resources)?;
+        enforce_persisted_lti_service_origin(
             &resources.platform.canvas_base_url,
+            &resources.platform.lti_trust_profile,
             service_url,
-            &self.self_managed_origin_allowlist,
         )
     }
+}
+
+fn expected_lti_trust(
+    platform: &crate::canvas_sync_processor::CanvasSyncPlatformSnapshot,
+    self_managed_origin_allowlist: &[String],
+) -> Result<marty_oid4vci::lti::CanvasLtiTrustProfile, CanvasProviderReadError> {
+    let expected = canvas_lti_trust_profile(
+        &platform.canvas_base_url,
+        &platform.lti_trust_profile,
+        self_managed_origin_allowlist,
+    )
+    .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+    if platform.lti_issuer.trim() != expected.issuer
+        || platform.lti_auth_token_url.trim() != expected.token_endpoint
+    {
+        return Err(CanvasProviderReadError::InvalidConfiguration);
+    }
+    Ok(expected)
 }
 
 async fn request_lti_token(
@@ -574,29 +623,15 @@ fn reject_embedded_credentials(url: &Url) -> Result<(), CanvasProviderReadError>
     Ok(())
 }
 
-fn enforce_self_managed_origin(
+fn enforce_persisted_lti_service_origin(
     canvas_url: &str,
+    trust_profile: &str,
     service_url: &str,
-    allowlist: &[String],
 ) -> Result<(), CanvasProviderReadError> {
     let canvas =
         Url::parse(canvas_url).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
     let canvas_origin = origin_url(&canvas)?;
-    let self_managed = allowlist.iter().any(|candidate| {
-        Url::parse(candidate)
-            .ok()
-            .filter(|url| {
-                url.scheme() == "https"
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-                    && matches!(url.path(), "" | "/")
-            })
-            .and_then(|url| origin_url(&url).ok())
-            .is_some_and(|origin| origin == canvas_origin)
-    });
-    if self_managed {
+    if trust_profile.trim() == CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN {
         let service =
             Url::parse(service_url).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         if origin_url(&service)? != canvas_origin {
@@ -1296,39 +1331,32 @@ mod tests {
     }
 
     #[test]
-    fn self_managed_trust_is_independent_and_same_origin_only() {
-        let self_managed = vec!["https://canvas.example.edu".to_owned()];
-        assert!(enforce_self_managed_origin(
+    fn persisted_self_managed_trust_is_same_origin_only() {
+        assert!(enforce_persisted_lti_service_origin(
             "https://canvas.example.edu",
+            CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
             "https://canvas.example.edu/api/lti/token",
-            &self_managed,
         )
         .is_ok());
-        for invalid in [
-            "https://user:secret@canvas.example.edu",
-            "https://canvas.example.edu/path",
-            "http://canvas.example.edu",
-        ] {
-            assert!(enforce_self_managed_origin(
-                "https://canvas.example.edu",
-                "https://attacker.example/token",
-                &[invalid.to_owned()],
-            )
-            .is_ok());
-        }
         assert_eq!(
-            enforce_self_managed_origin(
+            enforce_persisted_lti_service_origin(
                 "https://canvas.example.edu",
+                CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
                 "https://attacker.example/api/lti/token",
-                &self_managed,
             ),
             Err(CanvasProviderReadError::InvalidConfiguration)
         );
-        assert!(enforce_self_managed_origin(
+        assert!(enforce_persisted_lti_service_origin(
             "https://school.instructure.com",
+            "hosted_global",
             "https://canvas.instructure.com/login/oauth2/token",
-            &self_managed,
         )
         .is_ok());
+        assert!(canvas_lti_trust_profile(
+            "https://canvas.example.edu",
+            CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
+            &[],
+        )
+        .is_err());
     }
 }

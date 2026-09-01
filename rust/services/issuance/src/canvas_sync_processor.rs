@@ -27,6 +27,7 @@ pub struct CanvasSyncPlatformSnapshot {
     pub id: String,
     pub organization_id: String,
     pub canvas_base_url: String,
+    pub lti_trust_profile: String,
     pub lti_issuer: String,
     pub lti_client_id: String,
     pub lti_deployment_id: String,
@@ -100,6 +101,10 @@ pub enum CanvasProviderReadError {
     ReauthorizationRequired,
     RateLimited { retry_after_seconds: u64 },
     InvalidConfiguration,
+    RosterConfigurationInvalid,
+    RosterOAuthUnavailable,
+    NrpsRosterUnavailable,
+    RosterCollectionTooLarge,
 }
 
 #[async_trait]
@@ -149,14 +154,15 @@ pub trait CanvasSyncProcessorRepository: Send + Sync {
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError>;
     async fn patch_application_sync(
         &self,
-        organization_id: &str,
-        application_id: &str,
+        target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         checked: &[String],
         policy_allowed: bool,
     ) -> Result<bool, CanvasSyncProcessingError>;
     async fn patch_platform_validation(
         &self,
-        platform: &CanvasSyncPlatformSnapshot,
+        target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         error_code: Option<&str>,
     ) -> Result<bool, CanvasSyncProcessingError>;
     async fn disable_target(
@@ -172,11 +178,13 @@ pub trait CanvasSyncProcessorRepository: Send + Sync {
     async fn save_candidate(
         &self,
         target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         candidate: &CanvasRosterCandidate,
     ) -> Result<String, CanvasSyncProcessingError>;
     async fn save_candidate_observation(
         &self,
         target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         candidate_id: &str,
         requirement_id: &str,
         observation: &CanvasAuthoritativeObservation,
@@ -189,6 +197,7 @@ pub trait CanvasSyncProcessorRepository: Send + Sync {
     async fn update_roster_cursor(
         &self,
         target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         next_cursor: usize,
         roster_size: usize,
     ) -> Result<(), CanvasSyncProcessingError>;
@@ -316,6 +325,22 @@ impl NativeCanvasSyncProcessor {
                         "Canvas evidence requirements are invalid",
                     ));
                 }
+                Err(CanvasProviderReadError::RosterConfigurationInvalid) => {
+                    return Err(CanvasSyncProcessingError::terminal(
+                        "canvas_roster_configuration_invalid",
+                        "Canvas roster configuration is invalid",
+                    ));
+                }
+                Err(CanvasProviderReadError::RosterCollectionTooLarge) => {
+                    return Err(CanvasSyncProcessingError::terminal(
+                        "canvas_roster_collection_too_large",
+                        "Canvas roster collection exceeds the configured bound",
+                    ));
+                }
+                Err(
+                    CanvasProviderReadError::RosterOAuthUnavailable
+                    | CanvasProviderReadError::NrpsRosterUnavailable,
+                ) => continue,
             };
             let fact = authoritative_fact(
                 application,
@@ -348,7 +373,7 @@ impl NativeCanvasSyncProcessor {
         };
         if !self
             .repository
-            .patch_platform_validation(&resources.platform, validation_error)
+            .patch_platform_validation(target, resources, validation_error)
             .await?
         {
             return Err(CanvasSyncProcessingError::retryable(
@@ -358,12 +383,7 @@ impl NativeCanvasSyncProcessor {
         }
         if !self
             .repository
-            .patch_application_sync(
-                &target.organization_id,
-                &application.application.id,
-                &checked,
-                policy_allowed,
-            )
+            .patch_application_sync(target, resources, &checked, policy_allowed)
             .await?
         {
             return Err(CanvasSyncProcessingError::terminal(
@@ -522,7 +542,10 @@ impl NativeCanvasSyncProcessor {
                 }
                 .to_owned();
             }
-            candidate.id = self.repository.save_candidate(target, &candidate).await?;
+            candidate.id = self
+                .repository
+                .save_candidate(target, resources, &candidate)
+                .await?;
             seen += 1;
             if candidate.state == "identity_link_required" {
                 identity_required += 1;
@@ -554,6 +577,7 @@ impl NativeCanvasSyncProcessor {
                             self.repository
                                 .save_candidate_observation(
                                     target,
+                                    resources,
                                     &candidate.id,
                                     &requirement_id,
                                     &observation,
@@ -589,7 +613,10 @@ impl NativeCanvasSyncProcessor {
             });
             if allowed && !matches!(candidate.state.as_str(), "claimed" | "dismissed") {
                 candidate.state = "pending_claim".to_owned();
-                candidate.id = self.repository.save_candidate(target, &candidate).await?;
+                candidate.id = self
+                    .repository
+                    .save_candidate(target, resources, &candidate)
+                    .await?;
                 pending += 1;
             }
         }
@@ -598,7 +625,7 @@ impl NativeCanvasSyncProcessor {
             next_cursor = 0;
         }
         self.repository
-            .update_roster_cursor(target, next_cursor, inputs.len())
+            .update_roster_cursor(target, resources, next_cursor, inputs.len())
             .await?;
         Ok(Map::from_iter([
             ("candidates_seen".to_owned(), Value::from(seen)),
@@ -704,6 +731,22 @@ fn provider_processing_error(error: CanvasProviderReadError) -> CanvasSyncProces
         CanvasProviderReadError::InvalidConfiguration => CanvasSyncProcessingError::terminal(
             "canvas_requirements_invalid",
             "Canvas evidence requirements are invalid",
+        ),
+        CanvasProviderReadError::RosterConfigurationInvalid => CanvasSyncProcessingError::terminal(
+            "canvas_roster_configuration_invalid",
+            "Canvas roster configuration is invalid",
+        ),
+        CanvasProviderReadError::RosterOAuthUnavailable => CanvasSyncProcessingError::retryable(
+            "canvas_roster_oauth_unavailable",
+            "Canvas background roster OAuth requires reauthorization",
+        ),
+        CanvasProviderReadError::NrpsRosterUnavailable => CanvasSyncProcessingError::retryable(
+            "canvas_nrps_roster_unavailable",
+            "Canvas NRPS roster URL is unavailable",
+        ),
+        CanvasProviderReadError::RosterCollectionTooLarge => CanvasSyncProcessingError::terminal(
+            "canvas_roster_collection_too_large",
+            "Canvas roster collection exceeds the configured bound",
         ),
         CanvasProviderReadError::Unavailable | CanvasProviderReadError::ReauthorizationRequired => {
             CanvasSyncProcessingError::retryable(
@@ -945,8 +988,8 @@ mod tests {
         }
         async fn patch_application_sync(
             &self,
-            _: &str,
-            _: &str,
+            _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
             _: &[String],
             _: bool,
         ) -> Result<bool, CanvasSyncProcessingError> {
@@ -954,7 +997,8 @@ mod tests {
         }
         async fn patch_platform_validation(
             &self,
-            _: &CanvasSyncPlatformSnapshot,
+            _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
             _: Option<&str>,
         ) -> Result<bool, CanvasSyncProcessingError> {
             Ok(true)
@@ -977,6 +1021,7 @@ mod tests {
         async fn save_candidate(
             &self,
             _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
             candidate: &CanvasRosterCandidate,
         ) -> Result<String, CanvasSyncProcessingError> {
             self.candidates
@@ -988,6 +1033,7 @@ mod tests {
         async fn save_candidate_observation(
             &self,
             _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
             candidate: &str,
             requirement: &str,
             observation: &CanvasAuthoritativeObservation,
@@ -1017,6 +1063,7 @@ mod tests {
         async fn update_roster_cursor(
             &self,
             _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
             cursor: usize,
             size: usize,
         ) -> Result<(), CanvasSyncProcessingError> {
@@ -1088,6 +1135,7 @@ mod tests {
                 id: "platform-1".into(),
                 organization_id: "org-1".into(),
                 canvas_base_url: "https://canvas.test".into(),
+                lti_trust_profile: "self_managed_same_origin".into(),
                 lti_issuer: "https://canvas.test".into(),
                 lti_client_id: "client".into(),
                 lti_deployment_id: "deployment".into(),

@@ -261,9 +261,9 @@ fn provider_error(retry_after_seconds: Option<u64>) -> CanvasOAuthProviderError 
 }
 
 fn rate_limited_error(response: &Response) -> CanvasOAuthProviderError {
-    provider_error(Some(
-        canvas_retry_after_seconds(response).unwrap_or_default(),
-    ))
+    CanvasOAuthProviderError::RateLimited {
+        retry_after_seconds: canvas_retry_after_seconds(response),
+    }
 }
 
 fn transport_error(error: reqwest::Error) -> CanvasOAuthProviderError {
@@ -303,8 +303,11 @@ mod tests {
             response.body(axum::body::Body::empty()).unwrap()
         }
 
-        for (retry_after, expected_seconds) in [(None, 0), (Some("malformed"), 0), (Some("17"), 17)]
-        {
+        for (retry_after, expected_seconds) in [
+            (None, None),
+            (Some("malformed"), None),
+            (Some("17"), Some(17)),
+        ] {
             let app = Router::new()
                 .route("/login/oauth2/token", any(rate_limited))
                 .with_state(retry_after);
@@ -320,8 +323,8 @@ mod tests {
                 true,
             );
             let origin = format!("http://{address}");
-            let expected = CanvasOAuthProviderError::Failed {
-                retry_after_seconds: Some(expected_seconds),
+            let expected = CanvasOAuthProviderError::RateLimited {
+                retry_after_seconds: expected_seconds,
             };
 
             assert_eq!(

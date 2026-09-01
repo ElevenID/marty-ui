@@ -58,7 +58,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         allow_private,
         allow_localhost,
     ));
-    let issuance_api_key = required_env("ISSUANCE_API_KEY")?;
+    let issuance_api_key =
+        required_secret_with_fallback("ISSUANCE_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY")?;
     let oauth = Arc::new(CanvasOAuthService::new(
         oauth_repository.clone(),
         vault.clone(),
@@ -76,8 +77,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             allow_http_localhost: allow_localhost,
         },
     )?);
-    let signing_url = url::Url::parse(&required_env("SIGNING_KEYS_INTERNAL_URL")?)?;
-    let signing_key = required_env("SIGNING_KEYS_INTERNAL_API_KEY")?;
+    let signing_url = url::Url::parse(
+        &env::var("SIGNING_KEYS_INTERNAL_URL")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "http://gateway:8000/internal/signing-keys".to_owned()),
+    )?;
+    let signing_key =
+        required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
     let signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
         required_env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID")?,
         required_env("CANVAS_LTI_TOOL_ISSUER_DID")?,
@@ -90,7 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(HttpCanvasLtiToolSignatureProvider::new(
             signing_url,
             Some(&signing_key),
-            Duration::from_secs(10),
+            Duration::from_secs(15),
         )?),
     ));
     let authoritative_provider = Arc::new(HttpCanvasAuthoritativeProvider::new(
@@ -122,9 +130,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let (stop_tx, stop_rx) = watch::channel(false);
     let shutdown = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            let _ = stop_tx.send(true);
-        }
+        shutdown_signal().await;
+        let _ = stop_tx.send(true);
     });
     info!(worker = ?worker, "starting standalone Rust Canvas sync worker candidate");
     let outcome = worker.run_loop(stop_rx).await;
@@ -140,6 +147,36 @@ fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{name} is required").into())
+}
+
+fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error>> {
+    if let Ok(value) = env::var(name) {
+        let value = value.trim().to_owned();
+        if !value.is_empty() {
+            return Ok(Some(value));
+        }
+    }
+    let file_name = format!("{name}_FILE");
+    if let Ok(path) = env::var(&file_name) {
+        let path = path.trim();
+        if !path.is_empty() {
+            let value = fs::read_to_string(path)?.trim().to_owned();
+            if !value.is_empty() {
+                return Ok(Some(value));
+            }
+            return Err(format!("{file_name} contains an empty secret").into());
+        }
+    }
+    Ok(None)
+}
+
+fn required_secret_with_fallback(
+    preferred: &str,
+    fallback: &str,
+) -> Result<String, Box<dyn Error>> {
+    optional_secret(preferred)?
+        .or(optional_secret(fallback)?)
+        .ok_or_else(|| format!("{preferred} or {fallback} is required").into())
 }
 
 fn bounded_usize(
@@ -162,9 +199,33 @@ fn env_bool(name: &str) -> bool {
     env::var(name).is_ok_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes"
+            "1" | "true" | "yes" | "on"
         )
     })
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                let _ = signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }
 
 fn integration_master_key() -> Result<String, Box<dyn Error>> {

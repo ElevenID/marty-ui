@@ -421,23 +421,9 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         result: &Map<String, Value>,
     ) -> Result<bool, CanvasSyncRepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
-        let target_updated: Option<String> = sqlx::query_scalar(
-            "UPDATE issuance_service.canvas_evidence_sync_targets
-             SET last_succeeded_at = clock_timestamp(), updated_at = clock_timestamp()
-             WHERE id = $1 AND organization_id = $2 AND config_version = $3
-               AND enabled = true
-             RETURNING id",
-        )
-        .bind(&job.target_id)
-        .bind(&job.organization_id)
-        .bind(target_config_version)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(repository_error)?;
-        if target_updated.is_none() {
-            transaction.rollback().await.map_err(repository_error)?;
-            return Ok(false);
-        }
+        // Lock and finalize the lease-owned job first. Expiry recovery uses the
+        // same job-before-target order, avoiding a target/job lock inversion.
+        // A concurrently reconfigured target must not undo a valid job outcome.
         let updated: Option<String> = sqlx::query_scalar(
             "UPDATE issuance_service.canvas_evidence_sync_jobs
              SET status = 'succeeded', result = $5, last_error_code = NULL,
@@ -461,6 +447,20 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
             transaction.rollback().await.map_err(repository_error)?;
             return Ok(false);
         }
+        // Target success is an independent generation CAS. Its loss leaves the
+        // lease-fenced job succeeded and never overwrites the newer target.
+        sqlx::query(
+            "UPDATE issuance_service.canvas_evidence_sync_targets
+             SET last_succeeded_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE id = $1 AND organization_id = $2 AND config_version = $3
+               AND enabled = true",
+        )
+        .bind(&job.target_id)
+        .bind(&job.organization_id)
+        .bind(target_config_version)
+        .execute(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
         transaction.commit().await.map_err(repository_error)?;
         Ok(true)
     }
