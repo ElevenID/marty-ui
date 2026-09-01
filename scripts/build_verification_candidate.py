@@ -86,6 +86,18 @@ TAR_SPECIAL_HEADER_TYPES = frozenset(
         tarfile.SOLARIS_XHDTYPE,
     }
 )
+# Python's tar reader does not consume data blocks for these supported types,
+# even when a malformed raw header declares a non-zero size.
+TAR_NON_DATA_HEADER_TYPES = frozenset(
+    {
+        tarfile.LNKTYPE,
+        tarfile.SYMTYPE,
+        tarfile.CHRTYPE,
+        tarfile.BLKTYPE,
+        tarfile.DIRTYPE,
+        tarfile.FIFOTYPE,
+    }
+)
 CYCLONEDX_COMPONENT_TYPES = {
     "application",
     "container",
@@ -142,9 +154,8 @@ def _tar_number(field: bytes, *, label: str) -> int:
     return value
 
 
-def _pax_size_override(payload: bytes, *, label: str) -> int | None:
+def _validate_pax_metadata(payload: bytes, *, label: str) -> None:
     position = 0
-    size_override: int | None = None
     while position < len(payload):
         if payload[position:] == bytes(len(payload) - position):
             break
@@ -171,9 +182,11 @@ def _pax_size_override(payload: bytes, *, label: str) -> int | None:
         )
         if key == b"size":
             require(value.isdigit(), f"{label} contains malformed PAX size metadata")
-            size_override = int(value)
+            # Candidate and layer caps fit in the ordinary tar size field. Reject
+            # this unnecessary offset override instead of duplicating tarfile's
+            # recursive local/global PAX precedence rules.
+            raise ValueError(f"{label} contains unsupported PAX size metadata")
         position = end
-    return size_override
 
 
 def _scan_tar_headers(
@@ -193,8 +206,6 @@ def _scan_tar_headers(
     member_count = 0
     special_count = 0
     special_bytes = 0
-    global_size_override: int | None = None
-    next_size_override: int | None = None
     while offset + TAR_BLOCK_BYTES <= stream_bytes:
         source.seek(offset)
         header = source.read(TAR_BLOCK_BYTES)
@@ -244,14 +255,11 @@ def _scan_tar_headers(
             )
             payload_size = raw_size
         else:
-            payload_size = (
-                next_size_override
-                if next_size_override is not None
-                else global_size_override
-                if global_size_override is not None
-                else raw_size
+            require(
+                typeflag not in TAR_NON_DATA_HEADER_TYPES or raw_size == 0,
+                f"{label} non-data tar member declares a payload",
             )
-            next_size_override = None
+            payload_size = raw_size
         padded_size = (
             (payload_size + TAR_BLOCK_BYTES - 1) // TAR_BLOCK_BYTES
         ) * TAR_BLOCK_BYTES
@@ -263,12 +271,7 @@ def _scan_tar_headers(
                 len(payload) == raw_size,
                 f"{label} contains truncated PAX metadata",
             )
-            override = _pax_size_override(payload, label=label)
-            if typeflag == tarfile.XGLTYPE:
-                if override is not None:
-                    global_size_override = override
-            elif override is not None:
-                next_size_override = override
+            _validate_pax_metadata(payload, label=label)
         offset = next_offset
     raise ValueError(f"{label} is missing the canonical tar end-of-archive")
 
