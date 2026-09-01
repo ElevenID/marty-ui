@@ -116,7 +116,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ElevenID/marty-integration-tests
-          ref: cd2c17f63774ebf02065b88307b3120666ce821d
+          ref: 8ee3f4e43efd4f0b7583d6b0f3cafe513cc54710
           path: integration-harness
           persist-credentials: false
 
