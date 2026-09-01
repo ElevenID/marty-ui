@@ -266,11 +266,14 @@ defects. Producer run `33465702948`, attempt `1`, was dispatched from exact
 protected-main commit `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204`
 before the trusted consumer landed. It failed bundle validation with
 `OCI layer tar is empty` before attestation or artifact upload, so it supplies
-no admissible candidate-gate acceptance. A corrected producer run and
-authenticated, inspected consumer result are still required. Before any future
-corrected artifact coordinate may be selected, reserved, prepared, or published, an
-exact protected-main descendant containing PR `#744` must pass the
-non-publishing candidate, trusted-positive OID4VP runtime, the landed
+no admissible candidate-gate acceptance. The corrected lane subsequently
+passed from exact protected-main commit
+`7a1e2d6f31a563b33832b46921ec3376cd124113`: producer run `33490549237`,
+attempt `1`, and authenticated, inspected consumer run `33491836719`, attempt
+`1`, both succeeded. All 19 language-neutral checks matched and the Rust-only
+default-disabled-route check passed. Before any future corrected artifact
+coordinate may be selected, reserved, prepared, or published, the
+trusted-positive OID4VP runtime gate, the landed
 artifact-differential parity gates, and digest-first resumable release
 requirements in
 [`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).

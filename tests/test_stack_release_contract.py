@@ -383,10 +383,11 @@ def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
             "attestation or artifact upload, so it supplies no admissible "
             "candidate-gate acceptance" in normalized
         )
-        assert (
-            "A corrected producer run and authenticated, inspected consumer "
-            "result are still required" in normalized
-        )
+        assert "`7a1e2d6f31a563b33832b46921ec3376cd124113`" in normalized
+        assert "producer run `33490549237`, attempt `1`" in normalized
+        assert "consumer run `33491836719`, attempt `1`" in normalized
+        assert "all 19 language-neutral checks matched" in normalized.lower()
+        assert "`canonical.oid4vp-positive-runtime-not-exercised`" in normalized
         assert "`v1.1.211`" not in document
         assert "`v1.1.212`" not in document
 
