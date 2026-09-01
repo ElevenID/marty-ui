@@ -34,6 +34,11 @@ pub const MAX_PRIVACY_NORMALIZATION_STEPS: usize =
 /// Hard work bounds for the privacy normalization graph.
 pub const MAX_PRIVACY_NORMALIZATION_STATES: usize = 64;
 pub const MAX_PRIVACY_NORMALIZED_BYTES: usize = MAX_CLAIM_VALUE_BYTES;
+/// Total authenticated string material considered when detecting a token split
+/// across otherwise-valid structured claims. The projection size bound makes
+/// both collection and reconstruction finite.
+pub const MAX_PRIVACY_FRAGMENT_BYTES: usize = MAX_EVIDENCE_PROJECTION_BYTES;
+pub const MAX_PRIVACY_FRAGMENT_PARTS: usize = MAX_CREDENTIALS * MAX_CLAIMS_PER_CREDENTIAL * 2;
 
 pub const REQUIRED_OID4VP_CHECKS: [Oid4vpCheckId; 8] = [
     Oid4vpCheckId::PresentationStructure,
@@ -291,8 +296,8 @@ pub struct AuthenticatedPresentationEvidence {
 pub struct EvidenceFact {
     pub outcome: EvidenceCheckOutcome,
     pub code: String,
-    pub evidence_digest: String,
-    pub checked_at_epoch_seconds: i64,
+    pub evidence_digest: Option<String>,
+    pub checked_at_epoch_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -307,6 +312,7 @@ pub struct AuthenticatedCredentialEvidence {
     pub issuer_id: String,
     pub proof_algorithm: String,
     pub issued_at_epoch_seconds: i64,
+    pub expires_at_epoch_seconds: Option<i64>,
     pub status_ids: Vec<String>,
     pub proof: EvidenceFact,
     pub trust: AuthenticatedTrustEvidence,
@@ -348,6 +354,8 @@ pub struct AuthenticatedStatusEvidence {
 pub enum CredentialStatusState {
     Active,
     Revoked,
+    Suspended,
+    Expired,
     Unknown,
     Stale,
     NotPresent,

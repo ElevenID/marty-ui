@@ -9,13 +9,13 @@ use marty_oid4vp_contract::{
     FROZEN_REQUEST_DIGEST_DOMAIN, MAX_CLAIMS_PER_CREDENTIAL, MAX_CLAIM_VALUE_BYTES, MAX_CODE_BYTES,
     MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH, MAX_EVIDENCE_LIST_ITEMS, MAX_EVIDENCE_PROJECTION_BYTES,
     MAX_FROZEN_REQUEST_BYTES, MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH,
-    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_NORMALIZATION_STATES,
-    MAX_PRIVACY_NORMALIZATION_STEPS, MAX_PRIVACY_NORMALIZED_BYTES,
-    MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES, MAX_QUERY_REQUIREMENTS,
-    MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS, MAX_TOKEN_BYTES,
-    MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES, NONCE_DIGEST_DOMAIN,
-    QUERY_DOCUMENT_DIGEST_DOMAIN, REPLAY_KEY_DIGEST_DOMAIN, REQUIRED_OID4VP_CHECKS,
-    RESPONSE_ITEM_DIGEST_DOMAIN, WALLET_SUBMISSION_DIGEST_DOMAIN,
+    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_FRAGMENT_BYTES, MAX_PRIVACY_FRAGMENT_PARTS,
+    MAX_PRIVACY_NORMALIZATION_STATES, MAX_PRIVACY_NORMALIZATION_STEPS,
+    MAX_PRIVACY_NORMALIZED_BYTES, MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES,
+    MAX_QUERY_REQUIREMENTS, MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS,
+    MAX_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES,
+    NONCE_DIGEST_DOMAIN, QUERY_DOCUMENT_DIGEST_DOMAIN, REPLAY_KEY_DIGEST_DOMAIN,
+    REQUIRED_OID4VP_CHECKS, RESPONSE_ITEM_DIGEST_DOMAIN, WALLET_SUBMISSION_DIGEST_DOMAIN,
 };
 use serde_json::{json, Value};
 
@@ -124,6 +124,8 @@ fn language_neutral_contract_freezes_boundaries_limits_and_domains() {
             MAX_PRIVACY_NORMALIZATION_STATES,
         ),
         ("privacy_normalized_bytes", MAX_PRIVACY_NORMALIZED_BYTES),
+        ("privacy_fragment_bytes", MAX_PRIVACY_FRAGMENT_BYTES),
+        ("privacy_fragment_parts", MAX_PRIVACY_FRAGMENT_PARTS),
     ] {
         assert_eq!(fixture["limits"][key], expected, "limit drifted: {key}");
     }
@@ -194,7 +196,7 @@ fn every_language_neutral_mutation_id_has_an_executable_rejection() {
     let fixture = fixture();
     let ids = fixture["required_mutation_ids"].as_array().unwrap();
     let vectors = fixture["mutation_vectors"].as_array().unwrap();
-    assert_eq!(ids.len(), 80);
+    assert_eq!(ids.len(), 90);
     assert_eq!(vectors.len(), ids.len());
     for (id, vector) in ids.iter().zip(vectors) {
         let id = id.as_str().unwrap();
@@ -236,15 +238,16 @@ fn indeterminate_status_is_consistent_and_never_allows() {
     projection.checks[4].code = "OID4VP_CREDENTIAL_STATUS_INDETERMINATE".into();
     projection.policy_result.result = AuthenticatedResult::Indeterminate;
     projection.policy_result.decision = AuthenticatedDecisionAction::Deny;
-    projection.policy_result.reason_code = "OID4VP_STATUS_UNKNOWN".into();
+    projection.policy_result.reason_code = "OID4VP_CREDENTIAL_STATUS_INDETERMINATE".into();
     projection.policy_result.satisfied_requirements = 1;
     projection.policy_result.required_total = 2;
     projection.policy_result.required_satisfied = 1;
     projection.policy_result.verified_claims.clear();
-    projection.policy_result.violation_codes = vec!["OID4VP_STATUS_UNKNOWN".into()];
+    projection.policy_result.violation_codes =
+        vec!["OID4VP_CREDENTIAL_STATUS_INDETERMINATE".into()];
     projection.decision.result = AuthenticatedResult::Indeterminate;
     projection.decision.decision = AuthenticatedDecisionAction::Deny;
-    projection.decision.reason_code = "OID4VP_STATUS_UNKNOWN".into();
+    projection.decision.reason_code = "OID4VP_CREDENTIAL_STATUS_INDETERMINATE".into();
     projection
         .validate_against_at(&request, &submission, now)
         .unwrap();
@@ -601,7 +604,7 @@ fn execute_mutation(id: &str) -> Oid4vpContractError {
         ),
         "raw_token_in_json_key" => {
             let token = first_token(&submission).to_owned();
-            retarget_claim(&mut request, &submission, &mut projection, &token);
+            leak_claim_object_key(&mut projection, &token);
         }
         "encoded_token_in_json_key" => {
             let claim = general_purpose::STANDARD.encode(first_token(&submission));
@@ -842,6 +845,69 @@ fn execute_mutation(id: &str) -> Oid4vpContractError {
                 .claims
                 .insert("given_name".into(), value);
         }
+        "dcql_dotted_path_collision" => {
+            request.query.document["credentials"][0]["claims"][0]["id"] =
+                json!("claim_address_street_name");
+            request.query.document["credentials"][0]["claims"][0]["path"] =
+                json!(["address.street", "name"]);
+            request.query.requirements[0].required_claims = vec!["address.street.name".into()];
+            request.query.requirements[0].allowed_claims = vec!["address.street.name".into()];
+            request.query.document_digest = digest_query_document(&request.query.document).unwrap();
+            return request.validate_at(now).unwrap_err();
+        }
+        "fragmented_raw_token" => {
+            let token = first_token(&submission).to_owned();
+            leak_fragmented_token(&mut request, &submission, &mut projection, &token);
+        }
+        "fragmented_encoded_token" => {
+            let token = general_purpose::STANDARD.encode(first_token(&submission));
+            leak_fragmented_token(&mut request, &submission, &mut projection, &token);
+        }
+        "optional_obligation_blocks_allow" => {
+            make_optional_failure(&mut request, &mut submission, &mut projection);
+            projection.policy_result.result = AuthenticatedResult::Partial;
+            projection.policy_result.decision = AuthenticatedDecisionAction::ManualReview;
+            projection.policy_result.reason_code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
+            projection.policy_result.verified_claims.clear();
+            projection.policy_result.violation_codes =
+                vec!["OID4VP_CREDENTIAL_STATUS_FAILED".into()];
+            projection.decision.result = AuthenticatedResult::Partial;
+            projection.decision.decision = AuthenticatedDecisionAction::ManualReview;
+            projection.decision.reason_code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
+        }
+        "optional_presentation_proof_fabricated_fact" => {
+            make_presentation_proof_optional(&mut request, &submission, &mut projection);
+            projection.presentation.proof.evidence_digest = Some(
+                "sha256:0202020202020202020202020202020202020202020202020202020202020202".into(),
+            );
+        }
+        "non_allow_violation_inventory_mismatch" => {
+            make_challenge_unavailable(&mut projection);
+            projection
+                .policy_result
+                .violation_codes
+                .push("OID4VP_Z_UNSUPPORTED".into());
+        }
+        "non_allow_reason_inventory_mismatch" => {
+            make_challenge_unavailable(&mut projection);
+            projection.policy_result.reason_code = "OID4VP_Z_UNSUPPORTED".into();
+            projection.decision.reason_code = "OID4VP_Z_UNSUPPORTED".into();
+        }
+        "suspended_without_evidence" => {
+            projection.credentials[0].status.state = CredentialStatusState::Suspended;
+            projection.credentials[0].status.outcome = EvidenceCheckOutcome::Failed;
+            projection.credentials[0].status.evidence_digest = None;
+        }
+        "expired_before_clock" => {
+            projection.credentials[0].status.state = CredentialStatusState::Expired;
+            projection.credentials[0].status.outcome = EvidenceCheckOutcome::Failed;
+            projection.credentials[0].status.checked_at_epoch_seconds = None;
+            projection.credentials[0].status.valid_until_epoch_seconds = None;
+            projection.credentials[0].status.evidence_digest = None;
+        }
+        "active_at_expiry" => {
+            projection.credentials[0].expires_at_epoch_seconds = Some(now);
+        }
         unknown => panic!("unimplemented language-neutral mutation: {unknown}"),
     }
     projection
@@ -884,7 +950,8 @@ fn expected_error_label(id: &str) -> &'static str {
         | "pe_none_algorithm"
         | "dcql_leading_evil_type"
         | "dcql_intent_type_mismatch"
-        | "dcql_intent_binding_mismatch" => "invalid_query",
+        | "dcql_intent_binding_mismatch"
+        | "dcql_dotted_path_collision" => "invalid_query",
         "duplicate_descriptor_id"
         | "pe_descriptor_format_mismatch"
         | "pe_descriptor_path_mismatch" => "presentation_definition",
@@ -900,8 +967,13 @@ fn expected_error_label(id: &str) -> &'static str {
         | "extra_credential_type"
         | "free_floating_check_outcome"
         | "complete_with_indeterminate"
-        | "supporting_code_outcome_mismatch" => "check_evidence",
-        "statusless_when_required" | "active_without_status_evidence" => "status",
+        | "supporting_code_outcome_mismatch"
+        | "optional_presentation_proof_fabricated_fact" => "check_evidence",
+        "statusless_when_required"
+        | "active_without_status_evidence"
+        | "suspended_without_evidence"
+        | "expired_before_clock"
+        | "active_at_expiry" => "status",
         "stale_trust" => "trust",
         "replay_receipt_missing"
         | "nonce_digest_domain_swap"
@@ -914,7 +986,10 @@ fn expected_error_label(id: &str) -> &'static str {
         | "verified_claim_mismatch"
         | "allow_reason_mismatch"
         | "manual_review_total_mismatch"
-        | "alternative_group_total_mismatch" => "decision",
+        | "alternative_group_total_mismatch"
+        | "optional_obligation_blocks_allow"
+        | "non_allow_violation_inventory_mismatch"
+        | "non_allow_reason_inventory_mismatch" => "decision",
         "raw_token_in_claim"
         | "raw_token_substring"
         | "encoded_token_substring"
@@ -948,6 +1023,7 @@ fn expected_error_label(id: &str) -> &'static str {
         | "url_safe_forbidden_wallet_key"
         | "url_safe_no_pad_forbidden_wallet_key"
         | "mixed_forbidden_wallet_key" => "privacy",
+        "fragmented_raw_token" | "fragmented_encoded_token" => "privacy",
         _ => unreachable!(),
     }
 }
@@ -1232,6 +1308,165 @@ fn leak_exact_claim(projection: &mut Oid4vpEvidenceProjectionV1, value: String) 
     projection.policy_result.verified_claims = projection.credentials[0].claims.clone();
 }
 
+#[test]
+fn structurally_nested_dcql_path_and_benign_fragments_are_accepted() {
+    let (now, mut request, submission, mut projection) = golden();
+    request.query.document["credentials"][0]["claims"][0]["id"] = json!("claim_address_street");
+    request.query.document["credentials"][0]["claims"][0]["path"] = json!(["address", "street"]);
+    request.query.requirements[0].required_claims = vec!["address.street".into()];
+    request.query.requirements[0].allowed_claims = vec!["address.street".into()];
+    projection.credentials[0].claims = [("address.street".into(), json!("ordinary display value"))]
+        .into_iter()
+        .collect();
+    projection.policy_result.verified_claims = projection.credentials[0].claims.clone();
+    request.query.document_digest = digest_query_document(&request.query.document).unwrap();
+    rebind(&mut projection, &request, &submission);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+
+    let (now, mut request, submission, mut projection) = golden();
+    leak_fragmented_token(
+        &mut request,
+        &submission,
+        &mut projection,
+        "ordinary-fragmented-display-value",
+    );
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+}
+
+#[test]
+fn optional_failures_and_absent_optional_presentation_proof_preserve_allow() {
+    let (now, mut request, mut submission, mut projection) = golden();
+    make_optional_failure(&mut request, &mut submission, &mut projection);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+    assert_eq!(
+        projection.decision.decision,
+        AuthenticatedDecisionAction::Allow
+    );
+
+    let (now, mut request, submission, mut projection) = golden();
+    make_presentation_proof_optional(&mut request, &submission, &mut projection);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+    assert_eq!(
+        projection.processing_status,
+        EvidenceProcessingStatus::Complete
+    );
+    assert_eq!(
+        projection.decision.decision,
+        AuthenticatedDecisionAction::Allow
+    );
+}
+
+#[test]
+fn suspended_and_expired_lifecycle_states_are_preserved_failures() {
+    let (now, request, submission, mut projection) = golden();
+    make_status_failure(&mut projection, CredentialStatusState::Suspended);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+
+    let (now, request, submission, mut projection) = golden();
+    projection.credentials[0].expires_at_epoch_seconds = Some(now);
+    projection.credentials[0].status.checked_at_epoch_seconds = None;
+    projection.credentials[0].status.valid_until_epoch_seconds = None;
+    projection.credentials[0].status.evidence_digest = None;
+    make_status_failure(&mut projection, CredentialStatusState::Expired);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+}
+
+fn leak_claim_object_key(projection: &mut Oid4vpEvidenceProjectionV1, key: &str) {
+    projection.credentials[0]
+        .claims
+        .insert("given_name".into(), json!({key: "Avery"}));
+    projection.policy_result.verified_claims = projection.credentials[0].claims.clone();
+}
+
+fn leak_fragmented_token(
+    request: &mut FrozenOid4vpRequestV1,
+    submission: &WalletSubmissionV1,
+    projection: &mut Oid4vpEvidenceProjectionV1,
+    material: &str,
+) {
+    let midpoint = material.len() / 2;
+    request.query.document["credentials"][0]["claims"] = json!([
+        {"id": "claim_fragment_a", "path": ["fragment_a"]},
+        {"id": "claim_fragment_b", "path": ["fragment_b"]}
+    ]);
+    request.query.requirements[0].required_claims = vec!["fragment_a".into(), "fragment_b".into()];
+    request.query.requirements[0].allowed_claims = vec!["fragment_a".into(), "fragment_b".into()];
+    projection.credentials[0].claims = [
+        ("fragment_a".into(), json!(&material[..midpoint])),
+        ("fragment_b".into(), json!(&material[midpoint..])),
+    ]
+    .into_iter()
+    .collect();
+    projection.policy_result.verified_claims = projection.credentials[0].claims.clone();
+    request.query.document_digest = digest_query_document(&request.query.document).unwrap();
+    rebind(projection, request, submission);
+}
+
+fn make_optional_failure(
+    request: &mut FrozenOid4vpRequestV1,
+    submission: &mut WalletSubmissionV1,
+    projection: &mut Oid4vpEvidenceProjectionV1,
+) {
+    add_second_requirement(request, submission, projection, true);
+    request.query.requirements[1].required = false;
+    request.query.document_digest = digest_query_document(&request.query.document).unwrap();
+    projection.checks[4].outcome = EvidenceCheckOutcome::Failed;
+    projection.checks[4].code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
+    projection.policy_result.total_requirements = 3;
+    projection.policy_result.satisfied_requirements = 2;
+    projection.policy_result.required_total = 2;
+    projection.policy_result.required_satisfied = 2;
+    rebind(projection, request, submission);
+}
+
+fn make_presentation_proof_optional(
+    request: &mut FrozenOid4vpRequestV1,
+    submission: &WalletSubmissionV1,
+    projection: &mut Oid4vpEvidenceProjectionV1,
+) {
+    request.policy.presentation_proof_required = false;
+    projection.presentation.proof.outcome = EvidenceCheckOutcome::Indeterminate;
+    projection.presentation.proof.code = "OID4VP_PRESENTATION_PROOF_NOT_REQUIRED".into();
+    projection.presentation.proof.evidence_digest = None;
+    projection.presentation.proof.checked_at_epoch_seconds = None;
+    projection.checks[1].outcome = EvidenceCheckOutcome::Indeterminate;
+    projection.checks[1].code = "OID4VP_PRESENTATION_PROOF_NOT_REQUIRED".into();
+    projection.policy_result.total_requirements = 1;
+    projection.policy_result.satisfied_requirements = 1;
+    projection.policy_result.required_total = 1;
+    projection.policy_result.required_satisfied = 1;
+    rebind(projection, request, submission);
+}
+
+fn make_status_failure(projection: &mut Oid4vpEvidenceProjectionV1, state: CredentialStatusState) {
+    projection.credentials[0].status.state = state;
+    projection.credentials[0].status.outcome = EvidenceCheckOutcome::Failed;
+    projection.checks[4].outcome = EvidenceCheckOutcome::Failed;
+    projection.checks[4].code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
+    projection.policy_result.result = AuthenticatedResult::Failed;
+    projection.policy_result.decision = AuthenticatedDecisionAction::Deny;
+    projection.policy_result.reason_code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
+    projection.policy_result.satisfied_requirements = 1;
+    projection.policy_result.required_satisfied = 1;
+    projection.policy_result.verified_claims.clear();
+    projection.policy_result.violation_codes = vec!["OID4VP_CREDENTIAL_STATUS_FAILED".into()];
+    projection.decision.result = AuthenticatedResult::Failed;
+    projection.decision.decision = AuthenticatedDecisionAction::Deny;
+    projection.decision.reason_code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
+}
+
 fn make_challenge_unavailable(projection: &mut Oid4vpEvidenceProjectionV1) {
     projection.binding.challenge.observed_digest = None;
     projection.binding.challenge.outcome = EvidenceCheckOutcome::Indeterminate;
@@ -1241,12 +1476,13 @@ fn make_challenge_unavailable(projection: &mut Oid4vpEvidenceProjectionV1) {
     projection.processing_status = EvidenceProcessingStatus::Incomplete;
     projection.policy_result.result = AuthenticatedResult::Indeterminate;
     projection.policy_result.decision = AuthenticatedDecisionAction::Deny;
-    projection.policy_result.reason_code = "OID4VP_NONCE_UNAVAILABLE".into();
+    projection.policy_result.reason_code = "OID4VP_TRANSACTION_BINDING_INDETERMINATE".into();
     projection.policy_result.verified_claims.clear();
-    projection.policy_result.violation_codes = vec!["OID4VP_NONCE_UNAVAILABLE".into()];
+    projection.policy_result.violation_codes =
+        vec!["OID4VP_TRANSACTION_BINDING_INDETERMINATE".into()];
     projection.decision.result = AuthenticatedResult::Indeterminate;
     projection.decision.decision = AuthenticatedDecisionAction::Deny;
-    projection.decision.reason_code = "OID4VP_NONCE_UNAVAILABLE".into();
+    projection.decision.reason_code = "OID4VP_TRANSACTION_BINDING_INDETERMINATE".into();
 }
 
 fn add_second_requirement(
@@ -1300,16 +1536,16 @@ fn make_partial_manual_review(
     projection.checks[4].code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
     projection.policy_result.result = AuthenticatedResult::Partial;
     projection.policy_result.decision = AuthenticatedDecisionAction::ManualReview;
-    projection.policy_result.reason_code = "OID4VP_POLICY_PARTIAL".into();
+    projection.policy_result.reason_code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
     projection.policy_result.total_requirements = 3;
     projection.policy_result.satisfied_requirements = 2;
     projection.policy_result.required_total = 3;
     projection.policy_result.required_satisfied = 2;
     projection.policy_result.verified_claims.clear();
-    projection.policy_result.violation_codes = vec!["OID4VP_POLICY_PARTIAL".into()];
+    projection.policy_result.violation_codes = vec!["OID4VP_CREDENTIAL_STATUS_FAILED".into()];
     projection.decision.result = AuthenticatedResult::Partial;
     projection.decision.decision = AuthenticatedDecisionAction::ManualReview;
-    projection.decision.reason_code = "OID4VP_POLICY_PARTIAL".into();
+    projection.decision.reason_code = "OID4VP_CREDENTIAL_STATUS_FAILED".into();
 }
 
 fn make_satisfied_alternative_group(

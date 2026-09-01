@@ -30,6 +30,7 @@
     "forbidden_key_normalization": "bounded_mixed_decode_then_ascii_alphanumeric_lowercase",
     "base64_alphabets": ["standard", "standard_no_pad", "url_safe", "url_safe_no_pad"],
     "mixed_percent_base64_normalization": true,
+    "structured_claim_fragment_reconstruction": "canonical_bounded_keys_and_values_fail_closed",
     "over_budget": "fail_closed"
   },
   "policy_parity": {
@@ -39,6 +40,9 @@
     "satisfied_requirements": "satisfied_direct_results_plus_satisfied_alternative_groups_plus_verified_required_presentation_proof",
     "partial": "some_required_credential_obligations_satisfied_without_global_failure",
     "partial_decision": "manual_review",
+    "optional_requirements": "included_in_total_but_do_not_block_allow_when_all_required_units_pass",
+    "optional_presentation_proof": "authenticated_not_required_fact_has_no_digest_or_clock_fact",
+    "non_allow_reason_inventory": "exact_sorted_unique_codes_from_relevant_failed_or_indeterminate_check_evidence",
     "non_allow_verified_claims": "empty"
   },
   "contracts": {
@@ -70,14 +74,17 @@
     "privacy_base64_decode_layers": 2,
     "privacy_normalization_steps": 5,
     "privacy_normalization_states": 64,
-    "privacy_normalized_bytes": 16384
+    "privacy_normalized_bytes": 16384,
+    "privacy_fragment_bytes": 1048576,
+    "privacy_fragment_parts": 16384
   },
   "status_semantics": {
     "required": "not_present_never_passes",
     "allow_absent": "not_present_passes_only_without_status_ids_or_check_artifacts",
     "active": "requires_status_ids_fresh_check_evidence_and_nonexpired_validity",
     "unknown": "indeterminate",
-    "revoked_or_stale": "failed"
+    "revoked_suspended_or_stale": "failed_with_authenticated_status_evidence",
+    "expired": "failed_when_credential_expiry_is_at_or_before_evaluation_clock"
   },
   "required_check_ids": [
     "presentation.structure",
@@ -186,6 +193,7 @@
           "issuer_id": "did:web:issuer.example",
           "proof_algorithm": "ES256",
           "issued_at_epoch_seconds": 1788087600,
+          "expires_at_epoch_seconds": 1788264000,
           "status_ids": ["https://issuer.example/status/1#42"],
           "proof": {"outcome": "passed", "code": "OID4VP_CREDENTIAL_SIGNATURE_VERIFIED", "evidence_digest": "sha256:0303030303030303030303030303030303030303030303030303030303030303", "checked_at_epoch_seconds": 1788177600},
           "trust": {
@@ -309,7 +317,17 @@
     "supporting_code_outcome_mismatch",
     "allow_reason_mismatch",
     "descriptor_depth_limit",
-    "claim_depth_limit"
+    "claim_depth_limit",
+    "dcql_dotted_path_collision",
+    "fragmented_raw_token",
+    "fragmented_encoded_token",
+    "optional_obligation_blocks_allow",
+    "optional_presentation_proof_fabricated_fact",
+    "non_allow_violation_inventory_mismatch",
+    "non_allow_reason_inventory_mismatch",
+    "suspended_without_evidence",
+    "expired_before_clock",
+    "active_at_expiry"
   ],
   "mutation_vectors": [
     {"id":"unknown_wallet_field","target":"wallet_submission","mutation":"add top-level policy object","expected_error":"deserialization"},
@@ -391,6 +409,16 @@
     {"id":"supporting_code_outcome_mismatch","target":"evidence_projection","mutation":"use a failed structure code with a passed supporting outcome","expected_error":"check_evidence"},
     {"id":"allow_reason_mismatch","target":"evidence_projection","mutation":"use a failure reason on coherent allow decisions","expected_error":"decision"},
     {"id":"descriptor_depth_limit","target":"wallet_submission","mutation":"nest descriptor one level beyond maximum","expected_error":"invalid_field"},
-    {"id":"claim_depth_limit","target":"evidence_projection","mutation":"nest claim value one level beyond maximum","expected_error":"invalid_field"}
+    {"id":"claim_depth_limit","target":"evidence_projection","mutation":"nest claim value one level beyond maximum","expected_error":"invalid_field"},
+    {"id":"dcql_dotted_path_collision","target":"frozen_request","mutation":"use a dotted DCQL component whose joined form collides with a structurally nested path","expected_error":"invalid_query"},
+    {"id":"fragmented_raw_token","target":"evidence_projection","mutation":"split raw wallet token material across two authenticated claim values","expected_error":"privacy"},
+    {"id":"fragmented_encoded_token","target":"evidence_projection","mutation":"split standard-base64 wallet token material across two authenticated claim values","expected_error":"privacy"},
+    {"id":"optional_obligation_blocks_allow","target":"evidence_projection","mutation":"deny when all required obligations pass and only an optional credential fails","expected_error":"decision"},
+    {"id":"optional_presentation_proof_fabricated_fact","target":"evidence_projection","mutation":"attach a fabricated digest to presentation-proof-not-required evidence","expected_error":"check_evidence"},
+    {"id":"non_allow_violation_inventory_mismatch","target":"evidence_projection","mutation":"append a violation absent from failed or indeterminate canonical evidence","expected_error":"decision"},
+    {"id":"non_allow_reason_inventory_mismatch","target":"evidence_projection","mutation":"use a non-allow reason other than the first exact canonical violation","expected_error":"decision"},
+    {"id":"suspended_without_evidence","target":"evidence_projection","mutation":"project suspended lifecycle state without authenticated status evidence","expected_error":"status"},
+    {"id":"expired_before_clock","target":"evidence_projection","mutation":"project expired lifecycle state before credential expiry","expected_error":"status"},
+    {"id":"active_at_expiry","target":"evidence_projection","mutation":"retain active lifecycle state exactly at credential expiry","expected_error":"status"}
   ]
 }

@@ -16,11 +16,12 @@ use crate::{
     QueryKind, VpToken, WalletSubmissionV1, MAX_CLAIMS_PER_CREDENTIAL, MAX_CLAIM_VALUE_BYTES,
     MAX_CODE_BYTES, MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH, MAX_EVIDENCE_LIST_ITEMS,
     MAX_EVIDENCE_PROJECTION_BYTES, MAX_FROZEN_REQUEST_BYTES, MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH,
-    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_NORMALIZATION_STATES,
-    MAX_PRIVACY_NORMALIZATION_STEPS, MAX_PRIVACY_NORMALIZED_BYTES,
-    MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES, MAX_QUERY_REQUIREMENTS,
-    MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS, MAX_TOKEN_BYTES,
-    MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES, REQUIRED_OID4VP_CHECKS,
+    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_FRAGMENT_BYTES, MAX_PRIVACY_FRAGMENT_PARTS,
+    MAX_PRIVACY_NORMALIZATION_STATES, MAX_PRIVACY_NORMALIZATION_STEPS,
+    MAX_PRIVACY_NORMALIZED_BYTES, MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES,
+    MAX_QUERY_REQUIREMENTS, MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS,
+    MAX_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES,
+    REQUIRED_OID4VP_CHECKS,
 };
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -385,7 +386,7 @@ impl Oid4vpEvidenceProjectionV1 {
         self.validate_supporting_facts(request, now_epoch_seconds)?;
         let credential_state = self.validate_credentials(request, submission, now_epoch_seconds)?;
         self.validate_bindings(request, now_epoch_seconds)?;
-        self.validate_checks(&credential_state)?;
+        self.validate_checks(request, &credential_state)?;
         self.validate_decision(request, &credential_state, now_epoch_seconds)?;
         self.validate_privacy(submission)?;
         Ok(())
@@ -469,6 +470,12 @@ impl Oid4vpEvidenceProjectionV1 {
             if credential.issued_at_epoch_seconds <= 0 || credential.issued_at_epoch_seconds > now {
                 return Err(Oid4vpContractError::CredentialBindingMismatch);
             }
+            if credential
+                .expires_at_epoch_seconds
+                .is_some_and(|expires_at| expires_at <= credential.issued_at_epoch_seconds)
+            {
+                return Err(Oid4vpContractError::CredentialBindingMismatch);
+            }
             validate_fact(&credential.proof, FactKind::CredentialProof, request, now)?;
             validate_trust(credential, request, now)?;
             validate_status(credential, requirement, request, now)?;
@@ -480,7 +487,7 @@ impl Oid4vpEvidenceProjectionV1 {
 
         validate_credential_token_binding(request, submission, &by_query)?;
 
-        let mut requirement_satisfaction = BTreeMap::new();
+        let mut requirement_outcomes = BTreeMap::new();
         let mut claim_outcomes = Vec::new();
         for requirement in &request.query.requirements {
             let credentials = by_query
@@ -499,13 +506,18 @@ impl Oid4vpEvidenceProjectionV1 {
             } else {
                 EvidenceCheckOutcome::Failed
             });
-            let fully_satisfied = metadata_satisfied
-                && credentials.iter().all(|credential| {
-                    credential.proof.outcome == EvidenceCheckOutcome::Passed
-                        && credential.trust.outcome == EvidenceCheckOutcome::Passed
-                        && credential.status.outcome == EvidenceCheckOutcome::Passed
-                });
-            requirement_satisfaction.insert(requirement.id.clone(), fully_satisfied);
+            let outcome = if metadata_satisfied {
+                aggregate_outcomes(credentials.iter().flat_map(|credential| {
+                    [
+                        credential.proof.outcome,
+                        credential.trust.outcome,
+                        credential.status.outcome,
+                    ]
+                }))
+            } else {
+                EvidenceCheckOutcome::Failed
+            };
+            requirement_outcomes.insert(requirement.id.clone(), outcome);
         }
 
         Ok(CredentialValidationState {
@@ -526,7 +538,19 @@ impl Oid4vpEvidenceProjectionV1 {
             ),
             claims: aggregate_outcomes(claim_outcomes),
             credential_ids,
-            requirement_satisfaction,
+            requirement_outcomes,
+            credentials_by_query: by_query
+                .into_iter()
+                .map(|(query, credentials)| {
+                    (
+                        query.to_owned(),
+                        credentials
+                            .into_iter()
+                            .map(|credential| credential.credential_id.clone())
+                            .collect(),
+                    )
+                })
+                .collect(),
         })
     }
 
@@ -629,6 +653,7 @@ impl Oid4vpEvidenceProjectionV1 {
 
     fn validate_checks(
         &self,
+        request: &FrozenOid4vpRequestV1,
         credential_state: &CredentialValidationState,
     ) -> Result<(), Oid4vpContractError> {
         if self.checks.len() != REQUIRED_OID4VP_CHECKS.len()
@@ -640,9 +665,10 @@ impl Oid4vpEvidenceProjectionV1 {
         {
             return Err(Oid4vpContractError::CheckInventoryMismatch);
         }
+        let proof_outcome = self.presentation.proof.outcome;
         let expected = [
             self.presentation.structure.outcome,
-            self.presentation.proof.outcome,
+            proof_outcome,
             credential_state.credential_proof,
             credential_state.trust,
             credential_state.status,
@@ -655,13 +681,22 @@ impl Oid4vpEvidenceProjectionV1 {
             credential_state.claims,
         ];
         for (check, expected_outcome) in self.checks.iter().zip(expected) {
-            if check.outcome != expected_outcome
-                || check.code != expected_check_code(check.check_id, expected_outcome)
+            let expected_code = if check.check_id == Oid4vpCheckId::PresentationProof
+                && !request.policy.presentation_proof_required
+                && self.presentation.proof.code == "OID4VP_PRESENTATION_PROOF_NOT_REQUIRED"
             {
+                "OID4VP_PRESENTATION_PROOF_NOT_REQUIRED"
+            } else {
+                expected_check_code(check.check_id, expected_outcome)
+            };
+            if check.outcome != expected_outcome || check.code != expected_code {
                 return Err(Oid4vpContractError::CheckEvidenceMismatch);
             }
         }
-        let expected_processing = if expected.contains(&EvidenceCheckOutcome::Indeterminate) {
+        let expected_processing = if expected.iter().enumerate().any(|(index, outcome)| {
+            *outcome == EvidenceCheckOutcome::Indeterminate
+                && (index != 1 || request.policy.presentation_proof_required)
+        }) {
             EvidenceProcessingStatus::Incomplete
         } else {
             EvidenceProcessingStatus::Complete
@@ -714,19 +749,26 @@ impl Oid4vpEvidenceProjectionV1 {
             true,
         )?;
 
-        let any_indeterminate = self
-            .checks
-            .iter()
-            .any(|check| check.outcome == EvidenceCheckOutcome::Indeterminate);
-        let global_failure = [0usize, 1, 5, 6]
-            .into_iter()
-            .any(|index| self.checks[index].outcome == EvidenceCheckOutcome::Failed);
+        let global_indices = if request.policy.presentation_proof_required {
+            vec![0usize, 1, 5, 6]
+        } else {
+            vec![0usize, 5, 6]
+        };
+        let global_outcome = aggregate_outcomes(
+            global_indices
+                .iter()
+                .map(|index| self.checks[*index].outcome),
+        );
+        let required_outcome = required_policy_outcome(request, credential_state);
+        let any_required_indeterminate = global_outcome == EvidenceCheckOutcome::Indeterminate
+            || required_outcome == EvidenceCheckOutcome::Indeterminate;
+        let global_failure = global_outcome == EvidenceCheckOutcome::Failed;
         let fully_satisfied = parity_counts.required_satisfied == parity_counts.required_total
-            && !global_failure
-            && !any_indeterminate;
+            && global_outcome == EvidenceCheckOutcome::Passed
+            && required_outcome == EvidenceCheckOutcome::Passed;
         let partial = parity_counts.satisfied_credential_obligations > 0
             && !global_failure
-            && !any_indeterminate;
+            && !any_required_indeterminate;
         let expected = if fully_satisfied {
             (
                 AuthenticatedResult::Passed,
@@ -737,7 +779,7 @@ impl Oid4vpEvidenceProjectionV1 {
                 AuthenticatedResult::Partial,
                 AuthenticatedDecisionAction::ManualReview,
             )
-        } else if any_indeterminate {
+        } else if any_required_indeterminate {
             (
                 AuthenticatedResult::Indeterminate,
                 AuthenticatedDecisionAction::Deny,
@@ -755,23 +797,23 @@ impl Oid4vpEvidenceProjectionV1 {
             return Err(Oid4vpContractError::DecisionMismatch);
         }
 
+        let expected_violations =
+            expected_policy_violations(self, request, credential_state, &global_indices);
         if fully_satisfied {
-            if self.policy_result.satisfied_requirements != self.policy_result.total_requirements
-                || !self.policy_result.violation_codes.is_empty()
+            if !self.policy_result.violation_codes.is_empty()
                 || self.policy_result.reason_code != "OID4VP_AND_POLICY_PASSED"
-                || self.policy_result.verified_claims != merged_verified_claims(&self.credentials)?
+                || self.policy_result.verified_claims
+                    != policy_verified_claims(self, request, credential_state)?
             {
                 return Err(Oid4vpContractError::DecisionMismatch);
             }
         } else {
-            let first_violation = self
-                .policy_result
-                .violation_codes
+            let first_violation = expected_violations
                 .first()
                 .ok_or(Oid4vpContractError::DecisionMismatch)?;
             if !self.policy_result.verified_claims.is_empty()
                 || &self.policy_result.reason_code != first_violation
-                || (partial && self.policy_result.reason_code != "OID4VP_POLICY_PARTIAL")
+                || self.policy_result.violation_codes != expected_violations
             {
                 return Err(Oid4vpContractError::DecisionMismatch);
             }
@@ -783,7 +825,9 @@ impl Oid4vpEvidenceProjectionV1 {
         let value = serde_json::to_value(self).map_err(|_| Oid4vpContractError::Serialization)?;
         let raw_tokens = submission.raw_tokens();
         let sensitive_patterns = sensitive_token_patterns(&raw_tokens);
-        if contains_sensitive_string(&value, &sensitive_patterns) {
+        if contains_sensitive_string(&value, &sensitive_patterns)
+            || fragmented_claim_material_is_forbidden(self, &sensitive_patterns)
+        {
             return Err(Oid4vpContractError::PrivacyViolation);
         }
         Ok(())
@@ -796,7 +840,8 @@ struct CredentialValidationState {
     status: EvidenceCheckOutcome,
     claims: EvidenceCheckOutcome,
     credential_ids: BTreeSet<String>,
-    requirement_satisfaction: BTreeMap<String, bool>,
+    requirement_outcomes: BTreeMap<String, EvidenceCheckOutcome>,
+    credentials_by_query: BTreeMap<String, Vec<String>>,
 }
 
 struct PolicyParityCounts {
@@ -805,6 +850,124 @@ struct PolicyParityCounts {
     required_total: u16,
     required_satisfied: u16,
     satisfied_credential_obligations: u16,
+}
+
+fn required_policy_outcome(
+    request: &FrozenOid4vpRequestV1,
+    credential_state: &CredentialValidationState,
+) -> EvidenceCheckOutcome {
+    let grouped = request
+        .policy
+        .alternative_requirement_groups
+        .iter()
+        .flat_map(|group| group.requirement_ids.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let direct = request
+        .query
+        .requirements
+        .iter()
+        .filter(|requirement| requirement.required && !grouped.contains(requirement.id.as_str()))
+        .map(|requirement| credential_state.requirement_outcomes[&requirement.id]);
+    let groups = request
+        .policy
+        .alternative_requirement_groups
+        .iter()
+        .map(|group| {
+            let outcomes = group
+                .requirement_ids
+                .iter()
+                .map(|id| credential_state.requirement_outcomes[id])
+                .collect::<Vec<_>>();
+            let passed = outcomes
+                .iter()
+                .filter(|outcome| **outcome == EvidenceCheckOutcome::Passed)
+                .count();
+            let possible = outcomes
+                .iter()
+                .filter(|outcome| **outcome != EvidenceCheckOutcome::Failed)
+                .count();
+            if passed >= usize::from(group.min_satisfied) {
+                EvidenceCheckOutcome::Passed
+            } else if possible >= usize::from(group.min_satisfied) {
+                EvidenceCheckOutcome::Indeterminate
+            } else {
+                EvidenceCheckOutcome::Failed
+            }
+        });
+    let outcomes = direct.chain(groups).collect::<Vec<_>>();
+    if outcomes.is_empty() {
+        EvidenceCheckOutcome::Passed
+    } else {
+        aggregate_outcomes(outcomes)
+    }
+}
+
+fn expected_policy_violations(
+    projection: &Oid4vpEvidenceProjectionV1,
+    request: &FrozenOid4vpRequestV1,
+    credential_state: &CredentialValidationState,
+    global_indices: &[usize],
+) -> Vec<String> {
+    let mut codes = global_indices
+        .iter()
+        .filter_map(|index| {
+            let check = &projection.checks[*index];
+            (check.outcome != EvidenceCheckOutcome::Passed).then(|| check.code.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    if required_policy_outcome(request, credential_state) != EvidenceCheckOutcome::Passed {
+        codes.extend([2usize, 3, 4, 7].into_iter().filter_map(|index| {
+            let check = &projection.checks[index];
+            (check.outcome != EvidenceCheckOutcome::Passed).then(|| check.code.clone())
+        }));
+    }
+    codes.into_iter().collect()
+}
+
+fn policy_verified_claims(
+    projection: &Oid4vpEvidenceProjectionV1,
+    request: &FrozenOid4vpRequestV1,
+    credential_state: &CredentialValidationState,
+) -> Result<BTreeMap<String, Value>, Oid4vpContractError> {
+    let grouped = request
+        .policy
+        .alternative_requirement_groups
+        .iter()
+        .flat_map(|group| group.requirement_ids.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut selected = request
+        .query
+        .requirements
+        .iter()
+        .filter(|requirement| {
+            !grouped.contains(requirement.id.as_str())
+                && credential_state.requirement_outcomes[&requirement.id]
+                    == EvidenceCheckOutcome::Passed
+        })
+        .map(|requirement| requirement.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for group in &request.policy.alternative_requirement_groups {
+        let passed = group
+            .requirement_ids
+            .iter()
+            .filter(|id| credential_state.requirement_outcomes[*id] == EvidenceCheckOutcome::Passed)
+            .collect::<Vec<_>>();
+        if passed.len() >= usize::from(group.min_satisfied) {
+            selected.extend(passed.into_iter().map(String::as_str));
+        }
+    }
+    let ids = selected
+        .iter()
+        .flat_map(|query| &credential_state.credentials_by_query[*query])
+        .collect::<BTreeSet<_>>();
+    merged_verified_claims(
+        &projection
+            .credentials
+            .iter()
+            .filter(|credential| ids.contains(&credential.credential_id))
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn policy_parity_counts(
@@ -825,11 +988,7 @@ fn policy_parity_counts(
         .filter(|requirement| !grouped_ids.contains(requirement.id.as_str()))
         .collect::<Vec<_>>();
     let is_satisfied = |id: &str| {
-        credential_state
-            .requirement_satisfaction
-            .get(id)
-            .copied()
-            .unwrap_or(false)
+        credential_state.requirement_outcomes.get(id) == Some(&EvidenceCheckOutcome::Passed)
     };
     let direct_satisfied = direct
         .iter()
@@ -1370,6 +1529,7 @@ fn extract_dcql_claims(
     requirement: &FrozenCredentialRequirement,
 ) -> Result<(Vec<String>, Vec<String>), Oid4vpContractError> {
     let mut claims = BTreeSet::new();
+    let mut claim_ids = BTreeSet::new();
     let mut retained_claims = BTreeSet::new();
     for entry in entries {
         let object = exact_object(entry, &["id", "path"], &["intent_to_retain"])?;
@@ -1378,6 +1538,12 @@ fn extract_dcql_claims(
             .ok_or(Oid4vpContractError::InvalidQueryDocument)?;
         require_identifier(id, "query.document.claim.id")?;
         let path = string_array(&object["path"], "query.document.claim.path")?;
+        // A dotted component is not structurally injective under the frozen
+        // dotted typed-claim representation: ["a.b", "c"] and ["a", "b.c"]
+        // would otherwise bind to the same claim. Reject it before joining.
+        if path.iter().any(|component| component.contains('.')) {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
         let claim = if (1..=2).contains(&path.len()) {
             path.join(".")
         } else {
@@ -1393,6 +1559,7 @@ fn extract_dcql_claims(
             .transpose()?
             .unwrap_or(false);
         if canonical_claim_id(&claim) != id
+            || !claim_ids.insert(id.to_owned())
             || requirement.allowed_claims.binary_search(&claim).is_err()
             || !claims.insert(claim.clone())
         {
@@ -1626,11 +1793,32 @@ fn validate_fact(
     request: &FrozenOid4vpRequestV1,
     now: i64,
 ) -> Result<(), Oid4vpContractError> {
+    if matches!(kind, FactKind::PresentationProof)
+        && !request.policy.presentation_proof_required
+        && fact.outcome == EvidenceCheckOutcome::Indeterminate
+        && fact.code == "OID4VP_PRESENTATION_PROOF_NOT_REQUIRED"
+    {
+        return if fact.evidence_digest.is_none() && fact.checked_at_epoch_seconds.is_none() {
+            Ok(())
+        } else {
+            Err(Oid4vpContractError::CheckEvidenceMismatch)
+        };
+    }
     if fact.code != expected_fact_code(kind, fact.outcome) {
         return Err(Oid4vpContractError::CheckEvidenceMismatch);
     }
-    validate_digest(&fact.evidence_digest, "evidence_fact.evidence_digest")?;
-    validate_checked_at(fact.checked_at_epoch_seconds, request, now)
+    validate_digest(
+        fact.evidence_digest
+            .as_deref()
+            .ok_or(Oid4vpContractError::CheckEvidenceMismatch)?,
+        "evidence_fact.evidence_digest",
+    )?;
+    validate_checked_at(
+        fact.checked_at_epoch_seconds
+            .ok_or(Oid4vpContractError::CheckEvidenceMismatch)?,
+        request,
+        now,
+    )
 }
 
 fn expected_fact_code(kind: FactKind, outcome: EvidenceCheckOutcome) -> &'static str {
@@ -1720,9 +1908,13 @@ fn validate_status(
     now: i64,
 ) -> Result<(), Oid4vpContractError> {
     let status = &credential.status;
+    let expired = credential
+        .expires_at_epoch_seconds
+        .is_some_and(|expires_at| expires_at <= now);
     let valid = match status.state {
         CredentialStatusState::NotPresent => {
-            credential.status_ids.is_empty()
+            !expired
+                && credential.status_ids.is_empty()
                 && requirement.status.mode == CredentialStatusMode::AllowAbsent
                 && status.outcome == EvidenceCheckOutcome::Passed
                 && status.checked_at_epoch_seconds.is_none()
@@ -1730,7 +1922,8 @@ fn validate_status(
                 && status.evidence_digest.is_none()
         }
         CredentialStatusState::Active => {
-            !credential.status_ids.is_empty()
+            !expired
+                && !credential.status_ids.is_empty()
                 && status.outcome == EvidenceCheckOutcome::Passed
                 && status
                     .valid_until_epoch_seconds
@@ -1739,18 +1932,35 @@ fn validate_status(
                 && status.evidence_digest.is_some()
         }
         CredentialStatusState::Revoked => {
-            !credential.status_ids.is_empty()
+            !expired
+                && !credential.status_ids.is_empty()
                 && status.outcome == EvidenceCheckOutcome::Failed
                 && status.checked_at_epoch_seconds.is_some()
                 && status.evidence_digest.is_some()
         }
+        CredentialStatusState::Suspended => {
+            !expired
+                && !credential.status_ids.is_empty()
+                && status.outcome == EvidenceCheckOutcome::Failed
+                && status.checked_at_epoch_seconds.is_some()
+                && status.evidence_digest.is_some()
+        }
+        CredentialStatusState::Expired => {
+            expired
+                && status.outcome == EvidenceCheckOutcome::Failed
+                && status.checked_at_epoch_seconds.is_none()
+                && status.valid_until_epoch_seconds.is_none()
+                && status.evidence_digest.is_none()
+        }
         CredentialStatusState::Unknown => {
-            !credential.status_ids.is_empty()
+            !expired
+                && !credential.status_ids.is_empty()
                 && status.outcome == EvidenceCheckOutcome::Indeterminate
                 && status.valid_until_epoch_seconds.is_none()
         }
         CredentialStatusState::Stale => {
-            !credential.status_ids.is_empty()
+            !expired
+                && !credential.status_ids.is_empty()
                 && status.outcome == EvidenceCheckOutcome::Failed
                 && status
                     .valid_until_epoch_seconds
@@ -2095,7 +2305,7 @@ fn sensitive_token_patterns(raw_tokens: &[&str]) -> Vec<String> {
     let mut patterns = raw_tokens
         .iter()
         .map(|token| (*token).to_owned())
-        .filter(|pattern| pattern.len() <= MAX_CLAIM_VALUE_BYTES)
+        .filter(|pattern| pattern.len() <= MAX_PRIVACY_FRAGMENT_BYTES)
         .collect::<BTreeSet<_>>();
     let mut frontier = patterns.clone();
     // Freeze the accepted normalization budget plus one fail-closed sentinel
@@ -2104,7 +2314,7 @@ fn sensitive_token_patterns(raw_tokens: &[&str]) -> Vec<String> {
         let next = frontier
             .iter()
             .flat_map(|value| encode_base64_variants(value.as_bytes()))
-            .filter(|pattern| pattern.len() <= MAX_CLAIM_VALUE_BYTES)
+            .filter(|pattern| pattern.len() <= MAX_PRIVACY_FRAGMENT_BYTES)
             .collect::<BTreeSet<_>>();
         patterns.extend(next.iter().cloned());
         frontier = next;
@@ -2123,16 +2333,81 @@ fn encode_base64_variants(value: &[u8]) -> [String; 4] {
 
 fn contains_sensitive_string(value: &Value, sensitive_patterns: &[String]) -> bool {
     match value {
-        Value::String(value) => normalized_value_is_forbidden(value, sensitive_patterns, false),
+        Value::String(value) => normalized_value_is_forbidden(
+            value,
+            sensitive_patterns,
+            false,
+            MAX_PRIVACY_NORMALIZED_BYTES,
+        ),
         Value::Array(values) => values
             .iter()
             .any(|value| contains_sensitive_string(value, sensitive_patterns)),
         Value::Object(values) => values.iter().any(|(key, value)| {
-            normalized_value_is_forbidden(key, sensitive_patterns, true)
-                || contains_sensitive_string(value, sensitive_patterns)
+            normalized_value_is_forbidden(
+                key,
+                sensitive_patterns,
+                true,
+                MAX_PRIVACY_NORMALIZED_BYTES,
+            ) || contains_sensitive_string(value, sensitive_patterns)
         }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
+}
+
+fn fragmented_claim_material_is_forbidden(
+    projection: &Oid4vpEvidenceProjectionV1,
+    sensitive_patterns: &[String],
+) -> bool {
+    let mut values = String::new();
+    let mut keys = String::new();
+    let mut parts = 0usize;
+    for credential in &projection.credentials {
+        for (key, value) in &credential.claims {
+            if !append_privacy_fragment(&mut keys, key, &mut parts)
+                || !collect_claim_fragments(value, &mut values, &mut keys, &mut parts)
+            {
+                return true;
+            }
+        }
+    }
+    normalized_value_is_forbidden(
+        &values,
+        sensitive_patterns,
+        false,
+        MAX_PRIVACY_FRAGMENT_BYTES,
+    ) || normalized_value_is_forbidden(&keys, sensitive_patterns, true, MAX_PRIVACY_FRAGMENT_BYTES)
+}
+
+fn collect_claim_fragments(
+    value: &Value,
+    values: &mut String,
+    keys: &mut String,
+    parts: &mut usize,
+) -> bool {
+    match value {
+        Value::String(value) => append_privacy_fragment(values, value, parts),
+        Value::Array(items) => items
+            .iter()
+            .all(|item| collect_claim_fragments(item, values, keys, parts)),
+        Value::Object(entries) => entries.iter().all(|(key, value)| {
+            append_privacy_fragment(keys, key, parts)
+                && collect_claim_fragments(value, values, keys, parts)
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) => true,
+    }
+}
+
+fn append_privacy_fragment(target: &mut String, value: &str, parts: &mut usize) -> bool {
+    *parts += 1;
+    *parts <= MAX_PRIVACY_FRAGMENT_PARTS
+        && target
+            .len()
+            .checked_add(value.len())
+            .is_some_and(|length| length <= MAX_PRIVACY_FRAGMENT_BYTES)
+        && {
+            target.push_str(value);
+            true
+        }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -2147,6 +2422,7 @@ fn normalized_value_is_forbidden(
     value: &str,
     sensitive_patterns: &[String],
     inspect_forbidden_key: bool,
+    max_normalized_bytes: usize,
 ) -> bool {
     let initial = NormalizationState {
         value: value.to_owned(),
@@ -2184,7 +2460,7 @@ fn normalized_value_is_forbidden(
             .map(|value| (value, true))
             .chain(base64.into_iter().map(|value| (value, false)))
         {
-            if decoded.len() > MAX_PRIVACY_NORMALIZED_BYTES {
+            if decoded.len() > max_normalized_bytes {
                 return true;
             }
             let next = NormalizationState {
