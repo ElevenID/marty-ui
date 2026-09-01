@@ -131,6 +131,7 @@ jobs:
         with:
           repository: ElevenID/marty-integration-tests
           ref: bdd3b33b9268ca4c8c3d37126e7c253ec8fce710
+          fetch-depth: 0
           path: integration-harness
           persist-credentials: false
 
