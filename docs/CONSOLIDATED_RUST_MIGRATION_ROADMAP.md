@@ -126,7 +126,7 @@ The 31-route language-neutral Canvas management floor is
 |---|---:|---|
 | Implemented and merged in Rust | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. PR `#717` merged at `a6b375bb0` |
 | Provenance-bound native beta routing merged | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; PR `#717` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
-| Standalone synchronization worker | Fenced Rust candidate merged; routing and Python deletion not started | `contracts/issuance-canvas-sync-worker.json` pins the complete Python worker/processor/oracle boundary. PR `#742` merged the bounded Rust fetch/parse candidate at `50b0985f4`; it remains non-routed until the remaining parity, differential and deletion gates pass |
+| Standalone synchronization worker | Fenced Rust candidate implemented; routing and Python deletion not started | `contracts/issuance-canvas-sync-worker.json` pins the complete Python worker/processor/oracle boundary. PR `#742` merged the bounded Rust candidate at `50b0985f4`; PR `#754` adds generation-fenced application/platform/candidate/cursor persistence, canonical target reload, persisted LTI trust-profile binding, explicit OAuth 429 handling, shutdown and deployed-secret parity, and target-reconfiguration race coverage. The candidate remains non-routed until the whole-worker differential, database rollback, readiness, consumer-routing and beta-soak deletion gates pass |
 
 Thus, all 31 routes and their beta routing are merged but not yet deployed.
 The final post-rebase maintainer and protected-queue gates passed 220 Rust
@@ -226,13 +226,18 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    fail the no-feature-loss gate. Delete them immediately only after every
    deployed profile routes the operations to Rust. The standalone
    `canvas-sync-worker` and its
-   `process_authoritative_canvas_sync_target` processor remain Python in this
-   wave: Rust currently owns enqueue/readiness support, but not that processor's
-   complete Canvas API polling, lease, retry, heartbeat and reconciliation
-   behavior. Their language-neutral whole-worker contract is now frozen in
+   `process_authoritative_canvas_sync_target` processor remain the deployed
+   Python implementation in this wave. Rust now has an unrouted native
+   worker/processor candidate covering Canvas API polling, leases, retries,
+   heartbeats and reconciliation, including generation-fenced side effects;
+   implementation coverage alone is not deletion evidence. Their
+   language-neutral whole-worker contract is frozen in
    `contracts/issuance-canvas-sync-worker.json`; implementation remains gated
-   on closing the enumerated Python oracle gaps and must extend the existing
-   Rust Canvas OAuth, PostgreSQL OAuth, integration-secret and readiness owners.
+   on closing the enumerated Python oracle gaps, whole-worker mutation/failure
+   differential parity, fresh-PostgreSQL migration/rollback and race evidence,
+   readiness parity, every deployment-consumer change and the beta-only soak.
+   Continue extending the existing Rust Canvas OAuth, PostgreSQL OAuth,
+   integration-secret and readiness owners rather than duplicating them.
 7. The Canvas, mdoc, Canvas Credentials, base verifier implementation and
    verifier contract worktrees have been tree-equivalence checked and removed
    after their protected merges. Integration cleanup is also complete: the
