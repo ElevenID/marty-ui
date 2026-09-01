@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -69,6 +70,33 @@ def _nodes(nodes_json: str) -> list[object]:
     return nodes
 
 
+def _require_exact_docker_version(run_text: TextRunner) -> None:
+    docker_version = run_text(
+        ["docker", "version", "--format", "{{.Server.Version}}"]
+    ).strip()
+    _require(docker_version == EXPECTED_DOCKER, "Docker version changed")
+
+
+def _require_exact_containerd_driver(run_text: TextRunner) -> None:
+    driver_status_raw = run_text(
+        ["docker", "info", "--format", "{{json .DriverStatus}}"]
+    )
+    try:
+        driver_status = json.loads(driver_status_raw)
+    except json.JSONDecodeError as error:
+        raise BackendContractError("Docker driver status is invalid") from error
+    _require(
+        driver_status == EXPECTED_DRIVER_STATUS,
+        "Docker containerd image store changed",
+    )
+
+
+def require_exact_containerd_store(*, run_text: TextRunner = _run_text) -> None:
+    """Require the reviewed Docker runtime used to load candidate OCI archives."""
+    _require_exact_docker_version(run_text)
+    _require_exact_containerd_driver(run_text)
+
+
 def require_exact_backend(
     nodes_json: str,
     driver: str,
@@ -77,10 +105,7 @@ def require_exact_backend(
     run_check: CheckRunner = _run_check,
 ) -> None:
     _require(driver == EXPECTED_DRIVER, "Buildx driver changed")
-    docker_version = run_text(
-        ["docker", "version", "--format", "{{.Server.Version}}"]
-    ).strip()
-    _require(docker_version == EXPECTED_DOCKER, "Docker version changed")
+    _require_exact_docker_version(run_text)
 
     buildx_fields = run_text(["docker", "buildx", "version"]).split()
     _require(
@@ -108,18 +133,7 @@ def require_exact_backend(
         "linux/amd64" in {value.strip() for value in platforms.split(",")},
         "Buildx node does not support linux/amd64",
     )
-
-    driver_status_raw = run_text(
-        ["docker", "info", "--format", "{{json .DriverStatus}}"]
-    )
-    try:
-        driver_status = json.loads(driver_status_raw)
-    except json.JSONDecodeError as error:
-        raise BackendContractError("Docker driver status is invalid") from error
-    _require(
-        driver_status == EXPECTED_DRIVER_STATUS,
-        "Docker containerd image store changed",
-    )
+    _require_exact_containerd_driver(run_text)
 
 
 def _fail(message: str) -> NoReturn:
@@ -127,12 +141,22 @@ def _fail(message: str) -> NoReturn:
     raise SystemExit(1)
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--runtime-only",
+        action="store_true",
+        help="verify only the Docker runtime and containerd image store",
+    )
+    arguments = parser.parse_args(argv)
     try:
-        require_exact_backend(
-            os.environ.get("MARTY_BUILDX_NODES_JSON", ""),
-            os.environ.get("MARTY_BUILDX_DRIVER", ""),
-        )
+        if arguments.runtime_only:
+            require_exact_containerd_store()
+        else:
+            require_exact_backend(
+                os.environ.get("MARTY_BUILDX_NODES_JSON", ""),
+                os.environ.get("MARTY_BUILDX_DRIVER", ""),
+            )
     except (BackendContractError, subprocess.SubprocessError):
         _fail("unsupported or unavailable backend")
     return 0

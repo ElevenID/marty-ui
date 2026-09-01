@@ -31,8 +31,16 @@ def valid_node() -> dict[str, object]:
 
 
 class BackendRunner:
-    def __init__(self, *, inspect_failure: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        inspect_failure: bool = False,
+        docker_version: str = "29.7.2\n",
+        driver_status: str = '[["driver-type","io.containerd.snapshotter.v1"]]\n',
+    ) -> None:
         self.inspect_failure = inspect_failure
+        self.docker_version = docker_version
+        self.driver_status = driver_status
         self.checked: list[tuple[str, ...]] = []
         self.text_calls: list[tuple[str, ...]] = []
 
@@ -40,13 +48,21 @@ class BackendRunner:
         key = tuple(command)
         self.text_calls.append(key)
         outputs = {
-            ("docker", "version", "--format", "{{.Server.Version}}"): "29.7.2\n",
+            (
+                "docker",
+                "version",
+                "--format",
+                "{{.Server.Version}}",
+            ): self.docker_version,
             ("docker", "buildx", "version"): (
                 "github.com/docker/buildx v0.36.1 exact-commit\n"
             ),
-            ("docker", "info", "--format", "{{json .DriverStatus}}"): (
-                '[["driver-type","io.containerd.snapshotter.v1"]]\n'
-            ),
+            (
+                "docker",
+                "info",
+                "--format",
+                "{{json .DriverStatus}}",
+            ): self.driver_status,
         }
         return outputs[key]
 
@@ -73,6 +89,60 @@ def test_exact_single_node_backend_accepts_json_alignment(indent: int | None) ->
         "--format",
         "{{json .DriverStatus}}",
     )
+
+
+def test_exact_containerd_runtime_accepts_the_reviewed_store() -> None:
+    runner = BackendRunner()
+
+    backend.require_exact_containerd_store(run_text=runner.text)
+
+    assert runner.text_calls == [
+        ("docker", "version", "--format", "{{.Server.Version}}"),
+        ("docker", "info", "--format", "{{json .DriverStatus}}"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("docker_version", "driver_status", "message"),
+    [
+        (
+            "29.7.1\n",
+            '[["driver-type","io.containerd.snapshotter.v1"]]\n',
+            "Docker version",
+        ),
+        ("29.7.2\n", "not-json", "driver status is invalid"),
+        ("29.7.2\n", "[]\n", "containerd image store changed"),
+    ],
+)
+def test_containerd_runtime_mutations_fail_closed(
+    docker_version: str, driver_status: str, message: str
+) -> None:
+    runner = BackendRunner(
+        docker_version=docker_version,
+        driver_status=driver_status,
+    )
+
+    with pytest.raises(backend.BackendContractError, match=message):
+        backend.require_exact_containerd_store(run_text=runner.text)
+
+
+def test_runtime_only_cli_does_not_require_buildx_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        backend,
+        "require_exact_containerd_store",
+        lambda: calls.append("runtime"),
+    )
+    monkeypatch.setattr(
+        backend,
+        "require_exact_backend",
+        lambda *_args, **_kwargs: pytest.fail("runtime-only probe used Buildx"),
+    )
+
+    assert backend.main(["--runtime-only"]) == 0
+    assert calls == ["runtime"]
 
 
 @pytest.mark.parametrize(

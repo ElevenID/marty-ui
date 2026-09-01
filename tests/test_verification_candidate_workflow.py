@@ -32,7 +32,7 @@ def consumer_workflow() -> tuple[str, dict[str, object]]:
     return source, yaml.safe_load(source)
 
 
-def assert_supported_backend(job: dict[str, object]) -> None:
+def assert_supported_containerd_store(job: dict[str, object]) -> None:
     steps = job["steps"]
     assert isinstance(steps, list)
     setup_docker = next(step for step in steps if step.get("uses") == SETUP_DOCKER)
@@ -40,6 +40,12 @@ def assert_supported_backend(job: dict[str, object]) -> None:
     assert json.loads(setup_docker["with"]["daemon-config"]) == {
         "features": {"containerd-snapshotter": True}
     }
+
+
+def assert_supported_backend(job: dict[str, object]) -> None:
+    assert_supported_containerd_store(job)
+    steps = job["steps"]
+    assert isinstance(steps, list)
     setup_buildx = next(step for step in steps if step.get("uses") == SETUP_BUILDX)
     assert setup_buildx["id"] == "buildx"
     assert setup_buildx["with"] == {
@@ -282,6 +288,7 @@ def test_consumer_uses_only_fixed_actions_and_drops_registry_credentials() -> No
         "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093": 1,
         "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97": 1,
         "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": 1,
+        SETUP_DOCKER: 1,
     }
     assert {
         action: source.count(action) for action in expected_actions
@@ -299,6 +306,62 @@ def test_consumer_uses_only_fixed_actions_and_drops_registry_credentials() -> No
     )
     assert execute["env"] == {"GH_TOKEN": "${{ github.token }}"}
     assert document["jobs"]["verify"]["permissions"]["attestations"] == "read"
+
+
+def test_consumer_requires_the_exact_containerd_runtime_before_image_use() -> None:
+    source, document = consumer_workflow()
+    job = document["jobs"]["verify"]
+
+    assert_supported_containerd_store(job)
+    probe = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Require the exact supported candidate runtime"
+    )
+    assert probe["run"] == (
+        "python scripts/check_verification_candidate_backend.py --runtime-only"
+    )
+    configure = source.index("name: Configure the pinned candidate runtime")
+    require = source.index("name: Require the exact supported candidate runtime")
+    oracle = source.index("name: Resolve and verify the immutable public oracle")
+    execute = source.index(
+        "name: Run candidate and oracle then compare fail-closed evidence"
+    )
+    assert configure < require < oracle < execute
+
+
+def test_consumer_containerd_runtime_contract_rejects_single_field_drift() -> None:
+    _source, document = consumer_workflow()
+    job = document["jobs"]["verify"]
+    mutations = [
+        lambda value: next(
+            step for step in value["steps"] if step.get("uses") == SETUP_DOCKER
+        ).update(uses="docker/setup-docker-action@main"),
+        lambda value: next(
+            step for step in value["steps"] if step.get("uses") == SETUP_DOCKER
+        )["with"].update(version="latest"),
+        lambda value: next(
+            step for step in value["steps"] if step.get("uses") == SETUP_DOCKER
+        )["with"].__setitem__("daemon-config", "{}"),
+        lambda value: next(
+            step
+            for step in value["steps"]
+            if step.get("name") == "Require the exact supported candidate runtime"
+        ).update(run="true"),
+    ]
+    for mutation in mutations:
+        mutated = copy.deepcopy(job)
+        mutation(mutated)
+        with pytest.raises((AssertionError, StopIteration)):
+            assert_supported_containerd_store(mutated)
+            probe = next(
+                step
+                for step in mutated["steps"]
+                if step.get("name") == "Require the exact supported candidate runtime"
+            )
+            assert probe["run"] == (
+                "python scripts/check_verification_candidate_backend.py --runtime-only"
+            )
 
 
 def test_consumer_uses_exact_public_harness_and_remains_fail_closed() -> None:
