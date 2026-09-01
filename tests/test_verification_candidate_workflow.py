@@ -10,8 +10,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "verification-candidate-build.yml"
+CONSUMER_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "verification-candidate-consumer.yml"
+)
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 VERIFICATION_FLOOR = "b2b2953f9fe00d848761830623935773419bdf60"
+INTEGRATION_HARNESS = "cd2c17f63774ebf02065b88307b3120666ce821d"
+PRODUCER_WORKFLOW_ID = "346930832"
 SETUP_DOCKER = "docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1"
 SETUP_BUILDX = "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e"
 BUILDKIT_IMAGE = "moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8"
@@ -19,6 +24,11 @@ BUILDKIT_IMAGE = "moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560
 
 def workflow() -> tuple[str, dict[str, object]]:
     source = WORKFLOW.read_text(encoding="utf-8")
+    return source, yaml.safe_load(source)
+
+
+def consumer_workflow() -> tuple[str, dict[str, object]]:
+    source = CONSUMER_WORKFLOW.read_text(encoding="utf-8")
     return source, yaml.safe_load(source)
 
 
@@ -160,6 +170,151 @@ def test_manual_candidate_uses_the_exact_supported_oci_backend() -> None:
     _source, document = workflow()
 
     assert_supported_backend(document["jobs"]["build"])
+
+
+def test_consumer_runs_only_for_the_authenticated_successful_producer() -> None:
+    source, document = consumer_workflow()
+
+    assert document[True] == {
+        "workflow_run": {
+            "workflows": ["Verification candidate build"],
+            "types": ["completed"],
+        }
+    }
+    assert document["permissions"] == {"contents": "read"}
+    verify = document["jobs"]["verify"]
+    assert verify["permissions"] == {
+        "actions": "read",
+        "attestations": "read",
+        "contents": "read",
+        "packages": "read",
+    }
+    for condition in (
+        "workflow_run.conclusion == 'success'",
+        "workflow_run.event == 'workflow_dispatch'",
+        "workflow_run.head_branch == 'main'",
+        "workflow_run.head_repository.full_name == 'ElevenID/marty-ui'",
+    ):
+        assert condition in verify["if"]
+    steps = verify["steps"]
+    gate = next(
+        step
+        for step in steps
+        if step.get("name") == "Authenticate the triggering producer run"
+    )["run"]
+    expected_api_bindings = {
+        ".id": "$TRIGGER_RUN_ID",
+        ".run_attempt": "$TRIGGER_RUN_ATTEMPT",
+        ".workflow_id": PRODUCER_WORKFLOW_ID,
+        ".name": "Verification candidate build",
+        ".path": ".github/workflows/verification-candidate-build.yml",
+        ".event": "workflow_dispatch",
+        ".status": "completed",
+        ".conclusion": "success",
+        ".head_repository.full_name": "$GITHUB_REPOSITORY",
+        ".head_branch": "main",
+        ".head_sha": "$TRIGGER_SHA",
+    }
+    for field, expected in expected_api_bindings.items():
+        assert f"jq -er '{field}' trigger-run.json" in gate
+        assert f'= "{expected}"' in gate
+    assert 'git merge-base --is-ancestor "$TRIGGER_SHA" origin/main' in gate
+    assert "environment:" not in source
+    assert "secrets." not in source
+    assert "id-token: write" not in source
+    assert "attestations: write" not in source
+    assert "deployments:" not in source
+
+
+def test_consumer_downloads_and_authenticates_the_exact_five_file_bundle() -> None:
+    source, _document = consumer_workflow()
+
+    assert (
+        source.count(
+            "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+        )
+        == 1
+    )
+    assert (
+        "name: verification-candidate-${{ github.event.workflow_run.id }}-"
+        "${{ github.event.workflow_run.run_attempt }}" in source
+    )
+    assert "run-id: ${{ github.event.workflow_run.id }}" in source
+    assert "github-token: ${{ github.token }}" in source
+    for asset in (
+        "marty-ui-services-build-metadata.json:f",
+        "marty-ui-services-provenance.json:f",
+        "marty-ui-services-sbom.cdx.json:f",
+        "marty-ui-services.oci.tar:f",
+        "verification-candidate.json:f",
+    ):
+        assert source.count(asset) == 1
+    for field, expected in (
+        (".commit", "$TRIGGER_SHA"),
+        (".source_ref", "refs/heads/main"),
+        (".run.id", "$TRIGGER_RUN_ID"),
+        (".run.attempt", "$TRIGGER_RUN_ATTEMPT"),
+    ):
+        assert f"jq -er '{field}'" in source
+        assert expected in source
+    assert source.count("gh attestation verify") == 4
+    assert (
+        source.count(
+            "--signer-workflow github.com/ElevenID/marty-ui/.github/workflows/verification-candidate-build.yml"
+        )
+        == 2
+    )
+    producer_gate = source.index("name: Authenticate the triggering producer run")
+    download = source.index("name: Download the exact triggering-run candidate")
+    candidate_gate = source.index("name: Authenticate the exact candidate bundle")
+    harness = source.index("name: Check out immutable public verification harness")
+    execute = source.index(
+        "name: Run candidate and oracle then compare fail-closed evidence"
+    )
+    assert producer_gate < download < candidate_gate < harness < execute
+
+
+def test_consumer_uses_only_fixed_actions_and_drops_registry_credentials() -> None:
+    source, document = consumer_workflow()
+
+    expected_actions = {
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1": 2,
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093": 1,
+        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97": 1,
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": 1,
+    }
+    assert {
+        action: source.count(action) for action in expected_actions
+    } == expected_actions
+    uses = [
+        step["uses"] for step in document["jobs"]["verify"]["steps"] if "uses" in step
+    ]
+    assert len(uses) == sum(expected_actions.values())
+    assert "docker logout ghcr.io" in source
+    execute = next(
+        step
+        for step in document["jobs"]["verify"]["steps"]
+        if step.get("name")
+        == "Run candidate and oracle then compare fail-closed evidence"
+    )
+    assert "env" not in execute
+
+
+def test_consumer_uses_exact_public_harness_and_remains_fail_closed() -> None:
+    source, _document = consumer_workflow()
+
+    assert "repository: ElevenID/marty-integration-tests" in source
+    assert f"ref: {INTEGRATION_HARNESS}" in source
+    assert "requirements/official-py312.lock" in source
+    assert "--require-hashes --only-binary=:all:" in source
+    assert "run-candidate" in source
+    assert "compare-candidate-evidence" in source
+    assert "--oracle-pin config/credentials-verifier-oracle.json" in source
+    assert (
+        "test \"$(jq -er '.release_clearance' ../work/evidence/comparison.json)\" = blocked"
+        in source
+    )
+    assert "retention-days: 3" in source
 
 
 def test_manual_candidate_backend_contract_rejects_single_field_drift() -> None:

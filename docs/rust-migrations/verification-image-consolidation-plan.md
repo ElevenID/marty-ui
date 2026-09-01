@@ -16,11 +16,15 @@ verified with the Python image as passing oracle and `v1.1.208` as bounded
 negative control. `v1.2.78` is preliminary, non-activating evidence: it packages
 protected parity corrections through PR `#403`, remains explicitly blocked,
 and does not pin a corrected Rust runtime. PR `#737` introduced the candidate
-producer, but its workflow was never dispatched. PR `#741` hardened the
-producer but retained raw tar-header offset defects. PR `#744` corrected those
-specific defects. No candidate workflow run exists, so merged producer code
-supplies no admissible candidate-gate evidence and the candidate gate has not
-run or passed. The
+producer; its first dispatch occurred only after the later hardening described
+below. PR `#741` hardened the producer but retained raw tar-header offset
+defects. PR `#744` corrected those specific defects. Producer run `33465702948`,
+attempt `1`, was dispatched from exact protected-main commit
+`2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the trusted consumer landed.
+It failed bundle validation with `OCI layer tar is empty` before attestation or
+artifact upload, so it supplies no admissible candidate-gate acceptance. A
+corrected producer run and authenticated, inspected consumer result are still
+required. The
 fail-closed eligibility interlock is merged. A future corrected Rust artifact,
 a later exact fully passing consumer release, and a later aggregate binder are
 required before beta acceptance; no future UI coordinate is selected or
@@ -255,12 +259,16 @@ and the SPDX SBOM is
 
 Protected `ElevenID/marty-ui#727` merged the fail-closed eligibility interlock
 at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`; the protected-main lock remains
-`hold`. PR `#737` introduced the candidate producer, but its workflow was never
-dispatched. PR `#741` hardened the producer but retained raw tar-header offset
-defects. PR `#744` corrected those specific defects. No candidate workflow run
-exists, so merged producer code supplies no admissible candidate-gate evidence
-and the candidate gate has not run or passed. Before any future corrected
-artifact coordinate may be selected, reserved, prepared, or published, an
+`hold`. PR `#737` introduced the candidate producer; its first dispatch occurred
+only after the later hardening described below. PR `#741` hardened the producer
+but retained raw tar-header offset defects. PR `#744` corrected those specific
+defects. Producer run `33465702948`, attempt `1`, was dispatched from exact
+protected-main commit `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204`
+before the trusted consumer landed. It failed bundle validation with
+`OCI layer tar is empty` before attestation or artifact upload, so it supplies
+no admissible candidate-gate acceptance. A corrected producer run and
+authenticated, inspected consumer result are still required. Before any future
+corrected artifact coordinate may be selected, reserved, prepared, or published, an
 exact protected-main descendant containing PR `#744` must pass the
 non-publishing candidate, trusted-positive OID4VP runtime, the landed
 artifact-differential parity gates, and digest-first resumable release

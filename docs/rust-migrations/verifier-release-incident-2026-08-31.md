@@ -12,11 +12,15 @@ The evidence classification is exact: `v0.1.72` is a valid issuance component,
 not a failed verifier artifact; `v1.2.76` is retained held evidence only and
 grants no cutover authorization; `v1.2.77` is intermediate evidence only; and
 `v1.2.78` is preliminary, non-activating evidence. PR `#737` introduced the
-candidate producer, but its workflow was never dispatched. PR `#741` hardened
-the producer but retained raw tar-header offset defects. PR `#744` corrected
-those specific defects. No candidate workflow run exists, so merged producer
-code supplies no admissible candidate-gate evidence and the candidate gate has
-not run or passed.
+candidate producer; its first dispatch occurred only after the later hardening
+described below. PR `#741` hardened the producer but retained raw tar-header
+offset defects. PR `#744` corrected those specific defects. Producer run
+`33465702948`, attempt `1`, was dispatched from exact protected-main commit
+`2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the trusted consumer landed.
+It failed bundle validation with `OCI layer tar is empty` before attestation or
+artifact upload, so it supplies no admissible candidate-gate acceptance. A
+corrected producer run and authenticated, inspected consumer result are still
+required.
 
 ## Immutable observations
 
