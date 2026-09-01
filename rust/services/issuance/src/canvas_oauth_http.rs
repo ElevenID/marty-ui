@@ -102,7 +102,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             return Err(provider_error(None));
         }
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
-            return Err(provider_error(canvas_retry_after_seconds(&response)));
+            return Err(rate_limited_error(&response));
         }
         if matches!(
             response.status(),
@@ -165,7 +165,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             return Err(provider_error(None));
         }
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
-            return Err(provider_error(canvas_retry_after_seconds(&response)));
+            return Err(rate_limited_error(&response));
         }
         if matches!(
             response.status(),
@@ -224,7 +224,7 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             return Err(provider_error(None));
         }
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
-            return Err(provider_error(canvas_retry_after_seconds(&response)));
+            return Err(rate_limited_error(&response));
         }
         if matches!(
             response.status(),
@@ -260,6 +260,12 @@ fn provider_error(retry_after_seconds: Option<u64>) -> CanvasOAuthProviderError 
     }
 }
 
+fn rate_limited_error(response: &Response) -> CanvasOAuthProviderError {
+    provider_error(Some(
+        canvas_retry_after_seconds(response).unwrap_or_default(),
+    ))
+}
+
 fn transport_error(error: reqwest::Error) -> CanvasOAuthProviderError {
     if error.is_timeout() {
         CanvasOAuthProviderError::Timeout
@@ -271,6 +277,7 @@ fn transport_error(error: reqwest::Error) -> CanvasOAuthProviderError {
 #[cfg(test)]
 mod tests {
     use super::HttpCanvasOAuthProvider;
+    use crate::canvas_oauth::{CanvasOAuthProvider, CanvasOAuthProviderError};
 
     #[test]
     fn provider_debug_output_does_not_disclose_private_origins() {
@@ -282,5 +289,66 @@ mod tests {
         let debug = format!("{provider:?}");
         assert!(debug.contains("private_origin_allowlist_count: 1"));
         assert!(!debug.contains("private-origin-sensitive"));
+    }
+
+    #[tokio::test]
+    async fn every_oauth_429_keeps_rate_limit_category_for_all_retry_after_shapes() {
+        use axum::{extract::State, http::StatusCode, response::Response, routing::any, Router};
+
+        async fn rate_limited(State(retry_after): State<Option<&'static str>>) -> Response {
+            let mut response = Response::builder().status(StatusCode::TOO_MANY_REQUESTS);
+            if let Some(retry_after) = retry_after {
+                response = response.header(reqwest::header::RETRY_AFTER, retry_after);
+            }
+            response.body(axum::body::Body::empty()).unwrap()
+        }
+
+        for (retry_after, expected_seconds) in [(None, 0), (Some("malformed"), 0), (Some("17"), 17)]
+        {
+            let app = Router::new()
+                .route("/login/oauth2/token", any(rate_limited))
+                .with_state(retry_after);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener");
+            let address = listener.local_addr().expect("address");
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let provider = HttpCanvasOAuthProvider::new_with_policy(
+                std::time::Duration::from_secs(5),
+                Vec::new(),
+                false,
+                true,
+            );
+            let origin = format!("http://{address}");
+            let expected = CanvasOAuthProviderError::Failed {
+                retry_after_seconds: Some(expected_seconds),
+            };
+
+            assert_eq!(
+                provider
+                    .exchange(
+                        &origin,
+                        "client-id",
+                        "client-secret",
+                        "code",
+                        "https://tool.example/callback",
+                    )
+                    .await
+                    .unwrap_err(),
+                expected,
+            );
+            assert_eq!(
+                provider
+                    .refresh(&origin, "client-id", "client-secret", "refresh-token")
+                    .await
+                    .unwrap_err(),
+                expected,
+            );
+            assert_eq!(
+                provider.revoke(&origin, "access-token").await.unwrap_err(),
+                expected,
+            );
+            server.abort();
+        }
     }
 }
