@@ -18,9 +18,14 @@ offset defects. PR `#744` corrected those specific defects. Producer run
 `33465702948`, attempt `1`, was dispatched from exact protected-main commit
 `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the trusted consumer landed.
 It failed bundle validation with `OCI layer tar is empty` before attestation or
-artifact upload, so it supplies no admissible candidate-gate acceptance. A
-corrected producer run and authenticated, inspected consumer result are still
-required.
+artifact upload, so it supplies no admissible candidate-gate acceptance. The
+corrected lane subsequently passed from exact protected-main commit
+`7a1e2d6f31a563b33832b46921ec3376cd124113`: producer run `33490549237`,
+attempt `1`, and authenticated, inspected consumer run `33491836719`, attempt
+`1`, both completed successfully. All 19 language-neutral checks matched and
+the Rust-only default-disabled-route check passed. Release clearance
+remains intentionally blocked only by
+`canonical.oid4vp-positive-runtime-not-exercised`.
 
 ## Immutable observations
 
@@ -70,6 +75,25 @@ required.
   remains non-activating and explicitly blocked on
   `canonical.oid4vp-positive-runtime-not-exercised`; it does not pin a
   corrected Rust services image or authorize publication or deployment.
+- Protected integration PR `#414` merged the repository-qualified containerd
+  load contract at `bdd3b33b9268ca4c8c3d37126e7c253ec8fce710`. UI PRs
+  `#759` and `#760` then pinned that exact harness and made its hardened-floor
+  ancestry available to the consumer.
+- Successful producer run `33490549237`, attempt `1`, retained candidate
+  artifact `9794047091` (`verification-candidate-33490549237-1`) from exact
+  protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`.
+  Its OCI archive is
+  `sha256:de72b842fa9cdce313776f71fb5d908e396ee2073ed468e8f5979d4cf8dc2bb0`;
+  the image digest is
+  `sha256:8059aa1f946cdf2c64ff5750eaad18e4ce9685e37d7d1189987593337a2281f9`;
+  and the SBOM digest is
+  `sha256:de1dc018e631ae53bbbca1cb613dcd2688ff9e5d00dc86414452a76f031ea7cf`.
+- Successful consumer run `33491836719`, attempt `1`, retained minimized
+  evidence artifact `9794114167`
+  (`verification-candidate-evidence-33490549237-1`). Its comparison status is
+  `matched_with_runtime_blocker`: 19 language-neutral checks matched, the
+  candidate-only `compatibility.default-disabled-routes-absent` check passed,
+  and `canonical.oid4vp-positive-runtime-not-exercised` is the sole blocker.
 
 ## Containment decision
 
@@ -83,19 +107,15 @@ held.
 Before the next UI/services artifact write or activating stack write, complete
 and test:
 
-1. Execute and validate the corrected read-only, non-publishing candidate
-   producer from an exact protected-main descendant containing PR `#744`. It
-   must build the exact
-   services Dockerfile and arguments, export an OCI archive plus
-   SBOM/source/config digests, verify the archive and image labels without
-   pulling a substitute, and run both the retained Python oracle and Rust
-   candidate. Merged producer code alone is not candidate-gate evidence.
+1. Preserve the successful read-only, non-publishing producer/consumer evidence
+   above. Do not treat it as publication, deployment, or release clearance.
 2. Retain the current hardened 19-check portable differential, its Rust-only
    default-disabled compatibility check, and the landed artifact-differential
    gates: trusted-positive OID4VP claim projection, migration idempotence by
    applying the release twice, explicit default-disabled and enabled
    compatibility behavior, and exact candidate/oracle evidence-set comparison
-   with only documented language-neutral differences. The eligible runtime
+   with only documented language-neutral differences. These candidate checks
+   now pass. The eligible runtime
    must actually exercise the positive OID4VP path; the deterministic fixture
    contract alone is not runtime evidence.
 3. A digest-first, resumable release transaction. Create the durable draft claim

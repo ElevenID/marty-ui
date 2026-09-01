@@ -1,12 +1,12 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tag `v1.1.210` is quarantined because it did not publish a complete stack release. Release-evidence classification is exact: `v0.1.72` is a valid issuance component, not a failed verifier artifact; `v1.2.76` is retained held evidence only and grants no cutover authorization; `v1.2.77` is intermediate evidence only; and `v1.2.78` is preliminary, non-activating evidence. The authenticated positive OID4VP runtime contract and the final public differential-harness corrections are merged. The non-publishing candidate producer and its separate trusted consumer are implemented. Producer run `33465702948`, attempt `1`, was dispatched from exact protected-main commit `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the consumer landed, then failed bundle validation because the inspector rejected an empty OCI layer; it produced no attestation or artifact and cannot pass the candidate gate. Exact partial-publication evidence is retained in [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md). Cutover remains on repair hold pending a corrected producer run and authenticated, inspected consumer result, digest-first resumable publication, the next corrected Rust artifact, its exact positive differential release, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tag `v1.1.210` is quarantined because it did not publish a complete stack release. Release-evidence classification is exact: `v0.1.72` is a valid issuance component, not a failed verifier artifact; `v1.2.76` is retained held evidence only and grants no cutover authorization; `v1.2.77` is intermediate evidence only; and `v1.2.78` is preliminary, non-activating evidence. The non-publishing candidate producer and separate trusted consumer now pass from exact protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`: producer run `33490549237`, attempt `1`, and consumer run `33491836719`, attempt `1`, completed successfully with all 19 language-neutral checks matched and the Rust-only default-disabled-route check passing. This admits the candidate-gate evidence but does not grant release clearance: `canonical.oid4vp-positive-runtime-not-exercised` remains the sole blocker. Cutover therefore remains on hold pending trusted-positive OID4VP runtime evidence, digest-first resumable publication, the next corrected Rust artifact and exact released-digest differential, a later aggregate release, one beta-only deployment, demos and acceptance soak; production is unchanged.
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-31
+**Last updated:** 2026-09-01
 
 ## Objective
 
@@ -73,8 +73,9 @@ PAX size overrides and non-data headers. PR `#408` binds the candidate pin and
 archive to private snapshots before exact-subject attestation and execution.
 PR `#409` carries the original bounded pin bytes through staging and digest
 verification so semantic reserialization cannot hide a byte-identity change.
-The exact consumer harness is now
-`cd2c17f63774ebf02065b88307b3120666ce821d`. Protected UI PR `#746` merged the
+The exact consumer harness is now protected integration commit
+`bdd3b33b9268ca4c8c3d37126e7c253ec8fce710`, including PR `#414`'s
+repository-qualified containerd load verification. Protected UI PR `#746` merged the
 authenticated positive OID4VP runtime contract at
 `7f8c35b8dcdc10352c1cf029fe2afbf399fbf954`. The candidate lane now uses a
 separate default-branch `workflow_run` consumer: it authenticates the producer
@@ -84,7 +85,14 @@ dispatched from exact protected-main commit
 `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the consumer landed. The run
 failed bundle validation with `OCI layer tar is empty` before attestation or
 artifact upload. It is diagnostic evidence only, not candidate acceptance or
-release evidence.
+release evidence. UI PRs `#759` and `#760` pinned the repaired harness and
+fetched its complete ancestry. Producer run `33490549237`, attempt `1`, then
+built and authenticated the exact candidate at protected-main commit
+`7a1e2d6f31a563b33832b46921ec3376cd124113`; trusted consumer run
+`33491836719`, attempt `1`, inspected and executed it successfully. The
+comparison is `matched_with_runtime_blocker`: all 19 language-neutral checks
+match, the candidate-only default-disabled-route check passes, and
+`canonical.oid4vp-positive-runtime-not-exercised` is the sole release blocker.
 
 Protected `ElevenID/marty-ui#727` merged the fail-closed `release_state`
 decision at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`. Tag preparation and
@@ -107,7 +115,7 @@ in scope and its deployment configuration remains unchanged.
 | `marty-integration-tests@v1.2.76` | Published; retained under hold | Bootstrap evidence only; grants no cutover authorization |
 | `marty-integration-tests@v1.2.77` | Published and independently verified intermediate evidence | Trustworthy immutable Python baseline plus `v1.1.208` bounded negative control; not cutover clearance |
 | `marty-integration-tests@v1.2.78` | Published preliminary, non-activating evidence | Packages protected PRs `#400`-`#403`; remains blocked and does not pin a corrected Rust runtime |
-| next corrected `marty-ui` artifact | Unselected and unreserved | Must first pass the non-publishing candidate and trusted-positive OID4VP runtime gates, then use the hardened digest-first release transaction; no tag, image or release exists |
+| next corrected `marty-ui` artifact | Unselected and unreserved | Non-publishing candidate passed at `7a1e2d6f31a5`; trusted-positive OID4VP runtime evidence and the hardened digest-first release transaction remain required; no tag, image or release exists |
 | later corrected-Rust-pinned integration release | Not started | Must use a new version, pin the corrected services image and convert the negative control to a completely passing Rust candidate |
 | later aggregate `marty-ui` release | Not started | Only artifact eligible for the single beta deployment and soak; its coordinate remains unselected |
 
@@ -137,8 +145,8 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 ### Remaining work in the active wave
 
 1. Keep the protected-main release lock and all release entry points held while
-   executing and validating the merged non-publishing services-image candidate
-   lane and implementing a digest-first, resumable release transaction with
+   completing trusted-positive OID4VP runtime evidence and implementing a
+   digest-first, resumable release transaction with
    exact-coordinate preflight and cancellation-point tests. PR `#737`
    introduced the candidate producer; its first dispatch occurred only after
    the later hardening described below.
@@ -148,20 +156,25 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the trusted consumer
    landed. It failed bundle validation with `OCI layer tar is empty` before
    attestation or artifact upload, so it supplies no admissible candidate-gate
-   acceptance. A corrected producer run and authenticated, inspected consumer
-   result are still required. Protected
+   acceptance. The repaired lane subsequently passed from protected-main commit
+   `7a1e2d6f31a563b33832b46921ec3376cd124113`: producer run `33490549237`,
+   attempt `1`, and authenticated consumer run `33491836719`, attempt `1`,
+   both succeeded. Protected
    `ElevenID/marty-integration-tests#406` through `#409` completed the public
    runtime, archive-boundary, private-snapshot and byte-identity harness at
-   exact commit `cd2c17f63774ebf02065b88307b3120666ce821d`. Protected UI PR `#746` completed
+   exact commit `bdd3b33b9268ca4c8c3d37126e7c253ec8fce710`. Protected UI PR `#746` completed
    the authenticated positive OID4VP runtime capability at
    `7f8c35b8dcdc10352c1cf029fe2afbf399fbf954`. The separate trusted consumer is
    pinned to that harness and still requires `release_clearance=blocked`; it
-   cannot publish, release or deploy. The detailed
+   cannot publish, release or deploy. Its result is
+   `matched_with_runtime_blocker`: all 19 language-neutral checks matched, the
+   Rust-only default-disabled-route check passed, and the sole blocker is
+   `canonical.oid4vp-positive-runtime-not-exercised`. The detailed
    requirements and immutable incident
    evidence are in
    [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md).
-   Run the candidate from an exact protected-main descendant containing PRs
-   `#744` and `#746`. Only after those gates pass may a corrected artifact coordinate be
+   Run and retain trusted-positive OID4VP execution against an eligible exact
+   runtime. Only after that gate passes may a corrected artifact coordinate be
    selected, confirmed absent, reserved and prepared; only then may its lock be
    changed to exact `release_state=eligible` and the final exact services digest
    built, tested, signed and published.
@@ -243,9 +256,8 @@ The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
 The next Canvas boundary is therefore not another route port. The immediate
-critical path is the trusted positive OID4VP runtime capability, the
-first execution and validation of the corrected non-publishing verifier
-candidate producer, digest-first resumable release hardening,
+critical path is trusted-positive OID4VP runtime execution,
+digest-first resumable release hardening,
 the next corrected artifact-only Rust verifier release, exact comprehensive
 differential re-pin, final aggregate release, and beta-only canary. The Python
 source deletion is already merged but cannot be declared accepted until the
@@ -339,19 +351,21 @@ defects. Producer run `33465702948`, attempt `1`, was dispatched from exact
 protected-main commit `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204`
 before the trusted consumer landed. It failed bundle validation with
 `OCI layer tar is empty` before attestation or artifact upload, so it supplies
-no admissible candidate-gate acceptance. A corrected producer run and
-authenticated, inspected consumer result are still required. Integration PRs
+no admissible candidate-gate acceptance. The corrected protected-main lane
+later passed: producer run `33490549237`, attempt `1`, and authenticated,
+inspected consumer run `33491836719`, attempt `1`, succeeded at exact commit
+`7a1e2d6f31a563b33832b46921ec3376cd124113`. Integration PRs
 `#406` through
 `#409` closed the remaining public-harness service-identity, archive-offset,
 private-snapshot and pin byte-identity boundaries at
-`cd2c17f63774ebf02065b88307b3120666ce821d`;
+`bdd3b33b9268ca4c8c3d37126e7c253ec8fce710`;
 UI PR `#746` merged
 the authenticated positive OID4VP runtime contract at
 `7f8c35b8dcdc10352c1cf029fe2afbf399fbf954`. The producer now has a separate,
-trusted default-branch consumer pinned to that harness. The remaining repair
-gate is to pass an exact protected-main candidate through the landed
-artifact-differential parity gates and
-complete the digest-first resumable release
+trusted default-branch consumer pinned to that harness. The candidate matched
+all 19 shared checks and passed its Rust-only default-disabled-route check. The
+remaining release gate is trusted-positive OID4VP runtime execution, followed
+by completion of the digest-first resumable release
 requirements in the incident record; publish the next eligible corrected
 artifact only afterward; pin and execute every differential group against its
 exact image/SBOM/provenance; publish the fully passing integration release; and
