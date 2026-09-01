@@ -261,14 +261,14 @@ impl HttpCanvasAuthoritativeProvider {
                 return Err(CanvasProviderReadError::Unavailable);
             }
             output.extend(rows.iter().cloned());
-            let Some(candidate) = link.as_deref().and_then(next_link) else {
+            let Some(candidate) = next_link(&link)? else {
                 return Ok(output);
             };
             if output.len() >= limit {
                 return Err(CanvasProviderReadError::Unavailable);
             }
-            next =
-                Url::parse(candidate).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            next = Url::parse(&candidate)
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
             reject_embedded_credentials(&next)?;
         }
         let _ = resources;
@@ -516,7 +516,7 @@ async fn request_collection_page(
     url: Url,
     token: &str,
     accept: &str,
-) -> Result<(Value, Option<String>), CanvasProviderReadError> {
+) -> Result<(Value, Vec<String>), CanvasProviderReadError> {
     let response = client
         .get(url)
         .bearer_auth(token)
@@ -524,13 +524,9 @@ async fn request_collection_page(
         .send()
         .await
         .map_err(|_| CanvasProviderReadError::Unavailable)?;
-    let link = response
-        .headers()
-        .get(LINK)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let link = link_header_values(response.headers());
     let payload = read_json_response(response, COLLECTION_PAGE_BYTES).await?;
-    Ok((payload, link))
+    Ok((payload, link?))
 }
 
 async fn read_json_response(
@@ -682,13 +678,232 @@ fn origin_url(url: &Url) -> Result<Url, CanvasProviderReadError> {
         .map_err(|_| CanvasProviderReadError::InvalidConfiguration)
 }
 
-fn next_link(header: &str) -> Option<&str> {
-    header.split(',').find_map(|part| {
-        let (url, attributes) = part.trim().split_once('>')?;
-        attributes
-            .contains("rel=\"next\"")
-            .then(|| url.trim_start_matches('<'))
-    })
+fn link_header_values(
+    headers: &reqwest::header::HeaderMap,
+) -> Result<Vec<String>, CanvasProviderReadError> {
+    headers
+        .get_all(LINK)
+        .iter()
+        .map(|value| {
+            value
+                .to_str()
+                .map(str::to_owned)
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)
+        })
+        .collect()
+}
+
+fn next_link(headers: &[String]) -> Result<Option<String>, CanvasProviderReadError> {
+    let mut next = None;
+    for header in headers {
+        parse_link_header(header, &mut next)?;
+    }
+    Ok(next)
+}
+
+fn parse_link_header(
+    header: &str,
+    next: &mut Option<String>,
+) -> Result<(), CanvasProviderReadError> {
+    if header.is_empty() || !header.is_ascii() {
+        return Err(CanvasProviderReadError::InvalidConfiguration);
+    }
+    let bytes = header.as_bytes();
+    let mut cursor = 0;
+    skip_optional_whitespace(bytes, &mut cursor);
+    if cursor == bytes.len() {
+        return Err(CanvasProviderReadError::InvalidConfiguration);
+    }
+    loop {
+        if bytes.get(cursor) != Some(&b'<') {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        cursor += 1;
+        let target_start = cursor;
+        while bytes.get(cursor).is_some_and(|value| *value != b'>') {
+            if bytes[cursor].is_ascii_whitespace() || matches!(bytes[cursor], b'<' | b'"' | b'\\') {
+                return Err(CanvasProviderReadError::InvalidConfiguration);
+            }
+            cursor += 1;
+        }
+        if cursor == target_start || bytes.get(cursor) != Some(&b'>') {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        let target = &header[target_start..cursor];
+        cursor += 1;
+        let mut relations = None;
+
+        loop {
+            skip_optional_whitespace(bytes, &mut cursor);
+            if cursor == bytes.len() || bytes[cursor] == b',' {
+                break;
+            }
+            if bytes[cursor] != b';' {
+                return Err(CanvasProviderReadError::InvalidConfiguration);
+            }
+            cursor += 1;
+            skip_optional_whitespace(bytes, &mut cursor);
+            let name_start = cursor;
+            while bytes.get(cursor).is_some_and(|value| is_token(*value)) {
+                cursor += 1;
+            }
+            if cursor == name_start {
+                return Err(CanvasProviderReadError::InvalidConfiguration);
+            }
+            let name = &header[name_start..cursor];
+            skip_optional_whitespace(bytes, &mut cursor);
+            if bytes.get(cursor) != Some(&b'=') {
+                return Err(CanvasProviderReadError::InvalidConfiguration);
+            }
+            cursor += 1;
+            skip_optional_whitespace(bytes, &mut cursor);
+            let value = parse_link_parameter_value(header, bytes, &mut cursor)?;
+            if name.eq_ignore_ascii_case("rel") {
+                if relations.is_some() {
+                    return Err(CanvasProviderReadError::InvalidConfiguration);
+                }
+                let parsed = value
+                    .split_ascii_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if parsed.is_empty() {
+                    return Err(CanvasProviderReadError::InvalidConfiguration);
+                }
+                relations = Some(parsed);
+            }
+        }
+
+        if relations.is_some_and(|relations| {
+            relations
+                .iter()
+                .any(|relation| relation.eq_ignore_ascii_case("next"))
+        }) && next.replace(target.to_owned()).is_some()
+        {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+
+        skip_optional_whitespace(bytes, &mut cursor);
+        if cursor == bytes.len() {
+            return Ok(());
+        }
+        if bytes[cursor] != b',' {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        cursor += 1;
+        skip_optional_whitespace(bytes, &mut cursor);
+        if cursor == bytes.len() {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+    }
+}
+
+fn parse_link_parameter_value(
+    header: &str,
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<String, CanvasProviderReadError> {
+    if bytes.get(*cursor) == Some(&b'"') {
+        *cursor += 1;
+        let mut output = String::new();
+        loop {
+            let Some(value) = bytes.get(*cursor).copied() else {
+                return Err(CanvasProviderReadError::InvalidConfiguration);
+            };
+            *cursor += 1;
+            match value {
+                b'"' => return Ok(output),
+                b'\\' => {
+                    let Some(escaped) = bytes.get(*cursor).copied() else {
+                        return Err(CanvasProviderReadError::InvalidConfiguration);
+                    };
+                    if escaped.is_ascii_control() && escaped != b'\t' {
+                        return Err(CanvasProviderReadError::InvalidConfiguration);
+                    }
+                    output.push(char::from(escaped));
+                    *cursor += 1;
+                }
+                value if value.is_ascii_control() && value != b'\t' => {
+                    return Err(CanvasProviderReadError::InvalidConfiguration);
+                }
+                value => output.push(char::from(value)),
+            }
+        }
+    }
+    let start = *cursor;
+    while bytes
+        .get(*cursor)
+        .is_some_and(|value| is_parameter_token(*value))
+    {
+        *cursor += 1;
+    }
+    if *cursor == start {
+        return Err(CanvasProviderReadError::InvalidConfiguration);
+    }
+    Ok(header[start..*cursor].to_owned())
+}
+
+fn skip_optional_whitespace(bytes: &[u8], cursor: &mut usize) {
+    while bytes
+        .get(*cursor)
+        .is_some_and(|value| matches!(value, b' ' | b'\t'))
+    {
+        *cursor += 1;
+    }
+}
+
+fn is_token(value: u8) -> bool {
+    value.is_ascii_alphanumeric()
+        || matches!(
+            value,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn is_parameter_token(value: u8) -> bool {
+    value.is_ascii_alphanumeric()
+        || matches!(
+            value,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b'<'
+                | b'='
+                | b'>'
+                | b'?'
+                | b'@'
+                | b'['
+                | b']'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'{'
+                | b'|'
+                | b'}'
+                | b'~'
+        )
 }
 
 fn selected_payload(value: &Value, keys: &[&str]) -> Map<String, Value> {
@@ -741,14 +956,125 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pagination_only_accepts_explicit_next_relation() {
+    fn pagination_accepts_standard_next_relation_forms_across_all_headers() {
         assert_eq!(TOKEN_RESPONSE_BYTES, 65_536);
         assert_eq!(COLLECTION_PAGE_BYTES, 8_388_608);
         assert_eq!(COLLECTION_MAX_PAGES, 200);
-        let header =
-            "<https://canvas.test/one>; rel=\"current\", <https://canvas.test/two>; rel=\"next\"";
-        assert_eq!(next_link(header), Some("https://canvas.test/two"));
-        assert_eq!(next_link("<https://canvas.test/two>; rel=\"last\""), None);
+        assert_eq!(
+            next_link(&[
+                "<https://canvas.test/one>; rel=\"current\"".to_owned(),
+                "<https://canvas.test/two?cursor=a,b>; title=\"page, two\"; REL=\"prev NEXT\""
+                    .to_owned(),
+            ]),
+            Ok(Some("https://canvas.test/two?cursor=a,b".to_owned())),
+        );
+        assert_eq!(
+            next_link(&["<https://canvas.test/two>; rel=next".to_owned()]),
+            Ok(Some("https://canvas.test/two".to_owned())),
+        );
+        assert_eq!(
+            next_link(&[
+                "<https://canvas.test/one>; title=\"rel=\\\"next\\\"\"; rel=current".to_owned(),
+                "<https://canvas.test/two>; rel=\"last\"".to_owned(),
+            ]),
+            Ok(None),
+        );
+    }
+
+    #[test]
+    fn pagination_link_parsing_fails_closed_on_malformed_or_ambiguous_headers() {
+        for malformed in [
+            "",
+            "garbage",
+            "<https://canvas.test/two; rel=next",
+            "<https://canvas.test/two>; rel",
+            "<https://canvas.test/two>; rel=\"next",
+            "<https://canvas.test/two>; rel=next,",
+            "<https://canvas.test/two>; rel=next; rel=last",
+            "<https://canvas.test/two bad>; rel=next",
+        ] {
+            assert_eq!(
+                next_link(&[malformed.to_owned()]),
+                Err(CanvasProviderReadError::InvalidConfiguration),
+                "{malformed}",
+            );
+        }
+        assert_eq!(
+            next_link(&[
+                "<https://canvas.test/two>; rel=next".to_owned(),
+                "<https://canvas.test/three>; rel=\"NEXT\"".to_owned(),
+            ]),
+            Err(CanvasProviderReadError::InvalidConfiguration),
+        );
+    }
+
+    #[test]
+    fn pagination_header_capture_preserves_all_values_and_rejects_non_text() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            LINK,
+            HeaderValue::from_static("<https://canvas.test/one>; rel=current"),
+        );
+        headers.append(
+            LINK,
+            HeaderValue::from_static("<https://canvas.test/two>; rel=next"),
+        );
+        assert_eq!(
+            link_header_values(&headers),
+            Ok(vec![
+                "<https://canvas.test/one>; rel=current".to_owned(),
+                "<https://canvas.test/two>; rel=next".to_owned(),
+            ]),
+        );
+
+        let mut non_text = HeaderMap::new();
+        non_text.insert(LINK, HeaderValue::from_bytes(&[0xff]).unwrap());
+        assert_eq!(
+            link_header_values(&non_text),
+            Err(CanvasProviderReadError::InvalidConfiguration),
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_link_metadata_cannot_mask_rate_limit_classification() {
+        use axum::{http::StatusCode, response::Response, routing::get, Router};
+
+        async fn rate_limited() -> Response {
+            Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header(LINK, "malformed")
+                .header(reqwest::header::RETRY_AFTER, "also-malformed")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        }
+
+        let app = Router::new().route("/collection", get(rate_limited));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .expect("client");
+
+        assert_eq!(
+            request_collection_page(
+                &client,
+                Url::parse(&format!("http://{address}/collection")).unwrap(),
+                "token",
+                NRPS_MEMBERSHIP_ACCEPT,
+            )
+            .await,
+            Err(CanvasProviderReadError::RateLimited {
+                retry_after_seconds: 0,
+            }),
+        );
+        server.abort();
     }
 
     #[test]
