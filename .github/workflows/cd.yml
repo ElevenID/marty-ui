@@ -1,14 +1,23 @@
 name: Stack release
 
 on:
-  push:
-    tags: ["v*"]
-  # Recovery for a lost/delayed tag event. Dispatch this workflow with the
-  # immutable tag selected as the ref; validation below rejects branches.
   workflow_dispatch:
+    inputs:
+      claim_run_id:
+        description: Successful Prepare stack release claim workflow run
+        required: true
+        type: string
+      resume_run_id:
+        description: Prior Stack release run containing a later transaction checkpoint
+        required: false
+        type: string
+      resume_artifact:
+        description: Exact transaction artifact name from resume_run_id
+        required: false
+        type: string
 
 concurrency:
-  group: stack-release-${{ github.ref }}
+  group: stack-release-claim-${{ inputs.claim_run_id }}
   cancel-in-progress: false
 
 permissions:
@@ -23,6 +32,133 @@ env:
   MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
 
 jobs:
+  resolve-transaction:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      claim_run_id: ${{ steps.identity.outputs.claim_run_id }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      state: ${{ steps.identity.outputs.state }}
+      tag: ${{ steps.identity.outputs.tag }}
+      transaction_id: ${{ steps.identity.outputs.transaction_id }}
+      version: ${{ steps.identity.outputs.version }}
+      ui_digest: ${{ steps.identity.outputs.ui_digest }}
+      services_digest: ${{ steps.identity.outputs.services_digest }}
+      migrations_digest: ${{ steps.identity.outputs.migrations_digest }}
+    steps:
+      - name: Download the exact claim or resume checkpoint
+        env:
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CLAIM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          if { [ -n "$RESUME_RUN_ID" ] && [ -z "$RESUME_ARTIFACT" ]; } || \
+             { [ -z "$RESUME_RUN_ID" ] && [ -n "$RESUME_ARTIFACT" ]; }; then
+            echo "::error::resume_run_id and resume_artifact must be supplied together"
+            exit 1
+          fi
+          if [ -n "$RESUME_RUN_ID" ]; then
+            [[ "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            source_run="$RESUME_RUN_ID"
+            artifact="$RESUME_ARTIFACT"
+          else
+            source_run="$CLAIM_RUN_ID"
+            artifacts="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$source_run/artifacts?per_page=100")"
+            artifact="$(jq -er '
+              [.artifacts[] | select(.expired == false and (.name | startswith("stack-release-claim-v")))]
+              | if length == 1 then .[0].name else error("exactly one release claim artifact is required") end
+            ' <<<"$artifacts")"
+          fi
+          case "$artifact" in
+            stack-release-claim-v*|stack-release-digests-*|stack-release-qualified-*|stack-release-promotion-*) ;;
+            *) echo "::error::resume artifact is outside the release transaction allowlist"; exit 1 ;;
+          esac
+          input="$RUNNER_TEMP/release-transaction-input"
+          mkdir "$input"
+          gh run download "$source_run" --name "$artifact" --dir "$input"
+          mapfile -t entries < <(find "$input" -mindepth 1 -maxdepth 1 -printf '%f:%y\n' | LC_ALL=C sort)
+          if [[ "$artifact" == stack-release-claim-v* ]]; then
+            expected=("release-transaction.json:f" "stack-tag-evidence.json:f")
+          else
+            expected=("release-transaction.json:f")
+          fi
+          test "${#entries[@]}" -eq "${#expected[@]}"
+          test "${entries[*]}" = "${expected[*]}"
+
+      - name: Parse bounded transaction identity for exact-source checkout
+        id: untrusted
+        env:
+          EXPECTED_CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/release-transaction-input/release-transaction.json"
+          test "$(wc -c < "$input")" -le 65536
+          source_sha="$(jq -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$input")"
+          claim_run_id="$(jq -er '.claim_run_id | select(test("^[1-9][0-9]*$"))' "$input")"
+          test "$claim_run_id" = "$EXPECTED_CLAIM_RUN_ID"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Validate the exact durable transaction
+        id: identity
+        env:
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+          SOURCE_SHA: ${{ steps.untrusted.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$SOURCE_SHA"
+          python scripts/release_transaction.py validate \
+            --input "$RUNNER_TEMP/release-transaction-input/release-transaction.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --stack-lock release/stack-lock.json \
+            --claim-run-id "$CLAIM_RUN_ID" \
+            --output release-transaction.json
+          state="$(jq -er .state release-transaction.json)"
+          case "$state" in
+            claimed|digests_recorded|qualified|promoting|promoted) ;;
+            *) echo "::error::transaction is terminal or cannot be resumed"; exit 1 ;;
+          esac
+          {
+            echo "claim_run_id=$CLAIM_RUN_ID"
+            echo "source_sha=$SOURCE_SHA"
+            echo "state=$state"
+            echo "tag=$(jq -er .tag release-transaction.json)"
+            echo "transaction_id=$(jq -er .transaction_id release-transaction.json)"
+            echo "version=$(jq -er .version release-transaction.json)"
+            echo "ui_digest=$(jq -r '.images.ui.digest // ""' release-transaction.json)"
+            echo "services_digest=$(jq -r '.images.services.digest // ""' release-transaction.json)"
+            echo "migrations_digest=$(jq -r '.images.migrations.digest // ""' release-transaction.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage the authenticated transaction for this run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-resolved-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+
   release-environment-preflight:
     permissions:
       actions: read
@@ -32,7 +168,7 @@ jobs:
       environment: stack-release
 
   validate-stack:
-    needs: release-environment-preflight
+    needs: [release-environment-preflight, resolve-transaction]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -61,73 +197,29 @@ jobs:
       cli_version: ${{ steps.components.outputs.cli }}
       cli_uri: ${{ steps.components.outputs.cli_uri }}
       cli_digest: ${{ steps.components.outputs.cli_digest }}
-      integration_commit: ${{ steps.components.outputs.integration_commit }}
+      integration_version: ${{ steps.components.outputs.integration_version }}
+      integration_digest: ${{ steps.components.outputs.integration_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - name: Require annotated release tag on exact protected main
+      - name: Require the exact claimed protected-main source
         env:
-          RUN_REF: ${{ github.ref }}
-          RUN_SHA: ${{ github.sha }}
-          TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$RUN_REF" = "refs/tags/$TAG"
           git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main
-          git fetch --force --no-tags origin \
-            "refs/tags/$TAG:refs/tags/$TAG"
-          test "$(git cat-file -t "refs/tags/$TAG")" = tag
-          tagged_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
           main_commit="$(git rev-parse refs/remotes/origin/main)"
-          test "$RUN_SHA" = "$tagged_commit"
-          test "$tagged_commit" = "$main_commit"
-      - name: Verify successful exact-main tag preparation
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          tag_type="$(git cat-file -t "refs/tags/$TAG")"
-          tag_object="$(git rev-parse "refs/tags/$TAG")"
-          commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
-          git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
-          run_id="$(sed -n 's/^Preparation-Run: //p' tag-message.txt)"
-          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
-          for _ in $(seq 1 36); do
-            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > preparation-run.json
-            status="$(jq -r .status preparation-run.json)"
-            conclusion="$(jq -r '.conclusion // ""' preparation-run.json)"
-            if [ "$status" = completed ]; then
-              test "$conclusion" = success
-              break
-            fi
-            sleep 5
-          done
-          test "$(jq -r .status preparation-run.json)" = completed
-          gh run download "$run_id" --name "stack-tag-evidence-$TAG" \
-            --dir prepared-tag-evidence
-          python scripts/stack_tag_gate.py validate-release \
-            --repository . \
-            --repository-name "$GITHUB_REPOSITORY" \
-            --tag "$TAG" \
-            --commit "$commit" \
-            --tag-type "$tag_type" \
-            --tag-object "$tag_object" \
-            --tag-message tag-message.txt \
-            --run-json preparation-run.json \
-            --evidence prepared-tag-evidence/stack-tag-evidence.json
-      - name: Reject any existing release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          test "$main_commit" = "$SOURCE_SHA"
       - id: components
         env:
+          EXPECTED_VERSION: ${{ needs.resolve-transaction.outputs.version }}
           LOCK_FILE: release/stack-lock.json
         shell: bash
         run: |
@@ -137,9 +229,8 @@ jobs:
           release="$(jq -r .release "$LOCK_FILE")"
           version="${release#marty-ui@}"
           test "$release" = "marty-ui@$version"
-          test "$GITHUB_EVENT_NAME" = "push" || test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
-          test "$GITHUB_REF_TYPE" = "tag"
-          test "$GITHUB_REF_NAME" = "v$version"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$version" = "$EXPECTED_VERSION"
           {
             echo "version=$version"
             echo "api_core=$(jq -er '.components[] | select(.name == "marty-api-core") | .version' "$LOCK_FILE")"
@@ -163,7 +254,8 @@ jobs:
             echo "cli=$(jq -er '.components[] | select(.name == "marty-cli") | .version' "$LOCK_FILE")"
             echo "cli_uri=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
             echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
-            echo "integration_commit=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
+            echo "integration_version=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .version' "$LOCK_FILE")"
+            echo "integration_digest=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
           } >> "$GITHUB_OUTPUT"
       - name: Verify release artifact provenance
         env:
@@ -195,12 +287,36 @@ jobs:
             docker pull "$uri@$digest"
             gh attestation verify "oci://$uri@$digest" --repo "$repository"
           done
+      - name: Stage the exact verified integration harness source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_FILE: release/stack-lock.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .repository' "$LOCK_FILE")"
+          commit="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
+          uri="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .uri' "$LOCK_FILE")"
+          digest="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
+          curl --fail --location --retry 3 --silent --show-error "$uri" \
+            --output integration-source.tar.gz
+          printf '%s  %s\n' "${digest#sha256:}" integration-source.tar.gz | \
+            sha256sum --check --strict
+          gh attestation verify integration-source.tar.gz \
+            --repo "$repository" --source-digest "$commit" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-integration-source-${{ github.run_id }}
+          path: integration-source.tar.gz
+          if-no-files-found: error
+          retention-days: 90
 
   build-ui:
-    needs: validate-stack
+    needs: [validate-stack, resolve-transaction]
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -209,6 +325,8 @@ jobs:
       artifact-metadata: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -216,12 +334,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - id: build
+        if: needs.resolve-transaction.outputs.ui_digest == ''
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: docker/ui.Dockerfile
-          push: true
-          tags: ${{ env.IMAGE }}:${{ needs.validate-stack.outputs.version }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
@@ -233,20 +351,48 @@ jobs:
             MARTY_BLOG_DIGEST=${{ needs.validate-stack.outputs.blog_digest }}
           provenance: mode=max
           sbom: true
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - id: digest
+        name: Bind the new or previously recorded UI digest
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          RECORDED_DIGEST: ${{ needs.resolve-transaction.outputs.ui_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${RECORDED_DIGEST:-$BUILT_DIGEST}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - if: needs.resolve-transaction.outputs.ui_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
-      - run: cosign sign --yes "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+      - if: needs.resolve-transaction.outputs.ui_digest == ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      - name: Verify a resumed UI digest
+        if: needs.resolve-transaction.outputs.ui_digest != ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: >-
+          gh attestation verify
+          "oci://$IMAGE@$DIGEST"
+          --repo "$GITHUB_REPOSITORY"
+          --source-digest "$SOURCE_SHA"
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
 
   build-services:
-    needs: validate-stack
+    needs: [validate-stack, resolve-transaction]
     runs-on: ubuntu-latest
     outputs:
-      services_digest: ${{ steps.services.outputs.digest }}
-      migrations_digest: ${{ steps.migrations.outputs.digest }}
+      services_digest: ${{ steps.digests.outputs.services_digest }}
+      migrations_digest: ${{ steps.digests.outputs.migrations_digest }}
     permissions:
       contents: read
       packages: write
@@ -255,6 +401,8 @@ jobs:
       artifact-metadata: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -262,12 +410,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - id: services
+        if: needs.resolve-transaction.outputs.services_digest == ''
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: services/Dockerfile
-          push: true
-          tags: ${{ env.SERVICES_IMAGE }}:${{ needs.validate-stack.outputs.version }}
+          outputs: type=image,name=${{ env.SERVICES_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             SERVICE_NAME=gateway
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
@@ -275,12 +423,12 @@ jobs:
           provenance: mode=max
           sbom: true
       - id: migrations
+        if: needs.resolve-transaction.outputs.migrations_digest == ''
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: services/Dockerfile.migrations
-          push: true
-          tags: ${{ env.MIGRATIONS_IMAGE }}:${{ needs.validate-stack.outputs.version }}
+          outputs: type=image,name=${{ env.MIGRATIONS_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
@@ -298,30 +446,113 @@ jobs:
             MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
           provenance: mode=max
           sbom: true
+      - id: digests
+        name: Bind the new or previously recorded service digests
+        env:
+          BUILT_MIGRATIONS_DIGEST: ${{ steps.migrations.outputs.digest }}
+          BUILT_SERVICES_DIGEST: ${{ steps.services.outputs.digest }}
+          RECORDED_MIGRATIONS_DIGEST: ${{ needs.resolve-transaction.outputs.migrations_digest }}
+          RECORDED_SERVICES_DIGEST: ${{ needs.resolve-transaction.outputs.services_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          services_digest="${RECORDED_SERVICES_DIGEST:-$BUILT_SERVICES_DIGEST}"
+          migrations_digest="${RECORDED_MIGRATIONS_DIGEST:-$BUILT_MIGRATIONS_DIGEST}"
+          [[ "$services_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$migrations_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "services_digest=$services_digest"
+            echo "migrations_digest=$migrations_digest"
+          } >> "$GITHUB_OUTPUT"
       - name: Smoke-test the published shared services verification artifact
+        env:
+          SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}
         shell: bash
         run: >-
           bash scripts/smoke-verification-image.sh
-          "${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"
+          "$SERVICES_IMAGE@$SERVICES_DIGEST"
           shared
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - if: needs.resolve-transaction.outputs.services_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ env.SERVICES_IMAGE }}
-          subject-digest: ${{ steps.services.outputs.digest }}
+          subject-digest: ${{ steps.digests.outputs.services_digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - if: needs.resolve-transaction.outputs.migrations_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ env.MIGRATIONS_IMAGE }}
-          subject-digest: ${{ steps.migrations.outputs.digest }}
+          subject-digest: ${{ steps.digests.outputs.migrations_digest }}
           push-to-registry: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign images by digest
+        if: needs.resolve-transaction.outputs.services_digest == ''
+        env:
+          MIGRATIONS_DIGEST: ${{ steps.digests.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}
         run: |
-          cosign sign --yes "${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"
-          cosign sign --yes "${{ env.MIGRATIONS_IMAGE }}@${{ steps.migrations.outputs.digest }}"
+          cosign sign --yes "$SERVICES_IMAGE@$SERVICES_DIGEST"
+          cosign sign --yes "$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST"
+      - name: Verify resumed service digests
+        if: needs.resolve-transaction.outputs.services_digest != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIGRATIONS_DIGEST: ${{ steps.digests.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            "oci://$SERVICES_IMAGE@$SERVICES_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+          gh attestation verify \
+            "oci://$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+
+  record-digests:
+    needs: [resolve-transaction, build-ui, build-services]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stack-release-resolved-${{ github.run_id }}
+          path: transaction
+      - name: Persist the exact digest checkpoint
+        env:
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+        shell: bash
+        run: >-
+          python scripts/release_transaction.py record-digests
+          --input transaction/release-transaction.json
+          --digest "ui=$UI_DIGEST"
+          --digest "services=$SERVICES_DIGEST"
+          --digest "migrations=$MIGRATIONS_DIGEST"
+          --build-run-id "$GITHUB_RUN_ID"
+          --output release-transaction.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-digests-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
 
   public-stack-smoke:
-    needs: [validate-stack, build-ui, build-services]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, record-digests]
     runs-on: ubuntu-latest
     env:
       # This deletion candidate must exercise the canonical Rust revocation
@@ -335,14 +566,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-ui
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          repository: ElevenID/marty-integration-tests
-          ref: ${{ needs.validate-stack.outputs.integration_commit }}
-          path: integration-tests
+          name: stack-release-integration-source-${{ github.run_id }}
+          path: harness-input
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - name: Extract the verified integration harness without trusting archive paths
+        env:
+          INTEGRATION_DIGEST: ${{ needs.validate-stack.outputs.integration_digest }}
+          INTEGRATION_VERSION: ${{ needs.validate-stack.outputs.integration_version }}
+        shell: bash
+        run: >-
+          python marty-ui/scripts/extract_verified_source.py
+          --archive harness-input/integration-source.tar.gz
+          --destination integration-tests
+          --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
+          --expected-sha256 "$INTEGRATION_DIGEST"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "24"
@@ -405,9 +647,11 @@ jobs:
             fi
           done < <(jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json)
       - name: Smoke-test UI image
+        env:
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
         shell: bash
         run: |
-          docker run --rm -d --name marty-ui-smoke -p 18080:80 "${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}"
+          docker run --rm -d --name marty-ui-smoke -p 18080:80 "$IMAGE@$UI_DIGEST"
           homepage="$(mktemp)"
           trap 'docker rm -f marty-ui-smoke >/dev/null 2>&1 || true; rm -f "$homepage"' EXIT
           for _ in $(seq 1 30); do
@@ -433,7 +677,9 @@ jobs:
           API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}
           CLI_URI: ${{ needs.validate-stack.outputs.cli_uri }}
           CLI_DIGEST: ${{ needs.validate-stack.outputs.cli_digest }}
-        run: |
+        # Both local tarballs are immutable stack-lock inputs whose SHA-256 was
+        # checked immediately before installation; no registry resolution occurs.
+        run: | # zizmor: ignore[adhoc-packages]
           python -m pip install .
           curl --fail --location --silent --show-error "$API_CORE_URI" --output /tmp/marty-api-core.tgz
           curl --fail --location --silent --show-error "$CLI_URI" --output /tmp/marty-cli.tgz
@@ -495,18 +741,265 @@ jobs:
             exit 1
           fi
           pytest tests/oss_stack -v
+      - name: Record exact-digest public-stack evidence
+        working-directory: integration-tests
+        env:
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/release-evidence
+          jq -n \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg ui_digest "$UI_DIGEST" \
+            --arg services_digest "$SERVICES_DIGEST" \
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            '{schema:"elevenid.stack-release-public-gate/v1",status:"passed",
+              source_sha:$source_sha,run_id:$run_id,
+              images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest}}' \
+            > work/release-evidence/public-stack.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-public-gate-${{ github.run_id }}
+          path: integration-tests/work/release-evidence/public-stack.json
+          if-no-files-found: error
+          retention-days: 90
+
+  verifier-differential:
+    needs: [resolve-transaction, validate-stack, build-services, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-ui
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stack-release-integration-source-${{ github.run_id }}
+          path: harness-input
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Extract the verified integration harness without trusting archive paths
+        env:
+          INTEGRATION_DIGEST: ${{ needs.validate-stack.outputs.integration_digest }}
+          INTEGRATION_VERSION: ${{ needs.validate-stack.outputs.integration_version }}
+        shell: bash
+        run: >-
+          python marty-ui/scripts/extract_verified_source.py
+          --archive harness-input/integration-source.tar.gz
+          --destination integration-tests
+          --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
+          --expected-sha256 "$INTEGRATION_DIGEST"
+      - name: Install the hash-locked verifier harness
+        working-directory: integration-tests
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --require-hashes --only-binary=:all:
+          --requirement requirements/official-py312.lock
+      - name: Prepare bounded verifier evidence workspace
+        run: mkdir -p integration-tests/work
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
+          format: cyclonedx-json
+          output-file: integration-tests/work/transaction-services-sbom.cdx.json
+      - name: Verify and exercise the exact services digest against the immutable oracle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          TRANSACTION_ID: ${{ needs.resolve-transaction.outputs.transaction_id }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/evidence work/oracle
+          gh attestation verify "oci://ghcr.io/elevenid/marty-ui-oss/services@$SERVICES_DIGEST" \
+            --repo ElevenID/marty-ui --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+          python scripts/credentials_verifier_artifact.py create-transaction-pin \
+            --transaction-id "$TRANSACTION_ID" \
+            --version "$VERSION" \
+            --commit "$SOURCE_SHA" \
+            --image-digest "$SERVICES_DIGEST" \
+            --sbom work/transaction-services-sbom.cdx.json \
+            --pin work/transaction-pin.json
+          gh release download v0.1.71 --repo ElevenID/marty-credentials \
+            --pattern marty-credentials-verification.spdx.json --dir work/oracle
+          python scripts/credentials_verifier_artifact.py validate-sbom \
+            --pin config/credentials-verifier-oracle.json --state ready \
+            --sbom work/oracle/marty-credentials-verification.spdx.json
+          python scripts/credentials_verifier_artifact.py run \
+            --pin config/credentials-verifier-oracle.json --provenance-verified \
+            --evidence work/evidence/oracle.json
+          python scripts/credentials_verifier_artifact.py run-transaction \
+            --pin work/transaction-pin.json --provenance-verified \
+            --evidence work/evidence/transaction.json
+          python scripts/credentials_verifier_artifact.py compare-transaction-evidence \
+            --oracle work/evidence/oracle.json \
+            --transaction work/evidence/transaction.json \
+            --oracle-pin config/credentials-verifier-oracle.json \
+            --transaction-pin work/transaction-pin.json \
+            --evidence work/evidence/verifier-differential.json
+          jq -e '
+            .status == "matched"
+            and .release_clearance == "eligible"
+            and (.blockers | length) == 0
+          ' work/evidence/verifier-differential.json >/dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-verifier-gate-${{ github.run_id }}
+          path: integration-tests/work/evidence/verifier-differential.json
+          if-no-files-found: error
+          retention-days: 90
+
+  qualify-release:
+    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stack-release-digests-${{ github.run_id }}
+          path: transaction
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stack-release-public-gate-${{ github.run_id }}
+          path: gates/public
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stack-release-verifier-gate-${{ github.run_id }}
+          path: gates/verifier
+      - name: Persist exact gate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if jq -e '.gates | length > 0' transaction/release-transaction.json >/dev/null; then
+            cp transaction/release-transaction.json release-transaction.json
+          else
+            public_digest="sha256:$(sha256sum gates/public/public-stack.json | cut -d' ' -f1)"
+            verifier_digest="sha256:$(sha256sum gates/verifier/verifier-differential.json | cut -d' ' -f1)"
+            python scripts/release_transaction.py qualify \
+              --input transaction/release-transaction.json \
+              --gate "public_stack=$GITHUB_RUN_ID:$public_digest" \
+              --gate "verifier_differential=$GITHUB_RUN_ID:$verifier_digest" \
+              --output release-transaction.json
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
 
   publish-manifest:
-    needs: [validate-stack, build-ui, build-services, public-stack-smoke]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, qualify-release]
     runs-on: ubuntu-latest
     environment: stack-release
     permissions:
+      actions: read
       contents: write
-      packages: read
+      packages: write
       id-token: write
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: transaction
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Promote the UI version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-ui.outputs.digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! jq -e '.promoted_roles | index("ui") != null' transaction/release-transaction.json >/dev/null; then
+            docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role ui --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-promotion-ui-${{ github.run_id }}
+          path: transaction/release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Promote the services version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! jq -e '.promoted_roles | index("services") != null' transaction/release-transaction.json >/dev/null; then
+            docker buildx imagetools create --tag "$SERVICES_IMAGE:$VERSION" "$SERVICES_IMAGE@$DIGEST"
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$SERVICES_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role services --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-promotion-services-${{ github.run_id }}
+          path: transaction/release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Promote the migrations version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! jq -e '.promoted_roles | index("migrations") != null' transaction/release-transaction.json >/dev/null; then
+            docker buildx imagetools create --tag "$MIGRATIONS_IMAGE:$VERSION" "$MIGRATIONS_IMAGE@$DIGEST"
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$MIGRATIONS_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role migrations --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-promotion-complete-${{ github.run_id }}
+          path: transaction/release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
@@ -528,11 +1021,12 @@ jobs:
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
           jq \
-            --arg sha "$GITHUB_SHA" \
+            --arg sha "$SOURCE_SHA" \
             --arg version "$VERSION" \
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
@@ -556,11 +1050,12 @@ jobs:
             }]
           ' "$LOCK_FILE" > release/complete-stack-lock.json
           python scripts/build_stack_manifest.py --lock release/complete-stack-lock.json --output stack-manifest.json
+          cp transaction/release-transaction.json release-transaction.json
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign and checksum manifest evidence
         shell: bash
         run: |
-          for file in stack-manifest.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json; do
+          for file in stack-manifest.json release-transaction.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json; do
             signed=false
             for attempt in 1 2 3 4; do
               rm -f "${file}.sigstore.json"
@@ -582,16 +1077,116 @@ jobs:
         with:
           subject-path: |
             stack-manifest.json
+            release-transaction.json
             marty-ui-sbom.cdx.json
             marty-ui-services-sbom.cdx.json
             marty-ui-migrations-sbom.cdx.json
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+      - name: Create or verify the late annotated source tag
+        env:
+          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          TRANSACTION_ID: ${{ needs.resolve-transaction.outputs.transaction_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          existing="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+          if [ -n "$existing" ]; then
+            git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            test "$(git cat-file -t "refs/tags/$TAG")" = tag
+            test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"
+            git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
+            grep -Fx "Release-Transaction: $TRANSACTION_ID" tag-message.txt
+            grep -Fx "Claim-Run: $CLAIM_RUN_ID" tag-message.txt
+          else
+            {
+              printf 'Release %s\n\n' "${TAG#v}"
+              printf 'Release-Transaction: %s\n' "$TRANSACTION_ID"
+              printf 'Claim-Run: %s\n' "$CLAIM_RUN_ID"
+              printf 'Source-SHA: %s\n' "$SOURCE_SHA"
+            } > tag-message.txt
+            git tag -a "$TAG" "$SOURCE_SHA" -F tag-message.txt
+            gh auth setup-git
+            git push origin "refs/tags/$TAG:refs/tags/$TAG"
+          fi
+      - name: Detect only an exact resumable immutable release
+        id: existing_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output release-response.json \
+            --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+          case "$status" in
+            404)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            200)
+              test "$(jq -er .tag_name release-response.json)" = "$TAG"
+              test "$(jq -er .draft release-response.json)" = false
+              mkdir existing-release
+              gh release download "$TAG" --pattern release-transaction.json \
+                --pattern stack-manifest.json --dir existing-release
+              cmp --silent release-transaction.json existing-release/release-transaction.json
+              cmp --silent stack-manifest.json existing-release/stack-manifest.json
+              {
+                echo "exists=true"
+                echo "release_id=$(jq -er .id release-response.json)"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::GitHub release lookup failed with HTTP $status"
+              exit 1
+              ;;
+          esac
+      - id: release
+        name: Publish the qualified GitHub release and exact assets
+        if: steps.existing_release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(stack-manifest.json release-transaction.json ./*.cdx.json ./*.sigstore.json SHA256SUMS)
+          for asset in "${assets[@]}"; do
+            test -f "$asset"
+          done
+          gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"
+          release_id="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          echo "id=$release_id" >> "$GITHUB_OUTPUT"
+      - name: Seal the published terminal transaction
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXISTING_RELEASE_ID: ${{ steps.existing_release.outputs.release_id }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="${EXISTING_RELEASE_ID:-${RELEASE_ID:-$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)}}"
+          manifest_digest="sha256:$(sha256sum stack-manifest.json | cut -d' ' -f1)"
+          python scripts/release_transaction.py publish \
+            --input release-transaction.json \
+            --release-id "$release_id" \
+            --manifest-sha256 "$manifest_digest" \
+            --publication-run-id "$GITHUB_RUN_ID" \
+            --output published-release-transaction.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          tag_name: v${{ needs.validate-stack.outputs.version }}
-          overwrite_files: false
-          generate_release_notes: true
-          files: |
-            stack-manifest.json
-            *.cdx.json
-            *.sigstore.json
-            SHA256SUMS
+          name: stack-release-published-${{ github.run_id }}
+          path: published-release-transaction.json
+          if-no-files-found: error
+          retention-days: 90

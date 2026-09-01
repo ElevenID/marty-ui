@@ -61,7 +61,8 @@ def test_ci_smokes_migration_start_readiness_and_a_real_operation_from_one_image
         in workflow
     )
     assert "Smoke-test the published shared services verification artifact" in release
-    assert '"${{ env.SERVICES_IMAGE }}@${{ steps.services.outputs.digest }}"' in release
+    assert "SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}" in release
+    assert '"$SERVICES_IMAGE@$SERVICES_DIGEST"' in release
     assert "scripts/smoke-verification-image.sh" in release
     assert "shared" in release
     assert "--entrypoint /app/services/entrypoint.sh" in smoke

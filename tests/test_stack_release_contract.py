@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA_ACTION = re.compile(r"^\s*(?:-\s*)?uses:\s*[^\s]+@[0-9a-f]{40}\s*$")
 
@@ -33,8 +32,10 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
 
     assert "gh attestation verify" in workflow
     assert 'docker pull "$uri@$digest"' in workflow
-    assert "repository: ElevenID/marty-integration-tests" in workflow
-    assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
+    assert "repository: ElevenID/marty-integration-tests" not in workflow
+    assert "stack-release-integration-source-${{ github.run_id }}" in workflow
+    assert "scripts/extract_verified_source.py" in workflow
+    assert "--expected-sha256 \"$INTEGRATION_DIGEST\"" in workflow
     assert "API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}" in workflow
     assert (
         "API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}"
@@ -44,7 +45,7 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
     assert "No previous public stack release" in workflow
     assert "marty-subscriptions" not in workflow
-    assert "self-hosted" not in workflow
+    assert "runs-on: self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
 
 
@@ -164,7 +165,11 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "actions/attest-build-provenance" in workflow
     assert "sbom: true" in workflow
     assert "SHA256SUMS" in workflow
-    assert "softprops/action-gh-release" in workflow
+    assert "softprops/action-gh-release" not in workflow
+    assert 'gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"' in workflow
+    assert "assets=(stack-manifest.json release-transaction.json" in workflow
+    assert 'release_id="$(gh api' in workflow
+    assert 'echo "id=$release_id" >> "$GITHUB_OUTPUT"' in workflow
     assert "pytest tests/oss_stack" in workflow
 
 
@@ -312,7 +317,8 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml"
         in workflow
     )
-    assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
+    assert "repository: ElevenID/marty-integration-tests" not in workflow
+    assert "scripts/extract_verified_source.py" in workflow
 
     lock = json.loads(_text("release/stack-lock.json"))
     integration = next(
@@ -320,10 +326,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.76"
-    assert integration["commit"] == "85f7d794b28079781e9455be5715e69b8995f9f4"
+    assert integration["version"] == "1.2.79"
+    assert integration["commit"] == "7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:2617792b8499f34d48605f8874567292c2f4c6c050f3d68c002a3f9a94c29c59"
+        "sha256:622e878e47a9c8239160bc2e38fe2423d6fe9843de18e6c953433ccd32a905b7"
     )
 
     issuance = next(
@@ -344,7 +350,7 @@ def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
 
     assert lock["release_state"] == "hold"
     assert components["marty-credentials-issuance"]["version"] == "0.1.72"
-    assert components["marty-integration-tests"]["version"] == "1.2.76"
+    assert components["marty-integration-tests"]["version"] == "1.2.79"
 
     documents = (
         _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
@@ -388,30 +394,48 @@ def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
         assert "consumer run `33491836719`, attempt `1`" in normalized
         assert "all 19 language-neutral checks matched" in normalized.lower()
         assert "`canonical.oid4vp-positive-runtime-not-exercised`" in normalized
-        assert "`v1.1.211`" not in document
+        assert "`v1.1.211`" in document
         assert "`v1.1.212`" not in document
 
 
-def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
+def test_stack_release_is_claim_only_digest_first_and_publishes_last() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert (
-        'test "$GITHUB_EVENT_NAME" = "push" || '
-        'test "$GITHUB_EVENT_NAME" = "workflow_dispatch"'
-    ) in workflow
-    assert 'test "$GITHUB_REF_TYPE" = "tag"' in workflow
-    assert 'test "$GITHUB_REF_NAME" = "v$version"' in workflow
-    assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
-    assert "Reject any existing release" in workflow
-    assert "python scripts/check_release_absent.py" in workflow
-    assert "overwrite_files: false" in workflow
-    # action-gh-release v3 stages assets before finalizing a standard release.
-    # A second API edit is incompatible with GitHub immutable releases.
+    assert "push:\n    tags:" not in workflow
+    assert "claim_run_id:" in workflow
+    assert "resume_run_id:" in workflow
+    assert "resume_artifact:" in workflow
+    assert "push-by-digest=true" in workflow
+    assert "name-canonical=true" in workflow
+    assert "scripts/release_transaction.py record-digests" in workflow
+    assert "scripts/release_transaction.py qualify" in workflow
+    assert "scripts/release_transaction.py record-promotion" in workflow
+    assert "scripts/release_transaction.py publish" in workflow
+    assert "create-transaction-pin" in workflow
+    assert "run-transaction" in workflow
+    assert "TAG: ${{ needs.resolve-transaction.outputs.tag }}" in workflow
+    assert 'gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"' in workflow
+    assert "overwrite_files:" not in workflow
     assert "draft: true" not in workflow
     assert 'gh release edit "$RELEASE_TAG"' not in workflow
     assert "--draft=false" not in workflow
     assert "inputs.lock_file" not in workflow
+    assert workflow.index("pytest tests/oss_stack -v") < workflow.index(
+        "docker buildx imagetools create --tag"
+    )
+    assert "compare-transaction-evidence" in workflow
+    assert "--oracle-pin config/credentials-verifier-oracle.json" in workflow
+    assert "--transaction-pin work/transaction-pin.json" in workflow
+    assert '.status == "matched"' in workflow
+    assert ".comparison_status" not in workflow
+    assert ".release_blockers" not in workflow
+    assert workflow.index("compare-transaction-evidence") < workflow.index(
+        "docker buildx imagetools create --tag"
+    )
+    assert workflow.index("docker buildx imagetools create --tag") < workflow.index(
+        'gh release create "$TAG"'
+    )
 
 
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
@@ -423,6 +447,47 @@ def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
         FULL_SHA_ACTION.match(line) or "uses: ./.github/workflows/" in line
         for line in uses_lines
     )
+
+
+def test_conflicting_or_unrecoverable_release_claims_have_a_tombstone_lane() -> None:
+    workflow = _text(".github/workflows/tombstone-stack-release.yml")
+
+    assert "workflow_dispatch:" in workflow
+    assert "claim_run_id:" in workflow
+    assert "source_run_id:" in workflow
+    assert "source_artifact:" in workflow
+    assert "reason:" in workflow
+    assert "evidence_sha256:" in workflow
+    assert "scripts/release_transaction.py validate" in workflow
+    assert "scripts/release_transaction.py tombstone" in workflow
+    assert "git merge-base --is-ancestor" in workflow
+    assert 'git show "${SOURCE_SHA}:release/stack-lock.json"' in workflow
+    assert "--stack-lock claimed-stack-lock.json" in workflow
+    assert "stack-release-tombstone-${{ inputs.claim_run_id }}" in workflow
+    assert "contents: write" not in workflow
+    assert "packages: write" not in workflow
+    assert "git push" not in workflow
+    assert "gh release" not in workflow
+    uses_lines = [line for line in workflow.splitlines() if "uses:" in line]
+    assert uses_lines
+    assert all(FULL_SHA_ACTION.match(line) for line in uses_lines)
+
+
+def test_release_workflows_never_checkout_dispatch_or_transaction_data() -> None:
+    workflows = (
+        _text(".github/workflows/cd.yml"),
+        _text(".github/workflows/prepare-stack-tag.yml"),
+        _text(".github/workflows/tombstone-stack-release.yml"),
+    )
+    forbidden_refs = (
+        "ref: ${{ inputs.source_sha }}",
+        "ref: ${{ steps.identity.outputs.source_sha }}",
+        "ref: ${{ steps.untrusted.outputs.source_sha }}",
+        "ref: ${{ needs.resolve-transaction.outputs.source_sha }}",
+        "ref: ${{ needs.validate-stack.outputs.integration_commit }}",
+    )
+    for workflow in workflows:
+        assert all(reference not in workflow for reference in forbidden_refs)
 
 
 def test_stack_release_uses_read_only_default_permissions() -> None:
@@ -459,17 +524,24 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
     assert "sha256sum --check --strict" in dockerfiles
 
 
-def test_stack_release_requires_annotated_tag_on_exact_protected_main() -> None:
+def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification() -> (
+    None
+):
     workflow = _text(".github/workflows/cd.yml")
 
-    assert "Require annotated release tag on exact protected main" in workflow
+    assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
-    assert '"refs/tags/$TAG:refs/tags/$TAG"' in workflow
+    assert "Create or verify the late annotated source tag" in workflow
+    assert 'git tag -a "$TAG" "$SOURCE_SHA"' in workflow
+    assert 'git push origin "refs/tags/$TAG:refs/tags/$TAG"' in workflow
     assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
-    assert 'tagged_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"' in workflow
-    assert 'main_commit="$(git rev-parse refs/remotes/origin/main)"' in workflow
-    assert 'test "$RUN_SHA" = "$tagged_commit"' in workflow
-    assert 'test "$tagged_commit" = "$main_commit"' in workflow
+    assert (
+        'test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"' in workflow
+    )
+    assert 'grep -Fx "Release-Transaction: $TRANSACTION_ID"' in workflow
+    assert workflow.index("stack-release-qualified-") < workflow.index(
+        "Create or verify the late annotated source tag"
+    )
 
 
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:
@@ -492,15 +564,16 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     ]
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "git ls-remote --tags" in prepare
-    assert "git tag -a" in prepare
-    assert "git bundle create prepared-stack-tag.bundle" in prepare
-    assert "git bundle verify prepared-stack-tag.bundle" in prepare
-    assert "stack-tag-evidence-${{ inputs.tag }}" in prepare
-    assert "prepared-stack-tag.bundle" in prepare
+    assert "git tag -a" not in prepare
+    assert "git bundle create" not in prepare
+    assert "scripts/check_release_absent.py" in prepare
+    assert "scripts/release_transaction.py claim" in prepare
+    assert "stack-release-claim-${{ inputs.tag }}" in prepare
+    assert "release-transaction.json" in prepare
     assert "git push origin" not in prepare
     assert "gh workflow run cd.yml" not in prepare
-    assert "scripts/stack_tag_gate.py validate-release" in workflow
-    assert "stack-tag-evidence-$TAG" in workflow
+    assert "scripts/release_transaction.py validate" in workflow
+    assert "stack-release-claim-v" in workflow
     assert "actions: read" in workflow
 
 
@@ -514,11 +587,12 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     assert example_lock["release_state"] == "hold"
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "--repository ." in prepare
-    assert "scripts/stack_tag_gate.py validate-release" in workflow
-    assert "--repository ." in workflow
-    assert workflow.index(
-        "scripts/stack_tag_gate.py validate-release"
-    ) < workflow.index("scripts/build_stack_manifest.py")
+    assert "scripts/release_transaction.py claim" in prepare
+    assert "scripts/release_transaction.py validate" in workflow
+    assert "--stack-lock release/stack-lock.json" in workflow
+    assert workflow.index("scripts/release_transaction.py validate") < workflow.index(
+        "scripts/build_stack_manifest.py"
+    )
 
 
 def test_python_migration_image_installs_every_required_native_backend() -> None:

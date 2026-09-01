@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+storybook-static
+.vite
+*.log
+.env
+.env.*
+!.env.example

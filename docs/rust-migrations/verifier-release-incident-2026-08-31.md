@@ -11,7 +11,9 @@ reusing a coordinate after any versioned image has been published.
 The evidence classification is exact: `v0.1.72` is a valid issuance component,
 not a failed verifier artifact; `v1.2.76` is retained held evidence only and
 grants no cutover authorization; `v1.2.77` is intermediate evidence only; and
-`v1.2.78` is preliminary, non-activating evidence. PR `#737` introduced the
+`v1.2.78` is preliminary, non-activating evidence. Public
+`marty-integration-tests@v1.2.79` is the independently verified exact-digest
+transaction harness. PR `#737` introduced the
 candidate producer; its first dispatch occurred only after the later hardening
 described below. PR `#741` hardened the producer but retained raw tar-header
 offset defects. PR `#744` corrected those specific defects. Producer run
@@ -23,9 +25,12 @@ corrected lane subsequently passed from exact protected-main commit
 `7a1e2d6f31a563b33832b46921ec3376cd124113`: producer run `33490549237`,
 attempt `1`, and authenticated, inspected consumer run `33491836719`, attempt
 `1`, both completed successfully. All 19 language-neutral checks matched and
-the Rust-only default-disabled-route check passed. Release clearance
-remains intentionally blocked only by
-`canonical.oid4vp-positive-runtime-not-exercised`.
+the Rust-only default-disabled-route check passed. That historical candidate
+remains blocked by `canonical.oid4vp-positive-runtime-not-exercised`.
+Protected UI PR `#762` subsequently merged the real trusted-positive Rust gate
+at `339660c4418f824251edba5c0c5ff27fd1ba`, closing the missing-capability gap.
+Release clearance remains held until that binary and every differential group
+pass against the exact unpublished `v1.1.211` services digest.
 
 ## Immutable observations
 
@@ -79,6 +84,16 @@ remains intentionally blocked only by
   load contract at `bdd3b33b9268ca4c8c3d37126e7c253ec8fce710`. UI PRs
   `#759` and `#760` then pinned that exact harness and made its hardened-floor
   ancestry available to the consumer.
+- Protected integration PRs `#415` and `#416` published the immutable
+  transaction harness as `v1.2.79` from
+  `7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`. Its source archive is
+  `sha256:622e878e47a9c8239160bc2e38fe2423d6fe9843de18e6c953433ccd32a905b7`
+  and its SPDX SBOM is
+  `sha256:3606d43a02379764b804ad22e29f1426edc66d0b7248152a0c159a947ec0821f`.
+- Protected UI PR `#762` merged the real trusted-positive OID4VP Rust runtime
+  gate at `339660c4418f824251edba5c0c5ff27fd1ba`. It is packaged but
+  deliberately unrouted as a service entry point. No published `marty-ui`
+  services digest has exercised it yet.
 - Successful producer run `33490549237`, attempt `1`, retained candidate
   artifact `9794047091` (`verification-candidate-33490549237-1`) from exact
   protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`.
@@ -98,11 +113,11 @@ remains intentionally blocked only by
 ## Containment decision
 
 Versions `v1.1.209` and `v1.1.210` are permanently quarantined and must never be
-retargeted, completed, or deployed. No future UI release coordinate is selected
-or reserved by this record. A coordinate may be selected only after all
-prerequisites pass and exact-coordinate absence is confirmed; nothing may be
-published through the current direct-tag workflow while the release lock is
-held.
+retargeted, completed, or deployed. Held target `v1.1.211` was selected only
+after its tag, release, and registry coordinates were confirmed absent; it is
+not claimed or reserved. Nothing may be claimed, promoted, or published while
+the release lock is held. Once separately reviewed as `eligible`, the
+digest-first transaction is the only authorized publication path.
 
 Before the next UI/services artifact write or activating stack write, complete
 and test:
@@ -115,10 +130,12 @@ and test:
    applying the release twice, explicit default-disabled and enabled
    compatibility behavior, and exact candidate/oracle evidence-set comparison
    with only documented language-neutral differences. These candidate checks
-   now pass. The eligible runtime
-   must actually exercise the positive OID4VP path; the deterministic fixture
-   contract alone is not runtime evidence.
-3. A digest-first, resumable release transaction. Create the durable draft claim
+   now pass. Protected UI PR `#762` implements the eligible positive OID4VP
+   runtime path, but the exact `v1.1.211` services digest must still exercise it;
+   the deterministic fixture contract or an unbound local run is not release
+   evidence.
+3. Retain the digest-first, resumable release transaction as the sole release
+   path. Create the durable draft claim
    only after eligibility, tag, environment, and exact no-`v` registry absence
    checks. Push and attest content-addressed images, run the public stack and
    verifier gates on the exact services digest, promote version tags only after
@@ -130,7 +147,7 @@ and test:
    digest evidence, partial tag promotion, a complete draft, a published
    terminal release, and mismatched existing coordinates.
 
-The candidate lane reduces prepublication risk but cannot replace the final
-test against the exact released services digest. The public integration pin is
-published only after that immutable digest exists. Production and persistent
-self-host remain unchanged.
+The candidate lane and merged runtime gate reduce prepublication risk but cannot
+replace the final test against the exact content-addressed services digest. The
+public static integration pin is published only after that immutable digest
+exists. Production and persistent self-host remain unchanged.

@@ -425,12 +425,16 @@ def test_local_build_defines_ui_without_release_image_overlays() -> None:
 
 def test_local_ui_image_is_reproducible_and_installs_postinstall_script() -> None:
     dockerfile = (ROOT / "ui" / "Dockerfile.prod").read_text(encoding="utf-8")
+    dockerignore = (ROOT / "ui" / ".dockerignore").read_text(encoding="utf-8")
 
     assert "oven/bun:1.3.14-alpine@sha256:" in dockerfile
     assert "nginx:1.29.1-alpine@sha256:" in dockerfile
     assert dockerfile.index("COPY scripts/patch-prerenderer-ts-deepmerge.cjs") < dockerfile.index(
         "RUN bun install --frozen-lockfile"
     )
+    assert "node_modules" in dockerignore.splitlines()
+    assert "dist" in dockerignore.splitlines()
+    assert ".env" in dockerignore.splitlines()
 
 
 def test_release_profile_removes_builds_and_pins_infrastructure() -> None:

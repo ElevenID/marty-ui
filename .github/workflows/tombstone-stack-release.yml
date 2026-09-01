@@ -1,0 +1,111 @@
+name: Tombstone stack release transaction
+
+run-name: Tombstone claim ${{ inputs.claim_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      claim_run_id:
+        description: Original no-write claim workflow run
+        required: true
+        type: string
+      source_run_id:
+        description: Workflow run containing the latest transaction checkpoint
+        required: true
+        type: string
+      source_artifact:
+        description: Exact checkpoint artifact name
+        required: true
+        type: string
+      reason:
+        description: Sanitized terminal reason without secret or provider detail
+        required: true
+        type: string
+      evidence_sha256:
+        description: sha256 digest of separately retained conflict or recovery evidence
+        required: true
+        type: string
+
+concurrency:
+  group: stack-release-claim-${{ inputs.claim_run_id }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  tombstone:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download one exact nonterminal checkpoint
+        env:
+          ARTIFACT: ${{ inputs.source_artifact }}
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          case "$ARTIFACT" in
+            stack-release-claim-v*|stack-release-digests-*|stack-release-qualified-*|stack-release-promotion-*) ;;
+            *) echo "::error::artifact is outside the tombstone allowlist"; exit 1 ;;
+          esac
+          input="$RUNNER_TEMP/release-tombstone-input"
+          mkdir "$input"
+          gh run download "$SOURCE_RUN_ID" --name "$ARTIFACT" --dir "$input"
+          mapfile -t entries < <(find "$input" -mindepth 1 -maxdepth 1 -printf '%f:%y\n' | LC_ALL=C sort)
+          if [[ "$ARTIFACT" == stack-release-claim-v* ]]; then
+            expected=("release-transaction.json:f" "stack-tag-evidence.json:f")
+          else
+            expected=("release-transaction.json:f")
+          fi
+          test "${#entries[@]}" -eq "${#expected[@]}"
+          test "${entries[*]}" = "${expected[*]}"
+          transaction="$input/release-transaction.json"
+          test "$(wc -c < "$transaction")" -le 65536
+          source_sha="$(jq -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$transaction")"
+          claim_run_id="$(jq -er '.claim_run_id | select(test("^[1-9][0-9]*$"))' "$transaction")"
+          test "$claim_run_id" = "$CLAIM_RUN_ID"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+        id: identity
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Validate and irreversibly tombstone the checkpoint
+        env:
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+          EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+          REASON: ${{ inputs.reason }}
+          SOURCE_SHA: ${{ steps.identity.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/release-tombstone-input/release-transaction.json"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          git show "${SOURCE_SHA}:release/stack-lock.json" > claimed-stack-lock.json
+          python scripts/release_transaction.py validate \
+            --input "$input" --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" --stack-lock claimed-stack-lock.json \
+            --claim-run-id "$CLAIM_RUN_ID" --output validated-transaction.json
+          python scripts/release_transaction.py tombstone \
+            --input validated-transaction.json --reason "$REASON" \
+            --evidence-sha256 "$EVIDENCE_SHA256" \
+            --output release-transaction.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-tombstone-${{ inputs.claim_run_id }}-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90

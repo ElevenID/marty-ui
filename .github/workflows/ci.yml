@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -49,6 +51,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 2
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -125,6 +128,8 @@ jobs:
         working-directory: ui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -214,6 +219,8 @@ jobs:
           --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Checkout pinned native trust-registry backend
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1243,6 +1250,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Require immutable protocol revision
         shell: bash
         run: |
@@ -1252,6 +1261,7 @@ jobs:
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          persist-credentials: false
           repository: Marty-Protocol/Marty-Protocol
           ref: ${{ env.MARTY_PROTOCOL_REF }}
           path: marty-protocol
@@ -1276,6 +1286,8 @@ jobs:
       PYTHONPATH: packages
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -1361,6 +1373,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -1418,6 +1432,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -1450,7 +1466,7 @@ jobs:
 
           timed pip-audit pip-audit -r requirements-services.txt &
           pip_audit_pid=$!
-          (cd ui && timed ui-audit bash -c 'bun audit && npm audit --package-lock-only --audit-level=low') &
+          (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && bun audit && npm audit --package-lock-only --audit-level=low') &
           ui_audit_pid=$!
           (cd tests && timed tests-audit npm audit --package-lock-only --audit-level=low) &
           tests_audit_pid=$!
