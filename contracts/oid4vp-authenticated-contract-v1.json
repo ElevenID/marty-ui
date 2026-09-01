@@ -22,7 +22,8 @@
     "frozen_request": "server_owned_before_wallet_response",
     "evidence_projection": "strict_untrusted_until_context_validated",
     "authenticated_evidence": "non_deserializable_sealed_type",
-    "replay_authority": "request_bound_repository_compare_and_set_receipt"
+    "replay_authority": "request_bound_repository_compare_and_set_receipt",
+    "dcql_ambiguous_claim_paths": "exact_server_owned_structured_component_binding"
   },
   "privacy_profile": {
     "scan_json_object_keys": true,
@@ -410,7 +411,7 @@
     {"id":"allow_reason_mismatch","target":"evidence_projection","mutation":"use a failure reason on coherent allow decisions","expected_error":"decision"},
     {"id":"descriptor_depth_limit","target":"wallet_submission","mutation":"nest descriptor one level beyond maximum","expected_error":"invalid_field"},
     {"id":"claim_depth_limit","target":"evidence_projection","mutation":"nest claim value one level beyond maximum","expected_error":"invalid_field"},
-    {"id":"dcql_dotted_path_collision","target":"frozen_request","mutation":"use a dotted DCQL component whose joined form collides with a structurally nested path","expected_error":"invalid_query"},
+    {"id":"dcql_dotted_path_collision","target":"frozen_request","mutation":"bind a dotted DCQL component to the competing structurally nested path with the same flattened name","expected_error":"invalid_query"},
     {"id":"fragmented_raw_token","target":"evidence_projection","mutation":"split raw wallet token material across two authenticated claim values","expected_error":"privacy"},
     {"id":"fragmented_encoded_token","target":"evidence_projection","mutation":"split standard-base64 wallet token material across two authenticated claim values","expected_error":"privacy"},
     {"id":"optional_obligation_blocks_allow","target":"evidence_projection","mutation":"deny when all required obligations pass and only an optional credential fails","expected_error":"decision"},

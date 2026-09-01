@@ -852,6 +852,12 @@ fn execute_mutation(id: &str) -> Oid4vpContractError {
                 json!(["address.street", "name"]);
             request.query.requirements[0].required_claims = vec!["address.street.name".into()];
             request.query.requirements[0].allowed_claims = vec!["address.street.name".into()];
+            request.query.requirements[0].dcql_claim_paths = [(
+                "address.street.name".into(),
+                vec!["address".into(), "street.name".into()],
+            )]
+            .into_iter()
+            .collect();
             request.query.document_digest = digest_query_document(&request.query.document).unwrap();
             return request.validate_at(now).unwrap_err();
         }
@@ -1316,6 +1322,29 @@ fn structurally_nested_dcql_path_and_benign_fragments_are_accepted() {
     request.query.requirements[0].required_claims = vec!["address.street".into()];
     request.query.requirements[0].allowed_claims = vec!["address.street".into()];
     projection.credentials[0].claims = [("address.street".into(), json!("ordinary display value"))]
+        .into_iter()
+        .collect();
+    projection.policy_result.verified_claims = projection.credentials[0].claims.clone();
+    request.query.document_digest = digest_query_document(&request.query.document).unwrap();
+    rebind(&mut projection, &request, &submission);
+    projection
+        .validate_against_at(&request, &submission, now)
+        .unwrap();
+
+    let (now, mut request, submission, mut projection) = golden();
+    request.query.document["credentials"][0]["claims"][0]["id"] =
+        json!("claim_address_street_name");
+    request.query.document["credentials"][0]["claims"][0]["path"] =
+        json!(["address.street", "name"]);
+    request.query.requirements[0].required_claims = vec!["address.street.name".into()];
+    request.query.requirements[0].allowed_claims = vec!["address.street.name".into()];
+    request.query.requirements[0].dcql_claim_paths = [(
+        "address.street.name".into(),
+        vec!["address.street".into(), "name".into()],
+    )]
+    .into_iter()
+    .collect();
+    projection.credentials[0].claims = [("address.street.name".into(), json!("Main"))]
         .into_iter()
         .collect();
     projection.policy_result.verified_claims = projection.credentials[0].claims.clone();

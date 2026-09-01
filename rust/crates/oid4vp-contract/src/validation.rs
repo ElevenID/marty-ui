@@ -1140,6 +1140,22 @@ fn validate_requirement(
         "query.requirements.retained_claims",
         true,
     )?;
+    if requirement.dcql_claim_paths.len() > MAX_CLAIMS_PER_CREDENTIAL {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
+    }
+    for (claim, path) in &requirement.dcql_claim_paths {
+        require_identifier(claim, "query.requirements.dcql_claim_paths.claim")?;
+        if !(1..=2).contains(&path.len())
+            || path.iter().any(|component| {
+                require_identifier(component, "query.requirements.dcql_claim_paths.component")
+                    .is_err()
+            })
+            || path.join(".") != *claim
+            || requirement.allowed_claims.binary_search(claim).is_err()
+        {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
+    }
     if !requirement
         .retained_claims
         .iter()
@@ -1266,6 +1282,12 @@ fn validate_pe_document(
     document: &Value,
     requirements: &[FrozenCredentialRequirement],
 ) -> Result<BTreeSet<String>, Oid4vpContractError> {
+    if requirements
+        .iter()
+        .any(|requirement| !requirement.dcql_claim_paths.is_empty())
+    {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
+    }
     let object = exact_object(document, &["format", "id", "input_descriptors"], &[])?;
     require_identifier(
         object["id"]
@@ -1530,6 +1552,7 @@ fn extract_dcql_claims(
 ) -> Result<(Vec<String>, Vec<String>), Oid4vpContractError> {
     let mut claims = BTreeSet::new();
     let mut claim_ids = BTreeSet::new();
+    let mut bound_path_claims = BTreeSet::new();
     let mut retained_claims = BTreeSet::new();
     for entry in entries {
         let object = exact_object(entry, &["id", "path"], &["intent_to_retain"])?;
@@ -1538,17 +1561,21 @@ fn extract_dcql_claims(
             .ok_or(Oid4vpContractError::InvalidQueryDocument)?;
         require_identifier(id, "query.document.claim.id")?;
         let path = string_array(&object["path"], "query.document.claim.path")?;
-        // A dotted component is not structurally injective under the frozen
-        // dotted typed-claim representation: ["a.b", "c"] and ["a", "b.c"]
-        // would otherwise bind to the same claim. Reject it before joining.
-        if path.iter().any(|component| component.contains('.')) {
-            return Err(Oid4vpContractError::InvalidQueryDocument);
-        }
         let claim = if (1..=2).contains(&path.len()) {
             path.join(".")
         } else {
             return Err(Oid4vpContractError::InvalidQueryDocument);
         };
+        match requirement.dcql_claim_paths.get(&claim) {
+            Some(bound_path) if bound_path == &path => {
+                bound_path_claims.insert(claim.clone());
+            }
+            Some(_) => return Err(Oid4vpContractError::InvalidQueryDocument),
+            None if path.iter().any(|component| component.contains('.')) => {
+                return Err(Oid4vpContractError::InvalidQueryDocument);
+            }
+            None => {}
+        }
         let intent_to_retain = object
             .get("intent_to_retain")
             .map(|value| {
@@ -1568,6 +1595,15 @@ fn extract_dcql_claims(
         if intent_to_retain {
             retained_claims.insert(claim);
         }
+    }
+    if bound_path_claims
+        != requirement
+            .dcql_claim_paths
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
     }
     Ok((
         claims.into_iter().collect(),

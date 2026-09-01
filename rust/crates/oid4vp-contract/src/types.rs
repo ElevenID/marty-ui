@@ -170,6 +170,11 @@ pub struct FrozenCredentialRequirement {
     pub required_claims: Vec<String>,
     pub allowed_claims: Vec<String>,
     pub retained_claims: Vec<String>,
+    /// Exact server-owned DCQL component paths for flattened claim names that
+    /// would otherwise be structurally ambiguous. Ordinary paths remain
+    /// wire-compatible and omit this map.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dcql_claim_paths: BTreeMap<String, Vec<String>>,
     pub required: bool,
     pub min_credentials: u16,
     pub max_credentials: u16,
