@@ -39,6 +39,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Configure the pinned candidate runtime
+        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
+        with:
+          version: v29.7.2
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+
+      - name: Require the exact supported candidate runtime
+        run: python scripts/check_verification_candidate_backend.py --runtime-only
+
       - name: Authenticate the triggering producer run
         shell: bash
         env:
