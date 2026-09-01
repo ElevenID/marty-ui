@@ -336,6 +336,49 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
     )
 
 
+def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+
+    assert lock["release_state"] == "hold"
+    assert components["marty-credentials-issuance"]["version"] == "0.1.72"
+    assert components["marty-integration-tests"]["version"] == "1.2.76"
+
+    documents = (
+        _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
+        _text("docs/rust-migrations/verification-image-consolidation-plan.md"),
+        _text("docs/rust-migrations/verifier-release-incident-2026-08-31.md"),
+    )
+    for document in documents:
+        normalized = " ".join(document.split())
+        assert (
+            "`v0.1.72` is a valid issuance component, not a failed verifier "
+            "artifact" in normalized
+        )
+        assert (
+            "`v1.2.76` is retained held evidence only and grants no cutover "
+            "authorization" in normalized
+        )
+        assert "`v1.2.77` is intermediate evidence only" in normalized
+        assert "`v1.2.78` is preliminary, non-activating evidence" in normalized
+        assert (
+            "PR `#737` introduced the candidate producer, but its workflow "
+            "was never dispatched" in normalized
+        )
+        assert (
+            "PR `#741` hardened the producer but retained raw tar-header "
+            "offset defects" in normalized
+        )
+        assert "PR `#744` corrected those specific defects" in normalized
+        assert (
+            "No candidate workflow run exists, so merged producer code "
+            "supplies no admissible candidate-gate evidence and the candidate "
+            "gate has not run or passed" in normalized
+        )
+        assert "`v1.1.211`" not in document
+        assert "`v1.1.212`" not in document
+
+
 def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
     workflow = _text(".github/workflows/cd.yml")
 

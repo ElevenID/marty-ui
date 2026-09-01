@@ -8,6 +8,16 @@ recovering the verification-image consolidation release order. It distinguishes
 an incomplete release attempt from a defective runtime artifact and avoids
 reusing a coordinate after any versioned image has been published.
 
+The evidence classification is exact: `v0.1.72` is a valid issuance component,
+not a failed verifier artifact; `v1.2.76` is retained held evidence only and
+grants no cutover authorization; `v1.2.77` is intermediate evidence only; and
+`v1.2.78` is preliminary, non-activating evidence. PR `#737` introduced the
+candidate producer, but its workflow was never dispatched. PR `#741` hardened
+the producer but retained raw tar-header offset defects. PR `#744` corrected
+those specific defects. No candidate workflow run exists, so merged producer
+code supplies no admissible candidate-gate evidence and the candidate gate has
+not run or passed.
+
 ## Immutable observations
 
 - `marty-ui@v1.1.209` has no GitHub release. Its interrupted release published
@@ -44,6 +54,12 @@ reusing a coordinate after any versioned image has been published.
 - Credentials adapter-retirement guard PR `ElevenID/marty-credentials#253`
   merged at `cbda2ac7e3376b858c1e8d5d010a304474c659cf`; it preserves the separate
   still-used adapter and does not change the issuance-only `v0.1.72` decision.
+- Immutable `marty-integration-tests@v1.2.76` remains the held stack's exact
+  bootstrap evidence. Its artifact-scoped checks do not authorize verifier
+  cutover.
+- Immutable `marty-integration-tests@v1.2.77` is independently verified
+  intermediate evidence: it preserves the Python oracle and the rejected Rust
+  bootstrap as a bounded negative control, but it does not clear cutover.
 - Protected integration PR `#404` packaged the reviewed `#400`-`#403` harness
   lineage as immutable `marty-integration-tests@v1.2.78` at merge commit
   `3baad4b5dbccc720a50ff9ae5a280349180c02a8`. This preliminary harness release
@@ -54,19 +70,22 @@ reusing a coordinate after any versioned image has been published.
 ## Containment decision
 
 Versions `v1.1.209` and `v1.1.210` are permanently quarantined and must never be
-retargeted, completed, or deployed. A local `v1.1.211` lock candidate exists,
-but no tag, registry coordinate, or release reserves that version. It must not
-be published through the current direct-tag workflow while the release lock is
+retargeted, completed, or deployed. No future UI release coordinate is selected
+or reserved by this record. A coordinate may be selected only after all
+prerequisites pass and exact-coordinate absence is confirmed; nothing may be
+published through the current direct-tag workflow while the release lock is
 held.
 
-Before the next UI/services artifact write or activating stack write, implement
+Before the next UI/services artifact write or activating stack write, complete
 and test:
 
-1. A read-only, non-publishing candidate lane that builds the exact services
-   Dockerfile and arguments from an exact protected-main commit, exports an OCI
-   archive plus SBOM/source/config digests, verifies the archive and image
-   labels without pulling a substitute, and runs both the retained Python
-   oracle and Rust candidate.
+1. Execute and validate the corrected read-only, non-publishing candidate
+   producer from an exact protected-main descendant containing PR `#744`. It
+   must build the exact
+   services Dockerfile and arguments, export an OCI archive plus
+   SBOM/source/config digests, verify the archive and image labels without
+   pulling a substitute, and run both the retained Python oracle and Rust
+   candidate. Merged producer code alone is not candidate-gate evidence.
 2. Retain the current hardened 19-check portable differential, its Rust-only
    default-disabled compatibility check, and the landed artifact-differential
    gates: trusted-positive OID4VP claim projection, migration idempotence by
