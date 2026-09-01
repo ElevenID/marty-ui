@@ -297,7 +297,8 @@ def test_consumer_uses_only_fixed_actions_and_drops_registry_credentials() -> No
         if step.get("name")
         == "Run candidate and oracle then compare fail-closed evidence"
     )
-    assert "env" not in execute
+    assert execute["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert document["jobs"]["verify"]["permissions"]["attestations"] == "read"
 
 
 def test_consumer_uses_exact_public_harness_and_remains_fail_closed() -> None:
