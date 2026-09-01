@@ -667,14 +667,14 @@ fn encoded(value: String) -> Result<String, CanvasProviderReadError> {
 }
 
 fn origin_url(url: &Url) -> Result<Url, CanvasProviderReadError> {
-    let host = url
-        .host_str()
-        .ok_or(CanvasProviderReadError::InvalidConfiguration)?;
-    let port = url
-        .port()
-        .map(|port| format!(":{port}"))
-        .unwrap_or_default();
-    Url::parse(&format!("{}://{host}{port}/", url.scheme()))
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(CanvasProviderReadError::InvalidConfiguration);
+    }
+    Url::parse(&format!("{}/", url.origin().ascii_serialization()))
         .map_err(|_| CanvasProviderReadError::InvalidConfiguration)
 }
 
@@ -1089,6 +1089,29 @@ mod tests {
         assert!(valid_collection_item(&json!({"id": 7})));
         assert!(valid_collection_item(&json!({"userId": "opaque-subject"})));
         assert!(!valid_collection_item(&json!([])));
+    }
+
+    #[test]
+    fn origin_reconstruction_preserves_ipv6_and_canonical_default_ports() {
+        assert_eq!(
+            origin_url(
+                &Url::parse("https://[2001:4860:4860::8888]:8443/path?cursor=1")
+                    .expect("public IPv6 URL"),
+            )
+            .expect("IPv6 origin")
+            .as_str(),
+            "https://[2001:4860:4860::8888]:8443/",
+        );
+        assert_eq!(
+            origin_url(&Url::parse("https://canvas.example:443/path").expect("HTTPS URL"))
+                .expect("canonical HTTPS origin")
+                .as_str(),
+            "https://canvas.example/",
+        );
+        assert_eq!(
+            origin_url(&Url::parse("https://user@example.test/path").expect("credentialed URL")),
+            Err(CanvasProviderReadError::InvalidConfiguration),
+        );
     }
 
     #[test]
