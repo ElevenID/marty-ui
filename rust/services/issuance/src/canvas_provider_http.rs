@@ -1,7 +1,7 @@
 //! Shared bounded HTTP client construction for Canvas provider traffic.
 
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     time::{Duration, SystemTime},
 };
 
@@ -152,20 +152,42 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || (first == 192 && second == 0 && third == 0)
                 || (first == 198 && (18..=19).contains(&second))
         }
-        IpAddr::V6(value) => {
-            let segments = value.segments();
-            value.is_loopback()
-                || value.is_unspecified()
-                || value.is_multicast()
-                || (segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfe80
-                || (segments[0] & 0xffc0) == 0xfec0
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || value
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| is_private_ip(IpAddr::V4(mapped)))
+        IpAddr::V6(value) => !is_globally_routable_ipv6(value),
+    }
+}
+
+/// Preserve the legacy Canvas guard's fail-closed IPv6 classification.
+///
+/// Rust does not yet expose a stable `Ipv6Addr::is_global`, so keep the
+/// relevant special-purpose ranges explicit. The exceptions inside
+/// `2001::/23` are the globally routable assignments accepted by the frozen
+/// service behavior.
+fn is_globally_routable_ipv6(value: Ipv6Addr) -> bool {
+    if let Some(mapped) = value.to_ipv4_mapped() {
+        return !is_private_ip(IpAddr::V4(mapped));
+    }
+
+    let segments = value.segments();
+
+    if (segments[0] & 0xe000) != 0x2000 {
+        return false;
+    }
+
+    if segments[0] == 0x2001 && segments[1] <= 0x01ff {
+        let globally_routable_exception = value == Ipv6Addr::new(0x2001, 0x0001, 0, 0, 0, 0, 0, 1)
+            || value == Ipv6Addr::new(0x2001, 0x0001, 0, 0, 0, 0, 0, 2)
+            || segments[1] == 0x0003
+            || (segments[1] == 0x0004 && segments[2] == 0x0112)
+            || (segments[1] & 0xfff0) == 0x0020
+            || (segments[1] & 0xfff0) == 0x0030;
+        if !globally_routable_exception {
+            return false;
         }
     }
+
+    !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+        && segments[0] != 0x2002
+        && !(segments[0] == 0x3fff && (segments[1] & 0xf000) == 0)
 }
 
 #[cfg(test)]
@@ -187,6 +209,70 @@ mod tests {
             assert!(is_private_ip(ip), "{ip} must fail closed");
         }
         assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn dns_pin_policy_rejects_every_frozen_non_global_ipv6_class() {
+        for raw in [
+            "64:ff9b::1",
+            "64:ff9b:1::1",
+            "100::1",
+            "2001:2::1",
+            "2001:db8::1",
+            "2002::1",
+            "3fff::1",
+            "4000::1",
+        ] {
+            let ip = raw.parse::<IpAddr>().expect("valid non-global IPv6");
+            assert!(is_private_ip(ip), "{ip} must fail closed");
+        }
+    }
+
+    #[test]
+    fn dns_pin_policy_preserves_frozen_global_ipv6_exceptions() {
+        for raw in [
+            "2001:1::1",
+            "2001:1::2",
+            "2001:3::1",
+            "2001:4:112::1",
+            "2001:20::1",
+            "2001:30::1",
+            "2001:4860::1",
+            "2606:4700:4700::1111",
+            "::ffff:8.8.8.8",
+        ] {
+            let ip = raw.parse::<IpAddr>().expect("valid global IPv6");
+            assert!(!is_private_ip(ip), "{ip} must remain globally routable");
+        }
+    }
+
+    #[test]
+    fn dns_pin_policy_enforces_frozen_ipv6_prefix_boundaries() {
+        for (raw, rejected) in [
+            ("1fff:ffff::1", true),
+            ("2000::1", false),
+            ("2001:1::3", true),
+            ("2001:3:ffff::1", false),
+            ("2001:4:111::1", true),
+            ("2001:4:112:ffff::1", false),
+            ("2001:4:113::1", true),
+            ("2001:1ff::1", true),
+            ("2001:200::1", false),
+            ("2001:db7::1", false),
+            ("2001:db8::1", true),
+            ("2001:db9::1", false),
+            ("2002:ffff::1", true),
+            ("2003::1", false),
+            ("3ffe:ffff::1", false),
+            ("3fff:fff::1", true),
+            ("3fff:1000::1", false),
+            ("4000::1", true),
+            ("::ffff:10.0.0.1", true),
+            ("::ffff:100.64.0.1", true),
+        ] {
+            let ip = raw.parse::<IpAddr>().expect("valid IPv6 boundary");
+            assert_eq!(is_private_ip(ip), rejected, "unexpected policy for {ip}");
+        }
     }
 
     #[test]
