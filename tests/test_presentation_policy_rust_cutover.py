@@ -19,6 +19,14 @@ def test_public_service_image_executes_the_native_presentation_policy_binary() -
         "/build/rust/target/release/marty-presentation-policy "
         "/usr/local/bin/marty-presentation-policy"
     ) in dockerfile
+    assert (
+        "-p marty-presentation-policy --bin marty-presentation-policy "
+        "--bin marty-verifier-positive-gate"
+    ) in dockerfile
+    assert (
+        "/build/rust/target/release/marty-verifier-positive-gate "
+        "/usr/local/bin/marty-verifier-positive-gate"
+    ) in dockerfile
     assert 'if [ "$MODULE_NAME" = "presentation_policy" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-presentation-policy" in entrypoint
 

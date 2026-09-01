@@ -30,8 +30,9 @@ pub use domain::{
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
-    presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
-    PresentationVerificationError, PresentationVerificationOrchestrator,
+    evaluate_verified_facts_for_policy, presentation_policy_router, EvaluatePresentationRequest,
+    PresentationPolicyHttpState, PresentationVerificationError,
+    PresentationVerificationOrchestrator,
 };
 pub use native_kernel::RustCredentialKernel;
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};

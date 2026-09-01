@@ -495,10 +495,18 @@ pub(crate) async fn evaluate_policy(
         )));
     }
     validate_evaluation_request(request)?;
-    let mut verified = verification
+    let verified = verification
         .verify(policy, request)
         .await
         .map_err(verification_error)?;
+    evaluate_verified_facts_for_policy(verified, policy, request)
+}
+
+pub fn evaluate_verified_facts_for_policy(
+    mut verified: Value,
+    policy: &PresentationPolicy,
+    request: &EvaluatePresentationRequest,
+) -> Result<Value, PresentationPolicyHttpError> {
     let object = verified
         .as_object_mut()
         .ok_or_else(|| service_unavailable("PRESENTATION_POLICY.INVALID_VERIFICATION_EVIDENCE"))?;
