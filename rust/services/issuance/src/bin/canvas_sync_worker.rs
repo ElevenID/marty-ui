@@ -237,29 +237,6 @@ async fn shutdown_signal() {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::first_present_or_else;
-
-    #[test]
-    fn preferred_secret_does_not_read_an_invalid_unused_fallback() {
-        let resolved = first_present_or_else(Some("preferred".to_owned()), || {
-            Err::<Option<String>, _>("unused fallback must not be read")
-        })
-        .expect("preferred secret short-circuits fallback");
-
-        assert_eq!(resolved.as_deref(), Some("preferred"));
-    }
-
-    #[test]
-    fn missing_preferred_secret_reads_the_fallback() {
-        let resolved = first_present_or_else(None, || Ok::<_, &'static str>(Some("fallback")))
-            .expect("fallback secret");
-
-        assert_eq!(resolved, Some("fallback"));
-    }
-}
-
 fn integration_master_key() -> Result<String, Box<dyn Error>> {
     if let Ok(value) = env::var("INTEGRATION_SECRET_MASTER_KEY") {
         if !value.trim().is_empty() {
@@ -287,4 +264,27 @@ fn comma_values(name: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_present_or_else;
+
+    #[test]
+    fn preferred_secret_does_not_read_an_invalid_unused_fallback() {
+        let resolved = first_present_or_else(Some("preferred".to_owned()), || {
+            Err::<Option<String>, _>("unused fallback must not be read")
+        })
+        .expect("preferred secret short-circuits fallback");
+
+        assert_eq!(resolved.as_deref(), Some("preferred"));
+    }
+
+    #[test]
+    fn missing_preferred_secret_reads_the_fallback() {
+        let resolved = first_present_or_else(None, || Ok::<_, &'static str>(Some("fallback")))
+            .expect("fallback secret");
+
+        assert_eq!(resolved, Some("fallback"));
+    }
 }

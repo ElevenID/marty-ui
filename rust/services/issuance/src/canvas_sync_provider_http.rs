@@ -39,6 +39,28 @@ const TOKEN_RESPONSE_BYTES: usize = 65_536;
 const COLLECTION_PAGE_BYTES: usize = 8_388_608;
 const COLLECTION_MAX_PAGES: usize = 200;
 
+#[derive(Clone, Copy)]
+enum LtiCollectionKind {
+    AgsResult,
+    NrpsMembership,
+}
+
+impl LtiCollectionKind {
+    const fn scope(self) -> &'static str {
+        match self {
+            Self::AgsResult => AGS_RESULT_READ_SCOPE,
+            Self::NrpsMembership => NRPS_MEMBERSHIP_READ_SCOPE,
+        }
+    }
+
+    const fn accept(self) -> &'static str {
+        match self {
+            Self::AgsResult => AGS_RESULT_ACCEPT,
+            Self::NrpsMembership => NRPS_MEMBERSHIP_ACCEPT,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct HttpCanvasAuthoritativeProvider {
     oauth: Arc<CanvasOAuthService>,
@@ -208,8 +230,7 @@ impl HttpCanvasAuthoritativeProvider {
         &self,
         resources: &CanvasSyncResources,
         url: &str,
-        scope: &str,
-        accept: &str,
+        kind: LtiCollectionKind,
         user_id: Option<&str>,
         limit: usize,
         limit_error: CanvasProviderReadError,
@@ -218,13 +239,13 @@ impl HttpCanvasAuthoritativeProvider {
             .await
             .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         self.enforce_lti_service_trust(resources, &validated)?;
-        let token = self.lti_access_token(resources, scope).await?;
+        let token = self.lti_access_token(resources, kind.scope()).await?;
         let mut next =
             Url::parse(&validated).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         if let Some(user_id) = user_id {
             next.query_pairs_mut().append_pair("user_id", user_id);
         }
-        self.collection(next, &token, accept, limit, limit_error)
+        self.collection(next, &token, kind.accept(), limit, limit_error)
             .await
     }
 
@@ -301,8 +322,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 .lti_collection(
                     resources,
                     &format!("{}/results", line_item.trim_end_matches('/')),
-                    AGS_RESULT_READ_SCOPE,
-                    AGS_RESULT_ACCEPT,
+                    LtiCollectionKind::AgsResult,
                     Some(subject),
                     100,
                     CanvasProviderReadError::Unavailable,
@@ -459,8 +479,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 .lti_collection(
                     resources,
                     &memberships,
-                    NRPS_MEMBERSHIP_READ_SCOPE,
-                    NRPS_MEMBERSHIP_ACCEPT,
+                    LtiCollectionKind::NrpsMembership,
                     None,
                     limit,
                     CanvasProviderReadError::RosterCollectionTooLarge,
