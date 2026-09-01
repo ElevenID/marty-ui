@@ -1365,6 +1365,37 @@ mod tests {
         assert!(*repository.disabled.lock().unwrap());
         assert!(repository.facts.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn roster_provider_failures_keep_the_frozen_retry_categories() {
+        for (provider, code, retryable) in [
+            (
+                CanvasProviderReadError::RosterConfigurationInvalid,
+                "canvas_roster_configuration_invalid",
+                false,
+            ),
+            (
+                CanvasProviderReadError::RosterOAuthUnavailable,
+                "canvas_roster_oauth_unavailable",
+                true,
+            ),
+            (
+                CanvasProviderReadError::NrpsRosterUnavailable,
+                "canvas_nrps_roster_unavailable",
+                true,
+            ),
+            (
+                CanvasProviderReadError::RosterCollectionTooLarge,
+                "canvas_roster_collection_too_large",
+                false,
+            ),
+        ] {
+            let actual = provider_processing_error(provider);
+            assert_eq!(actual.code, code);
+            assert_eq!(actual.retryable, retryable, "{code}");
+            assert_eq!(actual.retry_after_seconds, None, "{code}");
+        }
+    }
 }
 
 pub(crate) fn rest_assertion(fact_type: &str, record: &Value) -> Map<String, Value> {
