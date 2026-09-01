@@ -174,9 +174,18 @@ fn required_secret_with_fallback(
     preferred: &str,
     fallback: &str,
 ) -> Result<String, Box<dyn Error>> {
-    optional_secret(preferred)?
-        .or(optional_secret(fallback)?)
+    first_present_or_else(optional_secret(preferred)?, || optional_secret(fallback))?
         .ok_or_else(|| format!("{preferred} or {fallback} is required").into())
+}
+
+fn first_present_or_else<T, E>(
+    preferred: Option<T>,
+    fallback: impl FnOnce() -> Result<Option<T>, E>,
+) -> Result<Option<T>, E> {
+    match preferred {
+        Some(value) => Ok(Some(value)),
+        None => fallback(),
+    }
 }
 
 fn bounded_usize(
@@ -225,6 +234,29 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_present_or_else;
+
+    #[test]
+    fn preferred_secret_does_not_read_an_invalid_unused_fallback() {
+        let resolved = first_present_or_else(Some("preferred".to_owned()), || {
+            Err::<Option<String>, _>("unused fallback must not be read")
+        })
+        .expect("preferred secret short-circuits fallback");
+
+        assert_eq!(resolved.as_deref(), Some("preferred"));
+    }
+
+    #[test]
+    fn missing_preferred_secret_reads_the_fallback() {
+        let resolved = first_present_or_else(None, || Ok::<_, &'static str>(Some("fallback")))
+            .expect("fallback secret");
+
+        assert_eq!(resolved, Some("fallback"));
     }
 }
 
