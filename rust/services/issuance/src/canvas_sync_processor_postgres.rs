@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -41,6 +41,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         let platform = sqlx::query(
             "SELECT p.id, p.organization_id,
                     COALESCE(p.canvas_base_url, '') AS canvas_base_url,
+                    COALESCE(p.lti_trust_profile, '') AS lti_trust_profile,
                     COALESCE(p.lti_issuer, '') AS lti_issuer,
                     COALESCE(p.lti_client_id, '') AS lti_client_id,
                     COALESCE(p.lti_deployment_id, '') AS lti_deployment_id,
@@ -129,6 +130,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
                     .map_err(repository_error)?,
                 canvas_base_url: platform
                     .try_get("canvas_base_url")
+                    .map_err(repository_error)?,
+                lti_trust_profile: platform
+                    .try_get("lti_trust_profile")
                     .map_err(repository_error)?,
                 lti_issuer: platform.try_get("lti_issuer").map_err(repository_error)?,
                 lti_client_id: platform
@@ -249,37 +253,53 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
 
     async fn patch_application_sync(
         &self,
-        organization_id: &str,
-        application_id: &str,
+        target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         checked: &[String],
         policy_allowed: bool,
     ) -> Result<bool, CanvasSyncProcessingError> {
+        let application = resources.application.as_ref().ok_or_else(stale)?;
         let patch = json!({
             "last_evidence_sync_at": Utc::now(),
             "last_evidence_policy_allowed": policy_allowed,
             "last_evidence_requirements_checked": checked,
         });
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        lock_current_scope(&mut transaction, target, resources).await?;
+        lock_current_application(&mut transaction, application).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.applications SET integration_context = jsonb_set(
                 COALESCE(integration_context::jsonb, '{}'::jsonb), '{canvas}',
                 COALESCE(integration_context::jsonb->'canvas', '{}'::jsonb) || $3::jsonb, true),
                 updated_at = clock_timestamp()
-             WHERE id = $1 AND organization_id = $2",
+             WHERE id = $1 AND organization_id = $2 AND status = $4
+               AND integration_context::jsonb IS NOT DISTINCT FROM $5::jsonb",
         )
-        .bind(application_id)
-        .bind(organization_id)
+        .bind(&application.application.id)
+        .bind(&application.application.organization_id)
         .bind(patch)
-        .execute(&self.pool)
+        .bind(&application.application.status)
+        .bind(&application.application.integration_context)
+        .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
-        Ok(result.rows_affected() == 1)
+        if result.rows_affected() != 1 {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(stale());
+        }
+        transaction.commit().await.map_err(repository_error)?;
+        Ok(true)
     }
 
     async fn patch_platform_validation(
         &self,
-        platform: &CanvasSyncPlatformSnapshot,
+        target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         error_code: Option<&str>,
     ) -> Result<bool, CanvasSyncProcessingError> {
+        let platform = &resources.platform;
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_platforms
              SET last_validated_at = clock_timestamp(), last_connection_error = $4,
@@ -290,17 +310,22 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .bind(&platform.organization_id)
         .bind(platform.config_version)
         .bind(error_code)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
-        Ok(result.rows_affected() == 1)
+        if result.rows_affected() != 1 {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(stale());
+        }
+        transaction.commit().await.map_err(repository_error)?;
+        Ok(true)
     }
 
     async fn disable_target(
         &self,
         target: &CanvasSyncTarget,
     ) -> Result<(), CanvasSyncProcessingError> {
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
              SET enabled = false, updated_at = clock_timestamp()
              WHERE id = $1 AND organization_id = $2 AND config_version = $3",
@@ -311,6 +336,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .execute(&self.pool)
         .await
         .map_err(repository_error)?;
+        if result.rows_affected() != 1 {
+            return Err(stale());
+        }
         Ok(())
     }
 
@@ -340,9 +368,12 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
     async fn save_candidate(
         &self,
         target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         candidate: &CanvasRosterCandidate,
     ) -> Result<String, CanvasSyncProcessingError> {
-        sqlx::query_scalar(
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        lock_current_scope(&mut transaction, target, resources).await?;
+        let id = sqlx::query_scalar(
             "INSERT INTO issuance_service.canvas_award_candidates (
                 id, organization_id, platform_id, binding_id, learner_identity_id,
                 candidate_key, canvas_user_id, lti_subject, state, observed_at,
@@ -354,6 +385,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
                 state = CASE WHEN canvas_award_candidates.state IN ('claimed','dismissed')
                              THEN canvas_award_candidates.state ELSE EXCLUDED.state END,
                 observed_at = clock_timestamp(), updated_at = clock_timestamp()
+             WHERE canvas_award_candidates.organization_id = EXCLUDED.organization_id
+               AND canvas_award_candidates.platform_id = EXCLUDED.platform_id
+               AND canvas_award_candidates.binding_id = EXCLUDED.binding_id
              RETURNING id",
         )
         .bind(&candidate.id)
@@ -365,14 +399,18 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .bind(&candidate.canvas_user_id)
         .bind(&candidate.lti_subject)
         .bind(&candidate.state)
-        .fetch_one(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await
-        .map_err(repository_error)
+        .map_err(repository_error)?
+        .ok_or_else(stale)?;
+        transaction.commit().await.map_err(repository_error)?;
+        Ok(id)
     }
 
     async fn save_candidate_observation(
         &self,
         target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         candidate_id: &str,
         requirement_id: &str,
         observation: &CanvasAuthoritativeObservation,
@@ -383,6 +421,23 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         }));
         let payload_hash = hex::encode(Sha256::digest(canonical.as_bytes()));
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        lock_current_scope(&mut transaction, target, resources).await?;
+        let candidate_current = sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM issuance_service.canvas_award_candidates
+             WHERE id = $1 AND organization_id = $2 AND platform_id = $3 AND binding_id = $4
+             FOR UPDATE",
+        )
+        .bind(candidate_id)
+        .bind(&target.organization_id)
+        .bind(&target.platform_id)
+        .bind(&target.binding_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        if candidate_current.is_none() {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(stale());
+        }
         let current = sqlx::query(
             "SELECT id, payload_hash FROM issuance_service.canvas_candidate_observations
              WHERE organization_id = $1 AND candidate_id = $2 AND logical_key = $3
@@ -407,10 +462,19 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             .as_ref()
             .and_then(|row| row.try_get::<String, _>("id").ok());
         if let Some(id) = superseded.as_deref() {
-            sqlx::query("UPDATE issuance_service.canvas_candidate_observations SET is_current = false WHERE id = $1")
-                .bind(id).execute(&mut *transaction).await.map_err(repository_error)?;
+            let result = sqlx::query("UPDATE issuance_service.canvas_candidate_observations SET is_current = false WHERE id = $1 AND organization_id = $2 AND candidate_id = $3 AND is_current = true")
+                .bind(id)
+                .bind(&target.organization_id)
+                .bind(candidate_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(repository_error)?;
+            if result.rows_affected() != 1 {
+                transaction.rollback().await.map_err(repository_error)?;
+                return Err(stale());
+            }
         }
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO issuance_service.canvas_candidate_observations (
                 id, organization_id, candidate_id, requirement_id, logical_key,
                 assertion, verification, payload_hash, superseded_observation_id,
@@ -428,6 +492,10 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
+        if inserted.rows_affected() != 1 {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(stale());
+        }
         transaction.commit().await.map_err(repository_error)?;
         Ok(true)
     }
@@ -461,6 +529,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
     async fn update_roster_cursor(
         &self,
         target: &CanvasSyncTarget,
+        resources: &CanvasSyncResources,
         next_cursor: usize,
         roster_size: usize,
     ) -> Result<(), CanvasSyncProcessingError> {
@@ -469,7 +538,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             "roster_size": roster_size,
             "roster_cycle_completed_at": (next_cursor == 0).then(Utc::now),
         });
-        sqlx::query(
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        lock_current_scope(&mut transaction, target, resources).await?;
+        let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
              SET metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
                  next_run_at = CASE WHEN $5 THEN clock_timestamp() + interval '60 seconds' ELSE next_run_at END,
@@ -481,11 +552,74 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .bind(target.config_version)
         .bind(patch)
         .bind(next_cursor != 0)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
+        if result.rows_affected() != 1 {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(stale());
+        }
+        transaction.commit().await.map_err(repository_error)?;
         Ok(())
     }
+}
+
+async fn lock_current_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    target: &CanvasSyncTarget,
+    resources: &CanvasSyncResources,
+) -> Result<(), CanvasSyncProcessingError> {
+    let current = sqlx::query_scalar::<_, i32>(
+        "SELECT 1
+         FROM issuance_service.canvas_evidence_sync_targets t
+         JOIN issuance_service.canvas_platforms p
+           ON p.id = t.platform_id AND p.organization_id = t.organization_id
+         JOIN issuance_service.canvas_program_bindings b
+           ON b.id = t.binding_id AND b.organization_id = t.organization_id
+          AND b.platform_id = t.platform_id
+         WHERE t.id = $1 AND t.organization_id = $2
+           AND t.platform_id = $3 AND t.binding_id = $4
+           AND t.config_version = $5 AND t.enabled = true
+           AND p.config_version = $6 AND p.enabled = true AND p.archived_at IS NULL
+           AND b.config_version = $5 AND b.enabled = true AND b.archived_at IS NULL
+         FOR UPDATE OF t, p, b",
+    )
+    .bind(&target.id)
+    .bind(&target.organization_id)
+    .bind(&target.platform_id)
+    .bind(&target.binding_id)
+    .bind(target.config_version)
+    .bind(resources.platform.config_version)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(repository_error)?;
+    if current.is_none() {
+        return Err(stale());
+    }
+    Ok(())
+}
+
+async fn lock_current_application(
+    transaction: &mut Transaction<'_, Postgres>,
+    application: &CanvasSyncApplicationSnapshot,
+) -> Result<(), CanvasSyncProcessingError> {
+    let current = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM issuance_service.applications
+         WHERE id = $1 AND organization_id = $2 AND status = $3
+           AND integration_context::jsonb IS NOT DISTINCT FROM $4::jsonb
+         FOR UPDATE",
+    )
+    .bind(&application.application.id)
+    .bind(&application.application.organization_id)
+    .bind(&application.application.status)
+    .bind(&application.application.integration_context)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(repository_error)?;
+    if current.is_none() {
+        return Err(stale());
+    }
+    Ok(())
 }
 
 fn required_text(
@@ -582,5 +716,12 @@ fn unavailable() -> CanvasSyncProcessingError {
     CanvasSyncProcessingError::retryable(
         "canvas_sync_repository_unavailable",
         "Canvas synchronization persistence is unavailable",
+    )
+}
+
+fn stale() -> CanvasSyncProcessingError {
+    CanvasSyncProcessingError::retryable(
+        "canvas_platform_reconfigured",
+        "Canvas target, platform, binding, or application changed during synchronization",
     )
 }

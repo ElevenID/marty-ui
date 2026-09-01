@@ -478,7 +478,7 @@ impl CanvasOAuthProvider for MemoryProvider {
             .revocations
             .push((canvas_base_url.to_owned(), access_token.to_owned()));
         if let Some(retry_after_seconds) = state.fail_revoke_with_retry_after {
-            Err(CanvasOAuthProviderError::Failed {
+            Err(CanvasOAuthProviderError::RateLimited {
                 retry_after_seconds: Some(retry_after_seconds),
             })
         } else {
@@ -711,7 +711,7 @@ async fn rate_limited_refresh_releases_the_lease_and_preserves_retry_after() {
     let (service, repository, vault, provider) = fixture();
     install_connected_token_fixture(&repository, &vault, Some(Utc::now() - Duration::seconds(1)));
     provider.state.lock().expect("provider state").refresh_error =
-        Some(CanvasOAuthProviderError::Failed {
+        Some(CanvasOAuthProviderError::RateLimited {
             retry_after_seconds: Some(17),
         });
 

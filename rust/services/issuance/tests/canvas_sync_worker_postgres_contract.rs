@@ -265,7 +265,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .execute(&pool)
     .await
     .unwrap();
-    assert!(!repository
+    assert!(repository
         .complete_job(
             stale,
             "race-worker",
@@ -274,13 +274,18 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         )
         .await
         .unwrap());
-    let stale_status: String = sqlx::query_scalar(
-        "SELECT status FROM issuance_service.canvas_evidence_sync_jobs WHERE id = 'complete-stale'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(stale_status, "leased");
+    let (stale_status, stale_target_succeeded): (String, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as(
+            "SELECT j.status, t.last_succeeded_at
+             FROM issuance_service.canvas_evidence_sync_jobs j
+             JOIN issuance_service.canvas_evidence_sync_targets t ON t.id = j.target_id
+             WHERE j.id = 'complete-stale'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stale_status, "succeeded");
+    assert_eq!(stale_target_succeeded, None);
 
     let mut reconfiguration = pool.begin().await.unwrap();
     sqlx::query(
@@ -304,7 +309,19 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     });
     tokio::task::yield_now().await;
     reconfiguration.commit().await.unwrap();
-    assert!(!completion.await.unwrap());
+    assert!(completion.await.unwrap());
+    let (during_status, during_target_succeeded): (String, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as(
+            "SELECT j.status, t.last_succeeded_at
+             FROM issuance_service.canvas_evidence_sync_jobs j
+             JOIN issuance_service.canvas_evidence_sync_targets t ON t.id = j.target_id
+             WHERE j.id = 'complete-during'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(during_status, "succeeded");
+    assert_eq!(during_target_succeeded, None);
     assert_eq!(
         repository
             .fail_job(

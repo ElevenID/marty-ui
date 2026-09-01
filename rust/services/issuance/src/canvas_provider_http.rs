@@ -213,6 +213,9 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
             IpAddr::V6(Ipv6Addr::LOCALHOST),
             "2001:db8::1".parse().expect("documentation IPv6"),
+            "64:ff9b:1::1".parse().expect("local-use translation IPv6"),
+            "100::1".parse().expect("discard-only IPv6"),
+            "2001:2::1".parse().expect("benchmark IPv6"),
         ] {
             assert!(is_private_ip(ip), "{ip} must fail closed");
         }

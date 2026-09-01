@@ -33,6 +33,14 @@ mutations, pagination credential/item rejection, and independent self-managed
 origin policy; the PostgreSQL contract exercises dead-letter and recovery
 reconfiguration races when its database gate is configured.
 
+The follow-on parity hardening also generation-fences application state,
+platform validation, roster candidate/observation and cursor writes; reloads
+the canonical target before durable job completion; binds LTI collection use
+to the persisted and re-derived trust profile; and preserves explicit OAuth
+429, shutdown, truthy-environment and deployed-secret behavior. Target changes
+that race with reconciliation retain the original job outcome without allowing
+stale-generation business effects.
+
 This candidate does not change Compose, self-host, Kubernetes, beta, or
 production traffic. The executable uses the native processor while retaining
 the rollout gate:

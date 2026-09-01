@@ -48,6 +48,20 @@ fn configuration_matches_frozen_defaults_bounds_and_failures() {
     assert_eq!(bounded.job_timeout.as_secs_f64(), 3_600.0);
     assert_eq!(bounded.poll_interval.as_secs_f64(), 0.1);
 
+    let python_truthy = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([
+        (
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED".to_owned(),
+            " on ".to_owned(),
+        ),
+        (
+            "CANVAS_PILOT_ORGANIZATION_IDS".to_owned(),
+            "org-1".to_owned(),
+        ),
+    ]))
+    .expect("Python-compatible truthy value");
+    assert!(python_truthy.portable_enabled);
+    assert!(python_truthy.enabled_for("org-1"));
+
     for name in [
         "CANVAS_SYNC_WORKER_BATCH_SIZE",
         "CANVAS_SYNC_WORKER_LEASE_SECONDS",
@@ -62,6 +76,69 @@ fn configuration_matches_frozen_defaults_bounds_and_failures() {
         )]))
         .expect_err("malformed values fail startup");
         assert!(format!("{error}").contains(name));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_process_handles_sigterm_and_signing_key_fallback() {
+    use std::{
+        process::{Command, Stdio},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let binary = env!("CARGO_BIN_EXE_marty-canvas-sync-worker");
+    let mut child = Command::new(binary)
+        .env("DATABASE_URL", "postgresql://127.0.0.1:9/marty")
+        .env(
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        )
+        .env(
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+            "signing-only-deployment-key",
+        )
+        .env_remove("ISSUANCE_API_KEY")
+        .env_remove("ISSUANCE_API_KEY_FILE")
+        .env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
+        .env(
+            "CANVAS_LTI_TOOL_ISSUER_DID",
+            "did:web:issuer.example:orgs:system-tools",
+        )
+        .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "on")
+        .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+        .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("standalone worker starts with the deployed signing-only key projection");
+
+    thread::sleep(Duration::from_millis(750));
+    assert!(
+        child.try_wait().expect("worker status").is_none(),
+        "worker must survive startup without ISSUANCE_API_KEY"
+    );
+    let signal = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("send SIGTERM");
+    assert!(signal.success());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().expect("worker status after SIGTERM") {
+            assert!(
+                status.success(),
+                "worker did not shut down cleanly: {status}"
+            );
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("worker did not exit after SIGTERM");
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

@@ -164,7 +164,7 @@ fn parse_python_bool(value: Option<&String>, default: bool) -> bool {
     value.map_or(default, |value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes"
+            "1" | "true" | "yes" | "on"
         )
     })
 }
@@ -289,6 +289,13 @@ pub struct CanvasSyncWorkerCycleResult {
     pub dead_lettered: usize,
     pub oauth_revocations_succeeded: usize,
     pub oauth_revocations_retried: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OAuthRevocationOutcome {
+    Succeeded,
+    Retried,
+    OwnerFenceLost,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -553,7 +560,7 @@ impl CanvasSyncWorker {
         &self,
         job: CanvasSyncJob,
     ) -> Result<CanvasSyncJobStatus, EscapedJobError> {
-        let Some(target) = self
+        let Some(mut target) = self
             .repository
             .target(&job.organization_id, &job.target_id)
             .await?
@@ -570,13 +577,33 @@ impl CanvasSyncWorker {
                 )
                 .await;
         };
-        require_leased_target_generation(&job, &target)?;
         if !self
             .repository
             .touch_target_heartbeat(&target, &self.config.worker_id)
             .await?
         {
-            return Err(EscapedJobError::StaleLease);
+            let Some(current_target) = self
+                .repository
+                .target(&job.organization_id, &job.target_id)
+                .await?
+            else {
+                return self
+                    .persist_failure(
+                        &job,
+                        JobFailure {
+                            error_code: "canvas_sync_target_not_found",
+                            error_summary: Some("Canvas synchronization target is unavailable"),
+                            retry_after_seconds: None,
+                            force_dead_letter: true,
+                        },
+                    )
+                    .await;
+            };
+            // Reconcile against the canonical target. The leased job's
+            // generation remains the outcome fence, but validation must see a
+            // newly disabled or reconfigured target instead of abandoning the
+            // lease without a durable terminal outcome.
+            target = current_target;
         }
 
         let evaluation = async {
@@ -604,7 +631,15 @@ impl CanvasSyncWorker {
                     .touch_target_heartbeat(&target, &self.config.worker_id)
                     .await?;
                 if !target_is_current {
-                    return Ok(false);
+                    // Mirror the frozen worker's reload-on-target-CAS-loss
+                    // behavior. Side-effect repositories independently fence
+                    // the captured generation, so a live canonical target may
+                    // be reconciled without dropping the durable job lease.
+                    return self
+                        .repository
+                        .target(&job.organization_id, &job.target_id)
+                        .await
+                        .map(|target| target.is_some());
                 }
                 self.heartbeat("processing", 1).await?;
                 Ok(true)
@@ -747,14 +782,18 @@ impl CanvasSyncWorker {
                 }
             };
             match self.revoke_connection(&connection).await {
-                Ok(()) => succeeded += 1,
-                Err(()) => retried += 1,
+                OAuthRevocationOutcome::Succeeded => succeeded += 1,
+                OAuthRevocationOutcome::Retried => retried += 1,
+                OAuthRevocationOutcome::OwnerFenceLost => {}
             }
         }
         (succeeded, retried)
     }
 
-    async fn revoke_connection(&self, connection: &CanvasOAuthConnection) -> Result<(), ()> {
+    async fn revoke_connection(
+        &self,
+        connection: &CanvasOAuthConnection,
+    ) -> OAuthRevocationOutcome {
         let access_id = connection
             .access_token_secret_ref
             .as_deref()
@@ -795,9 +834,8 @@ impl CanvasSyncWorker {
                     retry_at,
                     code,
                 )
-                .await
-                .unwrap_or(false);
-            if rescheduled {
+                .await;
+            if matches!(rescheduled, Ok(true)) {
                 warn!(
                     organization_id = %connection.organization_id,
                     platform_id = %connection.platform_id,
@@ -805,7 +843,11 @@ impl CanvasSyncWorker {
                     "Canvas OAuth revocation retry scheduled"
                 );
             }
-            return Err(());
+            return if matches!(rescheduled, Ok(true)) {
+                OAuthRevocationOutcome::Retried
+            } else {
+                OAuthRevocationOutcome::OwnerFenceLost
+            };
         }
         let secret_ids = [access_id, refresh_id]
             .into_iter()
@@ -822,10 +864,9 @@ impl CanvasSyncWorker {
                 &self.config.worker_id,
                 &secret_ids,
             )
-            .await
-            .unwrap_or(false);
-        if !deleted {
-            return Err(());
+            .await;
+        if !matches!(deleted, Ok(true)) {
+            return OAuthRevocationOutcome::OwnerFenceLost;
         }
         if let Err(error) = self
             .oauth_repository
@@ -844,7 +885,7 @@ impl CanvasSyncWorker {
                 "Canvas OAuth disconnected projection failed"
             );
         }
-        Ok(())
+        OAuthRevocationOutcome::Succeeded
     }
 }
 
@@ -980,6 +1021,9 @@ fn provider_retry_after(error: &CanvasOAuthProviderError) -> Option<u64> {
     match error {
         CanvasOAuthProviderError::Failed {
             retry_after_seconds,
+        }
+        | CanvasOAuthProviderError::RateLimited {
+            retry_after_seconds,
         } => *retry_after_seconds,
         CanvasOAuthProviderError::RefreshRejected => None,
         CanvasOAuthProviderError::Timeout => None,
@@ -989,9 +1033,7 @@ fn provider_retry_after(error: &CanvasOAuthProviderError) -> Option<u64> {
 
 fn oauth_revocation_error_code(error: &CanvasOAuthProviderError) -> &'static str {
     match error {
-        CanvasOAuthProviderError::Failed {
-            retry_after_seconds: Some(_),
-        } => "canvas_oauth_revoke_rate_limited",
+        CanvasOAuthProviderError::RateLimited { .. } => "canvas_oauth_revoke_rate_limited",
         CanvasOAuthProviderError::RefreshRejected => "canvas_oauth_revoke_rejected",
         CanvasOAuthProviderError::RevocationRejected => "canvas_oauth_revoke_rejected",
         CanvasOAuthProviderError::Timeout => "canvas_oauth_revoke_timeout",
@@ -1040,16 +1082,6 @@ where
             }
         }
     }
-}
-
-fn require_leased_target_generation(
-    job: &CanvasSyncJob,
-    target: &CanvasSyncTarget,
-) -> Result<(), EscapedJobError> {
-    if target.config_version != job.target_config_version || !target.enabled {
-        return Err(EscapedJobError::StaleLease);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1109,7 +1141,7 @@ mod lease_tests {
     }
 
     #[test]
-    fn leased_job_never_adopts_a_reconfigured_target() {
+    fn canonical_target_snapshot_can_be_newer_or_disabled_than_the_lease_snapshot() {
         let now = Utc::now();
         let job = CanvasSyncJob {
             id: "job".into(),
@@ -1140,9 +1172,10 @@ mod lease_tests {
             metadata: Map::new(),
             created_at: now,
         };
-        assert!(matches!(
-            require_leased_target_generation(&job, &target),
-            Err(EscapedJobError::StaleLease)
-        ));
+        assert_ne!(target.config_version, job.target_config_version);
+        assert!(target.enabled);
+        let mut disabled = target;
+        disabled.enabled = false;
+        assert!(!disabled.enabled);
     }
 }

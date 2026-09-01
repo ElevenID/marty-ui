@@ -276,6 +276,8 @@ pub enum CanvasOAuthPlatformPatch {
 pub enum CanvasOAuthProviderError {
     #[error("Canvas OAuth provider request failed")]
     Failed { retry_after_seconds: Option<u64> },
+    #[error("Canvas OAuth provider rate limited the request")]
+    RateLimited { retry_after_seconds: Option<u64> },
     #[error("Canvas OAuth provider request timed out")]
     Timeout,
     #[error("Canvas OAuth provider rejected the refresh grant")]
@@ -1178,6 +1180,15 @@ impl CanvasOAuthService {
                 }
                 return Ok(None);
             }
+            Err(CanvasOAuthProviderError::RateLimited {
+                retry_after_seconds,
+            }) => {
+                self.release_refresh(&platform, &lease_owner, false, Some("oauth_refresh_failed"))
+                    .await?;
+                return Err(CanvasOAuthError::RefreshRateLimited {
+                    retry_after_seconds: retry_after_seconds.unwrap_or(0),
+                });
+            }
             Err(CanvasOAuthProviderError::Timeout) => {
                 self.release_refresh(&platform, &lease_owner, false, Some("oauth_refresh_failed"))
                     .await?;
@@ -1506,6 +1517,9 @@ impl CanvasOAuthService {
         if let Err(error) = revoked {
             let retry_after_seconds = match error {
                 CanvasOAuthProviderError::Failed {
+                    retry_after_seconds,
+                }
+                | CanvasOAuthProviderError::RateLimited {
                     retry_after_seconds,
                 } => retry_after_seconds,
                 CanvasOAuthProviderError::Timeout
