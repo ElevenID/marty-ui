@@ -134,6 +134,66 @@ impl PostgresIntegrationSecretVault {
 
 #[async_trait]
 impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
+    async fn due_revocations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CanvasOAuthConnection>, CanvasOAuthError> {
+        let rows = sqlx::query(
+            "SELECT id, organization_id, platform_id, canvas_base_url,
+                    platform_config_version, client_id, client_secret_ref,
+                    capabilities, scopes, access_token_secret_ref,
+                    refresh_token_secret_ref, token_expires_at, status,
+                    revoke_retry_count, updated_at
+             FROM issuance_service.canvas_oauth_connections
+             WHERE status = 'revocation_pending'
+               AND (revoke_retry_at IS NULL OR revoke_retry_at <= clock_timestamp())
+               AND (refresh_lease_owner IS NULL OR refresh_lease_expires_at IS NULL
+                    OR refresh_lease_expires_at <= clock_timestamp())
+             ORDER BY revoke_retry_at ASC NULLS FIRST
+             LIMIT $1",
+        )
+        .bind(i64::try_from(limit.clamp(1, 500)).map_err(|_| repository_failure())?)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repository_error)?;
+        rows.into_iter().map(connection_from_row).collect()
+    }
+
+    async fn acquire_due_revocation(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+        lease_owner: &str,
+        lease_seconds: i64,
+    ) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError> {
+        sqlx::query(
+            "UPDATE issuance_service.canvas_oauth_connections
+             SET refresh_lease_owner = $3,
+                 refresh_lease_expires_at = clock_timestamp() + make_interval(secs => $4),
+                 updated_at = clock_timestamp()
+             WHERE organization_id = $1 AND platform_id = $2
+               AND status = 'revocation_pending'
+               AND (revoke_retry_at IS NULL OR revoke_retry_at <= clock_timestamp())
+               AND (refresh_lease_owner IS NULL OR refresh_lease_expires_at IS NULL
+                    OR refresh_lease_expires_at <= clock_timestamp()
+                    OR refresh_lease_owner = $3)
+             RETURNING id, organization_id, platform_id, canvas_base_url,
+                       platform_config_version, client_id, client_secret_ref,
+                       capabilities, scopes, access_token_secret_ref,
+                       refresh_token_secret_ref, token_expires_at, status,
+                       revoke_retry_count, updated_at",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .bind(lease_owner)
+        .bind(lease_seconds.clamp(30, 300))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repository_error)?
+        .map(connection_from_row)
+        .transpose()
+    }
+
     async fn management_platform(
         &self,
         organization_id: &str,

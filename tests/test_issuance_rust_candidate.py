@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -17,7 +16,17 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     canvas_contracts = {
         path.stem for path in contract_dir.glob("canvas_*_postgres_contract.rs")
     }
-    assert len(canvas_contracts) == 8
+    assert canvas_contracts == {
+        "canvas_award_candidate_postgres_contract",
+        "canvas_event_status_postgres_contract",
+        "canvas_lti_deep_linking_postgres_contract",
+        "canvas_lti_evidence_postgres_contract",
+        "canvas_lti_login_postgres_contract",
+        "canvas_lti_sync_enqueue_postgres_contract",
+        "canvas_management_postgres_contract",
+        "canvas_oauth_postgres_contract",
+        "canvas_sync_worker_postgres_contract",
+    }
     assert (contract_dir / "proof_nonce_postgres_contract.rs").is_file()
 
     workflow = text(".github/workflows/ci.yml")
@@ -29,7 +38,8 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     assert 'startswith("canvas_")' in workflow
     assert 'endswith("_postgres_contract")' in workflow
     assert "canvas_*_postgres_contract-*" in workflow
-    assert workflow.count("Expected nine Canvas Issuance PostgreSQL") == 2
+    assert workflow.count("Expected ten issuance PostgreSQL contract") == 2
+    assert workflow.count("nine Canvas plus proof nonce") == 2
 
 
 def test_frozen_surface_provenance_and_coverage_are_complete() -> None:

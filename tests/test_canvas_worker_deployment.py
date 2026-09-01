@@ -81,6 +81,29 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert "CANVAS_SYNC_WORKER_POLL_SECONDS" in environment
 
 
+def test_unrouted_rust_candidate_is_packaged_without_changing_consumers() -> None:
+    cargo = (ROOT / "rust/services/issuance/Cargo.toml").read_text(encoding="utf-8")
+    worker = (ROOT / "rust/services/issuance/src/bin/canvas_sync_worker.rs").read_text(
+        encoding="utf-8"
+    )
+    service_image = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    ci_image = (ROOT / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
+
+    assert 'name = "marty-canvas-sync-worker"' in cargo
+    assert "NativeCanvasSyncProcessor::new" in worker
+    assert "canvas_sync_processor_unavailable" not in worker
+    for dockerfile in (service_image, ci_image):
+        assert "--bin marty-canvas-sync-worker" in dockerfile
+        assert "target/release/marty-canvas-sync-worker" in dockerfile
+
+    # Candidate packaging is not a cutover: every production consumer remains
+    # on the Python oracle until the frozen differential/deletion gates pass.
+    for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
+        worker = _yaml(path)["services"]["canvas-sync-worker"]
+        assert "issuance.canvas_worker" in str(worker["command"])
+        assert PROCESSOR in worker["environment"]["CANVAS_SYNC_PROCESSOR"]
+
+
 def test_deployments_migrate_issuance_from_the_released_credentials_image() -> None:
     for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
         services = _yaml(path)["services"]

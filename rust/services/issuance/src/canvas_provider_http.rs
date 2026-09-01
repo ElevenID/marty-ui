@@ -60,9 +60,17 @@ pub async fn client_for_canvas_origin(
     if addresses.is_empty() {
         return Err(());
     }
-    let exact_origin_allowed = policy.private_origin_allowlist.iter().any(|candidate| {
-        candidate.trim().trim_end_matches('/') == canvas_base_url.trim().trim_end_matches('/')
-    });
+    let requested_origin = normalized_origin(&origin);
+    let exact_origin_allowed = policy
+        .private_origin_allowlist
+        .iter()
+        .filter_map(|candidate| Url::parse(candidate.trim()).ok())
+        .filter_map(|candidate| normalized_origin(&candidate))
+        .any(|candidate| {
+            requested_origin
+                .as_ref()
+                .is_some_and(|origin| candidate == *origin)
+        });
     let private_allowed = policy.allow_private_networks || exact_origin_allowed || http_localhost;
     if !private_allowed && addresses.iter().any(|address| is_private_ip(address.ip())) {
         return Err(());
@@ -76,6 +84,26 @@ pub async fn client_for_canvas_origin(
         .build()
         .map_err(|_| ())?;
     Ok((client, origin))
+}
+
+fn normalized_origin(url: &Url) -> Option<String> {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !(url.path().is_empty() || url.path() == "/")
+    {
+        return None;
+    }
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    match url.port_or_known_default()? {
+        443 => Some(format!("https://{host}")),
+        port => Some(format!("https://{host}:{port}")),
+    }
 }
 
 #[must_use]
@@ -172,5 +200,20 @@ mod tests {
         let debug = format!("{policy:?}");
         assert!(debug.contains("private_origin_allowlist_count: 1"));
         assert!(!debug.contains("private-sensitive"));
+    }
+
+    #[test]
+    fn private_allowlist_normalization_is_exact_and_ignores_invalid_entries() {
+        let origin = Url::parse("https://Canvas.Internal.Example.:443/").unwrap();
+        assert_eq!(
+            normalized_origin(&origin).as_deref(),
+            Some("https://canvas.internal.example")
+        );
+        assert!(
+            normalized_origin(&Url::parse("https://user:secret@example.test").unwrap()).is_none()
+        );
+        assert!(
+            normalized_origin(&Url::parse("http://canvas.internal.example").unwrap()).is_none()
+        );
     }
 }

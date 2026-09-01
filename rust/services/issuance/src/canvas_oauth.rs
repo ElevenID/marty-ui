@@ -276,8 +276,12 @@ pub enum CanvasOAuthPlatformPatch {
 pub enum CanvasOAuthProviderError {
     #[error("Canvas OAuth provider request failed")]
     Failed { retry_after_seconds: Option<u64> },
+    #[error("Canvas OAuth provider request timed out")]
+    Timeout,
     #[error("Canvas OAuth provider rejected the refresh grant")]
     RefreshRejected,
+    #[error("Canvas OAuth provider rejected revocation")]
+    RevocationRejected,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -324,6 +328,29 @@ impl From<IntegrationSecretError> for CanvasOAuthError {
 
 #[async_trait]
 pub trait CanvasOAuthRepository: Send + Sync {
+    /// Return durable revocations that are due and not held by a live lease.
+    ///
+    /// The default keeps request-only repository implementations source
+    /// compatible. The standalone worker requires an implementation and fails
+    /// closed when the repository reports that the queue is unavailable.
+    async fn due_revocations(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<CanvasOAuthConnection>, CanvasOAuthError> {
+        Ok(Vec::new())
+    }
+    /// Lease one already-pending revocation without changing its durable
+    /// lifecycle state. This is distinct from `begin_revocation`, which is the
+    /// request-path transition into the queue.
+    async fn acquire_due_revocation(
+        &self,
+        _organization_id: &str,
+        _platform_id: &str,
+        _lease_owner: &str,
+        _lease_seconds: i64,
+    ) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError> {
+        Ok(None)
+    }
     async fn management_platform(
         &self,
         organization_id: &str,
@@ -1151,6 +1178,16 @@ impl CanvasOAuthService {
                 }
                 return Ok(None);
             }
+            Err(CanvasOAuthProviderError::Timeout) => {
+                self.release_refresh(&platform, &lease_owner, false, Some("oauth_refresh_failed"))
+                    .await?;
+                return Ok(None);
+            }
+            Err(CanvasOAuthProviderError::RevocationRejected) => {
+                self.release_refresh(&platform, &lease_owner, false, Some("oauth_refresh_failed"))
+                    .await?;
+                return Ok(None);
+            }
         };
 
         let token_expires_at =
@@ -1466,10 +1503,15 @@ impl CanvasOAuthService {
                 retry_after_seconds: None,
             })
         };
-        if let Err(CanvasOAuthProviderError::Failed {
-            retry_after_seconds,
-        }) = revoked
-        {
+        if let Err(error) = revoked {
+            let retry_after_seconds = match error {
+                CanvasOAuthProviderError::Failed {
+                    retry_after_seconds,
+                } => retry_after_seconds,
+                CanvasOAuthProviderError::Timeout
+                | CanvasOAuthProviderError::RefreshRejected
+                | CanvasOAuthProviderError::RevocationRejected => None,
+            };
             let exponent = u32::try_from(leased.revoke_retry_count.clamp(0, 7)).unwrap_or(0);
             let delay = 30_u64
                 .saturating_mul(2_u64.pow(exponent))

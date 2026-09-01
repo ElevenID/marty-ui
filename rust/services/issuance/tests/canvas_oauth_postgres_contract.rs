@@ -462,11 +462,21 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
         .unwrap()
         .expect("retry connection");
     assert_eq!(retried.revoke_retry_count, 1);
+    assert!(repository.due_revocations(25).await.unwrap().is_empty());
+    sqlx::query(
+        "UPDATE issuance_service.canvas_oauth_connections
+         SET revoke_retry_at = clock_timestamp() - interval '1 second'
+         WHERE organization_id = 'org-1' AND platform_id = 'platform-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(repository.due_revocations(25).await.unwrap().len(), 1);
     let leased_again = repository
-        .begin_revocation("org-1", "platform-1", retried.updated_at, "lease-2", 60)
+        .acquire_due_revocation("org-1", "platform-1", "lease-2", 60)
         .await
         .unwrap()
-        .expect("second lease");
+        .expect("worker-owned due revocation lease");
     assert_eq!(leased_again.status, "revocation_pending");
     assert!(repository
         .complete_revocation(

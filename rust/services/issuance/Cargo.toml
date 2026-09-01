@@ -13,6 +13,11 @@ name = "marty-issuance-service"
 path = "src/main.rs"
 test = false
 
+[[bin]]
+name = "marty-canvas-sync-worker"
+path = "src/bin/canvas_sync_worker.rs"
+test = false
+
 [dependencies]
 aes-gcm.workspace = true
 axum.workspace = true
