@@ -16,7 +16,7 @@ RUN cargo build --locked --release \
     -p marty-organization --bin marty-organization \
     -p marty-auth --bin marty-auth \
     -p marty-credential-template --bin marty-credential-template \
-    -p marty-presentation-policy --bin marty-presentation-policy \
+    -p marty-presentation-policy --bin marty-presentation-policy --bin marty-verifier-positive-gate \
     -p marty-trust-profile --bin marty-trust-profile \
     -p marty-applicant --bin marty-applicant \
     -p marty-device-registration --bin marty-device-registration \
@@ -55,6 +55,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-organization /
 COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth
 COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
 COPY --from=rust-service-builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy
+COPY --from=rust-service-builder /build/rust/target/release/marty-verifier-positive-gate /usr/local/bin/marty-verifier-positive-gate
 COPY --from=rust-service-builder /build/rust/target/release/marty-trust-profile /usr/local/bin/marty-trust-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-applicant /usr/local/bin/marty-applicant
 COPY --from=rust-service-builder /build/rust/target/release/marty-device-registration /usr/local/bin/marty-device-registration

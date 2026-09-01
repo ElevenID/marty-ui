@@ -15,13 +15,14 @@ base64.workspace = true
 chrono.workspace = true
 hex.workspace = true
 marty-crypto.workspace = true
-marty-oid4vci.workspace = true
+marty-oid4vci = { workspace = true, features = ["wallet"] }
 marty-verification.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 prost.workspace = true
+p256.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -23,8 +23,11 @@ RUST_SERVICES = {
     "trust_profile": "marty-trust-profile",
     "verification": "marty-verification-service",
 }
-UNROUTED_RUST_CANDIDATES = {"marty-canvas-sync-worker"}
-ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_CANDIDATES
+UNROUTED_RUST_BINARIES = {
+    "marty-canvas-sync-worker",
+    "marty-verifier-positive-gate",
+}
+ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
 
 
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
@@ -49,7 +52,7 @@ def test_container_entrypoint_is_the_exact_closed_rust_allowlist() -> None:
     for service_name, binary in RUST_SERVICES.items():
         assert f'if [ "$MODULE_NAME" = "{service_name}" ]; then' in script
         assert f"exec /usr/local/bin/{binary}" in script
-    for binary in UNROUTED_RUST_CANDIDATES:
+    for binary in UNROUTED_RUST_BINARIES:
         assert f"exec /usr/local/bin/{binary}" not in script
 
 
