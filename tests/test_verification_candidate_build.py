@@ -340,6 +340,10 @@ def minimal_layer_tar() -> bytes:
     return content.getvalue()
 
 
+def canonical_empty_layer_tar() -> bytes:
+    return bytes(candidate.TAR_BLOCK_BYTES * 2)
+
+
 def archive_resource_dimensions(path: Path) -> dict[str, int]:
     with tarfile.open(path, "r:*") as archive:
         outer_members = archive.getmembers()
@@ -793,6 +797,41 @@ def test_inspection_accepts_canonical_unqualified_linux_amd64_config(
     )
 
     candidate.inspect_oci_archive(archive, commit=commit, version=version)
+
+
+def test_inspection_accepts_a_canonical_empty_filesystem_layer(tmp_path: Path) -> None:
+    commit = "a" * 40
+    version = f"0.0.0-candidate.{commit[:12]}"
+    archive = tmp_path / "candidate.tar"
+    write_oci_archive(
+        archive,
+        commit=commit,
+        version=version,
+        uncompressed_layer_override=canonical_empty_layer_tar(),
+    )
+
+    inspected = candidate.inspect_oci_archive(
+        archive,
+        commit=commit,
+        version=version,
+    )
+
+    assert inspected["uri"] == candidate.IMAGE_URI
+
+
+def test_inspection_rejects_a_zero_byte_uncompressed_layer(tmp_path: Path) -> None:
+    commit = "a" * 40
+    version = f"0.0.0-candidate.{commit[:12]}"
+    archive = tmp_path / "candidate.tar"
+    write_oci_archive(
+        archive,
+        commit=commit,
+        version=version,
+        uncompressed_layer_override=b"",
+    )
+
+    with pytest.raises(ValueError, match="missing the canonical tar end-of-archive"):
+        candidate.inspect_oci_archive(archive, commit=commit, version=version)
 
 
 @pytest.mark.parametrize(
