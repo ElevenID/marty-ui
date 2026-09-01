@@ -365,10 +365,22 @@ def test_consumer_containerd_runtime_contract_rejects_single_field_drift() -> No
 
 
 def test_consumer_uses_exact_public_harness_and_remains_fail_closed() -> None:
-    source, _document = consumer_workflow()
+    source, document = consumer_workflow()
 
     assert "repository: ElevenID/marty-integration-tests" in source
     assert f"ref: {INTEGRATION_HARNESS}" in source
+    harness_checkout = next(
+        step
+        for step in document["jobs"]["verify"]["steps"]
+        if step.get("with", {}).get("repository") == "ElevenID/marty-integration-tests"
+    )
+    assert harness_checkout["with"] == {
+        "repository": "ElevenID/marty-integration-tests",
+        "ref": INTEGRATION_HARNESS,
+        "fetch-depth": 0,
+        "path": "integration-harness",
+        "persist-credentials": False,
+    }
     assert "requirements/official-py312.lock" in source
     assert "--require-hashes --only-binary=:all:" in source
     assert "run-candidate" in source
