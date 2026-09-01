@@ -630,7 +630,10 @@ def inspect_oci_archive(path: Path, *, commit: str, version: str) -> dict[str, A
                                 total_layer_members <= MAX_TOTAL_LAYER_MEMBERS,
                                 "OCI aggregate layer members are too large",
                             )
-                        require(layer_members > 0, "OCI layer tar is empty")
+                        # A valid filesystem changeset can contain no entries.
+                        # The raw scan above still requires the canonical two-block
+                        # end-of-archive marker and a zero-only tail, so this accepts
+                        # an empty layer without accepting an empty or truncated blob.
                 except tarfile.TarError as exc:
                     raise ValueError("OCI layer is not a readable tar archive") from exc
         require(
