@@ -121,9 +121,9 @@ def test_stack_artifacts_use_immutable_sha256_digests() -> None:
 
     for component in lock["components"]:
         for artifact in component["artifacts"]:
-            assert re.fullmatch(
-                r"sha256:[0-9a-f]{64}", artifact["digest"]
-            ), f"{component['name']} has an invalid artifact digest"
+            assert re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"]), (
+                f"{component['name']} has an invalid artifact digest"
+            )
 
 
 def test_ui_package_locks_match_stack_npm_artifacts() -> None:
@@ -214,10 +214,7 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
 
 
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
-    action = (
-        "dtolnay/rust-toolchain@"
-        "6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772"
-    )
+    action = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772"
     matched_steps: list[tuple[str, dict[str, object]]] = []
 
     for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
@@ -306,10 +303,15 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     assert "grep -v '^migrations$' || true" not in workflow
 
 
-def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate_overlay() -> None:
+def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate_overlay() -> (
+    None
+):
     workflow = _text(".github/workflows/cd.yml")
 
-    assert "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml" in workflow
+    assert (
+        "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml"
+        in workflow
+    )
     assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
 
     lock = json.loads(_text("release/stack-lock.json"))
@@ -362,8 +364,8 @@ def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
         assert "`v1.2.77` is intermediate evidence only" in normalized
         assert "`v1.2.78` is preliminary, non-activating evidence" in normalized
         assert (
-            "PR `#737` introduced the candidate producer, but its workflow "
-            "was never dispatched" in normalized
+            "PR `#737` introduced the candidate producer; its first dispatch "
+            "occurred only after the later hardening described below" in normalized
         )
         assert (
             "PR `#741` hardened the producer but retained raw tar-header "
@@ -371,9 +373,19 @@ def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
         )
         assert "PR `#744` corrected those specific defects" in normalized
         assert (
-            "No candidate workflow run exists, so merged producer code "
-            "supplies no admissible candidate-gate evidence and the candidate "
-            "gate has not run or passed" in normalized
+            "Producer run `33465702948`, attempt `1`, was dispatched from exact "
+            "protected-main commit "
+            "`2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the trusted "
+            "consumer landed" in normalized
+        )
+        assert (
+            "It failed bundle validation with `OCI layer tar is empty` before "
+            "attestation or artifact upload, so it supplies no admissible "
+            "candidate-gate acceptance" in normalized
+        )
+        assert (
+            "A corrected producer run and authenticated, inspected consumer "
+            "result are still required" in normalized
         )
         assert "`v1.1.211`" not in document
         assert "`v1.1.212`" not in document
@@ -503,9 +515,9 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     assert "--repository ." in prepare
     assert "scripts/stack_tag_gate.py validate-release" in workflow
     assert "--repository ." in workflow
-    assert workflow.index("scripts/stack_tag_gate.py validate-release") < workflow.index(
-        "scripts/build_stack_manifest.py"
-    )
+    assert workflow.index(
+        "scripts/stack_tag_gate.py validate-release"
+    ) < workflow.index("scripts/build_stack_manifest.py")
 
 
 def test_python_migration_image_installs_every_required_native_backend() -> None:
@@ -513,10 +525,7 @@ def test_python_migration_image_installs_every_required_native_backend() -> None
     migrations = _text("services/Dockerfile.migrations")
 
     assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in migrations
-    assert (
-        'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"'
-        in migrations
-    )
+    assert 'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"' in migrations
     assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in migrations
     assert '"$MARTY_VERIFICATION_WHEEL"' in migrations
     assert '"$MARTY_ISO18013_WHEEL"' in migrations
