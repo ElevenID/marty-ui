@@ -507,17 +507,17 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
@@ -585,7 +585,7 @@ jobs:
             marty-ui-sbom.cdx.json
             marty-ui-services-sbom.cdx.json
             marty-ui-migrations-sbom.cdx.json
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           tag_name: v${{ needs.validate-stack.outputs.version }}
           overwrite_files: false
