@@ -4679,6 +4679,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-oid4vp-contract"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "marty-verification",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "url",
+]
+
+[[package]]
 name = "marty-organization"
 version = "0.1.0"
 dependencies = [
