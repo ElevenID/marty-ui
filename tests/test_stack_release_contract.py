@@ -588,8 +588,7 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
             "path": ".github/workflows/organization-quality.yml",
             "event": "merge_group",
         },
-        {"path": ".github/workflows/codeql-rust.yml", "event": "merge_group"},
-        {"path": ".github/workflows/codeql-actions.yml", "event": "merge_group"},
+        {"path": "dynamic/github-code-scanning/codeql", "event": "dynamic"},
     ]
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "git ls-remote --tags" in prepare

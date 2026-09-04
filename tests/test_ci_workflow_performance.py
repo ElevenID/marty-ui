@@ -144,13 +144,17 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
     assert full["paths"] == ["rust/**"]
     required = policy["required_workflows"]
     assert {
+        "path": "dynamic/github-code-scanning/codeql",
+        "event": "dynamic",
+    } in required
+    assert {
         "path": ".github/workflows/codeql-rust.yml",
         "event": "merge_group",
-    } in required
+    } not in required
     assert {
         "path": ".github/workflows/codeql-actions.yml",
         "event": "merge_group",
-    } in required
+    } not in required
 
 
 def test_warm_cache_uses_the_same_rust_test_profile() -> None:
