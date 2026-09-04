@@ -52,6 +52,14 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "gh attestation verify" in workflow
     assert 'docker pull "$uri@$digest"' in workflow
     assert "repository: ElevenID/marty-integration-tests" not in workflow
+    integration_stage = workflow.split(
+        "- name: Stage the exact verified integration harness source", 1
+    )[1].split("- uses: actions/upload-artifact@", 1)[0]
+    assert 'select(.name == "marty-integration-tests") | .version' in integration_stage
+    assert '[[ "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]' in integration_stage
+    assert 'source_ref="refs/tags/v${version}"' in integration_stage
+    assert '--source-ref "$source_ref" --deny-self-hosted-runners' in integration_stage
+    assert "refs/heads/main" not in integration_stage
     assert "stack-release-integration-source-${{ github.run_id }}" in workflow
     assert "scripts/extract_verified_source.py" in workflow
     assert "--expected-sha256 \"$INTEGRATION_DIGEST\"" in workflow
