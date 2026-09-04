@@ -201,6 +201,7 @@ jobs:
       cli_uri: ${{ steps.components.outputs.cli_uri }}
       cli_digest: ${{ steps.components.outputs.cli_digest }}
       integration_version: ${{ steps.components.outputs.integration_version }}
+      integration_commit: ${{ steps.components.outputs.integration_commit }}
       integration_digest: ${{ steps.components.outputs.integration_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -258,6 +259,7 @@ jobs:
             echo "cli_uri=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
             echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
             echo "integration_version=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .version' "$LOCK_FILE")"
+            echo "integration_commit=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
             echo "integration_digest=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
           } >> "$GITHUB_OUTPUT"
       - name: Verify release artifact provenance
@@ -794,8 +796,25 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - name: Fetch the exact upstream harness history
+        env:
+          INTEGRATION_COMMIT: ${{ needs.validate-stack.outputs.integration_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$INTEGRATION_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          # Fetch objects and construct an index, but never check out source.
+          # All executed harness files still come from the attested archive.
+          git init --quiet integration-history
+          git -C integration-history config core.autocrlf false
+          git -C integration-history -c transfer.fsckObjects=true fetch --no-tags \
+            https://github.com/ElevenID/marty-integration-tests.git "$INTEGRATION_COMMIT"
+          test "$(git -C integration-history rev-parse FETCH_HEAD)" = "$INTEGRATION_COMMIT"
+          git -C integration-history update-ref HEAD "$INTEGRATION_COMMIT"
+          git -C integration-history read-tree "$INTEGRATION_COMMIT"
       - name: Extract the verified integration harness without trusting archive paths
         env:
+          INTEGRATION_COMMIT: ${{ needs.validate-stack.outputs.integration_commit }}
           INTEGRATION_DIGEST: ${{ needs.validate-stack.outputs.integration_digest }}
           INTEGRATION_VERSION: ${{ needs.validate-stack.outputs.integration_version }}
         shell: bash
@@ -805,6 +824,8 @@ jobs:
           --destination integration-tests
           --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
           --expected-sha256 "$INTEGRATION_DIGEST"
+          --history integration-history
+          --expected-commit "$INTEGRATION_COMMIT"
       - name: Install the hash-locked verifier harness
         working-directory: integration-tests
         run: >-

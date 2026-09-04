@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import os
 import re
+import subprocess
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,7 @@ MAX_FILE_BYTES = 32 * 1024 * 1024
 MAX_MEMBERS = 5_000
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 SAFE_ROOT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
 class SourceArchiveError(ValueError):
@@ -58,7 +60,9 @@ def extract_verified_source(
     """Verify and stream-extract a regular-file-only, single-root tar.gz archive."""
 
     _require(SAFE_ROOT.fullmatch(expected_root) is not None, "expected root is invalid")
-    _require(SHA256.fullmatch(expected_sha256) is not None, "expected digest is invalid")
+    _require(
+        SHA256.fullmatch(expected_sha256) is not None, "expected digest is invalid"
+    )
     _require(archive_path.is_file(), "source archive is missing")
     archive_size = archive_path.stat().st_size
     _require(0 < archive_size <= MAX_ARCHIVE_BYTES, "source archive size is invalid")
@@ -78,9 +82,15 @@ def extract_verified_source(
             with tarfile.open(archive_path, mode="r|gz") as archive:
                 for member in archive:
                     member_count += 1
-                    _require(member_count <= MAX_MEMBERS, "source archive has too many members")
+                    _require(
+                        member_count <= MAX_MEMBERS,
+                        "source archive has too many members",
+                    )
                     name = member.name
-                    _require("\\" not in name and "\x00" not in name, "archive path is invalid")
+                    _require(
+                        "\\" not in name and "\x00" not in name,
+                        "archive path is invalid",
+                    )
                     path = PurePosixPath(name)
                     parts = path.parts
                     _require(
@@ -97,7 +107,10 @@ def extract_verified_source(
                         member.isdir() or member.isreg(),
                         "archive contains a non-file member",
                     )
-                    _require(0 <= member.size <= MAX_FILE_BYTES, "archive member is too large")
+                    _require(
+                        0 <= member.size <= MAX_FILE_BYTES,
+                        "archive member is too large",
+                    )
                     expanded_bytes += member.size
                     _require(
                         expanded_bytes <= MAX_EXPANDED_BYTES,
@@ -106,12 +119,18 @@ def extract_verified_source(
 
                     target = temporary_path.joinpath(*parts)
                     if member.isdir():
-                        _require(not target.is_file(), "archive directory conflicts with a file")
+                        _require(
+                            not target.is_file(),
+                            "archive directory conflicts with a file",
+                        )
                         target.mkdir(parents=True, exist_ok=True, mode=0o755)
                         continue
 
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    _require(not target.exists(), "archive file conflicts with another member")
+                    _require(
+                        not target.exists(),
+                        "archive file conflicts with another member",
+                    )
                     source = archive.extractfile(member)
                     _require(source is not None, "archive file cannot be read")
                     with source:
@@ -133,18 +152,73 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--expected-root", required=True)
     parser.add_argument("--expected-sha256", required=True)
+    parser.add_argument("--history", type=Path)
+    parser.add_argument("--expected-commit")
     return parser
+
+
+def attach_verified_history(
+    destination: Path, history: Path, expected_commit: str
+) -> None:
+    """Attach real upstream history without replacing any verified archive file."""
+
+    _require(
+        COMMIT.fullmatch(expected_commit) is not None, "expected commit is invalid"
+    )
+    metadata = history / ".git"
+    target = destination / ".git"
+    _require(
+        metadata.is_dir() and not metadata.is_symlink(),
+        "history metadata is missing or indirect",
+    )
+    _require(not os.path.lexists(target), "source archive contains Git metadata")
+
+    def git(root: Path, *arguments: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(root), *arguments],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise SourceArchiveError(
+                "source archive does not match clean upstream history"
+            ) from exc
+        return result.stdout.strip()
+
+    _require(
+        git(history, "rev-parse", "HEAD") == expected_commit, "history commit changed"
+    )
+    git(history, "diff", "--cached", "--quiet", "--no-ext-diff", "--")
+    try:
+        os.replace(metadata, target)
+    except OSError as exc:
+        raise SourceArchiveError("could not attach upstream history") from exc
+    git(destination, "diff", "--quiet", "--no-ext-diff", "HEAD", "--")
+    _require(
+        not git(destination, "ls-files", "--others", "-z"),
+        "source archive has extra files",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        _require(
+            (args.history is None) == (args.expected_commit is None),
+            "history and expected commit must be supplied together",
+        )
         extract_verified_source(
             args.archive,
             args.destination,
             expected_root=args.expected_root,
             expected_sha256=args.expected_sha256,
         )
+        if args.history is not None:
+            attach_verified_history(
+                args.destination, args.history, args.expected_commit
+            )
     except SourceArchiveError as exc:
         raise SystemExit(f"error: {exc}") from exc
     return 0

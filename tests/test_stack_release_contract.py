@@ -52,6 +52,9 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "gh attestation verify" in workflow
     assert 'docker pull "$uri@$digest"' in workflow
     assert "repository: ElevenID/marty-integration-tests" not in workflow
+    assert '--history integration-history' in workflow
+    assert '--expected-commit "$INTEGRATION_COMMIT"' in workflow
+    assert 'read-tree "$INTEGRATION_COMMIT"' in workflow
     integration_stage = workflow.split(
         "- name: Stage the exact verified integration harness source", 1
     )[1].split("- uses: actions/upload-artifact@", 1)[0]
