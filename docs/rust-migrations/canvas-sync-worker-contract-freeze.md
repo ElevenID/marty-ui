@@ -1,6 +1,7 @@
 # Canvas synchronization worker contract freeze
 
-Status: language-neutral behavior inventory frozen; Rust implementation intentionally not started.
+Status: language-neutral behavior inventory frozen; Rust candidate implemented
+and intentionally unrouted; cutover and Python deletion are not authorized.
 
 The normative contract is
 `contracts/issuance-canvas-sync-worker.json`. It pins the protected
@@ -103,8 +104,9 @@ approve that ordering improvement.
 ## Remaining gate
 
 The current Python suite is useful but is not yet a complete deletion oracle.
-Before Rust implementation begins, add the gaps enumerated in
-`migration_gates.legacy_oracle_gaps`, including configuration/loader failures,
+Before the Rust candidate is routed or Python deletion begins, close the gaps
+enumerated in `migration_gates.legacy_oracle_gaps`, including
+configuration/loader failures,
 loop cancellation, database races, privacy projections, all validation and
 processor shape failures, OAuth failure paths, cursor continuation, and all
 four fact assertion projections. Verify every Python and Rust provenance pin,
