@@ -298,16 +298,19 @@ jobs:
         run: |
           set -euo pipefail
           repository="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .repository' "$LOCK_FILE")"
+          version="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .version' "$LOCK_FILE")"
           commit="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
           uri="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .uri' "$LOCK_FILE")"
           digest="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          source_ref="refs/tags/v${version}"
           curl --fail --location --retry 3 --silent --show-error "$uri" \
             --output integration-source.tar.gz
           printf '%s  %s\n' "${digest#sha256:}" integration-source.tar.gz | \
             sha256sum --check --strict
           gh attestation verify integration-source.tar.gz \
             --repo "$repository" --source-digest "$commit" \
-            --source-ref refs/heads/main --deny-self-hosted-runners
+            --source-ref "$source_ref" --deny-self-hosted-runners
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-release-integration-source-${{ github.run_id }}
