@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tags `v1.1.209` and `v1.1.210` remain quarantined. The non-publishing candidate producer and separate trusted consumer passed from exact protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`, matching all 19 language-neutral checks and the Rust-only default-disabled-route check. Public `marty-integration-tests@v1.2.79`, released from protected-main commit `7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`, supplies immutable exact-digest transaction pinning and fail-closed comparison. Protected `marty-ui#762` merged the real trusted-positive OID4VP Rust runtime gate at `339660c4418f824251edba5c0c5ff27cf27fd1ba`, protected `marty-ui#763` merged the digest-first resumable release transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`, and protected `marty-ui#766` activated the live `v1.1.211` lock at `bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`. Claim run `33896525605` durably reserved that exact coordinate. Release run `33896763851` then failed before checkout, build, tag, image, release, or deployment because its pre-checkout artifact download did not bind an explicit repository. The claim must be tombstoned after this recovery lands and may never be retargeted. One fresh aggregate release, beta-only deployment, demos, and acceptance soak remain; production is unchanged.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tags `v1.1.209` and `v1.1.210` remain quarantined. The non-publishing candidate producer and separate trusted consumer passed from exact protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`, matching all 19 language-neutral checks and the Rust-only default-disabled-route check. Public `marty-integration-tests@v1.2.79`, released from protected-main commit `7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`, supplies immutable exact-digest transaction pinning and fail-closed comparison. Protected `marty-ui#762` merged the real trusted-positive OID4VP Rust runtime gate at `339660c4418f824251edba5c0c5ff27cf27fd1ba`, protected `marty-ui#763` merged the digest-first resumable release transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`, and protected `marty-ui#766` activated `v1.1.211` at `bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`. Claim run `33896525605` durably reserved that coordinate, and release run `33896763851` failed before checkout or any artifact write. Protected recovery PR `#767` repaired the explicit repository and cross-platform lock-byte boundaries at `21eacfbbf2039655c0eb46322c1f375ccc6216a5`; run `33899690771` then tombstoned the claim in artifact `9947135634`. This separately reviewed activation selects the verified-absent `v1.1.212` coordinate while retaining every component pin and the held example. One aggregate release, beta-only deployment, demos, and acceptance soak remain; production is unchanged.
 
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
@@ -127,9 +127,13 @@ release state remains omitted from the public manifest. Its merge commit is
 durably reserved `v1.1.211` from that exact source. Release run `33896763851`
 failed before checkout because the pre-checkout `gh run download` command
 omitted `--repo`; it created no tag, image, GitHub release, or deployment.
-The coordinate must be tombstoned after the download repair lands and must not
-be reused. A later separately reviewed activation must select a fresh absent
-coordinate before the digest-first transaction is attempted again.
+Protected recovery PR `#767` repaired every workflow download and forced stable
+LF stack-lock bytes at `21eacfbbf2039655c0eb46322c1f375ccc6216a5`.
+Tombstone run `33899690771` terminally sealed the claim in artifact
+`9947135634`; `v1.1.211` must not be reused. This separately reviewed
+activation selects verified-absent `v1.1.212` while retaining the same component
+set and `eligible` decision before the digest-first transaction is attempted
+again.
 The deleted Python image remains immutable parity evidence; its separate public
 binding and still-used Credentials adapter were not deleted. Production is not
 in scope and its deployment configuration remains unchanged.
@@ -144,9 +148,9 @@ in scope and its deployment configuration remains unchanged.
 | `marty-integration-tests@v1.2.78` | Published preliminary, non-activating evidence | Packages protected PRs `#400`-`#403`; remains blocked and does not pin a corrected Rust runtime |
 | `marty-integration-tests@v1.2.79` | Published and independently verified transaction harness | Supplies immutable exact-digest transaction pinning, real Rust positive-runtime invocation, and fail-closed release comparison; it does not itself prove an unpublished `marty-ui` digest |
 | `marty-blog@v0.1.8` | Published, independently digest-verified, and pinned by this activation | Supplies the repaired demo/UI package at exact source commit `d8a124d2587464b092bf67dda65fe0283757b909` and archive digest `sha256:5fb2aa83ee21e7f882b1fe7e4d3ce16108a193926677754ea39a2ccef3238792` |
-| `marty-ui@v1.1.211` | Durably claimed; recovery required | Claim run `33896525605` binds the coordinate to `bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`; release run `33896763851` failed before any external artifact write, so the claim must be tombstoned and never retargeted |
+| `marty-ui@v1.1.211` | Tombstoned without artifact writes | Claim run `33896525605` binds the coordinate to `bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`; release run `33896763851` failed before checkout, and tombstone run `33899690771` terminally sealed it in artifact `9947135634` |
 | later corrected-Rust-pinned integration release | Not started | After a fresh immutable aggregate digest exists, retain a public static pin to the fully passing corrected Rust artifact without weakening the transaction evidence |
-| fresh aggregate `marty-ui` release | Recovery not yet activated | A new absent coordinate must be separately reviewed, claimed and exact-digest qualified before the single beta deployment and soak |
+| aggregate `marty-ui@v1.1.212` release | Eligible in this activation; absent and unclaimed | The fresh coordinate must be claimed and exact-digest qualified before the single beta deployment and soak |
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -205,11 +209,12 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    verifier, and protected UI PR `#762` merged the real trusted-positive OID4VP
    Rust gate at `339660c4418f824251edba5c0c5ff27cf27fd1ba`. Those changes close
    the missing-capability gap; they do not yet clear an exact services digest.
-   Repair every pre-checkout workflow artifact download to bind the repository
-   explicitly, tombstone the claimed `v1.1.211` transaction, and select a fresh
-   absent coordinate in a separately reviewed activation. Then run and retain
-   every gate against that transaction's exact content-addressed images before
-   any version tag is promoted or the release is published.
+   Protected recovery PR `#767` bound every workflow artifact download to its
+   explicit repository and stabilized stack-lock bytes; tombstone run
+   `33899690771` then sealed the claimed `v1.1.211` transaction. Merge this
+   separate activation for verified-absent `v1.1.212`, then run and retain every
+   gate against that transaction's exact content-addressed images before any
+   version tag is promoted or the release is published.
    Capture the services image and services-SBOM digests and independently
    verify tag-and-commit-scoped provenance. Do not deploy it.
 2. Execute public `marty-integration-tests@v1.2.79` against that exact corrected
@@ -296,9 +301,10 @@ The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
 The next Canvas boundary is therefore not another route port. The digest-first
-resumable release transaction is protected in `marty-ui#763`; the immediate
-critical path is merging this separately reviewed activation, executing the
-exact comprehensive differential against its content-addressed Rust services
+resumable release transaction is protected in `marty-ui#763`, and recovery PR
+`#767` repaired its pre-checkout download boundary. The immediate critical path
+is merging the separately reviewed `v1.1.212` activation, executing the exact
+comprehensive differential against its content-addressed Rust services
 image, retaining the static post-publication pin, and performing the single
 beta-only canary. The Python source deletion is already merged but cannot be
 declared accepted until the

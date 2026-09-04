@@ -2,8 +2,7 @@
 
 Status: contained; the quarantined marty-ui `v1.1.209` and `v1.1.210`
 coordinates are not deployable, the claimed but unwritten `v1.1.211`
-transaction is pending tombstone, and no beta or production deployment
-occurred.
+transaction is tombstoned, and no beta or production deployment occurred.
 
 This record preserves the registry and workflow evidence discovered while
 recovering the verification-image consolidation release order. It distinguishes
@@ -38,7 +37,11 @@ live `v1.1.211` lock while the example remained held, merging at
 durably reserved that exact coordinate. Release run `33896763851` failed in
 `resolve-transaction` before checkout because `gh run download` omitted
 `--repo "$GITHUB_REPOSITORY"`. It created no tag, image, release, or
-deployment. The claim must be tombstoned rather than retargeted.
+deployment. Protected recovery PR `#767` repaired the boundary at
+`21eacfbbf2039655c0eb46322c1f375ccc6216a5`; tombstone run `33899690771`
+terminally sealed the claim in artifact `9947135634`. This separately reviewed
+activation selects verified-absent `v1.1.212` rather than retargeting the old
+transaction.
 
 ## Immutable observations
 
@@ -80,6 +83,16 @@ deployment. The claim must be tombstoned rather than retargeted.
   download relied on repository inference in an empty runner directory. No
   `v1.1.211` public coordinate was written, but the durable claim still makes
   that coordinate non-reusable.
+- Protected recovery PR `#767` merged the explicit-repository download and
+  stable-LF lock-byte repairs at
+  `21eacfbbf2039655c0eb46322c1f375ccc6216a5`. Tombstone run `33899690771`
+  retained terminal artifact `9947135634`
+  (`stack-release-tombstone-33896525605-33899690771`), preserving transaction
+  ID `d7f6bee501f68a3e44ede6cf67547f7bdcc033494338cf61b500bf295eaecfd1`
+  and incident-evidence SHA-256
+  `485e543f787c6dd7396c77a687523a94d5f839214984cbe1acbcc6ab081eb5c4`.
+- The tag, GitHub release, and all three registry coordinates for `v1.1.212`
+  were verified absent on 2026-09-04 before this activation change.
 - `marty-credentials@v0.1.72` is not a failed verifier artifact. It intentionally
   published only the issuance image, at
   `sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176`,
@@ -139,10 +152,12 @@ retargeted, completed, or deployed. Target `v1.1.211` was selected only after
 its tag, release, and registry coordinates were confirmed absent; all
 coordinates were reverified absent immediately before successful claim run
 `33896525605` on 2026-09-04. That claim is immutable even though release run
-`33896763851` made no external artifact write. Repair the download boundary,
-tombstone the claim, and choose a fresh absent coordinate in a separate
-reviewed activation. The digest-first transaction merged by protected PR
-`#763` remains the only authorized claim and publication path.
+`33896763851` made no external artifact write. Recovery PR `#767` repaired the
+download boundary and tombstone run `33899690771` sealed the claim. This
+separate reviewed activation selects fresh absent coordinate `v1.1.212`; the
+held example and all component pins remain unchanged. The digest-first
+transaction merged by protected PR `#763` remains the only authorized claim
+and publication path.
 
 Before the next UI/services artifact write or activating stack write, complete
 and test:
