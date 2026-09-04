@@ -14,8 +14,12 @@
       "event": "merge_group"
     },
     {
-      "path": "dynamic/github-code-scanning/codeql",
-      "event": "dynamic"
+      "path": ".github/workflows/codeql-rust.yml",
+      "event": "merge_group"
+    },
+    {
+      "path": ".github/workflows/codeql-actions.yml",
+      "event": "merge_group"
     }
   ]
 }

@@ -133,27 +133,31 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
     assert "schedule:" in rust_source
     assert "schedule:" in actions_source
     assert "github.event_name == 'schedule'" in rust_source
-    assert rust_workflow["jobs"]["analyze-rust"]["if"] == (
-        "vars.CODEQL_ADVANCED_ENABLED == 'true'"
-    )
-    assert actions_workflow["jobs"]["analyze-actions"]["if"] == (
-        "vars.CODEQL_ADVANCED_ENABLED == 'true'"
-    )
+    rust_job = rust_workflow["jobs"]["analyze-rust"]
+    actions_job = actions_workflow["jobs"]["analyze-actions"]
+    for job in (rust_job, actions_job):
+        assert "if" not in job
+        assert job["env"]["CODEQL_ADVANCED_ENABLED"] == (
+            "${{ vars.CODEQL_ADVANCED_ENABLED }}"
+        )
+        guard = job["steps"][0]
+        assert guard["name"] == "Require the completed advanced CodeQL cutover"
+        assert 'test "$CODEQL_ADVANCED_ENABLED" = "true"' in guard["run"]
     assert production["paths"] == ["rust/crates/**", "rust/services/**"]
     assert "rust/third_party/**" in production["paths-ignore"]
     assert full["paths"] == ["rust/**"]
     required = policy["required_workflows"]
     assert {
-        "path": "dynamic/github-code-scanning/codeql",
-        "event": "dynamic",
-    } in required
-    assert {
         "path": ".github/workflows/codeql-rust.yml",
         "event": "merge_group",
-    } not in required
+    } in required
     assert {
         "path": ".github/workflows/codeql-actions.yml",
         "event": "merge_group",
+    } in required
+    assert {
+        "path": "dynamic/github-code-scanning/codeql",
+        "event": "dynamic",
     } not in required
 
 
