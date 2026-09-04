@@ -22,7 +22,7 @@ on:
         required: true
         type: string
       evidence_sha256:
-        description: sha256 digest of separately retained conflict or recovery evidence
+        description: "Digest of retained conflict or recovery evidence; required format sha256:<64 lowercase hex>"
         required: true
         type: string
 

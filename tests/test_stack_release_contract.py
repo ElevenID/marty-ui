@@ -382,7 +382,7 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.212"
+    assert lock["release"] == "marty-ui@1.1.213"
     assert lock["release_state"] == "eligible"
     assert components["marty-credentials-issuance"]["version"] == "0.1.72"
     assert components["marty-integration-tests"]["version"] == "1.2.79"
@@ -432,6 +432,7 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
         assert "`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`" in normalized
         assert "`v1.1.211`" in document
         assert "`v1.1.212`" in document
+        assert "`v1.1.213`" in document
 
 
 def test_stack_release_is_claim_only_digest_first_and_publishes_last() -> None:

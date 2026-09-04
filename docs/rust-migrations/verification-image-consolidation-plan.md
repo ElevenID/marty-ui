@@ -37,9 +37,15 @@ checkout because its artifact download omitted an explicit repository; it
 created no tag, image, release, or deployment. Protected recovery PR `#767`
 repaired that boundary at `21eacfbbf2039655c0eb46322c1f375ccc6216a5`, and
 tombstone run `33899690771` terminally sealed the claim in artifact
-`9947135634`. This activation selects verified-absent `v1.1.212` with the same
-component pins and held example. A later static integration pin and one beta
-aggregate acceptance remain required.
+`9947135634`. The subsequent `v1.1.212` claim `33918005955` was followed by
+release run `33918094173`, which failed integration-source attestation before
+build or publication. Protected PR `#776` corrected the expected immutable
+release ref at `3a8fccdb35ea51e06a023fe67d523e0888cd3e72`; tombstone run
+`33920259321` sealed that claim in artifact `9954730289`. This activation
+selects verified-absent `v1.1.213` with the same component pins and held example.
+The [integration-attestation incident](stack-release-integration-attestation-ref-incident-2026-09-04.md)
+retains exact evidence. A later static integration pin and one beta aggregate
+acceptance remain required.
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
 only and grants no cutover authorization; `v1.2.77` is intermediate evidence
@@ -296,8 +302,10 @@ trusted-positive OID4VP execution gate. Protected UI PR `#763` merged the
 digest-first resumable transaction. The reviewed activation claimed
 `v1.1.211`, but release run `33896763851` failed before any artifact write due
 to an unqualified pre-checkout `gh run download`. Recovery PR `#767` repaired
-the boundary and run `33899690771` tombstoned that transaction. Activate
-verified-absent `v1.1.212`, then exercise the binary and every differential
+the boundary and run `33899690771` tombstoned that transaction. The subsequent
+`v1.1.212` attempt failed before builds on the integration attestation ref;
+PR `#776` repaired it and run `33920259321` tombstoned the claim. Activate
+verified-absent `v1.1.213`, then exercise the binary and every differential
 group against its exact services image and SBOM before any version tag or
 release is promoted. After its immutable digest
 exists, publish a new static integration pin. The same aggregate stack then
@@ -362,5 +370,7 @@ harness evidence. Protected UI PR `#763` merged the digest-first resumable
 transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`; activation PR `#766`
 claimed `v1.1.211`. Its first release run failed before build, so no corrected
 services digest exists. Recovery PR `#767` and tombstone run `33899690771`
-closed that transaction. This activation makes `v1.1.212` the fresh exact
-transaction and release gate.
+closed that transaction. The subsequent `v1.1.212` transaction also stopped
+before builds; protected PR `#776` repaired its attestation-ref check and
+tombstone run `33920259321` sealed it. This activation makes `v1.1.213` the
+fresh exact transaction and release gate.
