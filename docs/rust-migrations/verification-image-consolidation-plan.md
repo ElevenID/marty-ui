@@ -34,9 +34,12 @@ gaps are closed. Protected activation PR `#766` made only the live
 `bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`. Claim run `33896525605`
 durably reserved that coordinate. Release run `33896763851` failed before
 checkout because its artifact download omitted an explicit repository; it
-created no tag, image, release, or deployment. This repair must land before the
-claim is tombstoned and a fresh absent coordinate is activated. A later static
-integration pin and one beta aggregate acceptance remain required.
+created no tag, image, release, or deployment. Protected recovery PR `#767`
+repaired that boundary at `21eacfbbf2039655c0eb46322c1f375ccc6216a5`, and
+tombstone run `33899690771` terminally sealed the claim in artifact
+`9947135634`. This activation selects verified-absent `v1.1.212` with the same
+component pins and held example. A later static integration pin and one beta
+aggregate acceptance remain required.
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
 only and grants no cutover authorization; `v1.2.77` is intermediate evidence
@@ -292,10 +295,11 @@ reviewed transaction harness, and protected UI PR `#762` merged the missing real
 trusted-positive OID4VP execution gate. Protected UI PR `#763` merged the
 digest-first resumable transaction. The reviewed activation claimed
 `v1.1.211`, but release run `33896763851` failed before any artifact write due
-to an unqualified pre-checkout `gh run download`. Tombstone that transaction,
-select a fresh absent coordinate, and exercise the binary and every
-differential group against the new transaction's exact services image and SBOM
-before any version tag or release is promoted. After its immutable digest
+to an unqualified pre-checkout `gh run download`. Recovery PR `#767` repaired
+the boundary and run `33899690771` tombstoned that transaction. Activate
+verified-absent `v1.1.212`, then exercise the binary and every differential
+group against its exact services image and SBOM before any version tag or
+release is promoted. After its immutable digest
 exists, publish a new static integration pin. The same aggregate stack then
 owns the single beta-only deployment, demos, acceptance soak and cleanup.
 Production is unchanged.
@@ -357,5 +361,6 @@ Protected UI PR `#762` merged the real trusted-positive Rust gate at
 harness evidence. Protected UI PR `#763` merged the digest-first resumable
 transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`; activation PR `#766`
 claimed `v1.1.211`. Its first release run failed before build, so no corrected
-services digest exists. After tombstoning that claim, the fresh exact
-transaction remains the release gate.
+services digest exists. Recovery PR `#767` and tombstone run `33899690771`
+closed that transaction. This activation makes `v1.1.212` the fresh exact
+transaction and release gate.
