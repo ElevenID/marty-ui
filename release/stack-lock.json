@@ -19,13 +19,13 @@
     {
       "name": "marty-blog",
       "repository": "ElevenID/marty-blog",
-      "version": "0.1.8",
-      "commit": "d8a124d2587464b092bf67dda65fe0283757b909",
+      "version": "0.1.9",
+      "commit": "587274a4e1d4281f8fa4d71cea212141759f0435",
       "artifacts": [{
         "type": "npm",
-          "uri": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.8/elevenid-marty-blog-0.1.8.tgz",
-          "digest": "sha256:5fb2aa83ee21e7f882b1fe7e4d3ce16108a193926677754ea39a2ccef3238792",
-          "sbom": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.8/marty-blog-sbom.cdx.json",
+          "uri": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz",
+          "digest": "sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358",
+          "sbom": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/marty-blog-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-blog/attestations"
       }]
     },

@@ -125,10 +125,10 @@ def test_ci_and_stack_lock_pin_the_same_npm_releases() -> None:
         assert workflow["env"][f"{env_prefix}_DIGEST"] == artifact["digest"]
 
     blog = components["marty-blog"]
-    assert blog["version"] == "0.1.8"
-    assert blog["commit"] == "d8a124d2587464b092bf67dda65fe0283757b909"
+    assert blog["version"] == "0.1.9"
+    assert blog["commit"] == "587274a4e1d4281f8fa4d71cea212141759f0435"
     assert blog["artifacts"][0]["digest"] == (
-        "sha256:5fb2aa83ee21e7f882b1fe7e4d3ce16108a193926677754ea39a2ccef3238792"
+        "sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358"
     )
 
 
