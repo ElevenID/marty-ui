@@ -1,8 +1,9 @@
 # Verifier release containment evidence — 2026-08-31
 
 Status: contained; the quarantined marty-ui `v1.1.209` and `v1.1.210`
-coordinates are not deployable, the claimed but unwritten `v1.1.211`
-transaction is tombstoned, and no beta or production deployment occurred.
+coordinates are not deployable, the claimed but unwritten `v1.1.211` and
+`v1.1.212` transactions are tombstoned, and no beta or production deployment
+occurred.
 
 This record preserves the registry and workflow evidence discovered while
 recovering the verification-image consolidation release order. It distinguishes
@@ -39,9 +40,15 @@ durably reserved that exact coordinate. Release run `33896763851` failed in
 `--repo "$GITHUB_REPOSITORY"`. It created no tag, image, release, or
 deployment. Protected recovery PR `#767` repaired the boundary at
 `21eacfbbf2039655c0eb46322c1f375ccc6216a5`; tombstone run `33899690771`
-terminally sealed the claim in artifact `9947135634`. This separately reviewed
-activation selects verified-absent `v1.1.212` rather than retargeting the old
-transaction.
+terminally sealed the claim in artifact `9947135634`. The subsequent
+`v1.1.212` claim `33918005955` reached release run `33918094173`, which failed
+integration-source attestation before builds. Protected PR `#776` corrected
+the expected immutable release ref at
+`3a8fccdb35ea51e06a023fe67d523e0888cd3e72`; tombstone run `33920259321`
+sealed that claim in artifact `9954730289`. This separately reviewed activation
+selects verified-absent `v1.1.213`. The
+[integration-attestation incident](stack-release-integration-attestation-ref-incident-2026-09-04.md)
+retains the exact failure, repair, and terminal artifact evidence.
 
 ## Immutable observations
 
@@ -92,6 +99,9 @@ transaction.
   and incident-evidence SHA-256
   `485e543f787c6dd7396c77a687523a94d5f839214984cbe1acbcc6ab081eb5c4`.
 - The tag, GitHub release, and all three registry coordinates for `v1.1.212`
+  were verified absent on 2026-09-04 before its activation. Its subsequent
+  durable claim is now tombstoned and must never be reused.
+- The tag, GitHub release, and all three registry coordinates for `v1.1.213`
   were verified absent on 2026-09-04 before this activation change.
 - `marty-credentials@v0.1.72` is not a failed verifier artifact. It intentionally
   published only the issuance image, at
@@ -153,8 +163,10 @@ its tag, release, and registry coordinates were confirmed absent; all
 coordinates were reverified absent immediately before successful claim run
 `33896525605` on 2026-09-04. That claim is immutable even though release run
 `33896763851` made no external artifact write. Recovery PR `#767` repaired the
-download boundary and tombstone run `33899690771` sealed the claim. This
-separate reviewed activation selects fresh absent coordinate `v1.1.212`; the
+download boundary and tombstone run `33899690771` sealed the claim. The next
+`v1.1.212` claim was also sealed after an attestation-ref failure before builds;
+PR `#776` and tombstone run `33920259321` complete its recovery. This
+separate reviewed activation selects fresh absent coordinate `v1.1.213`; the
 held example and all component pins remain unchanged. The digest-first
 transaction merged by protected PR `#763` remains the only authorized claim
 and publication path.
