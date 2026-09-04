@@ -611,7 +611,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts; do
+          for database in marty_verification_contract marty_db_contracts_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
       - name: Run safe Rust contract groups concurrently
@@ -674,16 +674,16 @@ jobs:
         working-directory: rust
         shell: bash
         env:
-          MARTY_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
+          MARTY_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
           MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
-          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_db_contracts
-          CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
-          PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
-          ISSUANCE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
-          MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
-          ORGANIZATION_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
-          TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts
+          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_db_contracts_test
+          CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          ISSUANCE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          ORGANIZATION_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
         run: |
           set -euo pipefail
           mapfile -t contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'contracts-*' -perm -u+x)
