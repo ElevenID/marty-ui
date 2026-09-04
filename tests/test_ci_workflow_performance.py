@@ -147,6 +147,27 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         guard = job["steps"][0]
         assert guard["name"] == "Require the completed advanced CodeQL cutover"
         assert 'test "$CODEQL_ADVANCED_ENABLED" = "true"' in guard["run"]
+        assert job["permissions"]["pull-requests"] == "read"
+        scope = job["steps"][1]
+        assert scope["id"] == "scope"
+        assert "github.paginate(github.rest.pulls.listFiles" in scope["with"]["script"]
+        assert "context.eventName !== 'pull_request'" in scope["with"]["script"]
+        assert any(
+            step.get("name") == "Record scoped analysis skip"
+            for step in job["steps"]
+        )
+        analysis_steps = [
+            step for step in job["steps"] if step.get("name", "").startswith("Analyze")
+        ]
+        assert analysis_steps
+        assert all(
+            step["if"] == "steps.scope.outputs.analyze == 'true'"
+            for step in analysis_steps
+        )
+    assert "filename.startsWith('rust/')" in rust_source
+    assert "filename.startsWith('.github/codeql/')" in rust_source
+    assert "filename === '.github/workflows/codeql-rust.yml'" in rust_source
+    assert "filename.startsWith('.github/')" in actions_source
     assert production["paths"] == ["rust/crates/**", "rust/services/**"]
     assert "rust/third_party/**" in production["paths-ignore"]
     assert full["paths"] == ["rust/**"]
