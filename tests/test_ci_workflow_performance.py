@@ -133,6 +133,10 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
     assert "schedule:" in rust_source
     assert "schedule:" in actions_source
     assert "github.event_name == 'schedule'" in rust_source
+    rust_events = rust_workflow.get("on") or rust_workflow[True]
+    actions_events = actions_workflow.get("on") or actions_workflow[True]
+    assert rust_events["pull_request"] == {"branches": ["main"]}
+    assert actions_events["pull_request"] == {"branches": ["main"]}
     rust_job = rust_workflow["jobs"]["analyze-rust"]
     actions_job = actions_workflow["jobs"]["analyze-actions"]
     for job in (rust_job, actions_job):
