@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tags `v1.1.209` and `v1.1.210` remain quarantined. The non-publishing candidate producer and separate trusted consumer passed from exact protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`, matching all 19 language-neutral checks and the Rust-only default-disabled-route check. Public `marty-integration-tests@v1.2.79`, released from protected-main commit `7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`, now supplies immutable exact-digest transaction pinning and fail-closed comparison. Protected `marty-ui#762` merged the real trusted-positive OID4VP Rust runtime gate at `339660c4418f824251edba5c0c5ff27cf27fd1ba`. The capability blocker is therefore implemented, but release clearance remains held until the digest-first transaction exercises that gate and every differential group against the exact unpublished `v1.1.211` services digest. No `v1.1.211` tag, image, release, or deployment exists. One later aggregate beta-only deployment, demos, and acceptance soak remain; production is unchanged.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verification-image implementation are merged. The standalone Python verifier source/image was deleted, while its public Python binding, still-used Credentials adapter and immutable Python image remain available. Bootstrap `marty-ui@v1.1.208` is rejected for cutover, and pre-interlock tags `v1.1.209` and `v1.1.210` remain quarantined. The non-publishing candidate producer and separate trusted consumer passed from exact protected-main commit `7a1e2d6f31a563b33832b46921ec3376cd124113`, matching all 19 language-neutral checks and the Rust-only default-disabled-route check. Public `marty-integration-tests@v1.2.79`, released from protected-main commit `7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`, supplies immutable exact-digest transaction pinning and fail-closed comparison. Protected `marty-ui#762` merged the real trusted-positive OID4VP Rust runtime gate at `339660c4418f824251edba5c0c5ff27cf27fd1ba`, and protected `marty-ui#763` merged the digest-first resumable release transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. This separately reviewed activation change makes only the live `v1.1.211` lock eligible, keeps the example lock held, and pins verified `marty-blog@v0.1.8`. No `v1.1.211` claim, tag, image, release, or deployment exists. The transaction must still exercise every gate against the exact unpublished services digest before promotion. One later aggregate beta-only deployment, demos, and acceptance soak remain; production is unchanged.
 
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
@@ -11,7 +11,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-01
+**Last updated:** 2026-09-04
 
 ## Objective
 
@@ -117,14 +117,16 @@ unrouted as a service entry point.
 
 Protected `ElevenID/marty-ui#727` merged the fail-closed `release_state`
 decision at `569d74b10fcae9d6eadc6fceaf9f6d3eaf9b7c5b`. Tag preparation and
-tag/dispatch publication now share the same decision. The current aggregate
-and example locks remain `hold`; only exact string `eligible` may create
-evidence or publish a release, and the internal state is omitted from the
-public manifest. Held target `v1.1.211` is selected but is not claimed,
-reserved, tagged, built, published, or deployed. Its tag and release coordinates
-were absent during the maintainer audit. It may be claimed only from an exact
-protected-`main` descendant after the digest-first workflow is merged and a
-separate reviewed change makes the lock exactly `eligible`.
+tag/dispatch publication share the same decision. Protected `marty-ui#763`
+then merged the digest-first resumable release transaction at
+`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. This separate activation change
+makes the live aggregate lock exactly `eligible`, retains `hold` in the example
+lock, and pins independently verified `marty-blog@v0.1.8`; the internal release
+state remains omitted from the public manifest. Target `v1.1.211` is selected
+but is not claimed, reserved, tagged, built, published, or deployed. Its tag,
+release, and three registry coordinates were reverified absent on 2026-09-04.
+It may be claimed only after this change reaches exact protected `main`, and
+only the merged digest-first transaction may create or promote its evidence.
 The deleted Python image remains immutable parity evidence; its separate public
 binding and still-used Credentials adapter were not deleted. Production is not
 in scope and its deployment configuration remains unchanged.
@@ -138,9 +140,10 @@ in scope and its deployment configuration remains unchanged.
 | `marty-integration-tests@v1.2.77` | Published and independently verified intermediate evidence | Trustworthy immutable Python baseline plus `v1.1.208` bounded negative control; not cutover clearance |
 | `marty-integration-tests@v1.2.78` | Published preliminary, non-activating evidence | Packages protected PRs `#400`-`#403`; remains blocked and does not pin a corrected Rust runtime |
 | `marty-integration-tests@v1.2.79` | Published and independently verified transaction harness | Supplies immutable exact-digest transaction pinning, real Rust positive-runtime invocation, and fail-closed release comparison; it does not itself prove an unpublished `marty-ui` digest |
-| `marty-ui@v1.1.211` | Selected under `hold`; absent and unclaimed | Next corrected aggregate target; no tag, image, release, or deployment exists, and only its exact transaction may clear it |
+| `marty-blog@v0.1.8` | Published, independently digest-verified, and pinned by this activation | Supplies the repaired demo/UI package at exact source commit `d8a124d2587464b092bf67dda65fe0283757b909` and archive digest `sha256:5fb2aa83ee21e7f882b1fe7e4d3ce16108a193926677754ea39a2ccef3238792` |
+| `marty-ui@v1.1.211` | Eligible in this activation change; absent and unclaimed | Next corrected aggregate target; no claim, tag, image, release, or deployment exists, and only its exact transaction may clear it |
 | later corrected-Rust-pinned integration release | Not started | After the immutable `v1.1.211` digest exists, retain a public static pin to the fully passing corrected Rust artifact without weakening the transaction evidence |
-| aggregate `marty-ui@v1.1.211` release | Not started | Only artifact eligible for the single beta deployment and soak after exact-digest qualification and publication complete |
+| aggregate `marty-ui@v1.1.211` release | Activation staged; transaction not started | Only artifact eligible for the single beta deployment and soak after exact-digest qualification and publication complete |
 
 The 31-route language-neutral Canvas management floor is
 `contracts/issuance-canvas-management.json`.
@@ -167,10 +170,10 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 
 ### Remaining work in the active wave
 
-1. Keep the protected-main release lock and all release entry points held while
-   landing the digest-first, resumable release transaction with exact-coordinate
-   preflight, immutable checkpoints, conflict tombstones, and cancellation-point
-   tests. PR `#737`
+1. Protected `marty-ui#763` landed the digest-first, resumable release
+   transaction with exact-coordinate preflight, immutable checkpoints, conflict
+   tombstones, and cancellation-point tests at
+   `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. PR `#737`
    introduced the candidate producer; its first dispatch occurred only after
    the later hardening described below.
    PR `#741` hardened the producer but retained raw tar-header offset defects.
@@ -195,12 +198,12 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
    `canonical.oid4vp-positive-runtime-not-exercised`. The detailed requirements
    and immutable incident evidence are in
    [`verifier-release-incident-2026-08-31.md`](rust-migrations/verifier-release-incident-2026-08-31.md).
-   Public integration release `v1.2.79` now packages the immutable transaction
+   Public integration release `v1.2.79` packages the immutable transaction
    verifier, and protected UI PR `#762` merged the real trusted-positive OID4VP
    Rust gate at `339660c4418f824251edba5c0c5ff27cf27fd1ba`. Those changes close
    the missing-capability gap; they do not yet clear an exact services digest.
-   After this digest-first workflow is protected and a separate reviewed change
-   makes `release_state` exactly `eligible`, run and retain every gate against
+   Merge this separate activation change, which makes only the live
+   `release_state` exactly `eligible`, then run and retain every gate against
    the exact content-addressed `v1.1.211` images before any version tag is
    promoted or the release is published.
    Capture the services image and services-SBOM digests and independently
@@ -288,12 +291,13 @@ not live beta acceptance; merged coverage is bound to PR `#717`.
 The three ingest endpoints now share one DRY Rust event-ingest kernel for
 signature verification, canonical event mapping, replay protection, evidence
 persistence and application-policy transitions, with three thin HTTP adapters.
-The next Canvas boundary is therefore not another route port. The immediate
-critical path is landing the digest-first resumable release transaction,
-activating one reviewed held coordinate, executing the exact comprehensive
-differential against its content-addressed Rust services image, retaining the
-static post-publication pin, and performing the single beta-only canary. The Python
-source deletion is already merged but cannot be declared accepted until the
+The next Canvas boundary is therefore not another route port. The digest-first
+resumable release transaction is protected in `marty-ui#763`; the immediate
+critical path is merging this separately reviewed activation, executing the
+exact comprehensive differential against its content-addressed Rust services
+image, retaining the static post-publication pin, and performing the single
+beta-only canary. The Python source deletion is already merged but cannot be
+declared accepted until the
 corrected immutable artifact passes every oracle/candidate group.
 Do not duplicate either the Canvas ingest kernel or verifier decisions while
 wiring consumers, and keep differential tests against preserved Python oracles

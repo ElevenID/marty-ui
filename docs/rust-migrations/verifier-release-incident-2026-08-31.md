@@ -28,9 +28,13 @@ attempt `1`, and authenticated, inspected consumer run `33491836719`, attempt
 the Rust-only default-disabled-route check passed. That historical candidate
 remains blocked by `canonical.oid4vp-positive-runtime-not-exercised`.
 Protected UI PR `#762` subsequently merged the real trusted-positive Rust gate
-at `339660c4418f824251edba5c0c5ff27fd1ba`, closing the missing-capability gap.
-Release clearance remains held until that binary and every differential group
-pass against the exact unpublished `v1.1.211` services digest.
+at `339660c4418f824251edba5c0c5ff27cf27fd1ba`, closing the missing-capability gap.
+Protected UI PR `#763` merged the digest-first resumable release transaction at
+`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. This separate reviewed activation
+makes the live `v1.1.211` lock eligible while the example remains held. Release
+clearance still requires that binary and every differential group to pass
+against the exact unpublished services digest; no claim, tag, image, release,
+or deployment exists.
 
 ## Immutable observations
 
@@ -113,11 +117,12 @@ pass against the exact unpublished `v1.1.211` services digest.
 ## Containment decision
 
 Versions `v1.1.209` and `v1.1.210` are permanently quarantined and must never be
-retargeted, completed, or deployed. Held target `v1.1.211` was selected only
-after its tag, release, and registry coordinates were confirmed absent; it is
-not claimed or reserved. Nothing may be claimed, promoted, or published while
-the release lock is held. Once separately reviewed as `eligible`, the
-digest-first transaction is the only authorized publication path.
+retargeted, completed, or deployed. Target `v1.1.211` was selected only after
+its tag, release, and registry coordinates were confirmed absent; all
+coordinates were reverified absent on 2026-09-04, and it remains unclaimed and
+unreserved. This separate reviewed change makes only its live lock eligible;
+the example lock remains held. The digest-first transaction merged by protected
+PR `#763` is the only authorized claim and publication path.
 
 Before the next UI/services artifact write or activating stack write, complete
 and test:
