@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import os
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -17,6 +18,108 @@ source_archive = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(source_archive)
 SourceArchiveError = source_archive.SourceArchiveError
 extract_verified_source = source_archive.extract_verified_source
+attach_verified_history = source_archive.attach_verified_history
+
+
+def _git(root: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+@pytest.fixture
+def upstream_history(tmp_path: Path) -> tuple[Path, str, str]:
+    history = tmp_path / "history"
+    history.mkdir()
+    _git(history, "init", "--quiet")
+    _git(history, "config", "core.autocrlf", "false")
+    _git(history, "config", "user.name", "Fixture")
+    _git(history, "config", "user.email", "fixture@example.invalid")
+    (history / "README.md").write_bytes(b"verified\n")
+    _git(history, "add", "README.md")
+    _git(history, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "floor")
+    floor = _git(history, "rev-parse", "HEAD")
+    (history / ".gitignore").write_bytes(b"ignored.txt\n")
+    _git(history, "add", ".gitignore")
+    _git(history, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "release")
+    return history, floor, _git(history, "rev-parse", "HEAD")
+
+
+def _release_source(tmp_path: Path) -> Path:
+    archive = tmp_path / "source.tar.gz"
+    digest = _archive(
+        archive,
+        [
+            ("release/README.md", b"verified\n", None),
+            ("release/.gitignore", b"ignored.txt\n", None),
+        ],
+    )
+    destination = tmp_path / "source"
+    extract_verified_source(
+        archive, destination, expected_root="release", expected_sha256=digest
+    )
+    return destination
+
+
+def test_archive_gains_real_clean_history_without_replacing_files(
+    tmp_path: Path, upstream_history: tuple[Path, str, str]
+) -> None:
+    history, floor, commit = upstream_history
+    destination = _release_source(tmp_path)
+    before = (destination / "README.md").read_bytes()
+
+    attach_verified_history(destination, history, commit)
+
+    assert (destination / "README.md").read_bytes() == before
+    assert _git(destination, "rev-parse", "HEAD") == commit
+    _git(destination, "diff", "--quiet", "--")
+    _git(destination, "diff", "--cached", "--quiet", "--")
+    _git(destination, "merge-base", "--is-ancestor", floor, commit)
+    assert not (history / ".git").exists()
+
+
+@pytest.mark.parametrize("mutation", ["changed", "missing", "extra", "ignored-extra"])
+def test_history_binding_rejects_any_archive_content_difference(
+    tmp_path: Path, upstream_history: tuple[Path, str, str], mutation: str
+) -> None:
+    history, _, commit = upstream_history
+    destination = _release_source(tmp_path)
+    if mutation == "changed":
+        (destination / "README.md").write_bytes(b"changed\n")
+    elif mutation == "missing":
+        (destination / "README.md").unlink()
+    else:
+        filename = "ignored.txt" if mutation == "ignored-extra" else "extra.txt"
+        (destination / filename).write_bytes(b"unapproved\n")
+
+    with pytest.raises(SourceArchiveError):
+        attach_verified_history(destination, history, commit)
+    if mutation == "changed":
+        assert (destination / "README.md").read_bytes() == b"changed\n"
+
+
+@pytest.mark.parametrize(
+    "mutation", ["wrong-commit", "dirty-index", "archive-metadata"]
+)
+def test_history_identity_failures_are_rejected_before_metadata_moves(
+    tmp_path: Path, upstream_history: tuple[Path, str, str], mutation: str
+) -> None:
+    history, floor, commit = upstream_history
+    destination = _release_source(tmp_path)
+    if mutation == "wrong-commit":
+        commit = floor
+    elif mutation == "dirty-index":
+        (history / "README.md").write_bytes(b"uncommitted\n")
+        _git(history, "add", "README.md")
+    else:
+        (destination / ".git").write_bytes(b"untrusted metadata\n")
+
+    with pytest.raises(SourceArchiveError):
+        attach_verified_history(destination, history, commit)
+    assert (history / ".git").is_dir()
 
 
 def _archive(path: Path, members: list[tuple[str, bytes | None, bytes | None]]) -> str:
