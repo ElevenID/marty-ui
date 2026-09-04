@@ -52,7 +52,12 @@ The earlier tombstone input attempt `33920198766` supplied bare hex and failed
 before writing an artifact; the successful run supplied the required `sha256:`
 prefix. The workflow input description now states that format explicitly.
 
-The failed coordinate must never be reclaimed, retagged, or deployed. This
-separate activation selects verified-absent `v1.1.213`, retaining all component
-pins and the held example. Claim, exact-image qualification, publication, a
-static integration pin, and aggregate beta acceptance remain outstanding.
+The failed coordinate must never be reclaimed, retagged, or deployed.
+Protected PR `#777` subsequently selected `v1.1.213`, retaining all component
+pins and the held example. That transaction built all three images and passed
+public-stack integration but stopped before verifier comparison at the
+archive/history boundary; PR `#778` and tombstone run `33926833221` complete
+its recovery. The [harness-history incident](stack-release-harness-history-incident-2026-09-04.md)
+retains that evidence. The next separate activation selects verified-absent
+`v1.1.214`; protected qualification, publication, a static integration pin,
+and aggregate beta acceptance remain outstanding.

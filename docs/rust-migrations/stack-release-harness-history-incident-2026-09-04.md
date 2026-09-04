@@ -66,3 +66,31 @@ cannot be resumed on the repaired commit. After the repair passes protected
 gates, tombstone claim `33922450526` from its latest digest checkpoint, retain
 the images as evidence, and separately activate a verified-unused coordinate.
 Never reclaim, retag, or deploy `v1.1.213`.
+
+## Protected repair and terminal recovery
+
+Protected PR `#778` merged at
+`ae00413780a5a3408af476aca5dca5eb6553bb62`, with exact tree equivalence to
+reviewed head `ad6c71454007b6e6c5cf505446423b21d6861d31`. All PR and
+merge-queue gates passed, including CI `33925825239` and Rust analysis
+`33925825365`.
+
+Successful tombstone run `33926833221` consumed the latest digest checkpoint,
+not the earlier empty claim. Terminal artifact `9957092310`
+(`stack-release-tombstone-33922450526-33926833221`) has artifact digest
+`sha256:faee6043b1af05684d6d86bd5901b586718c01d09cf9685fc48b8ea1b261533c`.
+Its transaction file digest is
+`sha256:93d736fc4bb724c58deb0a7d07b1d0db3afedf63bb74bd7893fa774a6600172c`.
+It preserves transaction ID
+`739fb62644754724129fdfa5c140292dadd064efec8319ae15c0671602350fa6`,
+all three images, no qualified gates, no promoted roles, and no publication.
+
+The tombstone evidence digest is
+`sha256:8d0661271cc59c7a25edc704917149d4d5033769de8de72442ecc6cd303992d6`.
+It identifies this document's Git blob at the protected repair commit, before
+this addendum. The untagged images remain retained evidence, not deployment
+inputs. A separate activation selects `v1.1.214` after verifying absence of
+its Git tag, GitHub release and all three registry version tags. All component
+pins and the held example remain unchanged. Qualification, publication, the
+static integration pin, beta demos and acceptance soak remain outstanding;
+production is unchanged.

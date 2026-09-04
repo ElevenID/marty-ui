@@ -1,7 +1,7 @@
 # Credentials verification-image consolidation plan
 
-Status: `exact-digest-release-activation-staged`; deployment is held. The
-standalone Python verifier source/image deletion is merged in
+Status: `exact-digest-release-activation-staged` for `v1.1.214`; deployment is held.
+The standalone Python verifier source/image deletion is merged in
 `marty-credentials@v0.1.72`. `v0.1.72` is a valid issuance component, not a
 failed verifier artifact. Release audit found that
 `marty-integration-tests@v1.2.76` pinned bootstrap `marty-ui@v1.1.208`, which
@@ -41,10 +41,16 @@ tombstone run `33899690771` terminally sealed the claim in artifact
 release run `33918094173`, which failed integration-source attestation before
 build or publication. Protected PR `#776` corrected the expected immutable
 release ref at `3a8fccdb35ea51e06a023fe67d523e0888cd3e72`; tombstone run
-`33920259321` sealed that claim in artifact `9954730289`. This activation
-selects verified-absent `v1.1.213` with the same component pins and held example.
-The [integration-attestation incident](stack-release-integration-attestation-ref-incident-2026-09-04.md)
-retains exact evidence. A later static integration pin and one beta aggregate
+`33920259321` sealed that claim in artifact `9954730289`. Protected PR `#777`
+then selected `v1.1.213`. Its release `33922539581` built all images and passed
+public-stack integration, then stopped before verifier comparison because the archive lacked
+required Git history. Protected PR `#778` repaired this at
+`ae00413780a5a3408af476aca5dca5eb6553bb62`; tombstone run `33926833221`
+sealed the digest checkpoint in artifact `9957092310`. This activation selects
+verified-absent `v1.1.214` with the same component pins and held example.
+The [harness-history incident](stack-release-harness-history-incident-2026-09-04.md)
+retains exact evidence and passing local diagnostics, which do not replace
+protected qualification. A later static integration pin and one beta aggregate
 acceptance remain required.
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
@@ -304,10 +310,12 @@ digest-first resumable transaction. The reviewed activation claimed
 to an unqualified pre-checkout `gh run download`. Recovery PR `#767` repaired
 the boundary and run `33899690771` tombstoned that transaction. The subsequent
 `v1.1.212` attempt failed before builds on the integration attestation ref;
-PR `#776` repaired it and run `33920259321` tombstoned the claim. Activate
-verified-absent `v1.1.213`, then exercise the binary and every differential
-group against its exact services image and SBOM before any version tag or
-release is promoted. After its immutable digest
+PR `#776` repaired it and run `33920259321` tombstoned the claim. The next
+`v1.1.213` attempt built all images but failed the harness history guard.
+PR `#778` repaired that boundary and run `33926833221` tombstoned the digest
+checkpoint. Activate verified-absent `v1.1.214`, then exercise the binary and
+every differential group against its exact services image and SBOM before any
+version tag or release is promoted. After its immutable digest
 exists, publish a new static integration pin. The same aggregate stack then
 owns the single beta-only deployment, demos, acceptance soak and cleanup.
 Production is unchanged.
@@ -368,9 +376,14 @@ Protected UI PR `#762` merged the real trusted-positive Rust gate at
 `339660c4418f824251edba5c0c5ff27cf27fd1ba`. These are implementation and
 harness evidence. Protected UI PR `#763` merged the digest-first resumable
 transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`; activation PR `#766`
-claimed `v1.1.211`. Its first release run failed before build, so no corrected
-services digest exists. Recovery PR `#767` and tombstone run `33899690771`
-closed that transaction. The subsequent `v1.1.212` transaction also stopped
-before builds; protected PR `#776` repaired its attestation-ref check and
-tombstone run `33920259321` sealed it. This activation makes `v1.1.213` the
-fresh exact transaction and release gate.
+claimed `v1.1.211`. Its first release run failed before build. Recovery PR
+`#767` and tombstone run `33899690771` closed that transaction. The subsequent
+`v1.1.212` transaction also stopped before builds; protected PR `#776` repaired
+its attestation-ref check and tombstone run `33920259321` sealed it. The next
+`v1.1.213` transaction produced corrected services and passed public-stack
+integration, but failed the harness history guard before verifier comparison.
+PR `#778` repaired the binding and run `33926833221` sealed the digest
+checkpoint in artifact `9957092310`. Local diagnostics then passed 21 Rust
+checks and all 19 shared Python comparisons against the retained exact image,
+with no blockers. They are not protected qualification evidence. This
+activation makes `v1.1.214` the fresh exact transaction and release gate.
