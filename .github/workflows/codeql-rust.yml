@@ -25,6 +25,8 @@ concurrency:
 jobs:
   analyze-rust:
     name: Analyze Rust
+    # Keep default setup authoritative until the post-merge atomic cutover.
+    if: vars.CODEQL_ADVANCED_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -46,4 +48,3 @@ jobs:
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938
         with:
           category: /language:rust
-

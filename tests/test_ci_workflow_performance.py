@@ -100,10 +100,10 @@ def test_ui_timing_refresh_runs_after_the_required_ci_gate() -> None:
 
 
 def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
-    rust_source, _rust = _workflow(
+    rust_source, rust_workflow = _workflow(
         ROOT / ".github" / "workflows" / "codeql-rust.yml"
     )
-    actions_source, _actions = _workflow(
+    actions_source, actions_workflow = _workflow(
         ROOT / ".github" / "workflows" / "codeql-actions.yml"
     )
     production = yaml.safe_load(
@@ -125,6 +125,12 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
     assert "schedule:" in rust_source
     assert "schedule:" in actions_source
     assert "github.event_name == 'schedule'" in rust_source
+    assert rust_workflow["jobs"]["analyze-rust"]["if"] == (
+        "vars.CODEQL_ADVANCED_ENABLED == 'true'"
+    )
+    assert actions_workflow["jobs"]["analyze-actions"]["if"] == (
+        "vars.CODEQL_ADVANCED_ENABLED == 'true'"
+    )
     assert production["paths"] == ["rust/crates/**", "rust/services/**"]
     assert "rust/third_party/**" in production["paths-ignore"]
     assert full["paths"] == ["rust/**"]
