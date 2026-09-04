@@ -1,7 +1,9 @@
 # Verifier release containment evidence — 2026-08-31
 
 Status: contained; the quarantined marty-ui `v1.1.209` and `v1.1.210`
-coordinates are not deployable, and no beta or production deployment occurred.
+coordinates are not deployable, the claimed but unwritten `v1.1.211`
+transaction is pending tombstone, and no beta or production deployment
+occurred.
 
 This record preserves the registry and workflow evidence discovered while
 recovering the verification-image consolidation release order. It distinguishes
@@ -30,11 +32,13 @@ remains blocked by `canonical.oid4vp-positive-runtime-not-exercised`.
 Protected UI PR `#762` subsequently merged the real trusted-positive Rust gate
 at `339660c4418f824251edba5c0c5ff27cf27fd1ba`, closing the missing-capability gap.
 Protected UI PR `#763` merged the digest-first resumable release transaction at
-`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. This separate reviewed activation
-makes the live `v1.1.211` lock eligible while the example remains held. Release
-clearance still requires that binary and every differential group to pass
-against the exact unpublished services digest; no claim, tag, image, release,
-or deployment exists.
+`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. Protected PR `#766` activated the
+live `v1.1.211` lock while the example remained held, merging at
+`bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`. Claim run `33896525605`
+durably reserved that exact coordinate. Release run `33896763851` failed in
+`resolve-transaction` before checkout because `gh run download` omitted
+`--repo "$GITHUB_REPOSITORY"`. It created no tag, image, release, or
+deployment. The claim must be tombstoned rather than retargeted.
 
 ## Immutable observations
 
@@ -58,10 +62,24 @@ or deployment exists.
   `migrations:1.1.210` image and no GitHub release exists.
 - OCI image tags omit the Git tag's leading `v`; absence checks must use, for
   example, `1.1.210` rather than `v1.1.210`.
-- Both marty-ui release workflows are disabled. The `stack-release`
-  environment disallows administrator bypass and admits only the inert
-  `release-hold-disabled` tag policy. Protected PR `#727` separately requires
-  exact `release_state=eligible` in both tag preparation and publication.
+- Before activation, both marty-ui release workflows were disabled and the
+  `stack-release` environment admitted only the inert `release-hold-disabled`
+  tag policy. On 2026-09-04 the workflows were enabled and the environment was
+  restricted to protected branches, retained its required `burdettadam`
+  reviewer, allowed that sole maintainer to review the deployment, and
+  continued to disallow administrator bypass. Protected PR `#727` separately
+  requires exact `release_state=eligible` in both tag preparation and
+  publication.
+- Successful claim run `33896525605` retained artifact `9945946292`
+  (`stack-release-claim-v1.1.211`) with transaction ID
+  `d7f6bee501f68a3e44ede6cf67547f7bdcc033494338cf61b500bf295eaecfd1`.
+  Its source is exact protected-main commit
+  `bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`.
+- Release run `33896763851` failed before checkout, build, digest checkpoint,
+  promotion, publication, or deployment because its pre-checkout artifact
+  download relied on repository inference in an empty runner directory. No
+  `v1.1.211` public coordinate was written, but the durable claim still makes
+  that coordinate non-reusable.
 - `marty-credentials@v0.1.72` is not a failed verifier artifact. It intentionally
   published only the issuance image, at
   `sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176`,
@@ -119,10 +137,12 @@ or deployment exists.
 Versions `v1.1.209` and `v1.1.210` are permanently quarantined and must never be
 retargeted, completed, or deployed. Target `v1.1.211` was selected only after
 its tag, release, and registry coordinates were confirmed absent; all
-coordinates were reverified absent on 2026-09-04, and it remains unclaimed and
-unreserved. This separate reviewed change makes only its live lock eligible;
-the example lock remains held. The digest-first transaction merged by protected
-PR `#763` is the only authorized claim and publication path.
+coordinates were reverified absent immediately before successful claim run
+`33896525605` on 2026-09-04. That claim is immutable even though release run
+`33896763851` made no external artifact write. Repair the download boundary,
+tombstone the claim, and choose a fresh absent coordinate in a separate
+reviewed activation. The digest-first transaction merged by protected PR
+`#763` remains the only authorized claim and publication path.
 
 Before the next UI/services artifact write or activating stack write, complete
 and test:
@@ -136,8 +156,8 @@ and test:
    compatibility behavior, and exact candidate/oracle evidence-set comparison
    with only documented language-neutral differences. These candidate checks
    now pass. Protected UI PR `#762` implements the eligible positive OID4VP
-   runtime path, but the exact `v1.1.211` services digest must still exercise it;
-   the deterministic fixture contract or an unbound local run is not release
+   runtime path, but a fresh exact services digest must still exercise it; the
+   deterministic fixture contract or an unbound local run is not release
    evidence.
 3. Retain the digest-first, resumable release transaction as the sole release
    path. Create the durable draft claim

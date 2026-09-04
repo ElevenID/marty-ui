@@ -202,6 +202,7 @@ jobs:
           test "$(jq -r '.event' <<<"$run_json")" = workflow_dispatch
           mkdir -p tests/artifacts/canvas-oss-portability/image
           gh run download "$CANVAS_OSS_IMAGE_BUILD_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
             --name "canvas-oss-image-$source_sha" \
             --dir tests/artifacts/canvas-oss-portability/image
           manifest=tests/artifacts/canvas-oss-portability/image/canvas-oss-image-manifest.json

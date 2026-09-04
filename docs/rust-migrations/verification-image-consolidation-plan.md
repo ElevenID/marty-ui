@@ -29,11 +29,14 @@ merged the real trusted-positive OID4VP Rust runtime gate at
 `339660c4418f824251edba5c0c5ff27cf27fd1ba`. Protected UI PR `#763` merged the
 digest-first resumable transaction at
 `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. The capability and transaction
-gaps are closed; this separate activation change makes only the live
-`v1.1.211` lock eligible and retains the held example. The transaction must
-still exercise every gate against the exact unpublished services digest. The
-target is selected but no tag, image, release, claim, or deployment exists. A
-later static integration pin and one beta aggregate acceptance remain required.
+gaps are closed. Protected activation PR `#766` made only the live
+`v1.1.211` lock eligible and retained the held example at merge commit
+`bc4d93fd58e3309be9dc0748becf3d32bbc5e9dd`. Claim run `33896525605`
+durably reserved that coordinate. Release run `33896763851` failed before
+checkout because its artifact download omitted an explicit repository; it
+created no tag, image, release, or deployment. This repair must land before the
+claim is tombstoned and a fresh absent coordinate is activated. A later static
+integration pin and one beta aggregate acceptance remain required.
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
 only and grants no cutover authorization; `v1.2.77` is intermediate evidence
@@ -287,10 +290,12 @@ gates and digest-first resumable release requirements in
 must remain fail-closed. Public integration release `v1.2.79` now binds the
 reviewed transaction harness, and protected UI PR `#762` merged the missing real
 trusted-positive OID4VP execution gate. Protected UI PR `#763` merged the
-digest-first resumable transaction. This separately reviewed activation makes
-the live target `v1.1.211` eligible, but the target must still exercise
-that binary and every differential group against its exact services image and
-SBOM before any version tag or release is promoted. After its immutable digest
+digest-first resumable transaction. The reviewed activation claimed
+`v1.1.211`, but release run `33896763851` failed before any artifact write due
+to an unqualified pre-checkout `gh run download`. Tombstone that transaction,
+select a fresh absent coordinate, and exercise the binary and every
+differential group against the new transaction's exact services image and SBOM
+before any version tag or release is promoted. After its immutable digest
 exists, publish a new static integration pin. The same aggregate stack then
 owns the single beta-only deployment, demos, acceptance soak and cleanup.
 Production is unchanged.
@@ -350,6 +355,7 @@ and
 Protected UI PR `#762` merged the real trusted-positive Rust gate at
 `339660c4418f824251edba5c0c5ff27cf27fd1ba`. These are implementation and
 harness evidence. Protected UI PR `#763` merged the digest-first resumable
-transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`; this activation makes the
-live lock eligible. None of that proves that the unpublished `v1.1.211`
-services digest has passed; that exact transaction remains the release gate.
+transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`; activation PR `#766`
+claimed `v1.1.211`. Its first release run failed before build, so no corrected
+services digest exists. After tombstoning that claim, the fresh exact
+transaction remains the release gate.

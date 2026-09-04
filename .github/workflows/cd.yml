@@ -82,7 +82,10 @@ jobs:
           esac
           input="$RUNNER_TEMP/release-transaction-input"
           mkdir "$input"
-          gh run download "$source_run" --name "$artifact" --dir "$input"
+          gh run download "$source_run" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact" \
+            --dir "$input"
           mapfile -t entries < <(find "$input" -mindepth 1 -maxdepth 1 -printf '%f:%y\n' | LC_ALL=C sort)
           if [[ "$artifact" == stack-release-claim-v* ]]; then
             expected=("release-transaction.json:f" "stack-tag-evidence.json:f")
