@@ -1,0 +1,5 @@
+name: Full Rust
+
+paths:
+  - rust/**
+

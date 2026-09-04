@@ -1,0 +1,50 @@
+name: Refresh UI Test Timings
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: refresh-ui-test-timings-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh UI Test Timings
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Download timing observations
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: ui-vitest-timing-*
+          path: ${{ runner.temp }}/ui-vitest-timings
+          merge-multiple: true
+      - name: Produce refreshed timing plan
+        if: steps.download.outcome == 'success'
+        run: >-
+          node ui/scripts/update-vitest-timings.mjs
+          "${{ runner.temp }}/ui-vitest-timings"
+          --output "${{ runner.temp }}/ui-vitest.json"
+      - name: Upload refreshed timing plan
+        if: steps.download.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-vitest-timings-refreshed
+          path: ${{ runner.temp }}/ui-vitest.json
+          retention-days: 14

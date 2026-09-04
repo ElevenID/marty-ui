@@ -32,7 +32,7 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
     workflow = text(".github/workflows/ci.yml")
     assert (
         "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: "
-        "postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test"
+        "postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts"
         in workflow
     )
     assert 'startswith("canvas_")' in workflow

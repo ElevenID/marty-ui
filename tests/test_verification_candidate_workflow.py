@@ -476,20 +476,25 @@ def test_candidate_bundle_root_uses_an_exact_regular_file_allowlist() -> None:
 def test_supported_containerd_candidate_contract_is_a_required_ci_lane() -> None:
     source = CI_WORKFLOW.read_text(encoding="utf-8")
     document = yaml.safe_load(source)
-    job = document["jobs"]["verification-candidate-oci-contract"]
+    job = document["jobs"]["test-release-contracts"]
 
-    assert job["name"] == "Verification Candidate OCI Contract"
+    assert job["name"] == "Release Contract Tests"
     assert job["runs-on"] == "ubuntu-latest"
-    assert job["timeout-minutes"] == 15
-    assert job["permissions"] == {"contents": "read"}
-    assert job["env"] == {"MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS": "1"}
     assert_supported_backend(job)
     steps = job["steps"]
     commands = "\n".join(str(step.get("run", "")) for step in steps)
-    assert "uv pip install --system pytest==9.1.1 pyyaml==6.0.3" in commands
+    candidate_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Prove the same OCI archive through the future consumer path"
+    )
+    assert candidate_step["env"] == {
+        "MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS": "1"
+    }
     assert (
         "python -m pytest -q tests/test_verification_candidate_build.py "
         "tests/test_verification_candidate_backend.py "
         "tests/test_verification_candidate_workflow.py"
     ) in commands
-    assert "verification-candidate-oci-contract" in document["jobs"]["ci-gate"]["needs"]
+    assert "test-release-contracts" in document["jobs"]["ci-gate"]["needs"]
+    assert "verification-candidate-oci-contract" not in document["jobs"]
