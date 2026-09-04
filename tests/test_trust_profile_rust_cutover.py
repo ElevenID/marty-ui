@@ -36,7 +36,7 @@ def test_rust_owns_schema_history_and_postgresql_acceptance() -> None:
     assert '"name": "trust_profile"' not in migration_runner
     assert '"trust_profile_service"' not in migration_runner
     assert "TEST_POSTGRES_URL:" in workflow
-    assert "trust_profile_contracts" in workflow
+    assert "target/debug/trust-profile-migration-contract" in workflow
 
 
 def test_native_service_has_shared_and_dedicated_image_paths() -> None:

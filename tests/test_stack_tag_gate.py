@@ -72,6 +72,21 @@ def test_exact_head_terminal_workflows_pass() -> None:
     assert [item["run_id"] for item in accepted] == [10, 11]
 
 
+def test_skipped_only_advanced_codeql_replacement_cannot_satisfy_default_setup() -> None:
+    document = {
+        "workflow_runs": [
+            run(10, ".github/workflows/ci.yml", "merge_group"),
+            # A workflow whose sole job is skipped can still report workflow-level
+            # success. It must not replace the active default-setup CodeQL evidence.
+            run(11, ".github/workflows/codeql-rust.yml", "merge_group"),
+            run(12, ".github/workflows/codeql-actions.yml", "merge_group"),
+        ]
+    }
+
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="github-code-scanning"):
+        stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
+
+
 @pytest.mark.parametrize(
     ("updates", "message"),
     [

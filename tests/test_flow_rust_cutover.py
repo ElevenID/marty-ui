@@ -34,7 +34,7 @@ def test_rust_owns_flow_schema_and_postgresql_behavior() -> None:
     assert '"flow_service"' not in migration_runner
     assert "flow-idempotency-contract:" not in workflow
     assert "docker-compose.flow-idempotency-contract.yml" not in workflow
-    assert "cargo test --locked -p marty-flow --test postgres_integration" in workflow
+    assert "target/debug/flow-postgres-contract --test-threads=1" in workflow
 
 
 def test_compose_preserves_development_and_beta_features() -> None:

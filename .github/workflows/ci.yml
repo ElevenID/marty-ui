@@ -23,6 +23,101 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Classify Changes
+    runs-on: ubuntu-latest
+    outputs:
+      all: ${{ steps.classify.outputs.all }}
+      ui: ${{ steps.classify.outputs.ui }}
+      python: ${{ steps.classify.outputs.python }}
+      rust: ${{ steps.classify.outputs.rust }}
+      release: ${{ steps.classify.outputs.release }}
+      verification: ${{ steps.classify.outputs.verification }}
+      security: ${{ steps.classify.outputs.security }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Conservatively classify the pull request
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+        run: |
+          set -euo pipefail
+
+          all=false
+          ui=false
+          python=false
+          rust=false
+          release=false
+          verification=false
+          security=false
+
+          if [[ "${{ github.event_name }}" == merge_group ]]; then
+            all=true
+          elif [[ -z "$BASE_SHA" ]]; then
+            all=true
+          else
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" HEAD)
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                *.md|docs/*|.github/ISSUE_TEMPLATE/*)
+                  ;;
+                ui/*|demo-apps/*)
+                  ui=true
+                  security=true
+                  ;;
+                services/*|packages/*|requirements-services.txt)
+                  python=true
+                  security=true
+                  ;;
+                rust/*|proto/*|contracts/*)
+                  rust=true
+                  ;;
+                release/stack-lock.json|.github/workflows/ci.yml|.github/actions/*|docker-compose*.yml|k8s/*)
+                  all=true
+                  ;;
+                release/*|scripts/stack_tag_gate.py|scripts/release_transaction.py|.github/stack-tag-policy.json)
+                  release=true
+                  ;;
+                .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
+                  verification=true
+                  release=true
+                  ;;
+                tests/*|scripts/*|.github/workflows/*|.github/codeql/*|.dockerignore)
+                  all=true
+                  ;;
+                *)
+                  # Unknown paths deliberately receive the complete suite.
+                  all=true
+                  ;;
+              esac
+            done
+          fi
+
+          if [[ "$all" == true ]]; then
+            ui=true
+            python=true
+            rust=true
+            release=true
+            verification=true
+            security=true
+          fi
+
+          {
+            printf 'all=%s\n' "$all"
+            printf 'ui=%s\n' "$ui"
+            printf 'python=%s\n' "$python"
+            printf 'rust=%s\n' "$rust"
+            printf 'release=%s\n' "$release"
+            printf 'verification=%s\n' "$verification"
+            printf 'security=%s\n' "$security"
+          } >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint Python
     runs-on: ubuntu-latest
@@ -45,6 +140,8 @@ jobs:
 
   fast-feedback:
     name: Fast Feedback
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -117,6 +214,8 @@ jobs:
 
   test-ui:
     name: UI Tests (${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -158,38 +257,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  refresh-ui-test-timings:
-    name: Refresh UI Test Timings
-    needs: test-ui
-    if: needs.test-ui.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Download timing observations
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: ui-vitest-timing-*
-          path: ${{ runner.temp }}/ui-vitest-timings
-          merge-multiple: true
-      - name: Produce refreshed timing plan
-        run: >-
-          node ui/scripts/update-vitest-timings.mjs
-          "${{ runner.temp }}/ui-vitest-timings"
-          --output "${{ runner.temp }}/ui-vitest.json"
-      - name: Upload refreshed timing plan
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: ui-vitest-timings-refreshed
-          path: ${{ runner.temp }}/ui-vitest.json
-          retention-days: 14
-
   test-services:
     name: Service Tests
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     env:
-      MARTY_CORE_TRUST_REGISTRY_REF: f1c022cccbc1ca53846eb80ae68a7ebc9dfc166d
       DEVICE_CHALLENGE_TEST_REDIS_URL: redis://localhost:6379/14
       DEVICE_KEY_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/marty_atomic_test
       VERIFICATION_ATOMIC_TEST_REDIS_URL: redis://localhost:6379/15
@@ -221,19 +294,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Checkout pinned native trust-registry backend
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: ElevenID/marty-core
-          ref: ${{ env.MARTY_CORE_TRUST_REGISTRY_REF }}
-          path: marty-core
-          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
-        with:
-          toolchain: 1.95.0
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.11.3"
@@ -267,16 +330,10 @@ jobs:
           uv pip install --system -r requirements-services.txt
           uv pip install --system psycopg2-binary==2.9.10
           uv pip install --system "$marty_common_wheel" "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
-      - name: Build and install pinned native trust-registry backend
+      - name: Verify released native trust-registry backend
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/marty-core-wheels"
-          uv tool run maturin==1.9.4 build \
-            --release \
-            --manifest-path marty-core/marty-bindings/Cargo.toml \
-            --out "$RUNNER_TEMP/marty-core-wheels"
-          uv pip install --system --force-reinstall "$RUNNER_TEMP"/marty-core-wheels/marty_rs-*.whl
           python - <<'PY'
           import json
           from marty_rs import _marty_rs
@@ -290,6 +347,8 @@ jobs:
 
   test-rust-services:
     name: Rust Service Tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -318,6 +377,7 @@ jobs:
           --health-retries 20
     env:
       CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
       FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       VERIFICATION_SESSION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       RUSTC_WRAPPER: sccache
@@ -344,7 +404,7 @@ jobs:
         run: >-
           cargo test --locked --workspace --no-run --message-format=json
           > "$RUNNER_TEMP/rust-test-artifacts.json"
-      - name: Package database contract executables
+      - name: Prepare database contract executables
         working-directory: rust
         shell: bash
         run: |
@@ -359,7 +419,6 @@ jobs:
             echo "Unable to locate the compiled revocation contracts executable." >&2
             exit 1
           fi
-          contract_relative="${contract_executable#"$PWD/"}"
           registry_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "registry_storage_contract")
@@ -370,7 +429,6 @@ jobs:
             echo "Unable to locate the compiled signing registry contract executable." >&2
             exit 1
           fi
-          registry_relative="${registry_executable#"$PWD/"}"
           document_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "document_storage_contract")
@@ -381,7 +439,6 @@ jobs:
             echo "Unable to locate the compiled signing document contract executable." >&2
             exit 1
           fi
-          document_relative="${document_executable#"$PWD/"}"
           issuer_profile_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "issuer_profile_storage_contract")
@@ -392,7 +449,6 @@ jobs:
             echo "Unable to locate the compiled issuer profile contract executable." >&2
             exit 1
           fi
-          issuer_profile_relative="${issuer_profile_executable#"$PWD/"}"
           credential_template_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "postgres_integration")
@@ -404,7 +460,7 @@ jobs:
             echo "Unable to locate the compiled Credential Template PostgreSQL contract executable." >&2
             exit 1
           fi
-          credential_template_relative="${credential_template_executable#"$PWD/"}"
+          cp "$credential_template_executable" target/debug/credential-template-postgres-contract
           credential_template_migration_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "migration_contract")
@@ -428,7 +484,7 @@ jobs:
             echo "Unable to locate the compiled Presentation Policy PostgreSQL contract executable." >&2
             exit 1
           fi
-          presentation_policy_relative="${presentation_policy_executable#"$PWD/"}"
+          cp "$presentation_policy_executable" target/debug/presentation-policy-postgres-contract
           issuance_transaction_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "issuance_transaction_postgres_contract")
@@ -440,7 +496,6 @@ jobs:
             echo "Unable to locate the compiled Issuance transaction PostgreSQL contract executable." >&2
             exit 1
           fi
-          issuance_transaction_relative="${issuance_transaction_executable#"$PWD/"}"
           issuance_credential_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "credential_postgres_contract")
@@ -452,7 +507,6 @@ jobs:
             echo "Unable to locate the compiled Issuance credential PostgreSQL contract executable." >&2
             exit 1
           fi
-          issuance_credential_relative="${issuance_credential_executable#"$PWD/"}"
           mapfile -t canvas_issuance_contract_executables < <(jq -r '
             select(.reason == "compiler-artifact")
             | select(.package_id | contains("marty-issuance-service"))
@@ -468,13 +522,11 @@ jobs:
             printf 'Expected ten issuance PostgreSQL contracts (nine Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contract_executables[@]}" >&2
             exit 1
           fi
-          canvas_issuance_contract_relatives=()
           for contract_executable in "${canvas_issuance_contract_executables[@]}"; do
             if [[ ! -x "$contract_executable" ]]; then
               printf 'Canvas Issuance PostgreSQL contract is not executable: %s.\n' "$contract_executable" >&2
               exit 1
             fi
-            canvas_issuance_contract_relatives+=("${contract_executable#"$PWD/"}")
           done
           trust_profile_executable="$(jq -r '
             select(.reason == "compiler-artifact")
@@ -487,7 +539,7 @@ jobs:
             echo "Unable to locate the compiled Trust Profile PostgreSQL contract executable." >&2
             exit 1
           fi
-          trust_profile_relative="${trust_profile_executable#"$PWD/"}"
+          cp "$trust_profile_executable" target/debug/trust-profile-migration-contract
           organization_migration_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "migration_contract")
@@ -524,115 +576,114 @@ jobs:
           cp "$organization_migration_executable" target/debug/organization-migration-contract
           cp "$organization_application_executable" target/debug/organization-application-postgres-contract
           cp "$organization_repository_executable" target/debug/organization-repository-postgres-contract
+          flow_postgres_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-flow"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          verification_postgres_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "credentials_compat_postgres")
+            | select(.package_id | contains("marty-verification-service"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          gateway_redis_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "redis_runtime")
+            | select(.package_id | contains("marty-gateway"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          for executable in "$flow_postgres_executable" "$verification_postgres_executable" "$gateway_redis_executable"; do
+            if [[ -z "$executable" || ! -x "$executable" ]]; then
+              echo "Unable to locate a compiled explicit Rust contract executable." >&2
+              exit 1
+            fi
+          done
+          cp "$flow_postgres_executable" target/debug/flow-postgres-contract
+          cp "$verification_postgres_executable" target/debug/verification-postgres-contract
+          cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
-          command -v zstd >/dev/null
-          tar --zstd -cf "$RUNNER_TEMP/rust-db-test-bundle.tar.zst" \
-            "$contract_relative" \
-            "$registry_relative" \
-            "$document_relative" \
-            "$issuer_profile_relative" \
-            "$credential_template_relative" \
-            target/debug/credential-template-migration-contract \
-            "$presentation_policy_relative" \
-            "$issuance_transaction_relative" \
-            "$issuance_credential_relative" \
-            "${canvas_issuance_contract_relatives[@]}" \
-            "$trust_profile_relative" \
-            target/debug/organization-migration-contract \
-            target/debug/organization-application-postgres-contract \
-            target/debug/organization-repository-postgres-contract \
-            target/debug/marty-revocation-profile
-      - name: Publish reusable database contract executables
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: rust-db-test-bundle-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/rust-db-test-bundle.tar.zst
-          compression-level: 0
-          retention-days: 1
-      - name: Test Rust service contracts
+      - name: Create isolated Rust contract databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          for database in marty_verification_contract marty_db_contracts_test; do
+            docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
+          done
+      - name: Run safe Rust contract groups concurrently
         working-directory: rust
-        run: cargo test --locked --workspace
-      - name: Require native Flow PostgreSQL idempotency and callback contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          names=(workspace verification gateway)
+          pids=()
+
+          (
+            set +e
+            cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+            printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
+          ) &
+          pids+=("$!")
+          (
+            set +e
+            VERIFICATION_SESSION_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/marty_verification_contract \
+              target/debug/verification-postgres-contract \
+              --ignored --exact released_migration_and_atomic_repository_contract_hold_on_postgres \
+              >"$RUNNER_TEMP/rust-verification.log" 2>&1
+            printf '%s\n' "$?" >"$RUNNER_TEMP/rust-verification.status"
+          ) &
+          pids+=("$!")
+          (
+            set +e
+            MARTY_GATEWAY_TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
+              target/debug/gateway-redis-contract \
+              --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe \
+              >"$RUNNER_TEMP/rust-gateway.log" 2>&1
+            printf '%s\n' "$?" >"$RUNNER_TEMP/rust-gateway.status"
+          ) &
+          pids+=("$!")
+
+          status=0
+          for index in "${!names[@]}"; do
+            wait "${pids[$index]}"
+            name="${names[$index]}"
+            printf '\n===== %s =====\n' "$name"
+            cat "$RUNNER_TEMP/rust-$name.log"
+            if [[ "$(cat "$RUNNER_TEMP/rust-$name.status")" != 0 ]]; then
+              status=1
+            fi
+          done
+          exit "$status"
+      # The Flow contract deliberately requires the marty_atomic_test database.
+      # Serialize it after the workspace suite so both retain their isolation.
+      - name: Run Flow database contract after workspace suite
         working-directory: rust
-        run: >-
-          cargo test --locked -p marty-flow --test postgres_integration
-          -- --test-threads=1
-      - name: Require Verification PostgreSQL migration and fencing contract
-        working-directory: rust
-        run: >-
-          cargo test --locked -p marty-verification-service
-          --test credentials_compat_postgres
-          -- --ignored --exact released_migration_and_atomic_repository_contract_hold_on_postgres
-      - name: Test gateway Redis-backed runtime
-        working-directory: rust
+        shell: bash
         env:
-          MARTY_GATEWAY_TEST_REDIS_URL: redis://127.0.0.1:6379/15
-        run: >-
-          cargo test --locked -p marty-gateway --test redis_runtime
-          -- --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe
+          FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
+        run: target/debug/flow-postgres-contract --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
 
-  test-rust-db-contracts:
-    name: Rust Database Contracts
-    needs: test-rust-services
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
-        env:
-          POSTGRES_USER: marty
-          POSTGRES_PASSWORD: marty-test
-          POSTGRES_DB: marty_revocation_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U marty -d marty_revocation_test"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-      redis:
-        image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
-    permissions:
-      actions: read
-      contents: read
-    env:
-      MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-      MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
-      CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      ISSUANCE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      ORGANIZATION_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-      TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Download reusable database contract executables
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: rust-db-test-bundle-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/rust-db-test-bundle
-      - name: Extract reusable database contract executables
-        shell: bash
-        run: >-
-          tar --zstd -xf
-          "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar.zst"
-          -C rust
       - name: Test Rust database and runtime contracts
         working-directory: rust
         shell: bash
+        env:
+          MARTY_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_db_contracts_test
+          CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          ISSUANCE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          ORGANIZATION_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
+          TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
         run: |
           set -euo pipefail
           mapfile -t contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'contracts-*' -perm -u+x)
@@ -659,14 +710,10 @@ jobs:
             exit 1
           fi
           "${issuer_profile_contracts[0]}" --ignored --test-threads=1
-          mapfile -t service_postgres_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'postgres_integration-*' -perm -u+x)
-          if (( ${#service_postgres_contracts[@]} != 2 )); then
-            printf 'Expected two service PostgreSQL contract executables, found %s.\n' "${#service_postgres_contracts[@]}" >&2
-            exit 1
-          fi
-          for contract in "${service_postgres_contracts[@]}"; do
-            "$contract" --test-threads=1
-          done
+          test -x target/debug/credential-template-postgres-contract
+          test -x target/debug/presentation-policy-postgres-contract
+          target/debug/credential-template-postgres-contract --test-threads=1
+          target/debug/presentation-policy-postgres-contract --test-threads=1
           mapfile -t issuance_transaction_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuance_transaction_postgres_contract-*' -perm -u+x)
           if (( ${#issuance_transaction_contracts[@]} != 1 )); then
             printf 'Expected one Issuance transaction PostgreSQL contract executable, found %s.\n' "${#issuance_transaction_contracts[@]}" >&2
@@ -693,21 +740,18 @@ jobs:
           done
           test -x target/debug/credential-template-migration-contract
           target/debug/credential-template-migration-contract --test-threads=1
-          mapfile -t trust_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'migration_contract-*' -perm -u+x)
-          if (( ${#trust_profile_contracts[@]} != 1 )); then
-            printf 'Expected one Trust Profile PostgreSQL contract executable, found %s.\n' "${#trust_profile_contracts[@]}" >&2
-            exit 1
-          fi
-          "${trust_profile_contracts[0]}" --test-threads=1
+          test -x target/debug/trust-profile-migration-contract
+          target/debug/trust-profile-migration-contract --test-threads=1
           test -x target/debug/organization-migration-contract
           test -x target/debug/organization-application-postgres-contract
           test -x target/debug/organization-repository-postgres-contract
           target/debug/organization-migration-contract --test-threads=1
           target/debug/organization-application-postgres-contract --test-threads=1
           target/debug/organization-repository-postgres-contract --test-threads=1
-
   rust-lint-policy:
     name: Rust Lint and Packaging
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -835,6 +879,8 @@ jobs:
 
   test-rust-service-images:
     name: Rust Service Images
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -1245,6 +1291,12 @@ jobs:
 
   public-protocol-contract:
     name: Public Protocol Contract
+    needs: changes
+    if: >-
+      needs.changes.outputs.ui == 'true' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1281,7 +1333,12 @@ jobs:
 
   test-release-contracts:
     name: Release Contract Tests
+    needs: changes
+    if: >-
+      needs.changes.outputs.release == 'true' ||
+      needs.changes.outputs.verification == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTHONPATH: packages
     steps:
@@ -1367,9 +1424,40 @@ jobs:
         run: python scripts/check_oss_boundary.py
       - name: Run repository release checks
         run: python -m pytest tests -v --tb=short
+      - name: Configure the pinned containerd image store
+        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
+        with:
+          version: v29.7.2
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - name: Configure the pinned OCI exporter
+        id: buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v6.2.0
+        with:
+          version: v0.36.1
+          driver: docker-container
+          driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      - name: Require the exact supported OCI backend
+        env:
+          MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
+          MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
+        run: python scripts/check_verification_candidate_backend.py
+      - name: Prove the same OCI archive through the future consumer path
+        env:
+          MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
+        run: >-
+          python -m pytest -q tests/test_verification_candidate_build.py
+          tests/test_verification_candidate_backend.py
+          tests/test_verification_candidate_workflow.py
 
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1429,6 +1517,8 @@ jobs:
 
   security:
     name: Security Scanning
+    needs: changes
+    if: needs.changes.outputs.security == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1505,6 +1595,8 @@ jobs:
 
   rust-supply-chain:
     name: Rust Supply Chain
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1519,59 +1611,10 @@ jobs:
           command: check
           command-arguments: advisories bans licenses sources
 
-  verification-candidate-oci-contract:
-    name: Verification Candidate OCI Contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12.14"
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
-        with:
-          version: "0.11.3"
-          enable-cache: false
-      - name: Configure the pinned containerd image store
-        uses: docker/setup-docker-action@77e84dbf09b47d1e29270283c22f16145aa85ca1 # v5.4.0
-        with:
-          version: v29.7.2
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - name: Configure the pinned OCI exporter
-        id: buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v6.2.0
-        with:
-          version: v0.36.1
-          driver: docker-container
-          driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
-      - name: Require the exact supported OCI backend
-        env:
-          MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
-          MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
-        run: python scripts/check_verification_candidate_backend.py
-      - name: Install exact candidate contract dependencies
-        run: uv pip install --system pytest==9.1.1 pyyaml==6.0.3
-      - name: Prove the same OCI archive through the future consumer path
-        run: >-
-          python -m pytest -q tests/test_verification_candidate_build.py
-          tests/test_verification_candidate_backend.py
-          tests/test_verification_candidate_workflow.py
-
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [lint, fast-feedback, test-ui, test-services, test-rust-services, test-rust-db-contracts, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain, verification-candidate-oci-contract]
+    needs: [changes, lint, fast-feedback, test-ui, test-services, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -1582,8 +1625,13 @@ jobs:
       - name: Require every CI lane
         shell: bash
         run: |
+          set -euo pipefail
           for result in $RESULTS; do
-            test "$result" = success
+            if [[ "${{ github.event_name }}" == merge_group ]]; then
+              test "$result" = success
+            else
+              [[ "$result" == success || "$result" == skipped ]]
+            fi
           done
       - name: Summarize CI performance
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
