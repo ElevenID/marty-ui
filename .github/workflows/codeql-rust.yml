@@ -3,12 +3,6 @@ name: CodeQL Rust
 on:
   pull_request:
     branches: [main]
-    paths:
-      - rust/**
-      - proto/**
-      - contracts/**
-      - .github/codeql/**
-      - .github/workflows/codeql-rust.yml
   merge_group:
     types: [checks_requested]
   schedule:
