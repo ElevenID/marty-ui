@@ -191,3 +191,19 @@ def test_warm_cache_uses_the_same_rust_test_profile() -> None:
         ROOT / ".github" / "workflows" / "warm-ci-caches.yml"
     )
     assert document["jobs"]["rust"]["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
+
+
+def test_closed_pull_request_cache_cleanup_is_rate_limit_safe() -> None:
+    source, document = _workflow(
+        ROOT / ".github" / "workflows" / "cleanup-ci-caches.yml"
+    )
+    cleanup = document["jobs"]["cleanup"]
+    script = cleanup["steps"][0]["with"]["script"]
+
+    assert "Promise.all" not in script
+    assert "await delay(500)" in script
+    assert "error.status === 429 || error.status === 403" in script
+    assert "const maxAttempts = 7" in script
+    assert "retry-after" in script
+    assert "2_000 * (2 ** attempt)" in script
+    assert "maxDeletions = 2000" in source
