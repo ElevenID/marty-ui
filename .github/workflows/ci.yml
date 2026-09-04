@@ -576,14 +576,61 @@ jobs:
           cp "$organization_migration_executable" target/debug/organization-migration-contract
           cp "$organization_application_executable" target/debug/organization-application-postgres-contract
           cp "$organization_repository_executable" target/debug/organization-repository-postgres-contract
+          flow_postgres_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-flow"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          verification_postgres_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "credentials_compat_postgres")
+            | select(.package_id | contains("marty-verification-service"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          gateway_redis_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "redis_runtime")
+            | select(.package_id | contains("marty-gateway"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          for executable in "$flow_postgres_executable" "$verification_postgres_executable" "$gateway_redis_executable"; do
+            if [[ -z "$executable" || ! -x "$executable" ]]; then
+              echo "Unable to locate a compiled explicit Rust contract executable." >&2
+              exit 1
+            fi
+          done
+          cp "$flow_postgres_executable" target/debug/flow-postgres-contract
+          cp "$verification_postgres_executable" target/debug/verification-postgres-contract
+          cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
       - name: Create isolated Rust contract databases
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_flow_contract marty_verification_contract marty_db_contracts; do
+          for database in marty_verification_contract marty_db_contracts; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
+          flow_container="marty-flow-contract-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run --detach --name "$flow_container" \
+            --publish 127.0.0.1::5432 \
+            --env POSTGRES_DB=marty_atomic_test \
+            --env POSTGRES_USER=postgres \
+            --env POSTGRES_PASSWORD=postgres \
+            postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
+          for attempt in {1..30}; do
+            if docker exec "$flow_container" pg_isready -U postgres -d marty_atomic_test; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$flow_container" pg_isready -U postgres -d marty_atomic_test
+          flow_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$flow_container")"
+          printf 'FLOW_CONTRACT_POSTGRES_CONTAINER=%s\n' "$flow_container" >> "$GITHUB_ENV"
+          printf 'FLOW_CONTRACT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:%s/marty_atomic_test\n' "$flow_port" >> "$GITHUB_ENV"
       - name: Run independent Rust contract groups concurrently
         working-directory: rust
         shell: bash
@@ -600,8 +647,8 @@ jobs:
           pids+=("$!")
           (
             set +e
-            FLOW_POSTGRES_TEST_URL=postgresql://postgres:postgres@localhost:5432/marty_flow_contract \
-              cargo test --locked -p marty-flow --test postgres_integration -- --test-threads=1 \
+            FLOW_POSTGRES_TEST_URL="$FLOW_CONTRACT_POSTGRES_URL" \
+              target/debug/flow-postgres-contract --test-threads=1 \
               >"$RUNNER_TEMP/rust-flow.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-flow.status"
           ) &
@@ -609,8 +656,8 @@ jobs:
           (
             set +e
             VERIFICATION_SESSION_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/marty_verification_contract \
-              cargo test --locked -p marty-verification-service --test credentials_compat_postgres \
-              -- --ignored --exact released_migration_and_atomic_repository_contract_hold_on_postgres \
+              target/debug/verification-postgres-contract \
+              --ignored --exact released_migration_and_atomic_repository_contract_hold_on_postgres \
               >"$RUNNER_TEMP/rust-verification.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-verification.status"
           ) &
@@ -618,8 +665,8 @@ jobs:
           (
             set +e
             MARTY_GATEWAY_TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
-              cargo test --locked -p marty-gateway --test redis_runtime \
-              -- --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe \
+              target/debug/gateway-redis-contract \
+              --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe \
               >"$RUNNER_TEMP/rust-gateway.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-gateway.status"
           ) &
@@ -718,6 +765,13 @@ jobs:
           target/debug/organization-migration-contract --test-threads=1
           target/debug/organization-application-postgres-contract --test-threads=1
           target/debug/organization-repository-postgres-contract --test-threads=1
+      - name: Stop isolated Flow PostgreSQL
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${FLOW_CONTRACT_POSTGRES_CONTAINER:-}" ]]; then
+            docker rm --force "$FLOW_CONTRACT_POSTGRES_CONTAINER"
+          fi
 
   rust-lint-policy:
     name: Rust Lint and Packaging

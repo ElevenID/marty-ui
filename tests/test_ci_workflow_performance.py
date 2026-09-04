@@ -71,6 +71,12 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     )
     for group in ("workspace", "flow", "verification", "gateway"):
         assert f'rust-{group}.status' in source
+    assert "target/debug/flow-postgres-contract --test-threads=1" in source
+    assert "target/debug/verification-postgres-contract" in source
+    assert "target/debug/gateway-redis-contract" in source
+    assert "FLOW_CONTRACT_POSTGRES_URL" in source
+    assert "POSTGRES_DB=marty_atomic_test" in source
+    assert "cargo test --locked -p marty-flow --test postgres_integration" not in source
 
 
 def test_released_native_backend_is_verified_without_rebuilding_it() -> None:
