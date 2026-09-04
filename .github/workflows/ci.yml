@@ -621,7 +621,7 @@ jobs:
             --env POSTGRES_USER=postgres \
             --env POSTGRES_PASSWORD=postgres \
             postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             if docker exec "$flow_container" pg_isready -U postgres -d marty_atomic_test; then
               break
             fi
