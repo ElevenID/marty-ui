@@ -27,6 +27,7 @@ jobs:
       actions: read
       contents: read
       packages: read
+      pull-requests: read
       security-events: write
     steps:
       - name: Require the completed advanced CodeQL cutover
@@ -34,16 +35,46 @@ jobs:
         run: |
           set -euo pipefail
           test "$CODEQL_ADVANCED_ENABLED" = "true"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Classify Rust analysis scope
+        id: scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('analyze', 'true');
+              return;
+            }
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const analyze = files.some(({ filename }) =>
+              filename.startsWith('rust/') ||
+              filename.startsWith('.github/codeql/') ||
+              filename === '.github/workflows/codeql-rust.yml'
+            );
+            core.info(analyze
+              ? 'Rust-relevant changes require CodeQL analysis.'
+              : 'No Rust-relevant changes; satisfying the required check without analysis.');
+            core.setOutput('analyze', String(analyze));
+      - name: Record scoped analysis skip
+        if: steps.scope.outputs.analyze != 'true'
+        run: echo "Rust CodeQL is not affected by this pull request."
+      - if: steps.scope.outputs.analyze == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Initialize production-focused analysis
+        if: steps.scope.outputs.analyze == 'true'
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
         with:
           languages: rust
           build-mode: none
           config-file: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}
       - name: Analyze Rust
+        if: steps.scope.outputs.analyze == 'true'
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938
         with:
           category: /language:rust
