@@ -10,16 +10,20 @@ Python MMF beta packages and do not recreate `release-beta.yml` workflows.
    record each exact revision in the stack inputs. The coordinated set includes
    the Rust verifier and the demo recorder because their executable behavior is
    part of release qualification even though they are not service images.
-2. Dispatch **Prepare stack tag** on exact protected `marty-ui/main`. It checks
-   the configured merge-queue and code-scanning results, creates the annotated
-   `v*` tag in an evidence bundle, and records its exact object and source SHA.
-   The accountable maintainer verifies and imports that bundle, publishes the
-   previously unused tag through a temporary scoped tag-rule bypass, restores
-   the rule immediately, and lets the tag event start
-   `.github/workflows/cd.yml` at the immutable tag.
-3. Allow that workflow to validate the coordinated revisions, build the Rust
-   service plane, publish immutable OCI images, SBOMs, attestations, checksums,
-   and the atomic release manifest, and retain rollback evidence.
+2. In a separate reviewed change, set the exact absent stack coordinate to
+   `eligible`, then dispatch **Prepare stack release claim** on that exact
+   protected `marty-ui/main` commit. It checks the configured merge-queue and
+   code-scanning results, release environments, component attestations, and
+   absence of every public coordinate before writing a durable claim artifact.
+   Preparation creates no tag, image, release, or deployment.
+3. Dispatch **Stack release** from `.github/workflows/cd.yml` on the same exact
+   protected-main commit with the successful claim run ID. It authenticates the
+   claim and pinned integration source, builds and attests content-addressed
+   Rust images, runs the public-stack and verifier gates against those exact
+   digests, and retains resumable transaction checkpoints. Only after every
+   qualification gate passes may it promote the version tags, create the
+   annotated source tag, publish the GitHub release with exact SBOMs,
+   attestations and checksums, and seal the terminal transaction.
 4. Deploy the manifest's exact image digests to beta as one aggregate change.
    Production deployment is a separate decision and is not part of this gate.
 5. Dispatch **MIP 0.4 Beta Credential Lifecycle** from
@@ -112,11 +116,17 @@ deployment and audit.
 
 ## Recovery dispatch
 
-The **Stack release** workflow re-downloads the completed preparation evidence.
-It rejects branches, lightweight tags, tags not on the exact protected `main`
-commit, tag objects that differ from the preparation bundle, failed preparation
-runs, and tags with an existing release. A lost tag event is recovered by
-dispatching `.github/workflows/cd.yml` at that same immutable annotated tag.
+The **Stack release** workflow re-downloads either the original claim or one
+explicit later checkpoint. Supply `resume_run_id` and `resume_artifact`
+together; the checkpoint allowlist, transaction identity, claim run, source
+SHA, stack-lock digest, state, image digests and attestations must all still
+match. Rerunning the original workflow run retains its exact source. A new
+dispatch is accepted only while protected `main` still equals the claimed
+source SHA, so current trusted workflow code is never selected from transaction
+data.
 
-Do not use a branch workflow dispatch as a substitute for an immutable release,
-and do not mix independently built component versions in beta.
+If exact-source completion is no longer possible, publish a conflict tombstone
+through `.github/workflows/tombstone-stack-release.yml`; never retarget or reuse
+the claimed coordinate. Do not create a tag or release by hand, substitute a
+different branch dispatch, or mix independently built component versions in
+beta.

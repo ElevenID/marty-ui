@@ -27,6 +27,20 @@ def test_beta_guide_names_the_current_aggregate_gates() -> None:
         assert environment in guide
 
 
+def test_beta_guide_requires_the_digest_first_transaction() -> None:
+    guide = GUIDE.read_text(encoding="utf-8")
+    prose = " ".join(guide.split())
+
+    assert "Prepare stack release claim" in guide
+    assert "Preparation creates no tag, image, release, or deployment" in prose
+    assert "Only after every qualification gate passes may it promote" in prose
+    assert "resume_run_id" in guide
+    assert "resume_artifact" in guide
+    assert ".github/workflows/tombstone-stack-release.yml" in guide
+    assert "temporary scoped tag-rule bypass" not in guide
+    assert "lets the tag event start" not in guide
+
+
 def test_retired_python_beta_trigger_does_not_return() -> None:
     guide = GUIDE.read_text(encoding="utf-8").lower()
 

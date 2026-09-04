@@ -1,6 +1,6 @@
-name: Prepare stack tag
+name: Prepare stack release claim
 
-run-name: Prepare ${{ inputs.tag }} at ${{ inputs.source_sha }}
+run-name: Claim ${{ inputs.tag }} at ${{ inputs.source_sha }}
 
 on:
   workflow_dispatch:
@@ -10,23 +10,38 @@ on:
         required: true
         type: string
       source_sha:
-        description: Exact protected-main commit to validate and tag
+        description: Exact protected-main commit to validate and claim
         required: true
         type: string
 
 concurrency:
-  group: ui-prepare-stack-${{ inputs.tag }}
+  group: ui-stack-release-claim-${{ inputs.tag }}
   cancel-in-progress: false
 
 permissions: {}
 
+env:
+  IMAGE: ghcr.io/elevenid/marty-ui-oss/ui
+  SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
+  MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
+
 jobs:
-  prepare-stack-tag:
-    name: Validate exact main and create annotated tag
+  release-environment-preflight:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: stack-release
+
+  claim-stack-release:
+    name: Validate exact main and persist the no-write claim
+    needs: release-environment-preflight
     runs-on: ubuntu-latest
     permissions:
-      actions: write
-      contents: write
+      actions: read
+      contents: read
+      packages: read
     steps:
       - name: Require exact protected-main dispatch
         shell: bash
@@ -42,8 +57,8 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -87,46 +102,48 @@ jobs:
           --policy .github/stack-tag-policy.json
           --evidence stack-tag-evidence.json
 
-      - name: Create the exact annotated tag locally
+      - name: Require every public release coordinate to be absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.tag }}
         shell: bash
+        run: >-
+          python scripts/check_release_absent.py
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$VERSION"
+          --version-tag "${VERSION#v}"
+          --image "$IMAGE"
+          --image "$SERVICES_IMAGE"
+          --image "$MIGRATIONS_IMAGE"
+
+      - name: Create the durable digest-first release claim
         env:
           COMMIT: ${{ inputs.source_sha }}
           TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          version="${TAG#v}"
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          {
-            printf 'Release %s\n\n' "$version"
-            printf 'Stack-Tag-Gate: elevenid.stack-tag-preparation/v1\n'
-            printf 'Preparation-Run: %s\n' "$GITHUB_RUN_ID"
-            printf 'Source-SHA: %s\n' "$COMMIT"
-          } > tag-message.txt
-          git tag -a "$TAG" "$COMMIT" -F tag-message.txt
-          test "$(git cat-file -t "refs/tags/$TAG")" = tag
-          tag_object="$(git rev-parse "refs/tags/$TAG")"
-          peeled="$(git rev-parse "refs/tags/$TAG^{commit}")"
-          python scripts/stack_tag_gate.py record-tag \
-            --evidence stack-tag-evidence.json \
-            --tag-object "$tag_object" \
-            --peeled-commit "$peeled"
-
-      - name: Create portable exact-tag handoff
         shell: bash
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          git bundle create prepared-stack-tag.bundle "refs/tags/$TAG"
-          git bundle verify prepared-stack-tag.bundle
+        run: >-
+          python scripts/release_transaction.py claim
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$TAG"
+          --source-sha "$COMMIT"
+          --stack-lock release/stack-lock.json
+          --claim-run-id "$GITHUB_RUN_ID"
+          --image "ui=$IMAGE"
+          --image "services=$SERVICES_IMAGE"
+          --image "migrations=$MIGRATIONS_IMAGE"
+          --tag-absent
+          --release-absent
+          --version-tag-absent ui=true
+          --version-tag-absent services=true
+          --version-tag-absent migrations=true
+          --output release-transaction.json
 
-      - name: Upload immutable tag preparation evidence
+      - name: Upload immutable no-write release claim
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: stack-tag-evidence-${{ inputs.tag }}
+          name: stack-release-claim-${{ inputs.tag }}
           path: |
             stack-tag-evidence.json
-            prepared-stack-tag.bundle
+            release-transaction.json
           if-no-files-found: error
           retention-days: 90

@@ -43,9 +43,9 @@ def test_release_workflows_fail_closed_before_protected_jobs() -> None:
             "./.github/workflows/release-environment-preflight.yml"
         )
         assert preflight["with"]["environment"] == environment
-        assert workflow["jobs"][protected_job]["needs"] == (
-            "release-environment-preflight"
-        )
+        needs = workflow["jobs"][protected_job]["needs"]
+        dependencies = {needs} if isinstance(needs, str) else set(needs)
+        assert "release-environment-preflight" in dependencies
 
 
 def test_reusable_preflight_uses_only_the_job_token() -> None:

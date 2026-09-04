@@ -1,6 +1,6 @@
 # Credentials verification-image consolidation plan
 
-Status: `eligible-corrected-artifact-required`; deployment is held. The
+Status: `exact-digest-release-transaction-required`; deployment is held. The
 standalone Python verifier source/image deletion is merged in
 `marty-credentials@v0.1.72`. `v0.1.72` is a valid issuance component, not a
 failed verifier artifact. Release audit found that
@@ -11,24 +11,31 @@ evidence only and grants no cutover authorization. Pre-interlock
 release or services artifact, but one UI-only registry coordinate remains from
 the partial publication. Exact `v1.1.209` and `v1.1.210` evidence is retained in
 [`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).
-`v1.2.77` is intermediate evidence only: it is published and independently
-verified with the Python image as passing oracle and `v1.1.208` as bounded
-negative control. `v1.2.78` is preliminary, non-activating evidence: it packages
-protected parity corrections through PR `#403`, remains explicitly blocked,
-and does not pin a corrected Rust runtime. PR `#737` introduced the candidate
+`v1.2.77` is intermediate evidence only, and `v1.2.78` is preliminary,
+non-activating evidence. Public `marty-integration-tests@v1.2.79`, released from
+protected-main commit `7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`, supplies
+immutable exact-digest transaction pinning and fail-closed release comparison.
+PR `#737` introduced the candidate
 producer; its first dispatch occurred only after the later hardening described
 below. PR `#741` hardened the producer but retained raw tar-header offset
 defects. PR `#744` corrected those specific defects. Producer run `33465702948`,
 attempt `1`, was dispatched from exact protected-main commit
 `2fa1ffa3b36a0c978a41377dd64ab084bc8fc204` before the trusted consumer landed.
 It failed bundle validation with `OCI layer tar is empty` before attestation or
-artifact upload, so it supplies no admissible candidate-gate acceptance. A
-corrected producer run and authenticated, inspected consumer result are still
-required. The
-fail-closed eligibility interlock is merged. A future corrected Rust artifact,
-a later exact fully passing consumer release, and a later aggregate binder are
-required before beta acceptance; no future UI coordinate is selected or
-reserved by this plan.
+artifact upload, so it supplies no admissible candidate-gate acceptance. The
+corrected lane later passed from protected-main commit
+`7a1e2d6f31a563b33832b46921ec3376cd124113`. Protected UI PR `#762`
+merged the real trusted-positive OID4VP Rust runtime gate at
+`339660c4418f824251edba5c0c5ff27cf27fd1ba`. The capability gap is closed, but
+the fail-closed eligibility interlock remains held until the digest-first
+transaction exercises every gate against the exact unpublished `v1.1.211`
+services digest. The target is selected but no tag, image, release, claim, or
+deployment exists. A later static integration pin and one beta aggregate
+acceptance remain required.
+Release-evidence classification remains exact: `v0.1.72` is a valid issuance
+component, not a failed verifier artifact; `v1.2.76` is retained held evidence
+only and grants no cutover authorization; `v1.2.77` is intermediate evidence
+only; and `v1.2.78` is preliminary, non-activating evidence.
 The separate public Python binding and the still-used Credentials adapter
 remain supported. Production is unchanged.
 
@@ -271,20 +278,18 @@ passed from exact protected-main commit
 `7a1e2d6f31a563b33832b46921ec3376cd124113`: producer run `33490549237`,
 attempt `1`, and authenticated, inspected consumer run `33491836719`, attempt
 `1`, both succeeded. All 19 language-neutral checks matched and the Rust-only
-default-disabled-route check passed. Before any future corrected artifact
-coordinate may be selected, reserved, prepared, or published, the
-trusted-positive OID4VP runtime gate, the landed
-artifact-differential parity gates, and digest-first resumable release
-requirements in
-[`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md).
-It must then bind the reviewed harness baseline, pass the hardened release gates and
-publish without deployment. The differential must pin that exact image and
-pass every group before a new
-immutable corrected-Rust-pinned integration release is published using a
-new coordinate selected after the harness-only `v1.2.78`. A later aggregate
-stack, also selected only after its prerequisites pass, owns the single
-beta-only deployment, demos, acceptance soak and cleanup. Production is
-unchanged.
+default-disabled-route check passed. Before any future corrected artifact may
+be claimed, prepared, or published, the landed artifact-differential parity
+gates and digest-first resumable release requirements in
+[`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md)
+must remain fail-closed. Public integration release `v1.2.79` now binds the
+reviewed transaction harness, and protected UI PR `#762` merged the missing real
+trusted-positive OID4VP execution gate. Held target `v1.1.211` must exercise
+that binary and every differential group against its exact services image and
+SBOM before any version tag or release is promoted. After its immutable digest
+exists, publish a new static integration pin. The same aggregate stack then
+owns the single beta-only deployment, demos, acceptance soak and cleanup.
+Production is unchanged.
 
 Protected `ElevenID/marty-integration-tests#400` merged the post-`v1.2.77`
 differential strengthening at
@@ -329,3 +334,16 @@ protected harness lineage as immutable `v1.2.78` at merge commit
 `release_clearance` is still blocked on the positive OID4VP runtime, it does
 not pin a corrected Rust services image, and it grants no publication,
 deployment or activation authority; it is explicitly non-activating.
+
+Protected integration PR `#415` merged immutable transaction pins, exact-digest
+runtime execution, and fail-closed evidence comparison. Protected PR `#416`
+published that lineage as `marty-integration-tests@v1.2.79` from
+`7d24c73c1ef7e7dfb7e5cf119c6552321e58fa71`; its source archive and SPDX SBOM
+digests are respectively
+`sha256:622e878e47a9c8239160bc2e38fe2423d6fe9843de18e6c953433ccd32a905b7`
+and
+`sha256:3606d43a02379764b804ad22e29f1426edc66d0b7248152a0c159a947ec0821f`.
+Protected UI PR `#762` merged the real trusted-positive Rust gate at
+`339660c4418f824251edba5c0c5ff27cf27fd1ba`. These are implementation and
+harness evidence, not proof that the unpublished `v1.1.211` services digest has
+passed; that exact transaction remains the release gate.
