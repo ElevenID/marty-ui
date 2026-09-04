@@ -62,20 +62,22 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     step_names = {step.get("name") for step in rust_job["steps"]}
 
     assert rust_job["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
-    assert "Run independent Rust contract groups concurrently" in step_names
+    assert "Run safe Rust contract groups concurrently" in step_names
+    assert "Run Flow database contract after workspace suite" in step_names
     assert "Test Rust database and runtime contracts" in step_names
     assert "test-rust-db-contracts" not in document["jobs"]
     assert "rust-db-test-bundle" not in source
     assert "actions/upload-artifact" not in "\n".join(
         str(step) for step in rust_job["steps"]
     )
-    for group in ("workspace", "flow", "verification", "gateway"):
+    for group in ("workspace", "verification", "gateway"):
         assert f'rust-{group}.status' in source
     assert "target/debug/flow-postgres-contract --test-threads=1" in source
     assert "target/debug/verification-postgres-contract" in source
     assert "target/debug/gateway-redis-contract" in source
-    assert "FLOW_CONTRACT_POSTGRES_URL" in source
-    assert "POSTGRES_DB=marty_atomic_test" in source
+    assert "FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test" in source
+    assert "FLOW_CONTRACT_POSTGRES_URL" not in source
+    assert "POSTGRES_DB=marty_atomic_test" not in source
     assert "cargo test --locked -p marty-flow --test postgres_integration" not in source
 
 

@@ -614,43 +614,18 @@ jobs:
           for database in marty_verification_contract marty_db_contracts; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
-          flow_container="marty-flow-contract-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker run --detach --name "$flow_container" \
-            --publish 127.0.0.1::5432 \
-            --env POSTGRES_DB=marty_atomic_test \
-            --env POSTGRES_USER=postgres \
-            --env POSTGRES_PASSWORD=postgres \
-            postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
-          for _ in {1..30}; do
-            if docker exec "$flow_container" pg_isready -U postgres -d marty_atomic_test; then
-              break
-            fi
-            sleep 1
-          done
-          docker exec "$flow_container" pg_isready -U postgres -d marty_atomic_test
-          flow_port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$flow_container")"
-          printf 'FLOW_CONTRACT_POSTGRES_CONTAINER=%s\n' "$flow_container" >> "$GITHUB_ENV"
-          printf 'FLOW_CONTRACT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:%s/marty_atomic_test\n' "$flow_port" >> "$GITHUB_ENV"
-      - name: Run independent Rust contract groups concurrently
+      - name: Run safe Rust contract groups concurrently
         working-directory: rust
         shell: bash
         run: |
           set -euo pipefail
-          names=(workspace flow verification gateway)
+          names=(workspace verification gateway)
           pids=()
 
           (
             set +e
             cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
-          ) &
-          pids+=("$!")
-          (
-            set +e
-            FLOW_POSTGRES_TEST_URL="$FLOW_CONTRACT_POSTGRES_URL" \
-              target/debug/flow-postgres-contract --test-threads=1 \
-              >"$RUNNER_TEMP/rust-flow.log" 2>&1
-            printf '%s\n' "$?" >"$RUNNER_TEMP/rust-flow.status"
           ) &
           pids+=("$!")
           (
@@ -683,6 +658,14 @@ jobs:
             fi
           done
           exit "$status"
+      # The Flow contract deliberately requires the marty_atomic_test database.
+      # Serialize it after the workspace suite so both retain their isolation.
+      - name: Run Flow database contract after workspace suite
+        working-directory: rust
+        shell: bash
+        env:
+          FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
+        run: target/debug/flow-postgres-contract --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
@@ -765,14 +748,6 @@ jobs:
           target/debug/organization-migration-contract --test-threads=1
           target/debug/organization-application-postgres-contract --test-threads=1
           target/debug/organization-repository-postgres-contract --test-threads=1
-      - name: Stop isolated Flow PostgreSQL
-        if: always()
-        shell: bash
-        run: |
-          if [[ -n "${FLOW_CONTRACT_POSTGRES_CONTAINER:-}" ]]; then
-            docker rm --force "$FLOW_CONTRACT_POSTGRES_CONTAINER"
-          fi
-
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes
@@ -1363,6 +1338,7 @@ jobs:
       needs.changes.outputs.release == 'true' ||
       needs.changes.outputs.verification == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTHONPATH: packages
     steps:
