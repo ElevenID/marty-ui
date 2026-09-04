@@ -105,6 +105,13 @@ def test_ci_and_stack_lock_pin_the_same_npm_releases() -> None:
         assert workflow["env"][f"{env_prefix}_URI"] == artifact["uri"]
         assert workflow["env"][f"{env_prefix}_DIGEST"] == artifact["digest"]
 
+    blog = components["marty-blog"]
+    assert blog["version"] == "0.1.8"
+    assert blog["commit"] == "d8a124d2587464b092bf67dda65fe0283757b909"
+    assert blog["artifacts"][0]["digest"] == (
+        "sha256:5fb2aa83ee21e7f882b1fe7e4d3ce16108a193926677754ea39a2ccef3238792"
+    )
+
 
 def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
@@ -344,11 +351,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
     )
 
 
-def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
+def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release_state"] == "hold"
+    assert lock["release_state"] == "eligible"
     assert components["marty-credentials-issuance"]["version"] == "0.1.72"
     assert components["marty-integration-tests"]["version"] == "1.2.79"
 
@@ -394,6 +401,7 @@ def test_verifier_release_lineage_is_held_and_evidence_bounded() -> None:
         assert "consumer run `33491836719`, attempt `1`" in normalized
         assert "all 19 language-neutral checks matched" in normalized.lower()
         assert "`canonical.oid4vp-positive-runtime-not-exercised`" in normalized
+        assert "`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`" in normalized
         assert "`v1.1.211`" in document
         assert "`v1.1.212`" not in document
 
@@ -583,7 +591,7 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     example_lock = json.loads(_text("release/stack-lock.example.json"))
 
-    assert lock["release_state"] == "hold"
+    assert lock["release_state"] == "eligible"
     assert example_lock["release_state"] == "hold"
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "--repository ." in prepare

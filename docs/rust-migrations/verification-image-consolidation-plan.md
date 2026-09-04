@@ -1,6 +1,6 @@
 # Credentials verification-image consolidation plan
 
-Status: `exact-digest-release-transaction-required`; deployment is held. The
+Status: `exact-digest-release-activation-staged`; deployment is held. The
 standalone Python verifier source/image deletion is merged in
 `marty-credentials@v0.1.72`. `v0.1.72` is a valid issuance component, not a
 failed verifier artifact. Release audit found that
@@ -26,12 +26,14 @@ artifact upload, so it supplies no admissible candidate-gate acceptance. The
 corrected lane later passed from protected-main commit
 `7a1e2d6f31a563b33832b46921ec3376cd124113`. Protected UI PR `#762`
 merged the real trusted-positive OID4VP Rust runtime gate at
-`339660c4418f824251edba5c0c5ff27cf27fd1ba`. The capability gap is closed, but
-the fail-closed eligibility interlock remains held until the digest-first
-transaction exercises every gate against the exact unpublished `v1.1.211`
-services digest. The target is selected but no tag, image, release, claim, or
-deployment exists. A later static integration pin and one beta aggregate
-acceptance remain required.
+`339660c4418f824251edba5c0c5ff27cf27fd1ba`. Protected UI PR `#763` merged the
+digest-first resumable transaction at
+`4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`. The capability and transaction
+gaps are closed; this separate activation change makes only the live
+`v1.1.211` lock eligible and retains the held example. The transaction must
+still exercise every gate against the exact unpublished services digest. The
+target is selected but no tag, image, release, claim, or deployment exists. A
+later static integration pin and one beta aggregate acceptance remain required.
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
 only and grants no cutover authorization; `v1.2.77` is intermediate evidence
@@ -284,7 +286,9 @@ gates and digest-first resumable release requirements in
 [`verifier-release-incident-2026-08-31.md`](verifier-release-incident-2026-08-31.md)
 must remain fail-closed. Public integration release `v1.2.79` now binds the
 reviewed transaction harness, and protected UI PR `#762` merged the missing real
-trusted-positive OID4VP execution gate. Held target `v1.1.211` must exercise
+trusted-positive OID4VP execution gate. Protected UI PR `#763` merged the
+digest-first resumable transaction. This separately reviewed activation makes
+the live target `v1.1.211` eligible, but the target must still exercise
 that binary and every differential group against its exact services image and
 SBOM before any version tag or release is promoted. After its immutable digest
 exists, publish a new static integration pin. The same aggregate stack then
@@ -345,5 +349,7 @@ and
 `sha256:3606d43a02379764b804ad22e29f1426edc66d0b7248152a0c159a947ec0821f`.
 Protected UI PR `#762` merged the real trusted-positive Rust gate at
 `339660c4418f824251edba5c0c5ff27cf27fd1ba`. These are implementation and
-harness evidence, not proof that the unpublished `v1.1.211` services digest has
-passed; that exact transaction remains the release gate.
+harness evidence. Protected UI PR `#763` merged the digest-first resumable
+transaction at `4e817b32f6d65f88c763af79e2f07df1eb8a1ce7`; this activation makes the
+live lock eligible. None of that proves that the unpublished `v1.1.211`
+services digest has passed; that exact transaction remains the release gate.
