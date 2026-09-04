@@ -56,7 +56,10 @@ jobs:
           esac
           input="$RUNNER_TEMP/release-tombstone-input"
           mkdir "$input"
-          gh run download "$SOURCE_RUN_ID" --name "$ARTIFACT" --dir "$input"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT" \
+            --dir "$input"
           mapfile -t entries < <(find "$input" -mindepth 1 -maxdepth 1 -printf '%f:%y\n' | LC_ALL=C sort)
           if [[ "$ARTIFACT" == stack-release-claim-v* ]]; then
             expected=("release-transaction.json:f" "stack-tag-evidence.json:f")

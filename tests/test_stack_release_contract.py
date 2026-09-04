@@ -8,10 +8,29 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA_ACTION = re.compile(r"^\s*(?:-\s*)?uses:\s*[^\s]+@[0-9a-f]{40}\s*$")
+GH_RUN_DOWNLOAD = re.compile(r"gh run download\b(?:[^\n]*\\\n)*[^\n]*")
 
 
 def _text(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_stack_lock_bytes_are_platform_stable() -> None:
+    assert "release/stack-lock*.json text eol=lf" in _text(".gitattributes")
+
+
+def test_every_workflow_run_download_binds_the_repository_explicitly() -> None:
+    commands: list[tuple[Path, str]] = []
+    for workflow_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        workflow = workflow_path.read_text(encoding="utf-8")
+        commands.extend(
+            (workflow_path, match.group(0))
+            for match in GH_RUN_DOWNLOAD.finditer(workflow)
+        )
+
+    assert commands
+    for workflow_path, command in commands:
+        assert '--repo "$GITHUB_REPOSITORY"' in command, workflow_path
 
 
 def test_stack_release_consumes_only_immutable_public_components() -> None:
