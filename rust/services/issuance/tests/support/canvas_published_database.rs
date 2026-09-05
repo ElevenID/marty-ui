@@ -150,6 +150,16 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_timeout_consumer() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "timeout_consumer",
+            "timeout-consumer",
+            "timeout_consumer",
+            "MARTY_CANVAS_TIMEOUT_CONSUMER_ORACLE=1",
+        )))
+        .await
+    }
+
     pub async fn start_with_review_lifecycle() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((

@@ -111,6 +111,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in gate["run"]
     )
     assert (
+        "grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'"
+        in gate["run"]
+    )
+    assert (
         "grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'"
         in gate["run"]
     )

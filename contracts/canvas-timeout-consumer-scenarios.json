@@ -1,0 +1,22 @@
+{
+  "schema": "marty.canvas-timeout-consumer-scenarios/v1",
+  "cases": [
+    {"name":"normal_success","seconds":"2","response":"immediate"},
+    {"name":"headers_timeout","seconds":"0.2","response":"headers"},
+    {"name":"body_timeout","seconds":"0.2","response":"body"},
+    {"name":"progress_exceeds_total_budget","seconds":"0.5","response":"progress"},
+    {"name":"zero","seconds":"0","response":"immediate"},
+    {"name":"negative_zero","seconds":"-0.0","response":"immediate"},
+    {"name":"negative","seconds":"-1","response":"immediate"},
+    {"name":"nan","seconds":"nan","response":"immediate"},
+    {"name":"infinity","seconds":"inf","response":"immediate"},
+    {"name":"negative_infinity","seconds":"-inf","response":"immediate"},
+    {"name":"huge","seconds":"1e30","response":"immediate"},
+    {"name":"overflow","seconds":"1e9999","response":"immediate"},
+    {"name":"tiny","seconds":"1e-30","response":"immediate"},
+    {"name":"nan_delayed_body","seconds":"nan","response":"body"},
+    {"name":"infinity_delayed_headers","seconds":"inf","response":"headers"},
+    {"name":"huge_delayed_body","seconds":"1e30","response":"body"},
+    {"name":"untrusted_certificate","seconds":"2","response":"immediate","trusted":false}
+  ]
+}

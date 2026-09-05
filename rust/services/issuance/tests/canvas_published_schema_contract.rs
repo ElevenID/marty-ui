@@ -12,6 +12,28 @@ mod canvas_status_provider_replay;
 mod canvas_status_runtime_contract;
 
 #[tokio::test]
+async fn timeout_consumer_matches_published_socket_behavior() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_timeout_consumer()
+        .await
+        .unwrap();
+    let oracle = owned.oracle.clone().unwrap();
+    owned.close().unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-timeout-consumer-oracle.json"
+    ))
+    .unwrap();
+    // Capture installed published versions; local versions are provenance, not
+    // an invented constraint on the immutable published image's dependencies.
+    eprintln!("Published timeout consumer runtime: {}", oracle["runtime"]);
+    for key in ["source_sha256", "boundary", "cases"] {
+        assert_eq!(oracle[key], expected[key], "published timeout {key}");
+    }
+}
+
+#[tokio::test]
 async fn provider_configuration_matches_published_helpers() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

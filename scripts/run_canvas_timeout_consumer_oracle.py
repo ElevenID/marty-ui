@@ -1,0 +1,222 @@
+"""Synthetic loopback TLS qualification of the exact Canvas HTTP client owner.
+
+No deployment URLs or credentials are accepted. Only the test connection pool's
+CA trust is injected; the published pinning transport and HTTPX socket operations
+run unchanged. Local mode loads immutable Git source, image mode installed source.
+"""
+
+import argparse
+import ast
+import asyncio
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import importlib.metadata
+import importlib.util
+import ipaddress
+import json
+from pathlib import Path
+import socket
+import ssl
+import subprocess
+import tempfile
+import threading
+import time
+from urllib.parse import urlparse
+
+import httpx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+
+
+SOURCE_REF = "51f0a758a076777cb18a30b1db3f89c74ac23e01:services/issuance/application/canvas_lti_services.py"
+SOURCE_SHA256 = "ab5b5a6de0e1c3ed45838e6ca0c1df1c84f3eb311de41060a60754769d7ac6b3"
+NAMES = {
+    "CanvasLtiServiceError",
+    "normalize_canvas_https_origin",
+    "_is_private_canvas_hostname",
+    "_normalized_private_canvas_origins",
+    "_canvas_origin_is_private_allowlisted",
+    "_resolved_canvas_addresses",
+    "PinnedCanvasAsyncTransport",
+    "canvas_http_client",
+}
+
+
+def client_owner(source, origin):
+    assert hashlib.sha256(source.encode()).hexdigest() == SOURCE_SHA256
+    tree = ast.parse(source)
+    nodes = [node for node in tree.body if getattr(node, "name", None) in NAMES]
+    assert {node.name for node in nodes} == NAMES
+    future = ast.ImportFrom(
+        module="__future__", names=[ast.alias(name="annotations")], level=0
+    )
+    code = compile(
+        ast.fix_missing_locations(ast.Module(body=[future, *nodes], type_ignores=[])),
+        "published-canvas-http-owner",
+        "exec",
+    )
+    namespace = {
+        "httpx": httpx,
+        "ipaddress": ipaddress,
+        "socket": socket,
+        "urlparse": urlparse,
+        "private_canvas_origin_allowlist": lambda: [origin],
+    }
+    exec(code, namespace)
+    return namespace["canvas_http_client"]
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        try:
+            if self.path not in {"/immediate", "/headers", "/body", "/progress"}:
+                self.server.failures.append("unexpected path")
+                return
+            if self.path == "/headers":
+                time.sleep(0.6)
+            self.send_response(200)
+            self.send_header("Content-Length", "6")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.flush()
+            if self.path == "/body":
+                time.sleep(0.6)
+            for byte in b"result":
+                if self.path == "/progress":
+                    time.sleep(0.15)
+                self.wfile.write(bytes([byte]))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+            # Expected when the client deadline expires before this owned reply.
+            pass
+
+
+@contextmanager
+def loopback_tls():
+    with tempfile.TemporaryDirectory(prefix="canvas-timeout-oracle-") as directory:
+        root = Path(directory)
+        cert, key = root / "synthetic.pem", root / "synthetic.key"
+        # cryptography is already a dependency of the pinned issuance image;
+        # do not require an extra system executable or an OpenSSL config file.
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "synthetic-canvas-timeout")]
+        )
+        now = datetime.now(timezone.utc)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=1))
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+                ),
+                critical=False,
+            )
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None), critical=True
+            )
+            .sign(private_key, hashes.SHA256())
+        )
+        cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        key.write_bytes(
+            private_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = False
+        server.failures = []
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        trust = ssl.create_default_context(cafile=str(cert))
+        try:
+            yield f"https://127.0.0.1:{server.server_port}", trust
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert not server.failures
+
+
+async def observe(source, cases, origin, trust):
+    factory = client_owner(source, origin)
+    observations = []
+    for case in cases:
+        client = factory(timeout=float(case["seconds"]))
+        # Preserve the actual pinned transport. Trust only this fixture leaf in
+        # its original-origin pool; no machine trust or process-wide SSL changes.
+        if case.get("trusted", True):
+            client._transport._origin_transports[origin] = httpx.AsyncHTTPTransport(
+                verify=trust, trust_env=False, retries=0
+            )
+        async with client:
+            try:
+                async with asyncio.timeout(5):
+                    response = await client.get(origin + "/" + case["response"])
+                    result = {"status": response.status_code, "body": response.text}
+            except httpx.HTTPError as failure:
+                result = {"error_class": type(failure).__name__}
+            except TimeoutError:
+                raise AssertionError("owned test watchdog expired") from None
+        observations.append({"name": case["name"], **result})
+    return observations
+
+
+def run(source=None):
+    if source is None:
+        spec = importlib.util.find_spec("issuance.application.canvas_lti_services")
+        source = Path(spec.origin).read_text(encoding="utf-8")
+    cases = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "contracts/canvas-timeout-consumer-scenarios.json"
+        ).read_text(encoding="utf-8")
+    )["cases"]
+    with loopback_tls() as (origin, trust):
+        observations = asyncio.run(observe(source, cases, origin, trust))
+    return {
+        "source_sha256": SOURCE_SHA256,
+        "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
+        "runtime": {
+            name: importlib.metadata.version(name)
+            for name in ("httpx", "httpcore", "anyio")
+        },
+        "cases": observations,
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-repository", required=True)
+    arguments = parser.parse_args()
+    source = (
+        subprocess.run(
+            ["git", "show", SOURCE_REF],
+            cwd=arguments.source_repository,
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode("utf-8")
+        .replace("\r\n", "\n")
+    )
+    print(json.dumps(run(source), sort_keys=True))

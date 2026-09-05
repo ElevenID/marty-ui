@@ -108,6 +108,11 @@ def prepare():
                 )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
             (
+                "MARTY_CANVAS_TIMEOUT_CONSUMER_ORACLE",
+                "timeout_consumer",
+                "timeout_consumer",
+            ),
+            (
                 "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE",
                 "provider_configuration",
                 "provider_configuration",

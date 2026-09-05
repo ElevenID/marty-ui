@@ -33,6 +33,16 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
+Timeout qualification now includes 17 independently repeated, real loopback-TLS
+observations from the exact published Canvas HTTP factory/pinning transport.
+They confirm that Python uses progress-sensitive operation deadlines, whereas
+Rust currently uses a whole-response deadline and rejects several values at
+startup that Python accepts. A new mandatory image test cross-checks those socket
+outcomes; the helper gate additionally verifies 19 full adapter imports in fresh
+processes. These new gates await hosted qualification. Native timeout repair and
+all-consumer adoption remain open; no cutover is implied by a Python baseline.
+See [configuration evidence](rust-migrations/canvas-provider-configuration.md).
+
 The latest [provider configuration continuation](rust-migrations/canvas-provider-configuration.md)
 adds one lazy Rust operator-secret owner and 39 independently captured helper
 observations (20 secret, 19 timeout), including file rotation, optional I/O,
