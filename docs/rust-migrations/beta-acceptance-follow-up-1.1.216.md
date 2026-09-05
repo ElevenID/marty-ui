@@ -50,7 +50,9 @@ authoritative absence and exact-protected-main checks in the claim workflow.
    backup migration rehearsals, live native migrations and public/local markers.
    Capture fresh before/after29-container production invariants. The user allows
    beta downtime/forward retries; production deployment is out of scope.
-4. Use fresh artifact/attempt paths and the exact protected recorder revision.
+4. Use fresh artifact/attempt paths and the exact reviewed recorder revision.
+   Recorder main is not protected under its current GitHub plan; explicitly verify
+   the reviewed SHA and completed green checks rather than assuming protection.
    Rerun the unchanged KMS switching demo, full browser/credential lifecycle and
    governed device-evidence acceptance. No response overrides or relaxed checks.
 5. Collect source-bound operational samples and evaluate the governed event-

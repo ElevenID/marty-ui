@@ -289,7 +289,10 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
     assert '"attestation", "verify"' in script
     assert '"--repo", "ElevenID/marty-ui"' in script
     assert "Official beta deployment requires the published annotated release tag" in script
-    assert "Recorder revision must match protected marty-demo-recorder main" in script
+    assert "Recorder revision must match current marty-demo-recorder main" in script
+    assert "Recorder revision must match protected marty-demo-recorder main" not in script
+    assert 'git ls-remote https://github.com/ElevenID/marty-demo-recorder.git refs/heads/main' in script
+    assert '($remoteRecorder[0] -split "\\s+", 2)[0] -ne $RecorderRevision' in script
     assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
     assert '$migrationImage = [string]$officialPlan.images.migrations.reference' in script
     assert '$uiImage = [string]$officialPlan.images.ui.reference' in script
@@ -303,7 +306,7 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
     assert 'official_stack_manifest_sha256 = if ($OfficialStackRelease)' in script
 
     first_source_check = script.index(
-        'Write-Step "Verify official release source, protected recorder, and artifact attestation"'
+        'Write-Step "Verify official release source, current recorder revision, and artifact attestation"'
     )
     second_source_check = script.index(
         'Write-Step "Reverify official source and release inputs before maintenance"'

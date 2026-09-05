@@ -77,10 +77,18 @@ Use the official-stack mode for a release produced by `.github/workflows/cd.yml`
 It is intentionally separate from the non-promotable local-worktree snapshot
 mode. The official mode accepts only the downloaded `stack-manifest.json` and
 its exact `SHA256SUMS` entry, an annotated release tag at the executing commit,
-and the current protected `marty-demo-recorder/main` revision. It verifies the
+and the explicitly selected current `marty-demo-recorder/main` revision. It verifies the
 manifest attestation, pulls every runtime image by digest, verifies OCI version
 and revision labels, and records registry digests in deployment evidence. It
 does not rebuild released images.
+
+Select that recorder SHA only after maintainer review and terminal green checks.
+The recorder repository's current GitHub plan does not enforce branch protection;
+the wrapper verifies remote-main equality, not protected-branch governance. New
+receipts label this input `explicit-recorder-revision`, never an unverified claim
+of protection. Preserve historical receipts byte-for-byte rather than relabeling
+them. See the [private qualification/lifecycle sequence](rust-migrations/private-demo-qualification-lifecycle.md)
+for the checked acceptance prerequisite and private evidence handling.
 
 Create a clean detached worktree at the published tag. Keep the release bundle
 under that worktree's ignored `tests/artifacts` directory and reference the
@@ -90,7 +98,8 @@ host's existing beta environment files explicitly:
 $releaseTag = "v1.1.205"
 $releaseWorktree = "C:\beta-release-worktrees\marty-ui-$releaseTag"
 $releaseArtifacts = Join-Path $releaseWorktree "tests\artifacts\$releaseTag-official"
-$recorderRevision = (git ls-remote https://github.com/ElevenID/marty-demo-recorder.git refs/heads/main).Split()[0]
+# Replace with the exact revision already reviewed after its checks passed.
+$recorderRevision = "REVIEWED_RECORDER_40_CHARACTER_SHA"
 
 git fetch origin --tags
 git worktree add --detach $releaseWorktree $releaseTag

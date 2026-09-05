@@ -127,6 +127,14 @@ def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
     assert revisions["marty-ui"]["revision"] == UI_SHA
     assert revisions["marty-demo-recorder"]["revision"] == RECORDER_SHA
     assert set(revisions) == set(plan["source_manifest"]["repositories"])
+    repositories = plan["source_manifest"]["repositories"]
+    assert repositories["marty-demo-recorder"]["source"] == "explicit-recorder-revision"
+    assert repositories["marty-demo-recorder"]["revision"] == RECORDER_SHA
+    assert all(
+        record["source"] == "official-stack-manifest"
+        for name, record in repositories.items() if name != "marty-demo-recorder"
+    )
+    assert "protected-recorder-main" not in json.dumps(plan)
 
 
 def test_rejects_tampered_or_mismatched_release_inputs(tmp_path: Path) -> None:
