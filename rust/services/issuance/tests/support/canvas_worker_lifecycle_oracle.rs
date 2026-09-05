@@ -34,7 +34,16 @@ pub(super) struct ProcessorState {
     entry: Notify,
 }
 
-struct ActiveProcessor(Arc<ProcessorState>);
+pub(super) struct ActiveProcessor(Arc<ProcessorState>);
+
+impl ProcessorState {
+    pub(super) fn enter(self: &Arc<Self>) -> ActiveProcessor {
+        self.active.fetch_add(1, Ordering::SeqCst);
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        self.entry.notify_one();
+        ActiveProcessor(self.clone())
+    }
+}
 
 struct SignalScope(Arc<AtomicUsize>);
 
@@ -68,10 +77,7 @@ impl CanvasSyncProcessor for ControlledProcessor {
         target: &CanvasSyncTarget,
         _: &marty_issuance_service::canvas_sync_lease::CanvasSyncLease,
     ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
-        self.state.active.fetch_add(1, Ordering::SeqCst);
-        let _active = ActiveProcessor(self.state.clone());
-        self.state.entered.fetch_add(1, Ordering::SeqCst);
-        self.state.entry.notify_one();
+        let _active = self.state.enter();
         self.release
             .acquire()
             .await
@@ -87,20 +93,28 @@ impl CanvasSyncProcessor for ControlledProcessor {
 }
 
 pub(super) async fn await_both_processors<F: std::future::Future>(
-    mut cycle: Pin<&mut F>,
+    cycle: Pin<&mut F>,
     state: &ProcessorState,
 ) {
+    await_processors(cycle, state, 2).await;
+}
+
+pub(super) async fn await_processors<F: std::future::Future>(
+    mut cycle: Pin<&mut F>,
+    state: &ProcessorState,
+    expected: usize,
+) {
     tokio::time::timeout(Duration::from_secs(5), async {
-        while state.entered.load(Ordering::SeqCst) != 2 {
+        while state.entered.load(Ordering::SeqCst) != expected {
             tokio::select! {
-                _ = &mut cycle => panic!("cycle completed before both processors were active"),
+                _ = &mut cycle => panic!("cycle completed before all processors were active"),
                 () = state.entry.notified() => {},
             }
         }
     })
     .await
-    .expect("both jobs must progress concurrently");
-    assert_eq!(state.active.load(Ordering::SeqCst), 2);
+    .expect("all jobs must progress concurrently");
+    assert_eq!(state.active.load(Ordering::SeqCst), expected);
 }
 
 pub(super) struct ControlledCycle {

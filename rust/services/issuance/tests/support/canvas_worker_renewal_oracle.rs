@@ -141,7 +141,7 @@ pub async fn assert_generation_change_preserves_process_liveness(pool: &PgPool) 
 // statement rollback and therefore count ATTEMPTS, not successful persistence.
 const WRITE_STAGES: [&str; 3] = ["lease", "target", "process"];
 
-async fn install_write_failure(pool: &PgPool, failed_stage: &str) {
+pub(super) async fn install_write_failure(pool: &PgPool, failed_stage: &str) {
     assert!(WRITE_STAGES.contains(&failed_stage));
     sqlx::raw_sql(
         "CREATE TABLE issuance_service.renewal_failed_stage (stage text NOT NULL);
@@ -182,7 +182,7 @@ async fn install_write_failure(pool: &PgPool, failed_stage: &str) {
         .unwrap();
 }
 
-async fn remove_write_probes(pool: &PgPool) {
+pub(super) async fn remove_write_probes(pool: &PgPool) {
     sqlx::raw_sql(
         "DROP TRIGGER renewal_write_probe ON issuance_service.canvas_evidence_sync_jobs;
          DROP TRIGGER renewal_write_probe ON issuance_service.canvas_evidence_sync_targets;
@@ -219,32 +219,20 @@ pub async fn assert_renewal_write_failure_boundaries(pool: &PgPool) {
         .unwrap();
         assert_eq!(before.len(), 2);
         install_write_failure(pool, failed_stage).await;
-        let result = tokio::time::timeout(Duration::from_secs(15), cycle)
-            .await
-            .expect("renewal write failure must release both owned processors")
-            .unwrap();
-        assert_eq!((result.scheduled, result.leased), (2, 2));
-        assert_eq!(
-            (result.succeeded, result.retried, result.dead_lettered),
-            (0, 0, 0)
-        );
+        await_write_failure(cycle.as_mut(), pool, expected_attempts).await;
+        assert_eq!(state.active.load(Ordering::SeqCst), 2);
+        assert_eq!(state.cleaned.load(Ordering::SeqCst), 0);
+        // Operational failure leaves processing alive; cancellation, not the
+        // renewal error, now acknowledges both owned scopes. Durable partial
+        // write and attempt assertions below are unchanged.
+        drop(cycle);
         assert_eq!(state.active.load(Ordering::SeqCst), 0);
         assert_eq!(state.cleaned.load(Ordering::SeqCst), 2);
 
-        let attempts: (i64, i64, i64) = sqlx::query_as(
-            "SELECT CASE WHEN l.is_called THEN l.last_value ELSE 0 END,
-                    CASE WHEN t.is_called THEN t.last_value ELSE 0 END,
-                    CASE WHEN p.is_called THEN p.last_value ELSE 0 END
-             FROM issuance_service.renewal_lease_attempts l,
-                  issuance_service.renewal_target_attempts t,
-                  issuance_service.renewal_process_attempts p",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap();
+        let attempts = write_attempts(pool).await;
         for ((stage, actual), expected) in WRITE_STAGES
             .into_iter()
-            .zip([attempts.0, attempts.1, attempts.2])
+            .zip(attempts)
             .zip(expected_attempts)
         {
             assert_eq!(actual, expected, "failure={failed_stage}, stage={stage}");
@@ -291,4 +279,44 @@ pub async fn assert_renewal_write_failure_boundaries(pool: &PgPool) {
         }
         remove_write_probes(pool).await;
     }
+}
+
+async fn write_attempts(pool: &PgPool) -> [i64; 3] {
+    let (lease, target, process): (i64, i64, i64) = sqlx::query_as(
+        "SELECT CASE WHEN l.is_called THEN l.last_value ELSE 0 END,
+                CASE WHEN t.is_called THEN t.last_value ELSE 0 END,
+                CASE WHEN p.is_called THEN p.last_value ELSE 0 END
+         FROM issuance_service.renewal_lease_attempts l,
+              issuance_service.renewal_target_attempts t,
+              issuance_service.renewal_process_attempts p",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    [lease, target, process]
+}
+
+pub(super) async fn await_write_failure<F: std::future::Future>(
+    mut cycle: std::pin::Pin<&mut F>,
+    pool: &PgPool,
+    expected: [i64; 3],
+) {
+    tokio::time::timeout(Duration::from_secs(25), async {
+        tokio::select! {
+            _ = &mut cycle => panic!("operational renewal failure discarded processing"),
+            () = async {
+                loop {
+                    let actual = write_attempts(pool).await;
+                    assert!(actual.iter().zip(expected).all(|(a, e)| *a <= e), "unexpected renewal attempts: {actual:?}");
+                    if actual == expected { break; }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            } => {}
+        }
+    }).await.expect("real configured renewal writes must be attempted");
+    // Drive the actual cycle after the failing statements, without restarting
+    // it or treating an observation timeout as process completion.
+    assert!(tokio::time::timeout(Duration::from_millis(20), cycle)
+        .await
+        .is_err());
 }

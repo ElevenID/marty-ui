@@ -1,5 +1,11 @@
 # Canvas renewal progress and process-liveness parity
 
+The [whole-job outcome follow-up](canvas-worker-renewal-job-outcomes.md) supersedes
+the initial operational-error cancellation policy recorded below. It preserves
+all partial-write assertions, keeps processing bounded and lease-fenced after
+operational errors, and retains immediate cancellation on definite lease loss.
+The historical baseline observations below are not the current outcome policy.
+
 Review against the frozen worker and renewal oracle found two native gaps.
 Integration review also reproduced a target-heartbeat timestamp formatting gap.
 Neither correction changes tenant/lease/attempt/target-generation fences,

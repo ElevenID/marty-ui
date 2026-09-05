@@ -41,27 +41,34 @@ follow-up now carries an explicit lease into independent repository handles,
 checks the durable job before resource locks and again before committing effects,
 and rejects unscoped writes across all seven processor effect entry points.
 Initial configured PostgreSQL guard tests pass; complete gates/protected landing
-remain required. Renewal-error outcome handling is not changed yet. Preserve
-legitimate fenced results next without copying cancellation masking or weakening
-the existing tenant/resource checks. All-consumer cutover and Python deletion
+remain required. The native [renewal-job outcome follow-up](rust-migrations/canvas-worker-renewal-job-outcomes.md)
+now preserves bounded processing after operational renewal errors, attempts only
+lease-fenced durable outcomes, and observes the original renewal error afterward.
+Its real PostgreSQL 60-case matrix consumes the unchanged frozen corpus; external
+cancellation remains prompt and is not masked by renewal failure. Exact-head
+and protected landing gates remain required. All-consumer cutover and Python deletion
 remain gated on full authoritative-processor, schema and acceptance evidence.
 
 The integrated [renewal-progress follow-up](rust-migrations/canvas-worker-renewal-progress.md)
 retains the initialized pool owner and actual process-signal gate while correcting
 three reproduced differences: processing/deadline stalls during renewal I/O,
 suppressed process liveness after target CAS loss, and non-ISO target-heartbeat
-timestamp serialization. Local combined tests pass; protected landing and the
-remaining renewal failure/order, provider and whole-worker gates remain required.
+timestamp serialization. It landed as #799 on protected main at
+`9a7b0ad013713446d9e9887e618c0f161dde15e6`, with the reviewed UI readiness test
+fix retained. Provider and whole-worker gates remain required.
 
 The separate native renewal failure-boundary test now exercises actual PostgreSQL
 lease, target-heartbeat and process-heartbeat write errors after two processors
 start. All three local cases pass on unchanged worker code; durable rows and
 rollback-surviving attempt counters verify partial commits and suppression of
 later writes. A reversed-heartbeat-order negative control fails as intended and
-was restored. Protected landing/Linux gates remain required. This proves the
-maintainer's write boundaries, not whole-job equivalence: Python observes its
-maintainer failure in processor cleanup, while Rust stops its owned processor
-immediately. Full processor/provider outcomes and all-consumer cutover remain open.
+was restored. Those baseline tests landed as #800 at protected
+`6cf634705bf4221ce360428321d90a5545c36593`, after configured Linux and normal
+merge-queue checks passed. This proves the
+maintainer's write boundaries, not whole-job equivalence. The newer outcome
+follow-up above retains these assertions while changing processor lifetime after
+operational errors to preserve legitimate results. Full authoritative processor/
+provider outcomes and all-consumer cutover remain open.
 
 The [process-signal follow-up](rust-migrations/canvas-worker-process-signals.md)
 freezes actual published Python SIGINT exit130, corrects the native exit mapping,

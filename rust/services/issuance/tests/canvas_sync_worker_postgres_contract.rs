@@ -20,6 +20,9 @@ mod canvas_worker_process_signals;
 #[path = "support/canvas_worker_renewal_oracle.rs"]
 mod canvas_worker_renewal_oracle;
 
+#[path = "support/canvas_worker_renewal_job_outcomes.rs"]
+mod canvas_worker_renewal_job_outcomes;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
@@ -398,6 +401,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     canvas_worker_process_signals::assert_process_signals(&pool, &database_url).await;
     canvas_worker_renewal_oracle::assert_generation_change_preserves_process_liveness(&pool).await;
     canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool).await;
+    canvas_worker_renewal_job_outcomes::assert_renewal_job_outcomes(&pool).await;
     pool.close().await;
 }
 
