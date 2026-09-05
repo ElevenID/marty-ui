@@ -397,6 +397,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     canvas_worker_lifecycle_oracle::assert_initialized_pool_disposal(&pool).await;
     canvas_worker_process_signals::assert_process_signals(&pool, &database_url).await;
     canvas_worker_renewal_oracle::assert_generation_change_preserves_process_liveness(&pool).await;
+    canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool).await;
     pool.close().await;
 }
 
