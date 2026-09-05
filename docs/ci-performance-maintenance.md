@@ -31,7 +31,7 @@ outputs without changing production optimization or smoke-test coverage.
 
 Compare cold and warm runs separately. sccache hit rates exclude non-cacheable
 calls, so also inspect test executable compilation/linking and wall-clock time.
-Six independent in-memory issuance test modules now share `issuance-behavior`;
+Six independent issuance behavior test modules now share `issuance-behavior`;
 their assertions and fixtures are unchanged. Filter by module to run one group:
 
 ```sh

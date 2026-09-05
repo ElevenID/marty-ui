@@ -1,5 +1,6 @@
-//! Independent in-memory contracts share a test binary, not fixtures or state.
-//! Database, process-signal and executable smoke tests retain separate binaries.
+//! Independent behavior contracts share a test binary, not fixtures or state.
+//! Child-process checks keep child-scoped configuration; database and executable
+//! smoke harnesses retain separate binaries.
 
 #[path = "canvas_management_contract.rs"]
 mod canvas_management_contract;
