@@ -33,15 +33,31 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
+The [Canvas lifecycle status provider candidate](rust-migrations/canvas-status-provider.md)
+now implements bridge POST and Badgr DELETE synchronization plus canonical-only
+suspend/reinstate, with 55 independently frozen published protocol cases matching
+the Rust replay and a fresh published-image capture. Shared provider primitives
+retain validation's distinct secret policy. Actual loopback HTTP tests cover
+wire payloads/headers and non-followed redirects; environment/factory wiring,
+TLS/transport edge cases and all-consumer cutover remain open. Draft #814's prior
+head `8b75c27c0b64c437356bbb0e6dd1cb692cc4d36e` completed CI33995364201 and
+Rust CodeQL33995364199 successfully, including the packaged-worker contract that
+previously failed. New provider changes require their own hosted qualification.
+The expanded local candidate passes all 17 configured schema tests, 266 library
+tests, 5 worker tests, 22 combined behavior tests, 33 workflow/image tests and
+strict all-target Clippy. Two final deterministic-DNS provider captures preserve
+all 55 observations. No new deployment or Python deletion occurred.
+
 The [actual lifecycle/delivery candidate](rust-migrations/canvas-lifecycle-delivery.md)
 adds17 independently frozen published cases covering durable credential/delivery
 effects, provider failures, cancellation and competing resolution. It exposes and
 replaces the pending-only delivery behavior for the explicitly configured candidate;
-the default runtime adapter is not yet cut over. Bridge/Badgr provider implementation
+the default runtime adapter is not yet cut over. Bridge/Badgr provider qualification
 and all-consumer adoption remain required. A separate configured database regression
 reproduces a SQLx return-to-pool cancellation race consistent with the hosted worker
 signal failure; bounded post-operation connection validation fixes the local race
-without changing active-query or graceful-drain policy. Linux process gates remain.
+without changing active-query or graceful-drain policy. Linux CI passed at the
+prior head identified above; subsequent changes must retain that gate.
 The expanded candidate passes15 configured schema tests,264 library tests,
 5 worker executable tests,22 combined behavior tests,33 workflow/image tests
 and strict Clippy locally. No new deployment or superseded Python deletion occurred.

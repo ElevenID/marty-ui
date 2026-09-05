@@ -20,12 +20,19 @@ pub trait CanvasLifecycleStatusProvider: Send + Sync {
     /// Errors must be safe to persist as public delivery diagnostics.
     async fn synchronize(
         &self,
-        credential: &ManagedCredential,
+        context: CanvasLifecycleCredential<'_>,
         platform: &Value,
         delivery: &Value,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<Map<String, Value>, CredentialManagementPortError>;
+}
+
+/// Transaction identity comes from the credential row, never the delivery row.
+#[derive(Clone, Copy)]
+pub struct CanvasLifecycleCredential<'a> {
+    pub credential: &'a ManagedCredential,
+    pub transaction_id: &'a str,
 }
 
 #[derive(Clone)]
@@ -45,8 +52,9 @@ impl CanvasLifecycleDeliverySynchronizer {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<(), CredentialManagementPortError> {
-        let application: Option<Value> = sqlx::query_scalar("SELECT to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
-            .bind(&credential.id).bind(&credential.organization_id).fetch_optional(&self.pool).await.map_err(error)?.flatten();
+        let context: Option<(String, Option<Value>)> = sqlx::query_as("SELECT c.transaction_id,to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
+            .bind(&credential.id).bind(&credential.organization_id).fetch_optional(&self.pool).await.map_err(error)?;
+        let (transaction_id, application) = context.unwrap_or_default();
         let records: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE credential_id=$1 AND organization_id=$2 AND delivery_target='canvas_credentials' AND status='delivered' ORDER BY created_at,delivery_target")
             .bind(&credential.id).bind(&credential.organization_id).fetch_all(&self.pool).await.map_err(error)?;
         for mut record in records {
@@ -111,7 +119,16 @@ impl CanvasLifecycleDeliverySynchronizer {
                     // The provider sees hydrated target metadata, but not the
                     // new attempt projection until it has returned successfully.
                     self.provider
-                        .synchronize(credential, &platform, &record, action, reason)
+                        .synchronize(
+                            CanvasLifecycleCredential {
+                                credential,
+                                transaction_id: &transaction_id,
+                            },
+                            &platform,
+                            &record,
+                            action,
+                            reason,
+                        )
                         .await
                 }
                 Err(detail) => Err(error(format!("Canvas lifecycle sync skipped: {detail}"))),

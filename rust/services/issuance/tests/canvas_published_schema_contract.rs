@@ -5,6 +5,28 @@ use tracing::instrument::WithSubscriber;
 #[path = "support/canvas_operations_read_replay.rs"]
 mod canvas_operations_read_replay;
 
+#[path = "support/canvas_status_provider_replay.rs"]
+mod canvas_status_provider_replay;
+
+#[tokio::test]
+async fn status_provider_matches_frozen_protocol() {
+    canvas_status_provider_replay::replay(&canvas_status_provider_replay::frozen()).await;
+}
+
+#[tokio::test]
+async fn status_provider_matches_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let oracle = owned.oracle.clone().unwrap();
+    owned.close().unwrap();
+    assert_eq!(oracle, canvas_status_provider_replay::frozen());
+    canvas_status_provider_replay::replay(&oracle).await;
+}
+
 #[tokio::test]
 async fn cancelled_pool_release_does_not_wait_for_blocked_query() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

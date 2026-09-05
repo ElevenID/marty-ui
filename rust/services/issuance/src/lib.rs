@@ -18,6 +18,8 @@ pub mod canvas_award_candidate_postgres;
 pub mod canvas_award_candidate_service;
 pub mod canvas_binding_domain;
 pub mod canvas_catalog;
+mod canvas_credentials_protocol;
+pub mod canvas_credentials_status;
 pub mod canvas_credentials_validation;
 pub mod canvas_event_status;
 pub mod canvas_event_status_postgres;

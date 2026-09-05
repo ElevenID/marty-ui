@@ -107,6 +107,11 @@ def prepare():
                     "/verification/scripts/run_canvas_operations_oracle.py"
                 )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
+            (
+                "MARTY_CANVAS_STATUS_PROVIDER_ORACLE",
+                "status_provider",
+                "status_provider",
+            ),
             ("MARTY_CANVAS_ENQUEUE_INPUT_ORACLE", "enqueue_input", "enqueue_inputs"),
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),
             (

@@ -1,0 +1,1688 @@
+{
+  "adapter_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",
+  "boundary": "published status-provider adapter and real repository DTOs; controlled HTTP transport, public DNS result and tenant secret lookup; no external network",
+  "normalization": "validated datetime presence and synthetic bearer-token labels; selected contractual HTTP headers",
+  "observations": [
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_success",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_without_token",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": null,
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "CANVAS_CREDENTIALS_STATUS_SYNC_URL is not configured",
+      "error_class": "RuntimeError",
+      "name": "bridge_missing_url",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_revoke",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "  operator reason  ",
+              "revoked_at": "$timestamp",
+              "status": "revoked",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "revoke",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_external_issuer",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": "external-issuer",
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "external-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "payload": [
+            1,
+            {
+              "status": "ok"
+            }
+          ]
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_array_response",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "payload": "accepted"
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_scalar_response",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 204,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "body_excerpt": ""
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_empty_response",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "body_excerpt": "provider accepted"
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_text_response",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials status sync failed (HTTP 503): xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+      "error_class": "RuntimeError",
+      "name": "bridge_long_error",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials status sync failed (HTTP 400): Synthetic invalid request",
+      "error_class": "RuntimeError",
+      "name": "bridge_http_error",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials status sync request failed: Synthetic transport unavailable",
+      "error_class": "RuntimeError",
+      "name": "bridge_transport_error",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "unknown_provider_uses_bridge",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_suspend",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "active",
+          "external_action": null,
+          "requested_action": "reinstate"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_reinstate",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/v2/assertions/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_revoke",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/v2/assertions/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_revoke_reason_fallback",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "stored reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/v2/assertions/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_revoke_default_reason",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "Canonical ElevenID credential was revoked."
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials revoke requires external_credential_id",
+      "error_class": "RuntimeError",
+      "name": "badgr_missing_assertion",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "error": "CANVAS_CREDENTIALS_API_TOKEN is required for real Canvas Credentials status sync",
+      "error_class": "RuntimeError",
+      "name": "badgr_missing_token",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/v2/assertions/assertion%20%2F%3F%23%20caf%C3%A9",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_encoded_assertion",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/assertion%20%2F%3F%23%20caf%C3%A9"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/custom/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_custom_template",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/custom/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials assertion revoke failed (HTTP 409): Synthetic provider conflict",
+      "error_class": "RuntimeError",
+      "name": "badgr_http_error",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials assertion revoke request failed: Synthetic transport unavailable",
+      "error_class": "RuntimeError",
+      "name": "badgr_transport_error",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://unapproved.example.invalid/v2/assertions/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_operator_configured_origin",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://unapproved.example.invalid/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials API origin is not in CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+      "error_class": "RuntimeError",
+      "name": "badgr_tenant_untrusted_origin",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://tenant-provider.example.invalid/v2/assertions/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_tenant_allowlisted_origin",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://tenant-provider.example.invalid/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/v2/assertions/id%3A%3B%40%21%24%26%27%28%29%2A%2B%2C%3D%5B%5D%25",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_quoted_punctuation",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "synthetic reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/id%3A%3B%40%21%24%26%27%28%29%2A%2B%2C%3D%5B%5D%25"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "default_provider_badgeclass",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "default_provider_publish_url_precedence",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "default_provider_bridge",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_nested_issuer_precedence",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "nested-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "bridge_empty_reason",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "provider": "badgr_api",
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://api.badgr.io/v2/assertions/external-assertion",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "badgr_empty_reason_fallback",
+      "requests": [
+        {
+          "body": {
+            "revocation_reason": "stored reason"
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "DELETE",
+          "url": "https://api.badgr.io/v2/assertions/external-assertion"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials status sync failed (HTTP 302): Synthetic redirect",
+      "error_class": "RuntimeError",
+      "name": "bridge_redirect_response",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Canvas Credentials API base URL must be a trusted HTTPS URL",
+      "error_class": "RuntimeError",
+      "name": "badgr_non_https_origin",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "real_alias_canvas_credentials",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "real_alias_credentials_api",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "real_alias_canvas",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "real_alias_canvas_credentials_api",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_api_token_secret_id",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $tenant-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_api_token_secret_ref",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $tenant-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_api_token_ref",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $tenant-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_canvas_credentials_api_token_secret_id",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $tenant-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_canvas_credentials_api_token_secret_ref",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $tenant-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_miss_uses_operator",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "missing"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "secret_miss_uses_lower_source",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $tenant-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": [
+        {
+          "organization_id": "org-review",
+          "secret_id": "missing"
+        },
+        {
+          "organization_id": "org-review",
+          "secret_id": "tenant-key"
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "inline_token_not_selected",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": null,
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "nested_provider_precedence",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "canvas_credentials_lifecycle_mapping": {
+          "canonical_status": "suspended",
+          "external_action": null,
+          "requested_action": "suspend"
+        },
+        "provider": "badgr_api",
+        "status_sync_mode": "canonical_provenance_only",
+        "status_sync_reason": "Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
+        "status_sync_skipped": true,
+        "status_synced_at": "$timestamp"
+      },
+      "name": "legacy_provider_key",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "error": "Portable Canvas delivery is not enabled for this organization",
+      "error_class": "RuntimeError",
+      "name": "rollout_disabled",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "error": "Portable Canvas delivery is not enabled for this organization",
+      "error_class": "RuntimeError",
+      "name": "not_pilot",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "error": "Canvas delivery resources are unavailable",
+      "error_class": "RuntimeError",
+      "name": "foreign_platform",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "error": "Canvas delivery resources are unavailable",
+      "error_class": "RuntimeError",
+      "name": "mismatched_delivery_credential",
+      "requests": [],
+      "secrets": []
+    },
+    {
+      "error": "Canvas delivery resources are unavailable",
+      "error_class": "RuntimeError",
+      "name": "mismatched_delivery_transaction",
+      "requests": [],
+      "secrets": []
+    }
+  ]
+}

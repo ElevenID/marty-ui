@@ -5,7 +5,7 @@ use super::canvas_operations_read_replay::{
 };
 use async_trait::async_trait;
 use marty_issuance_service::{
-    canvas_lifecycle_delivery::CanvasLifecycleStatusProvider,
+    canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
     canvas_operations::{candidate_router, CanvasOperationsService},
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
@@ -74,12 +74,14 @@ impl CredentialStatusPublisher for Ports {
 impl CanvasLifecycleStatusProvider for Ports {
     async fn synchronize(
         &self,
-        credential: &ManagedCredential,
+        context: CanvasLifecycleCredential<'_>,
         platform: &Value,
         delivery: &Value,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<Map<String, Value>, CredentialManagementPortError> {
+        let credential = context.credential;
+        assert_eq!(context.transaction_id, "transaction-review");
         assert_eq!(platform["id"], "platform-review");
         self.observe("mirror", credential, action, reason, Some(delivery))
             .await;

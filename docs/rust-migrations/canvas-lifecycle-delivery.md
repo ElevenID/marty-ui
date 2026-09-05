@@ -81,7 +81,8 @@ test paths always release their own lock and finish pool cleanup before assertin
 This is connection validation after an operation has completed or been dropped,
 not a new deadline for active SQL. Normal SIGTERM drain is unchanged. The existing
 10-second process exit gate is not widened or disabled. Local reproduction passes;
-actual packaged POSIX signal behavior still requires mandatory Linux CI.
+the packaged-worker contract subsequently passed mandatory Linux CI33995364201
+at `8b75c27c0b64c437356bbb0e6dd1cb692cc4d36e`. New changes still require that gate.
 
 ## Remaining work
 
@@ -92,8 +93,9 @@ regression was then strengthened to observe connection release directly rather
 than assuming a scheduling delay; its final rerun is recorded in the PR/checkpoint.
 Hosted qualification of this updated head is still required.
 
-Implement and qualify actual Canvas Credentials bridge/Badgr status providers,
-reusing existing origin, secret-resolution and provider configuration owners.
+The [bridge/Badgr status provider candidate](canvas-status-provider.md) now passes
+55 published protocol cases and a separate actual loopback HTTP test. Complete
+its configuration/factory and end-to-end qualification before consumer adoption.
 Exercise profile hydration, malformed metadata/counters, multiple records,
 write failures after publication, further claim/recovery races and arbitrary
 encoding/transport cases. Broaden big-number qualification across consumers.

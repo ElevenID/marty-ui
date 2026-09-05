@@ -1,0 +1,405 @@
+{
+  "schema": "marty.canvas-status-provider-scenarios/v1",
+  "cases": [
+    {
+      "name": "bridge_success",
+      "action": "suspend",
+      "provider": "bridge"
+    },
+    {
+      "name": "bridge_without_token",
+      "action": "suspend",
+      "provider": "bridge",
+      "operator_token": ""
+    },
+    {
+      "name": "bridge_missing_url",
+      "action": "suspend",
+      "provider": "bridge",
+      "sync_url": ""
+    },
+    {
+      "name": "bridge_revoke",
+      "action": "revoke",
+      "provider": "bridge",
+      "reason": "  operator reason  "
+    },
+    {
+      "name": "bridge_external_issuer",
+      "action": "suspend",
+      "provider": "bridge",
+      "external_issuer_id": "external-issuer"
+    },
+    {
+      "name": "bridge_array_response",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_json": [
+        1,
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "bridge_scalar_response",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_json": "accepted"
+    },
+    {
+      "name": "bridge_empty_response",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_status": 204,
+      "response_text": ""
+    },
+    {
+      "name": "bridge_text_response",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_text": "provider accepted"
+    },
+    {
+      "name": "bridge_long_error",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_status": 503,
+      "response_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "bridge_http_error",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_status": 400,
+      "response_text": "Synthetic invalid request"
+    },
+    {
+      "name": "bridge_transport_error",
+      "action": "suspend",
+      "provider": "bridge",
+      "transport_error": true
+    },
+    {
+      "name": "unknown_provider_uses_bridge",
+      "action": "suspend",
+      "provider": "future-provider"
+    },
+    {
+      "name": "badgr_suspend",
+      "action": "suspend",
+      "provider": "badgr"
+    },
+    {
+      "name": "badgr_reinstate",
+      "action": "reinstate",
+      "provider": "badgr"
+    },
+    {
+      "name": "badgr_revoke",
+      "action": "revoke",
+      "provider": "badgr"
+    },
+    {
+      "name": "badgr_revoke_reason_fallback",
+      "action": "revoke",
+      "provider": "badgr",
+      "reason": null,
+      "revocation_reason": "stored reason"
+    },
+    {
+      "name": "badgr_revoke_default_reason",
+      "action": "revoke",
+      "provider": "badgr",
+      "reason": null,
+      "revocation_reason": null
+    },
+    {
+      "name": "badgr_missing_assertion",
+      "action": "revoke",
+      "provider": "badgr",
+      "external_credential_id": null
+    },
+    {
+      "name": "badgr_missing_token",
+      "action": "revoke",
+      "provider": "badgr",
+      "operator_token": ""
+    },
+    {
+      "name": "badgr_encoded_assertion",
+      "action": "revoke",
+      "provider": "badgr",
+      "external_credential_id": "assertion /?# café"
+    },
+    {
+      "name": "badgr_custom_template",
+      "action": "revoke",
+      "provider": "badgr",
+      "revoke_url_template": "{api_base_url}/custom/{external_credential_id}"
+    },
+    {
+      "name": "badgr_http_error",
+      "action": "revoke",
+      "provider": "badgr",
+      "response_status": 409,
+      "response_text": "Synthetic provider conflict"
+    },
+    {
+      "name": "badgr_transport_error",
+      "action": "revoke",
+      "provider": "badgr",
+      "transport_error": true
+    },
+    {
+      "name": "badgr_operator_configured_origin",
+      "action": "revoke",
+      "provider": "badgr",
+      "api_base_url": "https://unapproved.example.invalid"
+    },
+    {
+      "name": "badgr_tenant_untrusted_origin",
+      "action": "revoke",
+      "provider": "badgr",
+      "metadata": {"canvas_credentials": {"api_base_url": "https://unapproved.example.invalid"}}
+    },
+    {
+      "name": "badgr_tenant_allowlisted_origin",
+      "action": "revoke",
+      "provider": "badgr",
+      "allowed_api_origins": "https://tenant-provider.example.invalid",
+      "metadata": {"canvas_credentials": {"api_base_url": "https://tenant-provider.example.invalid"}}
+    },
+    {
+      "name": "badgr_quoted_punctuation",
+      "action": "revoke",
+      "provider": "badgr",
+      "external_credential_id": "id:;@!$&'()*+,=[]%"
+    },
+    {
+      "name": "default_provider_badgeclass",
+      "action": "suspend",
+      "provider": "",
+      "metadata": {"canvas_credentials_badgeclass_id": "badgeclass"}
+    },
+    {
+      "name": "default_provider_publish_url_precedence",
+      "action": "suspend",
+      "provider": "",
+      "publish_url": "https://bridge.example.invalid/publish",
+      "metadata": {"badgeclass_id": "badgeclass"}
+    },
+    {
+      "name": "default_provider_bridge",
+      "action": "suspend",
+      "provider": ""
+    },
+    {
+      "name": "bridge_nested_issuer_precedence",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {"canvas_credentials_config": {"canvas_credentials_issuer_id": " nested-issuer ", "issuer_id": "lower-alias"}, "issuer_id": "lower-source"}
+    },
+    {
+      "name": "bridge_empty_reason",
+      "action": "suspend",
+      "provider": "bridge",
+      "reason": ""
+    },
+    {
+      "name": "badgr_empty_reason_fallback",
+      "action": "revoke",
+      "provider": "badgr",
+      "reason": "",
+      "revocation_reason": "stored reason"
+    },
+    {
+      "name": "bridge_redirect_response",
+      "action": "suspend",
+      "provider": "bridge",
+      "response_status": 302,
+      "response_text": "Synthetic redirect"
+    },
+    {
+      "name": "badgr_non_https_origin",
+      "action": "revoke",
+      "provider": "badgr",
+      "api_base_url": "http://api.badgr.io"
+    },
+    {
+      "name": "real_alias_canvas_credentials",
+      "action": "suspend",
+      "provider": "canvas_credentials"
+    },
+    {
+      "name": "real_alias_credentials_api",
+      "action": "suspend",
+      "provider": "credentials_api"
+    },
+    {
+      "name": "real_alias_canvas",
+      "action": "suspend",
+      "provider": "canvas"
+    },
+    {
+      "name": "real_alias_canvas_credentials_api",
+      "action": "suspend",
+      "provider": "canvas_credentials_api"
+    },
+    {
+      "name": "secret_api_token_secret_id",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "api_token_secret_id": "org_secret://org-review/tenant-key/"
+        }
+      },
+      "secrets": {
+        "tenant-key": "tenant"
+      }
+    },
+    {
+      "name": "secret_api_token_secret_ref",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "api_token_secret_ref": "org_secret://org-review/tenant-key/"
+        }
+      },
+      "secrets": {
+        "tenant-key": "tenant"
+      }
+    },
+    {
+      "name": "secret_api_token_ref",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "api_token_ref": "org_secret://org-review/tenant-key/"
+        }
+      },
+      "secrets": {
+        "tenant-key": "tenant"
+      }
+    },
+    {
+      "name": "secret_canvas_credentials_api_token_secret_id",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "canvas_credentials_api_token_secret_id": "org_secret://org-review/tenant-key/"
+        }
+      },
+      "secrets": {
+        "tenant-key": "tenant"
+      }
+    },
+    {
+      "name": "secret_canvas_credentials_api_token_secret_ref",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "canvas_credentials_api_token_secret_ref": "org_secret://org-review/tenant-key/"
+        }
+      },
+      "secrets": {
+        "tenant-key": "tenant"
+      }
+    },
+    {
+      "name": "secret_miss_uses_operator",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "api_token_secret_id": "missing"
+        }
+      },
+      "secrets": {}
+    },
+    {
+      "name": "secret_miss_uses_lower_source",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "api_token_secret_id": "missing"
+        },
+        "provider_config": {
+          "api_token_ref": "tenant-key"
+        }
+      },
+      "secrets": {
+        "tenant-key": "tenant"
+      }
+    },
+    {
+      "name": "inline_token_not_selected",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "api_token": "synthetic-inline",
+        "api_token_env": "SYNTHETIC_OTHER_TOKEN",
+        "api_token_file": "synthetic-file-selector"
+      }
+    },
+    {
+      "name": "nested_provider_precedence",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "canvas_credentials": {
+          "provider": "badgr"
+        },
+        "provider_config": {
+          "provider": "bridge"
+        }
+      }
+    },
+    {
+      "name": "legacy_provider_key",
+      "action": "suspend",
+      "provider": "bridge",
+      "metadata": {
+        "provider_config": {
+          "canvas_credentials_provider": "badgr"
+        }
+      }
+    },
+    {
+      "name": "rollout_disabled",
+      "action": "suspend",
+      "provider": "bridge",
+      "rollout": false
+    },
+    {
+      "name": "not_pilot",
+      "action": "suspend",
+      "provider": "bridge",
+      "pilot_organizations": "another-org"
+    },
+    {
+      "name": "foreign_platform",
+      "action": "suspend",
+      "provider": "bridge",
+      "platform_organization": "another-org"
+    },
+    {
+      "name": "mismatched_delivery_credential",
+      "action": "suspend",
+      "provider": "bridge",
+      "delivery_credential": "another-credential"
+    },
+    {
+      "name": "mismatched_delivery_transaction",
+      "action": "suspend",
+      "provider": "bridge",
+      "delivery_transaction": "another-transaction"
+    }
+  ]
+}

@@ -16,9 +16,12 @@ use url::Url;
 
 use crate::canvas_provider_http::{client_for_canvas_origin, CanvasHttpClientPolicy};
 
-const DEFAULT_API_BASE_URL: &str = "https://api.badgr.io";
+#[cfg(test)]
+use crate::canvas_credentials_protocol::MAX_EXCERPT_CHARS;
+use crate::canvas_credentials_protocol::{
+    https_origin, provider_alias, response_excerpt as failure_excerpt, DEFAULT_API_BASE_URL,
+};
 const MAX_FAILURE_BODY_BYTES: usize = 64 * 1024;
-const MAX_EXCERPT_CHARS: usize = 1_000;
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct CanvasCredentialsValidationConfig {
@@ -206,11 +209,7 @@ impl CanvasCredentialsValidationService {
             }
             return "bridge".to_owned();
         }
-        match configured.as_str() {
-            "badgr" | "canvas_credentials" | "credentials_api" | "canvas" => "badgr_api".to_owned(),
-            "sandbox" | "proxy" | "bridge_api" => "bridge".to_owned(),
-            _ => configured,
-        }
+        provider_alias(configured)
     }
 
     fn base_url(
@@ -494,47 +493,12 @@ async fn read_failure_excerpt(response: &mut reqwest::Response) -> Result<Map<St
     Ok(failure_excerpt(&bytes, truncated))
 }
 
-fn failure_excerpt(bytes: &[u8], truncated: bool) -> Map<String, Value> {
-    if !truncated {
-        if let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(bytes) {
-            return object;
-        }
-        if let Ok(payload) = serde_json::from_slice::<Value>(bytes) {
-            return Map::from_iter([("payload".to_owned(), payload)]);
-        }
-    }
-    let mut body = String::from_utf8_lossy(bytes)
-        .chars()
-        .take(MAX_EXCERPT_CHARS)
-        .collect::<String>();
-    if truncated || String::from_utf8_lossy(bytes).chars().count() > MAX_EXCERPT_CHARS {
-        body.push('…');
-    }
-    Map::from_iter([("body_excerpt".to_owned(), Value::String(body))])
-}
-
 fn map_text<'value>(value: &'value Map<String, Value>, key: &str) -> Option<&'value str> {
     value
         .get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn https_origin(value: &str) -> Option<String> {
-    let parsed = Url::parse(value.trim()).ok()?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-    {
-        return None;
-    }
-    let host = parsed.host_str()?.to_ascii_lowercase();
-    Some(match parsed.port() {
-        Some(port) => format!("https://{host}:{port}"),
-        None => format!("https://{host}"),
-    })
 }
 
 fn encoded_path_segment(value: &str) -> String {
