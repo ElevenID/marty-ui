@@ -43,7 +43,7 @@ fn category(error: &CanvasSyncRepositoryError) -> &'static str {
     }
 }
 
-struct ObservedRepositories {
+pub(super) struct ObservedRepositories {
     worker: PostgresCanvasSyncWorkerRepository,
     oauth: PostgresCanvasOAuthRepository,
     events: Mutex<Vec<Value>>,
@@ -239,6 +239,15 @@ fn worker(
         ),
     ]))
     .expect("frozen accepted configuration");
+    observed_worker(pool, config, Arc::new(NoJobsExpected), stop)
+}
+
+pub(super) fn observed_worker(
+    pool: &PgPool,
+    config: CanvasSyncWorkerConfig,
+    processor: Arc<dyn CanvasSyncProcessor>,
+    stop: Option<(usize, watch::Sender<bool>)>,
+) -> (CanvasSyncWorker, Arc<ObservedRepositories>) {
     let observed = Arc::new(ObservedRepositories {
         worker: PostgresCanvasSyncWorkerRepository::new(pool.clone()),
         oauth: PostgresCanvasOAuthRepository::new(pool.clone()),
@@ -259,7 +268,7 @@ fn worker(
                 Vec::new(),
                 false,
             )),
-            Arc::new(NoJobsExpected),
+            processor,
             config,
         ),
         observed,

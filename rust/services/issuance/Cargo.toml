@@ -25,6 +25,7 @@ async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 futures-core.workspace = true
+futures-util.workspace = true
 hex.workspace = true
 hmac.workspace = true
 hostname = { version = "=0.4.2", default-features = false }
