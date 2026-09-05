@@ -13,6 +13,14 @@ use sqlx::Row;
 
 #[tokio::test]
 async fn transaction_projection_round_trips_and_enforces_tenant_lists_when_configured() {
+    // The deployed Python-owned schema uses json. Also retain compatibility
+    // with installations/tests using jsonb; neither requires a schema rewrite.
+    for claims_type in ["json", "jsonb"] {
+        transaction_contract(claims_type).await;
+    }
+}
+
+async fn transaction_contract(claims_type: &str) {
     let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
         return;
     };
@@ -57,13 +65,34 @@ async fn transaction_projection_round_trips_and_enforces_tenant_lists_when_confi
             revocation_reason TEXT,
             access_token TEXT,
             c_nonce TEXT,
-            claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+            claims JSON NOT NULL DEFAULT '{}'::json,
             oid4vci_client_id TEXT
         )",
     )
     .execute(&pool)
     .await
     .expect("issuance contract table must be created");
+    if claims_type == "jsonb" {
+        // Only this newly created, empty test table is changed. Literal SQL
+        // keeps the storage matrix independent of dynamic query construction.
+        sqlx::query(
+            "ALTER TABLE issuance_service.issuance_transactions
+             ALTER COLUMN claims TYPE JSONB USING claims::jsonb,
+             ALTER COLUMN claims SET DEFAULT '{}'::jsonb",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let actual_claims_type: String = sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_schema = 'issuance_service' AND table_name = 'issuance_transactions'
+           AND column_name = 'claims'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(actual_claims_type, claims_type);
 
     let created_at = timestamp("2026-08-20T12:34:56.123000+00:00");
     let expires_at = timestamp("2099-08-20T12:49:56+00:00");
@@ -151,6 +180,84 @@ async fn transaction_projection_round_trips_and_enforces_tenant_lists_when_confi
     .expect("token fixture status must reset");
     let token_repository =
         PostgresTokenExchangeRepository::new(pool.clone(), "postgres-contract-token-hmac-key");
+    // Exercise both branches deterministically before the concurrent claim
+    // test. A race alone may never exercise a successful DPoP-bound update.
+    for dpop_jkt in [None, Some("deterministic-dpop-thumbprint")] {
+        let original_claims = serde_json::json!({
+            "subject": {"name": "Synthetic \u{00e9}vidence", "verified": true},
+            "counter": 9007199254740991_u64,
+            "roles": ["learner", "reviewer"],
+            "optional": null
+        });
+        sqlx::query(
+            "UPDATE issuance_service.issuance_transactions
+             SET status = 'pending', access_token = NULL, c_nonce = 'old-nonce', claims = $1::json
+             WHERE id = 'tx-a'",
+        )
+        .bind(serde_json::to_string(&original_claims).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let original_storage: String = sqlx::query_scalar(
+            "SELECT claims::text FROM issuance_service.issuance_transactions WHERE id = 'tx-a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pending = token_repository
+            .transaction_by_pre_authorized_code("pre-auth-tx-a")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(token_repository
+            .claim_transaction(&pending, "deterministic-clear-token", dpop_jkt)
+            .await
+            .expect("token claim must support the actual claims storage type"));
+        assert!(!token_repository
+            .claim_transaction(&pending, "replayed-token", Some("different-thumbprint"))
+            .await
+            .unwrap());
+        let persisted = sqlx::query(
+            "SELECT claims, access_token, c_nonce, status
+             FROM issuance_service.issuance_transactions WHERE id = 'tx-a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut expected_claims = original_claims;
+        if let Some(thumbprint) = dpop_jkt {
+            expected_claims["_dpop_jkt"] = thumbprint.into();
+        }
+        assert_eq!(
+            persisted.get::<serde_json::Value, _>("claims"),
+            expected_claims
+        );
+        if dpop_jkt.is_none() {
+            let after_storage: String = sqlx::query_scalar(
+                "SELECT claims::text FROM issuance_service.issuance_transactions WHERE id = 'tx-a'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                after_storage, original_storage,
+                "unbound token exchange must not rewrite claims"
+            );
+        }
+        assert_eq!(
+            persisted.get::<String, _>("access_token"),
+            expected_token_hash("deterministic-clear-token")
+        );
+        assert_eq!(persisted.get::<String, _>("status"), "authorized");
+        assert!(persisted.get::<Option<String>, _>("c_nonce").is_none());
+    }
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET status = 'pending', access_token = NULL, claims = '{}' WHERE id = 'tx-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let token_transaction = token_repository
         .transaction_by_pre_authorized_code("pre-auth-tx-a")
         .await
@@ -182,9 +289,7 @@ async fn transaction_projection_round_trips_and_enforces_tenant_lists_when_confi
     } else {
         "clear-token-second"
     };
-    let mut expected = Hmac::<Sha256>::new_from_slice(b"postgres-contract-token-hmac-key").unwrap();
-    expected.update(claimed_token.as_bytes());
-    assert_eq!(stored_hash, hex::encode(expected.finalize().into_bytes()));
+    assert_eq!(stored_hash, expected_token_hash(claimed_token));
     assert_eq!(stored.try_get::<String, _>("status").unwrap(), "authorized");
     assert!(stored
         .try_get::<Option<String>, _>("c_nonce")
@@ -305,4 +410,10 @@ fn timestamp(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .expect("contract timestamp")
         .to_utc()
+}
+
+fn expected_token_hash(value: &str) -> String {
+    let mut expected = Hmac::<Sha256>::new_from_slice(b"postgres-contract-token-hmac-key").unwrap();
+    expected.update(value.as_bytes());
+    hex::encode(expected.finalize().into_bytes())
 }
