@@ -673,7 +673,7 @@ impl CanvasSyncWorker {
             }
             self.processor.process(&target, &lease).await
         };
-        let outcome = await_with_lease_renewal(
+        let (outcome, renewal_error) = await_with_lease_renewal(
             tokio::time::timeout(self.config.job_timeout, evaluation),
             self.config.lease_renewal_interval(),
             || async {
@@ -768,13 +768,32 @@ impl CanvasSyncWorker {
                             job.target_config_version,
                             &safe,
                         )
-                        .await?
-                        .then_some(CanvasSyncJobStatus::Succeeded)
-                        .ok_or(EscapedJobError::StaleLease)
+                        .await
+                        .map_err(EscapedJobError::from)
+                        .and_then(|completed| {
+                            completed
+                                .then_some(CanvasSyncJobStatus::Succeeded)
+                                .ok_or(EscapedJobError::StaleLease)
+                        })
                 }
             }
         };
-        status
+        if let Some(error) = renewal_error {
+            // Match the frozen handler's error observation AFTER its fenced
+            // durable outcome. A repository error is not proof of lease loss.
+            // Keep any secondary persistence failure observable without hiding
+            // the original renewal failure or changing cycle accounting.
+            if let Err(persistence_error) = &status {
+                warn!(
+                    job_id = %job.id,
+                    exception_class = persistence_error.class(),
+                    "Canvas outcome persistence failed after renewal error"
+                );
+            }
+            Err(error.into())
+        } else {
+            status
+        }
     }
 
     async fn persist_failure(
@@ -1157,7 +1176,7 @@ async fn await_with_lease_renewal<F, R, RF>(
     processing: F,
     interval: Duration,
     mut renew: R,
-) -> Result<F::Output, EscapedJobError>
+) -> Result<(F::Output, Option<CanvasSyncRepositoryError>), EscapedJobError>
 where
     F: Future,
     R: FnMut() -> RF,
@@ -1176,10 +1195,19 @@ where
     };
     // Poll both owned futures throughout renewal I/O. Awaiting renewal inside
     // a select branch would suspend processing and its wall-clock deadline.
-    // Whichever finishes drops the other future before acknowledgment.
+    // Definite lease loss cancels processing. Operational renewal failure stops
+    // only renewal: let the already-bounded processor finish, then surface the
+    // failure after its durable, independently lease-fenced outcome. Both futures
+    // remain parent-owned, so external cancellation never becomes a renewal error.
     tokio::select! {
-        outcome = &mut processing => Ok(outcome),
-        error = renewal => Err(error),
+        // If both branches are ready, observe an already-failed maintainer
+        // before accepting the result; do not randomly lose its error.
+        biased;
+        error = renewal => match error {
+            EscapedJobError::StaleLease => Err(EscapedJobError::StaleLease),
+            EscapedJobError::Repository(error) => Ok((processing.await, Some(error))),
+        },
+        outcome = &mut processing => Ok((outcome, None)),
     }
 }
 
@@ -1200,13 +1228,14 @@ mod lease_tests {
         }
     }
 
-    async fn assert_progress_during_blocked_renewal(deadline: bool) {
+    async fn assert_progress_during_blocked_renewal(deadline: bool, ready_renewal_error: bool) {
         let processing_dropped = Arc::new(AtomicBool::new(false));
         let renewal_dropped = Arc::new(AtomicBool::new(false));
         let processing_guard = DropSignal(processing_dropped.clone());
         let release = Arc::new(tokio::sync::Notify::new());
         let processing_release = release.clone();
         let renewal_entered = tokio::sync::Notify::new();
+        let renewal_release = tokio::sync::Notify::new();
         let processing = async move {
             let _guard = processing_guard;
             processing_release.notified().await;
@@ -1222,10 +1251,12 @@ mod lease_tests {
             || {
                 let guard = DropSignal(renewal_dropped.clone());
                 let entered = &renewal_entered;
+                let released = &renewal_release;
                 async move {
                     let _guard = guard;
                     entered.notify_one();
-                    std::future::pending::<Result<bool, CanvasSyncRepositoryError>>().await
+                    released.notified().await;
+                    Err(CanvasSyncRepositoryError::Unavailable)
                 }
             },
         ));
@@ -1238,10 +1269,17 @@ mod lease_tests {
         .await
         .expect("renewal must reach the controlled pending operation");
         release.notify_one();
-        let result = tokio::time::timeout(Duration::from_millis(100), &mut owned)
+        if ready_renewal_error {
+            renewal_release.notify_one();
+        }
+        let (result, renewal_error) = tokio::time::timeout(Duration::from_millis(100), &mut owned)
             .await
             .expect("blocked renewal stalled processor completion or deadline")
             .unwrap();
+        assert_eq!(
+            renewal_error,
+            ready_renewal_error.then_some(CanvasSyncRepositoryError::Unavailable)
+        );
         if deadline {
             assert!(result.is_err(), "processing deadline must still expire");
         } else {
@@ -1256,33 +1294,91 @@ mod lease_tests {
 
     #[tokio::test]
     async fn completed_processing_is_not_stalled_by_pending_renewal() {
-        assert_progress_during_blocked_renewal(false).await;
+        assert_progress_during_blocked_renewal(false, false).await;
     }
 
     #[tokio::test]
     async fn processing_deadline_is_not_stalled_by_pending_renewal() {
-        assert_progress_during_blocked_renewal(true).await;
+        assert_progress_during_blocked_renewal(true, false).await;
     }
 
     #[tokio::test]
-    async fn renewal_error_still_drops_processing_and_preserves_error_class() {
+    async fn already_ready_renewal_error_is_not_lost_to_ready_processing() {
+        assert_progress_during_blocked_renewal(false, true).await;
+    }
+
+    async fn assert_processing_after_renewal_error(deadline: bool, cancel: bool) {
         let dropped = Arc::new(AtomicBool::new(false));
         let guard = DropSignal(dropped.clone());
-        let processing = async move {
+        let release = tokio::sync::Notify::new();
+        let failed = tokio::sync::Notify::new();
+        let processing = async {
             let _guard = guard;
-            std::future::pending::<()>().await;
+            release.notified().await;
+            if deadline {
+                tokio::time::timeout(Duration::from_millis(1), std::future::pending::<u8>()).await
+            } else {
+                Ok(42)
+            }
         };
-        let result = await_with_lease_renewal(processing, Duration::from_millis(1), || async {
-            Err(CanvasSyncRepositoryError::Unavailable)
-        })
-        .await;
-        assert!(matches!(
-            result,
-            Err(EscapedJobError::Repository(
-                CanvasSyncRepositoryError::Unavailable
-            ))
+        let mut owned = Box::pin(await_with_lease_renewal(
+            processing,
+            Duration::from_millis(1),
+            || async {
+                failed.notify_one();
+                Err(CanvasSyncRepositoryError::Unavailable)
+            },
         ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                _ = &mut owned => panic!("renewal failure discarded processing"),
+                () = failed.notified() => {}
+            }
+        })
+        .await
+        .unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut owned)
+            .await
+            .is_err());
+        assert!(!dropped.load(Ordering::SeqCst));
+        if cancel {
+            drop(owned);
+            assert!(
+                dropped.load(Ordering::SeqCst),
+                "cancellation must synchronously clean processing"
+            );
+            return;
+        }
+        release.notify_one();
+        let (result, renewal_error) = tokio::time::timeout(Duration::from_secs(1), owned)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            renewal_error,
+            Some(CanvasSyncRepositoryError::Unavailable)
+        ));
+        if deadline {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap(), 42);
+        }
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn renewal_error_preserves_later_processing_and_error_class() {
+        assert_processing_after_renewal_error(false, false).await;
+    }
+
+    #[tokio::test]
+    async fn renewal_error_preserves_processing_deadline() {
+        assert_processing_after_renewal_error(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_renewal_error_cleans_processing_immediately() {
+        assert_processing_after_renewal_error(false, true).await;
     }
 
     #[tokio::test]
