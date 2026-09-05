@@ -55,12 +55,24 @@ a JSON/JSONB comparison failure in the native learner fact-commit guard. Real
 roster and learner effects, four fact types, repeat reads, provider-error head
 preservation and stale-context rejection now execute on the actual issuance
 schema. The provider is controlled and the organization dependency is minimal;
-original hosted CI now passes; fresh integration with protected #803 remains
-required. The next [issued-review differential](rust-migrations/canvas-issued-review-parity.md)
+UI #804 is merged at protected `e8d4b54c22f79d95a919d302a1a81c01f6e4ff0f`,
+with its reviewed tree retained and queue CI/CodeQL green.
+The [issued-review differential](rust-migrations/canvas-issued-review-parity.md)
 captures ten published Python lifecycle stages before the Rust replay. Both
 implementations pass locally on separate migrated databases, preserving manual
 claims, recovery, older history and all credential/transaction rows. No runtime
-change was needed for those scenarios. Full provider/processor differentials,
+change was needed for those scenarios. Original hosted CI/CodeQL and the
+configured two-test database gate pass; #805's identical-tree integration onto
+the actual #804 merge is ready with fresh protected checks running.
+
+The next [mixed-roster differential](rust-migrations/canvas-mixed-roster-parity.md)
+freezes twelve actual published Python stages before native replay. Local parity
+now covers missing/unverified/quarantined identities, active mixed-source joins,
+observation reuse, outages, negative/recovered AGS evidence and claimed/dismissed
+state. It discovered and restores the omitted native `roster_remaining` result;
+partial-batch and completed-cycle unit assertions accompany the real-schema
+replay. This still uses controlled transport, not the actual HTTP provider.
+Full provider/processor differentials,
 concurrency/rollback, manual resolver, all-consumer cutover and acceptance remain
 required. Reachable Python is retained until those gates pass.
 

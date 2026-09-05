@@ -640,6 +640,14 @@ impl NativeCanvasSyncProcessor {
                 Value::from(identity_required),
             ),
             ("observations_written".to_owned(), Value::from(written)),
+            (
+                "roster_remaining".to_owned(),
+                Value::from(if next_cursor == 0 {
+                    0
+                } else {
+                    inputs.len().saturating_sub(next_cursor)
+                }),
+            ),
         ]))
     }
 }
@@ -1371,12 +1379,24 @@ mod tests {
             Some("1")
         );
         assert_eq!(*repository.cursor.lock().unwrap(), Some((1, 2)));
+        assert_eq!(
+            result.get("roster_remaining").map(|value| value.get()),
+            Some("1")
+        );
         assert!(repository
             .candidates
             .lock()
             .unwrap()
             .values()
             .any(|candidate| candidate.state == "claimed"));
+        let mut next = target(CanvasSyncTargetType::BackgroundRoster);
+        next.metadata.insert("roster_cursor".into(), Value::from(1));
+        let result = run_simulated(&processor, next).await.unwrap();
+        assert_eq!(
+            result.get("roster_remaining").map(|value| value.get()),
+            Some("0")
+        );
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 2)));
     }
 
     #[tokio::test]
