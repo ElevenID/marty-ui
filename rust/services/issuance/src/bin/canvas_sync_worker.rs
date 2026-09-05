@@ -13,16 +13,20 @@ use marty_issuance_service::{
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
     canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
+    canvas_sync_worker_lifecycle::{
+        finish_on_shutdown, spawn_with_postgres_cleanup, WorkerShutdown,
+    },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     integration_secret::IntegrationSecretCipher,
 };
-use sqlx::postgres::PgPoolOptions;
+use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use tokio::sync::watch;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -45,6 +49,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
         .connect_lazy(&database_url)?;
+    let (stop, receiver) = watch::channel(false);
+    let owner = spawn_with_postgres_cleanup(pool, move |pool| {
+        run_initialized_worker(pool, config, cipher, receiver)
+    });
+    let completion = finish_on_shutdown(owner, stop, shutdown_signal()).await?;
+    completion_result(completion)
+}
+
+fn completion_result(
+    completion: TaskCompletion<(), Box<dyn Error + Send + Sync>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    match (completion.outcome, completion.cleanup) {
+        (TaskOutcome::Completed(()), CleanupOutcome::Completed) => Ok(()),
+        (TaskOutcome::Failed(error), CleanupOutcome::Completed) => Err(error),
+        (outcome, cleanup) => {
+            // Inspect both outcomes without logging configuration, SQL or panic
+            // payloads. Cancellation is not a successful graceful shutdown.
+            error!(
+                operation_outcome = match outcome {
+                    TaskOutcome::Completed(()) => "completed",
+                    TaskOutcome::Failed(_) => "failed",
+                    TaskOutcome::Cancelled => "cancelled",
+                    TaskOutcome::Panicked => "panicked",
+                },
+                cleanup_outcome = match cleanup {
+                    CleanupOutcome::Completed => "completed",
+                    CleanupOutcome::Failed(never) => match never {},
+                    CleanupOutcome::Cancelled => "cancelled",
+                    CleanupOutcome::Panicked => "panicked",
+                },
+                "Canvas worker did not complete cleanly"
+            );
+            Err("Canvas worker did not complete cleanly".into())
+        }
+    }
+}
+
+async fn run_initialized_worker(
+    pool: PgPool,
+    config: CanvasSyncWorkerConfig,
+    cipher: IntegrationSecretCipher,
+    stop: watch::Receiver<bool>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let oauth_repository = Arc::new(PostgresCanvasOAuthRepository::new(pool.clone()));
     let worker_repository = Arc::new(PostgresCanvasSyncWorkerRepository::new(pool.clone()));
     let vault = Arc::new(PostgresIntegrationSecretVault::new(pool.clone(), cipher));
@@ -128,20 +175,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         processor,
         config,
     );
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let shutdown = tokio::spawn(async move {
-        shutdown_signal().await;
-        let _ = stop_tx.send(true);
-    });
     info!(worker = ?worker, "starting standalone Rust Canvas sync worker candidate");
-    let outcome = worker.run_loop(stop_rx).await;
-    shutdown.abort();
-    pool.close().await;
-    outcome?;
+    worker.run_loop(stop).await?;
     Ok(())
 }
 
-fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
+fn required_env(name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
     env::var(name)
         .ok()
         .map(|value| value.trim().to_owned())
@@ -149,7 +188,7 @@ fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
         .ok_or_else(|| format!("{name} is required").into())
 }
 
-fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error>> {
+fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
     if let Ok(value) = env::var(name) {
         let value = value.trim().to_owned();
         if !value.is_empty() {
@@ -173,7 +212,7 @@ fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error>> {
 fn required_secret_with_fallback(
     preferred: &str,
     fallback: &str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String, Box<dyn Error + Send + Sync>> {
     first_present_or_else(optional_secret(preferred)?, || optional_secret(fallback))?
         .ok_or_else(|| format!("{preferred} or {fallback} is required").into())
 }
@@ -193,7 +232,7 @@ fn bounded_usize(
     default: usize,
     minimum: usize,
     maximum: usize,
-) -> Result<usize, Box<dyn Error>> {
+) -> Result<usize, Box<dyn Error + Send + Sync>> {
     let value = env::var(name)
         .ok()
         .map(|value| value.trim().parse::<i64>())
@@ -213,31 +252,49 @@ fn env_bool(name: &str) -> bool {
     })
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal() -> WorkerShutdown {
     let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
+        if tokio::signal::ctrl_c().await.is_err() {
+            error!(
+                exception_class = "SignalRegistrationError",
+                "Canvas interrupt handler failed"
+            );
+        }
+        // asyncio.run cancels the main task on its first SIGINT. Preserve
+        // cancellation, including awaited disposal, rather than graceful success.
+        WorkerShutdown::Cancel
     };
 
     #[cfg(unix)]
     let terminate = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
             Ok(mut signal) => {
-                let _ = signal.recv().await;
+                if signal.recv().await.is_some() {
+                    WorkerShutdown::Drain
+                } else {
+                    WorkerShutdown::Cancel
+                }
             }
-            Err(_) => std::future::pending::<()>().await,
+            Err(_) => {
+                error!(
+                    exception_class = "SignalRegistrationError",
+                    "Canvas termination handler failed"
+                );
+                WorkerShutdown::Cancel
+            }
         }
     };
 
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let terminate = std::future::pending::<WorkerShutdown>();
 
     tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+        action = ctrl_c => action,
+        action = terminate => action,
     }
 }
 
-fn integration_master_key() -> Result<String, Box<dyn Error>> {
+fn integration_master_key() -> Result<String, Box<dyn Error + Send + Sync>> {
     if let Ok(value) = env::var("INTEGRATION_SECRET_MASTER_KEY") {
         if !value.trim().is_empty() {
             return Ok(value.trim().to_owned());
@@ -268,7 +325,45 @@ fn comma_values(name: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::first_present_or_else;
+    use super::{completion_result, first_present_or_else};
+    use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
+
+    #[test]
+    fn process_success_requires_both_operation_and_cleanup_success() {
+        for outcome in [
+            TaskOutcome::Completed(()),
+            TaskOutcome::Failed("synthetic operation failure".into()),
+            TaskOutcome::Cancelled,
+            TaskOutcome::Panicked,
+        ] {
+            let succeeds = matches!(outcome, TaskOutcome::Completed(()));
+            assert_eq!(
+                completion_result(TaskCompletion {
+                    outcome,
+                    cleanup: CleanupOutcome::Completed,
+                })
+                .is_ok(),
+                succeeds
+            );
+        }
+        for cleanup in [CleanupOutcome::Cancelled, CleanupOutcome::Panicked] {
+            assert!(completion_result(TaskCompletion {
+                outcome: TaskOutcome::Completed(()),
+                cleanup,
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn successful_disposal_preserves_original_operation_failure() {
+        let failure = completion_result(TaskCompletion {
+            outcome: TaskOutcome::Failed("synthetic operation failure".into()),
+            cleanup: CleanupOutcome::Completed,
+        })
+        .unwrap_err();
+        assert_eq!(failure.to_string(), "synthetic operation failure");
+    }
 
     #[test]
     fn preferred_secret_does_not_read_an_invalid_unused_fallback() {

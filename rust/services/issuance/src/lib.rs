@@ -48,6 +48,7 @@ pub mod canvas_sync_processor;
 pub mod canvas_sync_processor_postgres;
 pub mod canvas_sync_provider_http;
 pub mod canvas_sync_worker;
+pub mod canvas_sync_worker_lifecycle;
 pub mod canvas_sync_worker_postgres;
 pub mod client_auth;
 pub mod config;

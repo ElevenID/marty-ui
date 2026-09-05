@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import runpy
+import tomllib
 
 import pytest
 import yaml
@@ -90,6 +91,12 @@ def test_unrouted_rust_candidate_is_packaged_without_changing_consumers() -> Non
     ci_image = (ROOT / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
 
     assert 'name = "marty-canvas-sync-worker"' in cargo
+    worker_target = next(
+        target
+        for target in tomllib.loads(cargo)["bin"]
+        if target["name"] == "marty-canvas-sync-worker"
+    )
+    assert worker_target.get("test", True), "workspace tests must execute worker binary tests"
     assert "NativeCanvasSyncProcessor::new" in worker
     assert "canvas_sync_processor_unavailable" not in worker
     for dockerfile in (service_image, ci_image):

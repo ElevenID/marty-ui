@@ -31,6 +31,31 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
+### Current Canvas initialized-owner adoption
+
+UI #795 is merged at protected `354374618014add2611280cbcb7a63703af0daf2`;
+the configuration candidate below has therefore landed. MMF #102/#103 are
+merged, with current protected revision
+`b4376cda59b3921598e1749f550595d7293e4624`. The standalone worker now adopts
+that shared async owner, closes its actual PostgreSQL pool before acknowledging
+initialized exits, and preserves cancellation separately from graceful drain.
+Its binary tests are enabled for normal workspace test execution.
+See [initialized lifecycle evidence and remaining limits](rust-migrations/canvas-worker-awaited-pool-disposal.md).
+
+The pool-disposal replay supplements, rather than replaces, UI #796's owned-job
+cancellation proof and the existing configuration/recovery/renewal/fencing gates.
+It uses synthetic PostgreSQL schema and controlled processors; published-schema,
+process-signal, provider and whole-worker parity remain separate requirements.
+The worker remains unrouted, with Python and all production consumers retained.
+
+There are now four retained beta217 operational samples, latest captured at
+`10:50:14Z`, not a completed 7–14-day soak. The user confirmed the unexpected
+host reboot caused Docker restarts; uptime before and after reboot stays
+separate. Read-only production verification at `11:37:04Z` still matches the
+post-reboot 29-container baseline. No new deployment is part of this adoption.
+The historical three-sample and pending-configuration statements below are
+superseded by this checkpoint; all broader acceptance and cleanup gates remain.
+
 ### Current 1.1.217 evidence and Canvas configuration progress
 
 UI `#793` and activation `#794` have merged through protected gates. Release
