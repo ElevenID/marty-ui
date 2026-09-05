@@ -29,6 +29,7 @@ pub struct PublishedDatabase {
     postgres: Option<String>,
     probe: Option<String>,
     pub url: String,
+    pub issued_reviews: Option<Value>,
 }
 
 impl PublishedDatabase {
@@ -41,6 +42,14 @@ impl PublishedDatabase {
     }
 
     pub async fn start() -> Result<Self, String> {
+        Self::start_probe(false).await
+    }
+
+    pub async fn start_with_issued_reviews() -> Result<Self, String> {
+        Self::start_probe(true).await
+    }
+
+    async fn start_probe(issued_reviews: bool) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -50,6 +59,7 @@ impl PublishedDatabase {
             postgres: None,
             probe: None,
             url: String::new(),
+            issued_reviews: None,
         };
         let label = format!("{LABEL}={}", owned.scope);
         let postgres = docker(&[
@@ -115,7 +125,7 @@ impl PublishedDatabase {
         let fixture_mount = format!("type=bind,source={},target=/verification/contracts/canvas-worker-consumer-range-oracle.json,readonly",
             root.join("contracts/canvas-worker-consumer-range-oracle.json").display());
         let network = format!("container:{postgres}");
-        let probe = docker(&[
+        let mut arguments = vec![
             "create",
             "--pull=never",
             "--label",
@@ -139,7 +149,27 @@ impl PublishedDatabase {
             "python",
             fixture["observed_image"].as_str().unwrap(),
             "/verification/scripts/prepare_canvas_published_schema.py",
-        ])?;
+        ];
+        let oracle_script_mount = format!("type=bind,source={},target=/verification/scripts/run_canvas_issued_review_oracle.py,readonly",
+            root.join("scripts/run_canvas_issued_review_oracle.py").display());
+        let oracle_scenario_mount = format!("type=bind,source={},target=/verification/contracts/canvas-issued-review-scenarios.json,readonly",
+            root.join("contracts/canvas-issued-review-scenarios.json").display());
+        if issued_reviews {
+            // Insert options before the image, never turn them into Python args.
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--env",
+                    "MARTY_CANVAS_ISSUED_REVIEW_ORACLE=1",
+                    "--mount",
+                    &oracle_script_mount,
+                    "--mount",
+                    &oracle_scenario_mount,
+                ],
+            );
+        }
+        let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());
         eprintln!("Owned published migration probe: {probe}");
@@ -148,7 +178,10 @@ impl PublishedDatabase {
             let state = inspect(&probe)?;
             if state["State"]["Running"] == false {
                 if state["State"]["ExitCode"] != 0 {
-                    return Err("Published migration probe failed (raw logs suppressed)".into());
+                    let report: Value = serde_json::from_str(&docker(&["logs", &probe])?)
+                        .map_err(|_| "Probe failed without a structured diagnostic")?;
+                    return Err(format!("Published probe failed: class={}, frames={} (exception messages suppressed)",
+                        report["error_class"], report["frames"]));
                 }
                 break;
             }
@@ -164,6 +197,14 @@ impl PublishedDatabase {
             return Err("Published migration evidence incomplete".into());
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
+        if issued_reviews {
+            owned.issued_reviews = Some(
+                report
+                    .get("issued_reviews")
+                    .ok_or("Missing issued review oracle")?
+                    .clone(),
+            );
+        }
         Ok(owned)
     }
 

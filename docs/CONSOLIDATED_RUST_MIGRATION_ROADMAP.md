@@ -55,8 +55,14 @@ a JSON/JSONB comparison failure in the native learner fact-commit guard. Real
 roster and learner effects, four fact types, repeat reads, provider-error head
 preservation and stale-context rejection now execute on the actual issuance
 schema. The provider is controlled and the organization dependency is minimal;
-hosted integration, full provider/processor differentials, all-consumer cutover
-and acceptance remain required. Reachable Python is retained until those gates pass.
+original hosted CI now passes; fresh integration with protected #803 remains
+required. The next [issued-review differential](rust-migrations/canvas-issued-review-parity.md)
+captures ten published Python lifecycle stages before the Rust replay. Both
+implementations pass locally on separate migrated databases, preserving manual
+claims, recovery, older history and all credential/transaction rows. No runtime
+change was needed for those scenarios. Full provider/processor differentials,
+concurrency/rollback, manual resolver, all-consumer cutover and acceptance remain
+required. Reachable Python is retained until those gates pass.
 
 The integrated [renewal-progress follow-up](rust-migrations/canvas-worker-renewal-progress.md)
 retains the initialized pool owner and actual process-signal gate while correcting

@@ -24,7 +24,7 @@ use std::{
     },
 };
 
-const WORKER: &str = "published-schema-worker";
+pub const WORKER: &str = "published-schema-worker";
 
 struct Provider {
     pool: PgPool,
@@ -168,13 +168,23 @@ async fn run(
     processor: &NativeCanvasSyncProcessor,
     id: &str,
 ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+    run_for_organization(pool, processor, id, "org-published").await
+}
+
+pub async fn run_for_organization(
+    pool: &PgPool,
+    processor: &NativeCanvasSyncProcessor,
+    id: &str,
+    organization: &str,
+) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
     let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
     sqlx::query(
         "INSERT INTO issuance_service.canvas_evidence_sync_jobs
-        (id,organization_id,target_id) VALUES ($1,'org-published',$2)",
+        (id,organization_id,target_id) VALUES ($1,$3,$2)",
     )
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(id)
+    .bind(organization)
     .execute(pool)
     .await
     .unwrap();
@@ -185,11 +195,7 @@ async fn run(
     assert_eq!(jobs.len(), 1);
     let job = &jobs[0];
     assert_eq!(job.target_id, id);
-    let target = repository
-        .target("org-published", id)
-        .await
-        .unwrap()
-        .unwrap();
+    let target = repository.target(organization, id).await.unwrap().unwrap();
     repository.validate_target(&target).await.unwrap();
     let lease = CanvasSyncLease::from_job(job, WORKER).unwrap();
     let result = processor.process(&target, &lease).await;
