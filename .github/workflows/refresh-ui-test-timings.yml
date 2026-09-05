@@ -35,14 +35,34 @@ jobs:
           pattern: ui-vitest-timing-*
           path: ${{ runner.temp }}/ui-vitest-timings
           merge-multiple: true
-      - name: Produce refreshed timing plan
+      - name: Check for timing observations
+        id: observations
         if: steps.download.outcome == 'success'
+        shell: bash
+        env:
+          TIMINGS_DIRECTORY: ${{ runner.temp }}/ui-vitest-timings
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readdirSync } from 'node:fs'
+
+          let entries = []
+          try {
+            entries = readdirSync(process.env.TIMINGS_DIRECTORY, { recursive: true, withFileTypes: true })
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error
+          }
+          const available = entries.some(entry => entry.isFile() && entry.name.endsWith('.json'))
+          appendFileSync(process.env.GITHUB_OUTPUT, `available=${available}\n`)
+          if (!available) console.log('No UI timing reports were produced; skipping timing refresh.')
+          NODE
+      - name: Produce refreshed timing plan
+        if: steps.observations.outputs.available == 'true'
         run: >-
           node ui/scripts/update-vitest-timings.mjs
           "${{ runner.temp }}/ui-vitest-timings"
           --output "${{ runner.temp }}/ui-vitest.json"
       - name: Upload refreshed timing plan
-        if: steps.download.outcome == 'success'
+        if: steps.observations.outputs.available == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ui-vitest-timings-refreshed
