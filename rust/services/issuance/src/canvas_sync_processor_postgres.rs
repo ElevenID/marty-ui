@@ -1,5 +1,7 @@
 //! Tenant-scoped PostgreSQL adapter for authoritative Canvas reconciliation.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -10,6 +12,7 @@ use uuid::Uuid;
 use crate::{
     canvas_award_candidate_postgres::{record_fact_and_policy, CanvasSyncCommitFence},
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
+    canvas_sync_lease::{lease_lost, CanvasSyncLease},
     canvas_sync_processor::{
         CanvasAuthoritativeObservation, CanvasCandidateObservationSnapshot, CanvasFactCommit,
         CanvasLinkedIdentitySnapshot, CanvasRosterCandidate, CanvasSyncApplicationSnapshot,
@@ -21,17 +24,64 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct PostgresCanvasSyncProcessorRepository {
     pool: PgPool,
+    lease: Option<CanvasSyncLease>,
 }
 
 impl PostgresCanvasSyncProcessorRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, lease: None }
+    }
+
+    async fn begin_write(
+        &self,
+        target: &CanvasSyncTarget,
+    ) -> Result<Transaction<'_, Postgres>, CanvasSyncProcessingError> {
+        let lease = self.lease.as_ref().ok_or_else(lease_lost)?;
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        if !lease
+            .lock_current(&mut transaction, &target.organization_id, &target.id)
+            .await
+            .map_err(repository_error)?
+        {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(lease_lost());
+        }
+        Ok(transaction)
+    }
+
+    async fn commit_write(
+        &self,
+        mut transaction: Transaction<'_, Postgres>,
+        target: &CanvasSyncTarget,
+    ) -> Result<(), CanvasSyncProcessingError> {
+        let lease = self.lease.as_ref().ok_or_else(lease_lost)?;
+        // Resource-lock waits or the effect itself may outlast the lease.
+        // Keep the job lock and roll back ALL effects if the final check fails.
+        if !lease
+            .lock_current(&mut transaction, &target.organization_id, &target.id)
+            .await
+            .map_err(repository_error)?
+        {
+            transaction.rollback().await.map_err(repository_error)?;
+            return Err(lease_lost());
+        }
+        transaction.commit().await.map_err(repository_error)
     }
 }
 
 #[async_trait]
 impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
+    fn for_lease(
+        self: Arc<Self>,
+        lease: CanvasSyncLease,
+    ) -> Arc<dyn CanvasSyncProcessorRepository> {
+        Arc::new(Self {
+            pool: self.pool.clone(),
+            lease: Some(lease),
+        })
+    }
+
     async fn resources(
         &self,
         target: &CanvasSyncTarget,
@@ -194,6 +244,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         resources: &CanvasSyncResources,
         fact: &Value,
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError> {
+        let lease = self.lease.clone().ok_or_else(lease_lost)?;
         let application = resources.application.as_ref().ok_or_else(unavailable)?;
         let template = resources
             .application_template
@@ -211,6 +262,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             template,
             fact,
             Some(&CanvasSyncCommitFence {
+                lease,
                 target_id: target.id.clone(),
                 target_config_version: target.config_version,
                 platform_id: resources.platform.id.clone(),
@@ -258,13 +310,13 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         checked: &[String],
         policy_allowed: bool,
     ) -> Result<bool, CanvasSyncProcessingError> {
+        let mut transaction = self.begin_write(target).await?;
         let application = resources.application.as_ref().ok_or_else(stale)?;
         let patch = json!({
             "last_evidence_sync_at": Utc::now(),
             "last_evidence_policy_allowed": policy_allowed,
             "last_evidence_requirements_checked": checked,
         });
-        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
         lock_current_scope(&mut transaction, target, resources).await?;
         lock_current_application(&mut transaction, application).await?;
         let result = sqlx::query(
@@ -287,7 +339,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             transaction.rollback().await.map_err(repository_error)?;
             return Err(stale());
         }
-        transaction.commit().await.map_err(repository_error)?;
+        self.commit_write(transaction, target).await?;
         Ok(true)
     }
 
@@ -298,7 +350,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         error_code: Option<&str>,
     ) -> Result<bool, CanvasSyncProcessingError> {
         let platform = &resources.platform;
-        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_platforms
@@ -317,7 +369,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             transaction.rollback().await.map_err(repository_error)?;
             return Err(stale());
         }
-        transaction.commit().await.map_err(repository_error)?;
+        self.commit_write(transaction, target).await?;
         Ok(true)
     }
 
@@ -325,6 +377,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         &self,
         target: &CanvasSyncTarget,
     ) -> Result<(), CanvasSyncProcessingError> {
+        let mut transaction = self.begin_write(target).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
              SET enabled = false, updated_at = clock_timestamp()
@@ -333,13 +386,13 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .bind(&target.id)
         .bind(&target.organization_id)
         .bind(target.config_version)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
         if result.rows_affected() != 1 {
             return Err(stale());
         }
-        Ok(())
+        self.commit_write(transaction, target).await
     }
 
     async fn existing_candidates(
@@ -371,7 +424,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         resources: &CanvasSyncResources,
         candidate: &CanvasRosterCandidate,
     ) -> Result<String, CanvasSyncProcessingError> {
-        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let id = sqlx::query_scalar(
             "INSERT INTO issuance_service.canvas_award_candidates (
@@ -403,7 +456,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         .await
         .map_err(repository_error)?
         .ok_or_else(stale)?;
-        transaction.commit().await.map_err(repository_error)?;
+        self.commit_write(transaction, target).await?;
         Ok(id)
     }
 
@@ -420,7 +473,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             "payload": observation.source_payload,
         }));
         let payload_hash = hex::encode(Sha256::digest(canonical.as_bytes()));
-        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let candidate_current = sqlx::query_scalar::<_, i32>(
             "SELECT 1 FROM issuance_service.canvas_award_candidates
@@ -455,7 +508,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             .as_deref()
             == Some(payload_hash.as_str())
         {
-            transaction.commit().await.map_err(repository_error)?;
+            self.commit_write(transaction, target).await?;
             return Ok(false);
         }
         let superseded = current
@@ -496,7 +549,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             transaction.rollback().await.map_err(repository_error)?;
             return Err(stale());
         }
-        transaction.commit().await.map_err(repository_error)?;
+        self.commit_write(transaction, target).await?;
         Ok(true)
     }
 
@@ -538,7 +591,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             "roster_size": roster_size,
             "roster_cycle_completed_at": (next_cursor == 0).then(Utc::now),
         });
-        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+        let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
@@ -559,7 +612,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             transaction.rollback().await.map_err(repository_error)?;
             return Err(stale());
         }
-        transaction.commit().await.map_err(repository_error)?;
+        self.commit_write(transaction, target).await?;
         Ok(())
     }
 }

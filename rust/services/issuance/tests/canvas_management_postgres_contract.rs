@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
@@ -14,7 +14,10 @@ use marty_issuance_service::{
     canvas_readiness_runtime::{
         CanvasReadinessStateProvider, PostgresCanvasReadinessStateProvider,
     },
-    canvas_sync_processor::CanvasSyncProcessorRepository,
+    canvas_sync_lease::CanvasSyncLease,
+    canvas_sync_processor::{
+        CanvasAuthoritativeObservation, CanvasRosterCandidate, CanvasSyncProcessorRepository,
+    },
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_worker::CanvasSyncWorkerRepository,
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
@@ -1090,14 +1093,87 @@ async fn management_contract(storage_type: &str) {
 
 async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
     let worker = PostgresCanvasSyncWorkerRepository::new(pool.clone());
-    let processor = PostgresCanvasSyncProcessorRepository::new(pool.clone());
+    let unscoped = Arc::new(PostgresCanvasSyncProcessorRepository::new(pool.clone()));
     let target = worker
         .target("org-management", "existing-roster")
         .await
         .unwrap()
         .unwrap();
-    let resources = processor.resources(&target).await.unwrap().unwrap();
+    let resources = unscoped.resources(&target).await.unwrap().unwrap();
     let original = roster_storage(pool).await;
+    let candidate = CanvasRosterCandidate {
+        id: "unauthorized-candidate".into(),
+        candidate_key: "synthetic".into(),
+        canvas_user_id: None,
+        lti_subject: None,
+        learner_identity_id: None,
+        state: "pending".into(),
+    };
+    let observation = CanvasAuthoritativeObservation {
+        assertion: Map::new(),
+        source_payload: Map::new(),
+        verification_method: "synthetic",
+        effective_at: None,
+    };
+    for effect in [
+        "fact",
+        "application",
+        "platform",
+        "disable",
+        "candidate",
+        "observation",
+        "cursor",
+    ] {
+        let denied = match effect {
+            "fact" => unscoped
+                .record_fact(&target, &resources, &json!({}))
+                .await
+                .map(|_| ()),
+            "application" => unscoped
+                .patch_application_sync(&target, &resources, &[], true)
+                .await
+                .map(|_| ()),
+            "platform" => unscoped
+                .patch_platform_validation(&target, &resources, None)
+                .await
+                .map(|_| ()),
+            "disable" => unscoped.disable_target(&target).await,
+            "candidate" => unscoped
+                .save_candidate(&target, &resources, &candidate)
+                .await
+                .map(|_| ()),
+            "observation" => unscoped
+                .save_candidate_observation(
+                    &target,
+                    &resources,
+                    &candidate.id,
+                    "synthetic",
+                    &observation,
+                )
+                .await
+                .map(|_| ()),
+            "cursor" => {
+                unscoped
+                    .update_roster_cursor(&target, &resources, 25, 40)
+                    .await
+            }
+            _ => unreachable!(),
+        }
+        .unwrap_err();
+        assert_eq!(denied.code, "canvas_sync_lease_lost", "{effect}");
+    }
+    assert_eq!(roster_storage(pool).await, original);
+    // Binding activation already created the durable roster job. Lease that
+    // real job instead of inventing a second active job for the same target.
+    let job = worker
+        .lease_ready("processor-auth-worker", &100_u64.into(), &120_u64.into())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|job| job.target_id == "existing-roster")
+        .unwrap();
+    let lease = CanvasSyncLease::from_job(&job, "processor-auth-worker").unwrap();
+    let processor = unscoped.clone().for_lease(lease);
     processor
         .update_roster_cursor(&target, &resources, 25, 40)
         .await
@@ -1144,10 +1220,125 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
             .update_roster_cursor(&stale_target, &stale_resources, 99, 100)
             .await
             .unwrap_err();
-        assert_eq!(failure.code, "canvas_platform_reconfigured");
+        assert_eq!(
+            failure.code,
+            if dimension < 2 {
+                "canvas_sync_lease_lost"
+            } else {
+                "canvas_platform_reconfigured"
+            }
+        );
         assert!(failure.retryable);
         assert_eq!(roster_storage(pool).await, completed);
     }
+
+    // Independent per-job handles must not change the shared repository's
+    // identity or another job's authorization. Exercise the new guard only
+    // after implementation, against this dedicated synthetic database.
+    for dimension in ["missing", "organization", "target", "owner", "attempt"] {
+        let mut different_job = job.clone();
+        let mut expected_worker = "processor-auth-worker";
+        match dimension {
+            "missing" => different_job.id = "missing-processor-job".into(),
+            "organization" => different_job.organization_id = "other-org".into(),
+            "target" => different_job.target_id = "other-target".into(),
+            "owner" => {
+                expected_worker = "other-worker";
+                different_job.lease_owner = Some(expected_worker.into());
+            }
+            "attempt" => different_job.attempt_count += 1,
+            _ => unreachable!(),
+        }
+        let other = unscoped
+            .clone()
+            .for_lease(CanvasSyncLease::from_job(&different_job, expected_worker).unwrap());
+        let denied = other
+            .update_roster_cursor(&target, &resources, 99, 100)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, "canvas_sync_lease_lost", "{dimension}");
+        assert_eq!(roster_storage(pool).await, completed, "{dimension}");
+    }
+    processor
+        .update_roster_cursor(&target, &resources, 0, 40)
+        .await
+        .unwrap();
+    let completed = roster_storage(pool).await;
+    sqlx::query("UPDATE issuance_service.canvas_evidence_sync_jobs SET status = 'retry' WHERE target_id = 'existing-roster'")
+        .execute(pool).await.unwrap();
+    assert_eq!(
+        processor
+            .update_roster_cursor(&target, &resources, 99, 100)
+            .await
+            .unwrap_err()
+            .code,
+        "canvas_sync_lease_lost"
+    );
+    assert_eq!(roster_storage(pool).await, completed);
+    sqlx::query("UPDATE issuance_service.canvas_evidence_sync_jobs SET status = 'leased' WHERE target_id = 'existing-roster'")
+        .execute(pool).await.unwrap();
+
+    // Expiry while an effect is in its transaction must roll the entire effect
+    // back. This trigger is a test-only deterministic clock/expiry fault, not a
+    // replacement for the production writer or its authorization queries.
+    sqlx::raw_sql(
+        "CREATE FUNCTION issuance_service.expire_processor_test_lease() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+           UPDATE issuance_service.canvas_evidence_sync_jobs
+             SET lease_expires_at = clock_timestamp() - interval '1 second'
+             WHERE target_id = 'existing-roster';
+           RETURN NEW;
+         END $$;
+         CREATE TRIGGER expire_processor_test_lease AFTER UPDATE OF metadata
+           ON issuance_service.canvas_evidence_sync_targets FOR EACH ROW
+           EXECUTE FUNCTION issuance_service.expire_processor_test_lease();",
+    ).execute(pool).await.unwrap();
+    assert_eq!(
+        processor
+            .update_roster_cursor(&target, &resources, 99, 100)
+            .await
+            .unwrap_err()
+            .code,
+        "canvas_sync_lease_lost"
+    );
+    assert_eq!(roster_storage(pool).await, completed);
+    let expiry: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT lease_expires_at FROM issuance_service.canvas_evidence_sync_jobs WHERE target_id = 'existing-roster'")
+        .fetch_one(pool).await.unwrap();
+    assert_eq!(
+        Some(expiry),
+        job.lease_expires_at,
+        "both the effect and injected expiry rolled back"
+    );
+    sqlx::raw_sql(
+        "DROP TRIGGER expire_processor_test_lease ON issuance_service.canvas_evidence_sync_targets;
+         DROP FUNCTION issuance_service.expire_processor_test_lease();",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let mut blocked = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM issuance_service.canvas_evidence_sync_jobs WHERE target_id = 'existing-roster' FOR UPDATE")
+        .fetch_one(&mut *blocked).await.unwrap();
+    let mut waiting = Box::pin(processor.update_roster_cursor(&target, &resources, 99, 100));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut waiting)
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE issuance_service.canvas_evidence_sync_jobs SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE target_id = 'existing-roster'")
+        .execute(&mut *blocked).await.unwrap();
+    blocked.commit().await.unwrap();
+    let denied = tokio::time::timeout(Duration::from_secs(3), waiting)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(denied.code, "canvas_sync_lease_lost");
+    assert_eq!(
+        roster_storage(pool).await,
+        completed,
+        "no pre-lock timestamp grant"
+    );
 }
 
 async fn roster_storage(

@@ -365,6 +365,7 @@ pub trait CanvasSyncProcessor: Send + Sync {
     async fn process(
         &self,
         target: &CanvasSyncTarget,
+        lease: &crate::canvas_sync_lease::CanvasSyncLease,
     ) -> Result<CanvasSyncResult, CanvasSyncProcessingError>;
 }
 
@@ -661,6 +662,8 @@ impl CanvasSyncWorker {
             target = current_target;
         }
 
+        let lease =
+            crate::canvas_sync_lease::CanvasSyncLease::from_job(&job, &self.config.worker_id)?;
         let evaluation = async {
             if self.config.enabled_for(&target.organization_id) {
                 self.repository.validate_target(&target).await?;
@@ -668,7 +671,7 @@ impl CanvasSyncWorker {
                 // Closed rollout is intentionally evaluated by the processor
                 // before any target/provider validation reads.
             }
-            self.processor.process(&target).await
+            self.processor.process(&target, &lease).await
         };
         let outcome = await_with_lease_renewal(
             tokio::time::timeout(self.config.job_timeout, evaluation),
