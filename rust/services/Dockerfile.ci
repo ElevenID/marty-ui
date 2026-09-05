@@ -24,6 +24,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 
+ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588 https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-x86_64-unknown-linux-musl.tar.gz /tmp/sccache.tar.gz
+RUN tar -xzf /tmp/sccache.tar.gz -C /tmp \
+    && install /tmp/sccache-v0.16.0-x86_64-unknown-linux-musl/sccache /usr/local/bin/sccache \
+    && rm /tmp/sccache.tar.gz
+
 COPY --from=planner /build/rust/recipe.json recipe.json
 COPY --from=planner /build/rust/third_party /build/rust/third_party
 COPY proto /build/proto
@@ -36,6 +41,16 @@ COPY rust /build/rust
 COPY proto /build/proto
 RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    if [ -s /run/secrets/sccache_token ]; then \
+      export SCCACHE_GHA_ENABLED=true \
+        SCCACHE_GHA_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
+        SCCACHE_GHA_CACHE_URL="$(cat /run/secrets/sccache_url)" \
+        SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
+    fi; \
+    export RUSTC_WRAPPER=sccache; \
     cargo build --locked --release \
     -p marty-event-stream --bin marty-event-stream \
     -p marty-gateway --bin marty-gateway \
@@ -52,7 +67,8 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     -p marty-verification-service --bin marty-verification-service \
     -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker \
     -p marty-deployment-profile --bin marty-deployment-profile \
-    -p marty-compliance-profile --bin marty-compliance-profile
+    -p marty-compliance-profile --bin marty-compliance-profile \
+    && sccache --show-stats
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 

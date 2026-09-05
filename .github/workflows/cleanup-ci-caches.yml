@@ -47,9 +47,9 @@ jobs:
               }
               return caches;
             };
-            const caches = closedNumber === null
-              ? await listCaches()
-              : await listCaches(`refs/pull/${closedNumber}/merge`);
+            // The PR ref filter misses caches written under its merge-queue ref.
+            // Enumerate once, then select only this closed PR (or closed PRs on sweep).
+            const caches = await listCaches();
             const candidates = caches.flatMap(cache => {
               const match = cache.ref.match(/^refs\/pull\/(\d+)\/merge$/)
                 || cache.ref.match(/^refs\/heads\/gh-readonly-queue\/[^/]+\/pr-(\d+)-/);
