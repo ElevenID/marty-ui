@@ -41,7 +41,8 @@ job/candidate platform filters retain the published bounded post-query window.
   an additional published differential fixture.
 - Seven configured schema tests pass locally (39.44s), all258 library tests
   pass (6.58s), and20 focused CI/image tests pass (0.74s). Mandatory CI registration
-  includes both new tests; hosted qualification is still required.
+  includes both new tests. Source and queue CI/CodeQL passed; #812 merged as
+  `91db72daa1256d5cdee27c61a1a73e3b5480eaf8`, retaining the reviewed tree.
 
 Timestamp values are checked as RFC3339 and normalized to presence as in the
 original baseline; exact temporal/wire-format equality is not claimed. The

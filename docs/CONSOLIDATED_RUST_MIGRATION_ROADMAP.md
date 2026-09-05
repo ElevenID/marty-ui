@@ -39,6 +39,8 @@ All25 frozen read cases and75 supplementary published input/status cases replay
 locally, alongside500-row review-window and unavailable-database checks.
 Its seven configured schema gates and258 library tests pass, with full CI and
 CodeQL green at reviewed #812 head `70e82b8b6068f377a417997b1a5dd68adde7e747`.
+After green queue CI/CodeQL, #812 merged as
+`91db72daa1256d5cdee27c61a1a73e3b5480eaf8`, retaining its reviewed tree.
 
 The [job operations candidate](rust-migrations/canvas-job-operations.md) now adds
 enqueue and dead-letter retry/resolve using the shared enqueue owner. All35
