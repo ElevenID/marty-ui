@@ -17,12 +17,15 @@ const GET_TRANSACTION: &str =
      FROM issuance_service.issuance_transactions
      WHERE pre_auth_code = $1";
 
+// Python-owned installations store claims as json; some consumers use jsonb.
+// Give CASE one explicit result type and use jsonb only for the object update.
+// The no-DPoP branch preserves json text instead of normalizing unrelated claims.
 const CLAIM_TRANSACTION: &str = "UPDATE issuance_service.issuance_transactions
      SET access_token = $3,
          c_nonce = NULL,
          claims = CASE
-             WHEN $4::text IS NULL THEN claims
-             ELSE jsonb_set(COALESCE(claims, '{}'::jsonb), '{_dpop_jkt}', to_jsonb($4::text), true)
+             WHEN $4::text IS NULL THEN claims::json
+             ELSE jsonb_set(COALESCE(claims::jsonb, '{}'::jsonb), '{_dpop_jkt}', to_jsonb($4::text), true)::json
          END,
          status = 'authorized'
      WHERE id = $1 AND pre_auth_code = $2 AND status = 'pending'

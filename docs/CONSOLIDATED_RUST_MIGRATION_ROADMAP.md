@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.214` is qualified, published, independently verified and successfully deployed to beta at exact source `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`. Protected release run `33930593794` passed public-stack and all verifier gates; its resume reused the original signed digests. Integration PR `#418` merged the real published static pin at `9f150de07a5a629a46b1eeeb58123ddb3eb86f32`, and its complete artifact workflow passed. Integration `v1.2.80` is published and independently verified at protected source `0c0944424c2f19ad05d99bb7482526104cb5b6d1` after PR `#419` and successful release run `33931821255`. Full credential/browser acceptance, demos and the governed acceptance soak remain. The standalone Canvas worker remains an unrouted Rust candidate pending whole-worker parity and all-consumer gates. Required Python bindings, adapters and reachable worker code are preserved. Production is unchanged.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.215` is qualified, published and deployed to beta at exact source `1866528ab859ea7007ca34671ad80a62131fd79d`. Verifier governance, public/local release markers, the custom Keycloak theme and organization selection pass. Full recording acceptance is incomplete: the deployed token exchange revealed a JSON/JSONB storage mismatch, corrected and regression-tested in this change but not yet released. The standalone Rust Canvas worker remains unrouted pending whole-worker and all-consumer gates. Reachable Python features are preserved. Full demos, branch cleanup and the governed acceptance soak remain. This lane made no production deployment; the separate host restart does not count as global runtime stasis.
 
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
@@ -22,6 +22,32 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
 ## Current execution snapshot — 2026-09-05
+
+### Deployed 1.1.215 and real-schema token exchange correction
+
+`v1.1.215` is published (release run `33937499784`, release ID `383105509`)
+and successfully deployed to beta at exact source
+`1866528ab859ea7007ca34671ad80a62131fd79d`, finishing `02:34:56Z`. Source-bound
+provenance, signatures, all assets, local/public markers and all 29 production
+before/after invariants passed. An earlier attempt hit a transient local Vite
+port conflict; its failed evidence remains, and no production process was changed.
+
+Verifier governance and the first `1.1.215` soak sample passed. The actual
+release-bound recording now passes the custom Keycloak theme and organization
+selection, but token exchange returns HTTP 500 because the native query assumes
+JSONB while the deployed transaction claims column is JSON. This change fixes
+the Rust query and executes the same contract against both physical types;
+the recorded failure was reproduced before the fix. No live schema change or
+weakened demo assertion is involved. A new immutable release and recording are
+still required; the failed partial video is not acceptance evidence.
+
+See [JSON storage parity and adjacent open findings](rust-migrations/issuance-json-storage-parity.md).
+Three nearby Canvas storage assumptions require their own executable regression
+coverage and fixes. Worker result-parity PR `#784` has passed all PR checks and
+entered the protected merge queue; it remains separate from this token correction.
+Full worker/consumer parity, feature-preserving branch cleanup, demos and the
+governed acceptance soak remain open. The host-restart explanation resolved the
+earlier coordination hold; no production deployment occurred in this lane.
 
 ### Beta browser correction and selected follow-up release
 
