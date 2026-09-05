@@ -34,12 +34,12 @@ for both storage types. Only the isolated, newly created test tables are altered
 
 The new test failed against the unchanged repository on the real `json` shape
 and passed after the fix for both shapes. Token HTTP/domain parity tests also
-passed. CI, maintainer review and the protected queue remain required before
-landing; a new immutable release and unchanged recording must verify the fix in
+passed. Maintainer review, CI and the protected queue passed; PR #785 merged at
+`895218b408f20922bda741d51886ec0744a0754f`. A new immutable release and unchanged recording must verify the fix in
 beta. Do not patch published v1.1.215, migrate its live claims column merely to
 fit a test fixture, or count its partial failed recording as acceptance.
 
-## Adjacent findings still requiring executable regression coverage
+## Adjacent findings subsequently corrected with executable regressions
 
 Read-only beta inspection also confirmed these Python-owned columns are `json`.
 Source review found direct JSONB-only operations in their Rust consumers:
@@ -50,9 +50,12 @@ Source review found direct JSONB-only operations in their Rust consumers:
 | `canvas_evidence_sync_targets.metadata` | `canvas_management_postgres.rs`: conflict-update COALESCE and concatenation |
 | `canvas_platforms.connection_config` | `canvas_management_postgres.rs`: LTI readiness/configuration updates using JSONB operators |
 
-These are open source/schema-review findings, not executed parity passes or
-fixed behavior in this token patch. Reproduce each against real-schema fixtures,
-fix in the shared Rust repository operations, preserve owner/generation fences
-and unrelated fields, and run complete consumer gates before declaring this
-storage compatibility work complete. Whole-worker migration, all-consumer
-routing, feature-preserving cleanup, full demos and acceptance soak also remain.
+These were open source/schema-review findings when the token patch was authored.
+PR #786 subsequently reproduced and corrected them, plus the same target
+metadata column's roster-cursor write, and merged at
+`fdcdf7e3b72749db29cb9cef3bf97ad1479075e4`. Complete JSON/JSONB contracts preserve
+unrelated metadata, capability intent, cursor scheduling and scope/generation
+fences. See [executed Canvas storage regressions](canvas-json-storage-parity.md).
+The corrections are not yet verified by a new beta release/recording. Whole-worker
+migration, all-consumer routing, feature-preserving cleanup, full demos and
+acceptance soak remain open.
