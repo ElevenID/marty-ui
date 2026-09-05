@@ -33,6 +33,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
+The [manual review resolver candidate](rust-migrations/canvas-review-resolution.md)
+completes implementation of all eight operations in the candidate router, still
+unrouted. All46 corrected-schema published HTTP/state cases pass without manual
+case exclusions, with supplementary audit rollback, token/action fences and
+shared application-lock checks. The actual credential service/PostgreSQL adapter
+is exercised for suspend/revoke with controlled publication. The exact official
+credentials#266 migration is mounted read-only and hash-verified for these tests;
+this is source-overlay qualification, not a newly released component. All12
+configured schema gates,260 library tests and20 focused CI/image tests pass locally.
+Extended manual HTTP parsing, lifecycle failure/cancellation/provider coverage,
+full hosted qualification and worker/all-consumer cutover remain open.
+
 The [native operations read candidate](rust-migrations/canvas-operations-reads.md)
 implements four read APIs in the existing issuance crate, without live routing.
 All25 frozen read cases and75 supplementary published input/status cases replay
@@ -52,7 +64,7 @@ it reproduced and corrects numeric display and control-whitespace differences.
 One shared Rust formatter consumes the frozen published Unicode15.0 text rules,
 with no runtime Python or new dependency. Ten configured schema gates,
 260 library tests,51 candidate/LTI behavior tests and20 focused CI/image tests
-pass locally. Manual review resolution, broader input/worker-interleaving qualification, hosted
+pass locally. The manual candidate above adds the last write; broader input/worker-interleaving qualification, hosted
 checks and all-consumer cutover remain required. No live routing has changed.
 
 The [operations baseline](rust-migrations/canvas-operations-freeze.md) captures
@@ -61,8 +73,8 @@ the published Python router, authentication, service and real PostgreSQL.
 It merged through #811 as `aac7d9377891564e947042a98a3db24ed8ba92b0`.
 Two independent captures agree; all five original configured published-schema tests,
 all-target issuance Clippy and twenty focused CI/image tests pass locally.
-Manual resolution and full hosted/cutover qualification remain pending; the
-three candidate job writes above do not qualify all eight operations.
+Full hosted/cutover qualification remains pending; the combined candidate does
+not authorize consumer switching or deletion from its current passing corpus.
 
 The failed-handler recovery scenario exposes a published schema defect:
 the internal `evidence_recovered` claim is rejected by the manual-action-only

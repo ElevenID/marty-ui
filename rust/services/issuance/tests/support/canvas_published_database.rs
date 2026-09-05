@@ -119,6 +119,32 @@ impl PublishedDatabase {
         oracle: Option<(&str, &str, &str, &str)>,
         extra_fixture: Option<&'static str>,
     ) -> Result<Self, String> {
+        Self::start_probe_with_migration(oracle, extra_fixture, false).await
+    }
+
+    pub async fn start_with_review_recovery() -> Result<Self, String> {
+        Self::start_probe_with_migration(None, None, true).await
+    }
+
+    pub async fn start_with_operations_recovery() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "operations",
+                "operations",
+                "operations",
+                "MARTY_CANVAS_OPERATIONS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    async fn start_probe_with_migration(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+    ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -257,6 +283,32 @@ impl PublishedDatabase {
             let index = arguments.len() - 2;
             arguments.splice(index..index, ["--mount", mount]);
         }
+        let recovery: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-recovery-migration.json"
+        ))
+        .unwrap();
+        let recovery_mount = format!(
+            "type=bind,source={},target=/app/{},readonly",
+            root.join("contracts/fixtures/canvas_review_recovery_claim.py")
+                .display(),
+            recovery["source"].as_str().unwrap()
+        );
+        let recovery_provenance = format!("type=bind,source={},target=/verification/contracts/canvas-review-recovery-migration.json,readonly",
+            root.join("contracts/canvas-review-recovery-migration.json").display());
+        if recovery_schema {
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--env",
+                    "MARTY_CANVAS_REVIEW_RECOVERY_SCHEMA=1",
+                    "--mount",
+                    &recovery_mount,
+                    "--mount",
+                    &recovery_provenance,
+                ],
+            );
+        }
         let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());
@@ -277,12 +329,20 @@ impl PublishedDatabase {
         }
         let report: Value = serde_json::from_str(&docker(&["logs", &probe])?)
             .map_err(|_| "Invalid migration report")?;
+        let expected_revisions = if recovery_schema {
+            serde_json::json!([recovery["revision"]])
+        } else {
+            fixture["migration_revisions"].clone()
+        };
         if report["status"] != "passed"
-            || report["migration_revisions"] != fixture["migration_revisions"]
+            || report["migration_revisions"] != expected_revisions
             || report["worker_sha256"] != fixture["observed_source_sha256"]
             || report["organization_dependency"] != "synthetic-minimal"
         {
             return Err("Published migration evidence incomplete".into());
+        }
+        if recovery_schema && report["review_recovery_overlay"] != recovery {
+            return Err("Official review recovery provenance incomplete".into());
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
         if oracle.is_some() {

@@ -31,6 +31,24 @@ def prepare():
     ).hexdigest()
     if worker_hash != fixture["observed_source_sha256"]:
         raise RuntimeError("Published worker provenance mismatch")
+    expected_revisions = fixture["migration_revisions"]
+    overlay = None
+    if os.environ.get("MARTY_CANVAS_REVIEW_RECOVERY_SCHEMA") == "1":
+        overlay = json.loads(
+            Path(
+                "/verification/contracts/canvas-review-recovery-migration.json"
+            ).read_text()
+        )
+        source = Path("/app") / overlay["source"]
+        normalized = source.read_text(encoding="utf-8").encode()
+        if hashlib.sha256(normalized).hexdigest() != overlay["sha256"]:
+            raise RuntimeError("Official review recovery migration hash mismatch")
+        git_blob = b"blob " + str(len(normalized)).encode() + b"\0" + normalized
+        if hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() != overlay["blob"]:
+            raise RuntimeError("Official review recovery migration blob mismatch")
+        if expected_revisions != [overlay["parent"]]:
+            raise RuntimeError("Official review recovery migration parent mismatch")
+        expected_revisions = [overlay["revision"]]
     os.environ["DATABASE_URL"] = DATABASE
     engine = create_engine(DATABASE, hide_parameters=True)
     try:
@@ -58,7 +76,7 @@ def prepare():
                     text("SELECT version_num FROM issuance_service.alembic_version")
                 ).scalars()
             )
-        if revisions != fixture["migration_revisions"]:
+        if revisions != expected_revisions:
             raise RuntimeError("Published migration head mismatch")
         report = {
             "status": "passed",
@@ -66,6 +84,8 @@ def prepare():
             "worker_sha256": worker_hash,
             "organization_dependency": "synthetic-minimal",
         }
+        if overlay is not None:
+            report["review_recovery_overlay"] = overlay
         for flag, name, key in [
             ("MARTY_CANVAS_ENQUEUE_INPUT_ORACLE", "enqueue_input", "enqueue_inputs"),
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),

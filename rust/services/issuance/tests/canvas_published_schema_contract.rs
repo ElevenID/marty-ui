@@ -6,6 +6,77 @@ use tracing::instrument::WithSubscriber;
 mod canvas_operations_read_replay;
 
 #[tokio::test]
+async fn operations_resolution_matches_corrected_published_schema() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_operations_recovery()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-operations-recovery-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "corrected published recovery baseline drifted"
+    );
+    owned.close().unwrap();
+    let native = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&native.url)
+        .await
+        .unwrap();
+    let revision: String =
+        sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(revision, "canvas_review_recovery_claim");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        canvas_review_resolution_replay::replay(&pool, &expected),
+    )
+    .await
+    .expect("manual review replay must not deadlock");
+    pool.close().await;
+    native.close().unwrap();
+}
+
+#[path = "support/canvas_review_resolution_replay.rs"]
+mod canvas_review_resolution_replay;
+
+#[path = "support/canvas_review_resolution_checks.rs"]
+mod canvas_review_resolution_checks;
+
+#[tokio::test]
+async fn operations_resolution_fences_and_lifecycle_delegate() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        canvas_review_resolution_checks::exercise(&pool),
+    )
+    .await
+    .expect("review invariant checks must not deadlock");
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
 async fn enqueue_inputs_match_frozen_published_python() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

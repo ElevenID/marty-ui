@@ -6,7 +6,8 @@ router; the live issuance router, gateway allowlist and deployed consumers are
 unchanged. All eight operations remain reachable through Python until the
 whole operations/worker cutover is qualified. The follow-up
 [job operations candidate](canvas-job-operations.md) adds enqueue/retry/resolve;
-manual review resolution and full cutover qualification remain outstanding.
+the [manual resolver candidate](canvas-review-resolution.md) adds the final write.
+Extended manual input/lifecycle and full cutover qualification remain outstanding.
 
 The service reuses shared management-key verification, worker job statuses and
 lossless integer parsing. Fixed SQL statements bind every caller value. Public

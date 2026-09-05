@@ -2,7 +2,8 @@
 
 The existing issuance candidate router now implements application enqueue,
 dead-letter retry and dead-letter resolution, alongside the four read APIs.
-Manual correction-review resolution remains unimplemented. Live issuance,
+The follow-up [manual resolver candidate](canvas-review-resolution.md) now implements
+correction-review resolution, with extended qualification still required. Live issuance,
 gateway and deployment consumers are unchanged; all eight operations remain
 available through Python until the whole operations/worker cutover is qualified.
 
@@ -80,9 +81,9 @@ Exact timestamp/wire equality and all interleavings with active workers remain
 separate gates. Do not infer complete parity or authorize deletion from this
 candidate's current passing cases.
 
-Next implement manual dismiss/suspend/revoke through the shared credential
-lifecycle and review-lock/audit owners, qualify recovery against credentials
-#266's corrected official schema, and finish provider/whole-worker/all-consumer
+Next finish manual resolver input/lifecycle qualification through its shared
+credential lifecycle and review-lock/audit owners, adopt credentials#266's
+corrected schema in the aggregate, and finish provider/whole-worker/all-consumer
 gates. Then delete superseded Python, complete recordings/device acceptance,
 and perform the aggregate beta-only deployment and governed soak. Production
 must remain unchanged; beta217 evidence does not qualify this new candidate.
