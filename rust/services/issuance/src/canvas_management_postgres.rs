@@ -182,7 +182,7 @@ ON CONFLICT (organization_id, logical_key) DO UPDATE SET
     enabled = true,
     schedule_seconds = EXCLUDED.schedule_seconds,
     config_version = EXCLUDED.config_version,
-    metadata = COALESCE(issuance_service.canvas_evidence_sync_targets.metadata, '{}'::jsonb)
+    metadata = COALESCE(issuance_service.canvas_evidence_sync_targets.metadata::jsonb, '{}'::jsonb)
         || $12::jsonb,
     updated_at = EXCLUDED.updated_at
 RETURNING id";
@@ -295,9 +295,9 @@ const UPDATE_PLATFORM_CONFIGURATION: &str = "UPDATE issuance_service.canvas_plat
      registration_status = $15,
      connection_config = jsonb_set(
          CASE
-             WHEN COALESCE(connection_config, '{}'::jsonb) ? 'lti_capability_intent'
-                 THEN COALESCE(connection_config, '{}'::jsonb)
-             ELSE COALESCE(connection_config, '{}'::jsonb)
+             WHEN COALESCE(connection_config::jsonb, '{}'::jsonb) ? 'lti_capability_intent'
+                 THEN COALESCE(connection_config::jsonb, '{}'::jsonb)
+             ELSE COALESCE(connection_config::jsonb, '{}'::jsonb)
                   || jsonb_build_object('lti_capability_intent', '[\"ags\",\"nrps\"]'::jsonb)
          END,
          '{enabled_intent}', to_jsonb($16::boolean), true
@@ -325,9 +325,9 @@ const TOUCH_PLATFORM_CONFIGURATION: &str = "UPDATE issuance_service.canvas_platf
      lti_trust_profile = $8,
      connection_config = jsonb_set(
          CASE
-             WHEN COALESCE(connection_config, '{}'::jsonb) ? 'lti_capability_intent'
-                 THEN COALESCE(connection_config, '{}'::jsonb)
-             ELSE COALESCE(connection_config, '{}'::jsonb)
+             WHEN COALESCE(connection_config::jsonb, '{}'::jsonb) ? 'lti_capability_intent'
+                 THEN COALESCE(connection_config::jsonb, '{}'::jsonb)
+             ELSE COALESCE(connection_config::jsonb, '{}'::jsonb)
                   || jsonb_build_object('lti_capability_intent', '[\"ags\",\"nrps\"]'::jsonb)
          END,
          '{enabled_intent}', to_jsonb($9::boolean), true
