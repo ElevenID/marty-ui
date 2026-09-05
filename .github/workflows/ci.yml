@@ -607,6 +607,9 @@ jobs:
           cp "$verification_postgres_executable" target/debug/verification-postgres-contract
           cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
+          # The Canvas PostgreSQL contract launches this actual binary and sends
+          # POSIX signals. A test-harness executable is not a substitute.
+          test -x target/debug/marty-canvas-sync-worker
       - name: Create isolated Rust contract databases
         shell: bash
         run: |

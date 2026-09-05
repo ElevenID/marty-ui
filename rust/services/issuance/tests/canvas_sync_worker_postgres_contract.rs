@@ -14,6 +14,9 @@ mod canvas_worker_range_oracle;
 #[path = "support/canvas_worker_lifecycle_oracle.rs"]
 mod canvas_worker_lifecycle_oracle;
 
+#[path = "support/canvas_worker_process_signals.rs"]
+mod canvas_worker_process_signals;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
@@ -389,6 +392,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
     canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool).await;
     canvas_worker_lifecycle_oracle::assert_initialized_pool_disposal(&pool).await;
+    canvas_worker_process_signals::assert_process_signals(&pool, &database_url).await;
     pool.close().await;
 }
 
