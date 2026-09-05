@@ -80,6 +80,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "grep -Fx 'operations_match_frozen_published_python: test'" in gate["run"]
     assert "grep -Fx 'operations_reads_match_frozen_published_python: test'" in gate["run"]
     assert "grep -Fx 'operations_inputs_match_frozen_published_python: test'" in gate["run"]
+    assert "grep -Fx 'operations_jobs_match_frozen_published_python: test'" in gate["run"]
+    assert "grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'" in gate["run"]
+    assert "grep -Fx 'enqueue_inputs_match_frozen_published_python: test'" in gate["run"]
     assert '"${executables[0]}" --nocapture --test-threads=1' in gate["run"]
     assert "[[ ${#executables[@]} == 1" in gate["run"]
 

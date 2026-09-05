@@ -37,8 +37,23 @@ The [native operations read candidate](rust-migrations/canvas-operations-reads.m
 implements four read APIs in the existing issuance crate, without live routing.
 All25 frozen read cases and75 supplementary published input/status cases replay
 locally, alongside500-row review-window and unavailable-database checks.
-Seven configured schema gates and258 library tests pass. The four write APIs,
-full edge/lifecycle qualification and all-consumer cutover remain required.
+Its seven configured schema gates and258 library tests pass, with full CI and
+CodeQL green at reviewed #812 head `70e82b8b6068f377a417997b1a5dd68adde7e747`.
+After green queue CI/CodeQL, #812 merged as
+`91db72daa1256d5cdee27c61a1a73e3b5480eaf8`, retaining its reviewed tree.
+
+The [job operations candidate](rust-migrations/canvas-job-operations.md) now adds
+enqueue and dead-letter retry/resolve using the shared enqueue owner. All35
+read/job cases from the unchanged46-case golden pass, plus native official-schema
+concurrency, rollback, canonical-ID and LTI compatibility checks. Review exposed
+and corrected the shared non-object metadata merge. A supplementary published
+capture adds28 actual enqueue HTTP/database cases and23 identifier conversions;
+it reproduced and corrects numeric display and control-whitespace differences.
+One shared Rust formatter consumes the frozen published Unicode15.0 text rules,
+with no runtime Python or new dependency. Ten configured schema gates,
+260 library tests,51 candidate/LTI behavior tests and20 focused CI/image tests
+pass locally. Manual review resolution, broader input/worker-interleaving qualification, hosted
+checks and all-consumer cutover remain required. No live routing has changed.
 
 The [operations baseline](rust-migrations/canvas-operations-freeze.md) captures
 46 HTTP/state scenarios across all eight remaining Canvas operations APIs using
@@ -46,7 +61,8 @@ the published Python router, authentication, service and real PostgreSQL.
 It merged through #811 as `aac7d9377891564e947042a98a3db24ed8ba92b0`.
 Two independent captures agree; all five original configured published-schema tests,
 all-target issuance Clippy and twenty focused CI/image tests pass locally.
-Native write operations and full hosted/cutover qualification remain pending.
+Manual resolution and full hosted/cutover qualification remain pending; the
+three candidate job writes above do not qualify all eight operations.
 
 The failed-handler recovery scenario exposes a published schema defect:
 the internal `evidence_recovered` claim is rejected by the manual-action-only

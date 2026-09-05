@@ -6,6 +6,90 @@ use tracing::instrument::WithSubscriber;
 mod canvas_operations_read_replay;
 
 #[tokio::test]
+async fn enqueue_inputs_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_enqueue_inputs()
+        .await
+        .unwrap();
+    let frozen: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-enqueue-input-oracle.json"
+    ))
+    .unwrap();
+    let mut report = owned.oracle.clone().unwrap();
+    let unicode = report.as_object_mut().unwrap().remove("unicode").unwrap();
+    let expected_unicode: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/python-text-semantics.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        unicode, expected_unicode,
+        "published Unicode text rules drifted"
+    );
+    assert_eq!(report, frozen);
+    owned.close().unwrap();
+    let native = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&native.url)
+        .await
+        .unwrap();
+    canvas_enqueue_input_replay::replay(&pool, &frozen).await;
+    pool.close().await;
+    native.close().unwrap();
+}
+
+#[path = "support/canvas_enqueue_input_replay.rs"]
+mod canvas_enqueue_input_replay;
+
+#[path = "support/canvas_job_operations_checks.rs"]
+mod canvas_job_operations_checks;
+
+#[tokio::test]
+async fn operations_jobs_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_operations_read_replay::replay_jobs(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn operations_jobs_are_atomic_and_concurrent() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        canvas_job_operations_checks::exercise(&pool),
+    )
+    .await
+    .expect("job operation checks must not deadlock");
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
 async fn operations_reads_match_frozen_published_python() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

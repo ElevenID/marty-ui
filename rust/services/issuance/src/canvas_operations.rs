@@ -8,16 +8,24 @@ use axum::{
     extract::{Path, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use mmf_config::numeric_config::PythonConfigInteger;
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use crate::{
-    canvas_sync_worker::CanvasSyncJobStatus, management_security::ManagementSecurity,
+    canvas_lti_sync_enqueue::{
+        ApplicationSyncEnqueueError, PostgresCanvasLtiBootstrapSyncEnqueuer,
+        UuidCanvasSyncEnqueueIdGenerator,
+    },
+    canvas_sync_worker::CanvasSyncJobStatus,
+    management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
 };
 
@@ -25,6 +33,7 @@ use crate::{
 pub struct CanvasOperationsService {
     pool: PgPool,
     security: ManagementSecurity,
+    jobs: Option<PostgresCanvasLtiBootstrapSyncEnqueuer>,
 }
 
 impl CanvasOperationsService {
@@ -33,7 +42,108 @@ impl CanvasOperationsService {
         Self {
             pool,
             security: ManagementSecurity::new(management_key.filter(|key| !key.is_empty())),
+            jobs: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_job_operations(
+        mut self,
+        enabled: bool,
+        pilot_organizations: BTreeSet<String>,
+    ) -> Self {
+        self.jobs = Some(PostgresCanvasLtiBootstrapSyncEnqueuer::new(
+            self.pool.clone(),
+            enabled,
+            pilot_organizations,
+            Arc::new(UuidCanvasSyncEnqueueIdGenerator),
+        ));
+        self
+    }
+
+    async fn enqueue(
+        &self,
+        headers: &HeaderMap,
+        application_id: &str,
+    ) -> Result<Value, OperationsError> {
+        self.authorize(headers)?;
+        let organization = organization(headers)?;
+        let ids = self
+            .jobs
+            .as_ref()
+            .ok_or(OperationsError::Internal)?
+            .enqueue_operation(organization, application_id)
+            .await
+            .map_err(enqueue_error)?;
+        let row = self.load_job(organization, &ids.job_id).await?;
+        self.job_view(organization, &row).await
+    }
+
+    async fn transition_job(
+        &self,
+        headers: &HeaderMap,
+        id: &str,
+        retry: bool,
+    ) -> Result<Value, OperationsError> {
+        self.authorize(headers)?;
+        let organization = organization(headers)?;
+        if retry {
+            let job = self.load_job(organization, id).await?;
+            if !self
+                .jobs
+                .as_ref()
+                .ok_or(OperationsError::Internal)?
+                .rollout_enabled(organization)
+            {
+                return Err(OperationsError::detail(
+                    StatusCode::CONFLICT,
+                    "Portable Canvas integration is disabled for this organization",
+                ));
+            }
+            if job["status"] != CanvasSyncJobStatus::DeadLetter.as_database() {
+                return Err(job_conflict(true));
+            }
+        }
+        let mut database = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| OperationsError::Internal)?;
+        let now = chrono::Utc::now();
+        let row: Option<Value> = if retry {
+            sqlx::query_scalar("UPDATE issuance_service.canvas_evidence_sync_jobs AS job SET
+                status='queued',attempt_count=0,max_attempts=8,available_at=$3,
+                lease_owner=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_summary=NULL,
+                result='{}',completed_at=NULL,updated_at=$3
+                WHERE organization_id=$1 AND id=$2 AND status='dead_letter' RETURNING to_jsonb(job)")
+                .bind(organization).bind(id).bind(now).fetch_optional(&mut *database).await
+        } else {
+            sqlx::query_scalar("UPDATE issuance_service.canvas_evidence_sync_jobs AS job SET
+                status='cancelled',completed_at=$3,updated_at=$3
+                WHERE organization_id=$1 AND id=$2 AND status='dead_letter' RETURNING to_jsonb(job)")
+                .bind(organization).bind(id).bind(now).fetch_optional(&mut *database).await
+        }.map_err(|_| OperationsError::Internal)?;
+        let Some(row) = row else {
+            database
+                .rollback()
+                .await
+                .map_err(|_| OperationsError::Internal)?;
+            if !retry {
+                self.load_job(organization, id).await?;
+            }
+            return Err(job_conflict(retry));
+        };
+        if retry {
+            sqlx::query("UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=true,updated_at=$3
+                WHERE organization_id=$1 AND id=$2")
+                .bind(organization).bind(row["target_id"].as_str().ok_or(OperationsError::Internal)?)
+                .bind(now).execute(&mut *database).await.map_err(|_| OperationsError::Internal)?;
+        }
+        database
+            .commit()
+            .await
+            .map_err(|_| OperationsError::Internal)?;
+        self.job_view(organization, &row).await
     }
 
     fn authorize(&self, headers: &HeaderMap) -> Result<(), OperationsError> {
@@ -121,6 +231,11 @@ impl CanvasOperationsService {
     async fn job(&self, headers: &HeaderMap, id: &str) -> Result<Value, OperationsError> {
         self.authorize(headers)?;
         let organization = organization(headers)?;
+        let row = self.load_job(organization, id).await?;
+        self.job_view(organization, &row).await
+    }
+
+    async fn load_job(&self, organization: &str, id: &str) -> Result<Value, OperationsError> {
         let row: Option<Value> = sqlx::query_scalar(
             "SELECT to_jsonb(job) FROM issuance_service.canvas_evidence_sync_jobs job \
              WHERE organization_id=$1 AND id=$2",
@@ -136,7 +251,7 @@ impl CanvasOperationsService {
                 "Canvas synchronization job not found",
             )
         })?;
-        self.job_view(organization, &row).await
+        Ok(row)
     }
 
     async fn job_view(&self, organization: &str, job: &Value) -> Result<Value, OperationsError> {
@@ -196,6 +311,18 @@ impl CanvasOperationsService {
 /// Deliberately separate from the live issuance/gateway route registration.
 pub fn candidate_router(service: CanvasOperationsService) -> Router {
     Router::new()
+        .route(
+            "/v1/integrations/canvas/applications/{id}/canvas-sync",
+            post(enqueue),
+        )
+        .route(
+            "/v1/integrations/canvas/canvas-sync-jobs/{id}/retry",
+            post(retry_job),
+        )
+        .route(
+            "/v1/integrations/canvas/canvas-sync-jobs/{id}/resolve",
+            post(resolve_job),
+        )
         .route("/v1/integrations/canvas/canvas-sync-jobs", get(jobs))
         .route("/v1/integrations/canvas/canvas-sync-jobs/{id}", get(job))
         .route(
@@ -207,6 +334,77 @@ pub fn candidate_router(service: CanvasOperationsService) -> Router {
             get(reviews),
         )
         .with_state(service)
+}
+
+async fn enqueue(
+    State(service): State<CanvasOperationsService>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), OperationsError> {
+    service
+        .enqueue(&headers, &id)
+        .await
+        .map(|value| (StatusCode::ACCEPTED, Json(value)))
+}
+async fn retry_job(
+    State(service): State<CanvasOperationsService>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), OperationsError> {
+    service
+        .transition_job(&headers, &id, true)
+        .await
+        .map(|value| (StatusCode::ACCEPTED, Json(value)))
+}
+async fn resolve_job(
+    State(service): State<CanvasOperationsService>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, OperationsError> {
+    service.transition_job(&headers, &id, false).await.map(Json)
+}
+
+fn job_conflict(retry: bool) -> OperationsError {
+    OperationsError::detail(
+        StatusCode::CONFLICT,
+        if retry {
+            "Only dead-letter Canvas sync jobs can be retried"
+        } else {
+            "Only dead-letter Canvas sync jobs can be resolved"
+        },
+    )
+}
+
+fn enqueue_error(error: ApplicationSyncEnqueueError) -> OperationsError {
+    let (status, code, message) = match error {
+        ApplicationSyncEnqueueError::ApplicationNotFound => (
+            StatusCode::NOT_FOUND,
+            "canvas_application_not_found",
+            "Canvas application not found".into(),
+        ),
+        ApplicationSyncEnqueueError::BindingNotFound => (
+            StatusCode::NOT_FOUND,
+            "canvas_binding_not_found",
+            "Canvas binding not found".into(),
+        ),
+        ApplicationSyncEnqueueError::RolloutDisabled => (
+            StatusCode::CONFLICT,
+            "canvas_rollout_disabled",
+            "Portable Canvas synchronization is not enabled for this organization".into(),
+        ),
+        ApplicationSyncEnqueueError::MissingContext(name) => (
+            StatusCode::CONFLICT,
+            "canvas_application_context_incomplete",
+            format!("Canvas application context is missing {name}"),
+        ),
+        ApplicationSyncEnqueueError::BindingInactive => (
+            StatusCode::CONFLICT,
+            "canvas_binding_inactive",
+            "Canvas platform and program binding must be active before synchronization".into(),
+        ),
+        ApplicationSyncEnqueueError::RepositoryUnavailable => return OperationsError::Internal,
+    };
+    OperationsError::Public(status, json!({"detail":{"code":code,"message":message}}))
 }
 
 async fn jobs(

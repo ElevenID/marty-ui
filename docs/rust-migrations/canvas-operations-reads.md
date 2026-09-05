@@ -4,8 +4,9 @@ The existing Rust issuance crate now contains job list/detail, candidate list,
 and correction-review list handlers. They are exposed only by the candidate
 router; the live issuance router, gateway allowlist and deployed consumers are
 unchanged. All eight operations remain reachable through Python until the
-whole operations/worker cutover is qualified. The four writes are not implemented
-by this read-only increment.
+whole operations/worker cutover is qualified. The follow-up
+[job operations candidate](canvas-job-operations.md) adds enqueue/retry/resolve;
+manual review resolution and full cutover qualification remain outstanding.
 
 The service reuses shared management-key verification, worker job statuses and
 lossless integer parsing. Fixed SQL statements bind every caller value. Public
@@ -40,7 +41,8 @@ job/candidate platform filters retain the published bounded post-query window.
   an additional published differential fixture.
 - Seven configured schema tests pass locally (39.44s), all258 library tests
   pass (6.58s), and20 focused CI/image tests pass (0.74s). Mandatory CI registration
-  includes both new tests; hosted qualification is still required.
+  includes both new tests. Source and queue CI/CodeQL passed; #812 merged as
+  `91db72daa1256d5cdee27c61a1a73e3b5480eaf8`, retaining the reviewed tree.
 
 Timestamp values are checked as RFC3339 and normalized to presence as in the
 original baseline; exact temporal/wire-format equality is not claimed. The
@@ -49,8 +51,8 @@ every job/candidate pagination boundary. Preserve these remaining gates.
 
 ## Next work, not optional cleanup
 
-Implement application enqueue, dead-letter retry/resolve and manual review
-resolution using the existing enqueue and credential lifecycle owners. Reuse
+Finish the job candidate's extended input gates and implement manual review
+resolution using the existing credential lifecycle owner. Reuse
 the shared review locking/audit mechanisms and qualify recovery on the corrected
 schema from credentials #266, merged as
 `51f0a758a076777cb18a30b1db3f89c74ac23e01`. That repair does not change the

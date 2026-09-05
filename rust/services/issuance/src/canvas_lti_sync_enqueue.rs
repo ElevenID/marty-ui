@@ -8,12 +8,42 @@ use tracing::error;
 use crate::{
     canvas_lti_bootstrap::{CanvasLtiBootstrapSyncEnqueuer, CanvasLtiBootstrapSyncError},
     canvas_lti_evidence::{CanvasLtiEvidenceSyncEnqueueError, CanvasLtiEvidenceSyncEnqueuer},
+    canvas_lti_experience::{python_string, python_truthy},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanvasSyncEnqueueIds {
     pub target_id: String,
     pub job_id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApplicationSyncEnqueueError {
+    ApplicationNotFound,
+    BindingNotFound,
+    RolloutDisabled,
+    MissingContext(&'static str),
+    BindingInactive,
+    RepositoryUnavailable,
+}
+
+impl From<ApplicationSyncEnqueueError> for CanvasLtiEvidenceSyncEnqueueError {
+    fn from(error: ApplicationSyncEnqueueError) -> Self {
+        match error {
+            ApplicationSyncEnqueueError::ApplicationNotFound
+            | ApplicationSyncEnqueueError::BindingNotFound => Self::NotFound,
+            ApplicationSyncEnqueueError::RolloutDisabled => Self::Conflict {
+                code: "canvas_rollout_disabled",
+            },
+            ApplicationSyncEnqueueError::MissingContext(_) => Self::Conflict {
+                code: "canvas_application_context_incomplete",
+            },
+            ApplicationSyncEnqueueError::BindingInactive => Self::Conflict {
+                code: "canvas_binding_inactive",
+            },
+            ApplicationSyncEnqueueError::RepositoryUnavailable => Self::RepositoryUnavailable,
+        }
+    }
 }
 
 pub trait CanvasSyncEnqueueIdGenerator: Send + Sync {
@@ -51,6 +81,25 @@ impl std::fmt::Debug for PostgresCanvasLtiBootstrapSyncEnqueuer {
 }
 
 impl PostgresCanvasLtiBootstrapSyncEnqueuer {
+    pub(crate) fn rollout_enabled(&self, organization_id: &str) -> bool {
+        self.enabled && self.pilot_organizations.contains(organization_id)
+    }
+
+    pub(crate) async fn enqueue_operation(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<CanvasSyncEnqueueIds, ApplicationSyncEnqueueError> {
+        enqueue_application_sync(
+            &self.pool,
+            organization_id,
+            application_id,
+            &self.ids.generate(),
+            Some(self.rollout_enabled(organization_id)),
+        )
+        .await
+    }
+
     #[must_use]
     pub fn new(
         pool: PgPool,
@@ -96,7 +145,7 @@ async fn enqueue_with_rollout(
     organization_id: &str,
     application_id: &str,
 ) -> Result<(), CanvasLtiEvidenceSyncEnqueueError> {
-    if !enqueuer.enabled || !enqueuer.pilot_organizations.contains(organization_id) {
+    if !enqueuer.rollout_enabled(organization_id) {
         return Err(CanvasLtiEvidenceSyncEnqueueError::Conflict {
             code: "canvas_rollout_disabled",
         });
@@ -106,8 +155,11 @@ async fn enqueue_with_rollout(
         organization_id,
         application_id,
         &enqueuer.ids.generate(),
+        None,
     )
     .await
+    .map(|_| ())
+    .map_err(Into::into)
 }
 
 async fn enqueue_application_sync(
@@ -115,7 +167,8 @@ async fn enqueue_application_sync(
     organization_id: &str,
     application_id: &str,
     ids: &CanvasSyncEnqueueIds,
-) -> Result<(), CanvasLtiEvidenceSyncEnqueueError> {
+    rollout_after_lookup: Option<bool>,
+) -> Result<CanvasSyncEnqueueIds, ApplicationSyncEnqueueError> {
     let mut database = pool.begin().await.map_err(sync_error)?;
     let application = sqlx::query(
         "SELECT integration_context, credential_id
@@ -127,15 +180,18 @@ async fn enqueue_application_sync(
     .fetch_optional(&mut *database)
     .await
     .map_err(sync_error)?
-    .ok_or(CanvasLtiEvidenceSyncEnqueueError::NotFound)?;
+    .ok_or(ApplicationSyncEnqueueError::ApplicationNotFound)?;
+    if rollout_after_lookup == Some(false) {
+        return Err(ApplicationSyncEnqueueError::RolloutDisabled);
+    }
     let integration: Value = application
         .try_get("integration_context")
         .map_err(sync_error)?;
-    let canvas = integration.get("canvas").and_then(Value::as_object).ok_or(
-        CanvasLtiEvidenceSyncEnqueueError::Conflict {
-            code: "canvas_application_context_incomplete",
-        },
-    )?;
+    let empty = Map::new();
+    let canvas = integration
+        .get("canvas")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
     let platform_id = required_text(canvas, "canvas_platform_id")?;
     let binding_id = required_text(canvas, "canvas_program_binding_id")?;
     let credential_id: Option<String> = application.try_get("credential_id").map_err(sync_error)?;
@@ -161,17 +217,17 @@ async fn enqueue_application_sync(
     .await
     .map_err(sync_error)?;
     let (Some(platform), Some(binding)) = (platform, binding) else {
-        return Err(CanvasLtiEvidenceSyncEnqueueError::NotFound);
+        return Err(ApplicationSyncEnqueueError::BindingNotFound);
     };
     let platform_enabled: bool = platform.try_get("enabled").map_err(sync_error)?;
     let binding_enabled: bool = binding.try_get("enabled").map_err(sync_error)?;
     if !platform_enabled || !binding_enabled {
-        return Err(CanvasLtiEvidenceSyncEnqueueError::Conflict {
-            code: "canvas_binding_inactive",
-        });
+        return Err(ApplicationSyncEnqueueError::BindingInactive);
     }
     let config_version: i32 = binding.try_get("config_version").map_err(sync_error)?;
-    let issued = credential_id.is_some();
+    let issued = credential_id
+        .as_deref()
+        .is_some_and(|value| !value.is_empty());
     let target_type = if issued {
         "issued_drift"
     } else {
@@ -197,9 +253,9 @@ async fn enqueue_application_sync(
             enabled = true,
             schedule_seconds = EXCLUDED.schedule_seconds,
             config_version = EXCLUDED.config_version,
-            metadata = COALESCE(
-                           to_jsonb(issuance_service.canvas_evidence_sync_targets.metadata),
-                           '{}'::jsonb)
+            metadata = (CASE WHEN json_typeof(issuance_service.canvas_evidence_sync_targets.metadata) = 'object'
+                           THEN to_jsonb(issuance_service.canvas_evidence_sync_targets.metadata)
+                           ELSE '{}'::jsonb END)
                        || '{\"last_requested_from\":\"application_sync_api\"}'::jsonb,
             updated_at = clock_timestamp()
          RETURNING id",
@@ -231,7 +287,9 @@ async fn enqueue_application_sync(
     .fetch_optional(&mut *database)
     .await
     .map_err(sync_error)?;
-    if inserted_job.is_none() {
+    let job_id = if let Some(job_id) = inserted_job {
+        job_id
+    } else {
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT id FROM issuance_service.canvas_evidence_sync_jobs
              WHERE target_id = $1 AND organization_id = $2
@@ -243,10 +301,8 @@ async fn enqueue_application_sync(
         .fetch_optional(&mut *database)
         .await
         .map_err(sync_error)?;
-        if existing.is_none() {
-            return Err(CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable);
-        }
-    }
+        existing.ok_or(ApplicationSyncEnqueueError::RepositoryUnavailable)?
+    };
     let touched = sqlx::query(
         "UPDATE issuance_service.canvas_evidence_sync_targets
          SET last_enqueued_at = clock_timestamp(), updated_at = clock_timestamp()
@@ -258,27 +314,56 @@ async fn enqueue_application_sync(
     .await
     .map_err(sync_error)?;
     if touched.rows_affected() != 1 {
-        return Err(CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable);
+        return Err(ApplicationSyncEnqueueError::RepositoryUnavailable);
     }
-    database.commit().await.map_err(sync_error)
+    database.commit().await.map_err(sync_error)?;
+    Ok(CanvasSyncEnqueueIds { target_id, job_id })
 }
 
 fn required_text(
     value: &Map<String, Value>,
-    name: &str,
-) -> Result<String, CanvasLtiEvidenceSyncEnqueueError> {
+    name: &'static str,
+) -> Result<String, ApplicationSyncEnqueueError> {
     value
         .get(name)
-        .and_then(Value::as_str)
-        .map(str::trim)
+        .filter(|value| python_truthy(value))
+        .and_then(python_string)
+        .map(|value| crate::python_value::strip(&value).to_owned())
         .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or(CanvasLtiEvidenceSyncEnqueueError::Conflict {
-            code: "canvas_application_context_incomplete",
-        })
+        .ok_or(ApplicationSyncEnqueueError::MissingContext(name))
 }
 
-fn sync_error(cause: sqlx::Error) -> CanvasLtiEvidenceSyncEnqueueError {
+fn sync_error(cause: sqlx::Error) -> ApplicationSyncEnqueueError {
     error!(%cause, "Canvas bootstrap sync enqueue query failed");
-    CanvasLtiEvidenceSyncEnqueueError::RepositoryUnavailable
+    ApplicationSyncEnqueueError::RepositoryUnavailable
+}
+
+#[cfg(test)]
+mod captured_identifier_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn enqueue_identifiers_match_published_python() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-enqueue-input-scenarios.json"
+        ))
+        .unwrap();
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-enqueue-input-oracle.json"
+        ))
+        .unwrap();
+        let inputs = scenarios["identifier_values"].as_array().unwrap();
+        let expected = frozen["identifiers"].as_array().unwrap();
+        assert_eq!(inputs.len(), expected.len());
+        for (input, expected) in inputs.iter().zip(expected) {
+            let context = Map::from_iter([("field".into(), input.clone())]);
+            let actual = match required_text(&context, "field") {
+                Ok(value) => json!({"value":value}),
+                Err(ApplicationSyncEnqueueError::MissingContext(name)) => json!({"missing":name}),
+                Err(other) => panic!("unexpected identifier error {other:?}"),
+            };
+            assert_eq!(&actual, expected, "published identifier input: {input}");
+        }
+    }
 }
