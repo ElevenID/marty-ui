@@ -6,6 +6,33 @@ use tracing::instrument::WithSubscriber;
 mod canvas_operations_read_replay;
 
 #[tokio::test]
+async fn review_inputs_match_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let first = canvas_published_database::PublishedDatabase::start_with_review_inputs()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-review-input-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(first.oracle.as_ref().unwrap(), &expected);
+    first.close().unwrap();
+    let second = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&second.url)
+        .await
+        .unwrap();
+    canvas_review_resolution_replay::replay_inputs(&pool, &expected).await;
+    pool.close().await;
+    second.close().unwrap();
+}
+
+#[tokio::test]
 async fn operations_resolution_matches_corrected_published_schema() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

@@ -719,6 +719,7 @@ jobs:
           "${executables[0]}" --list | grep -Fx 'enqueue_inputs_match_frozen_published_python: test'
           "${executables[0]}" --list | grep -Fx 'operations_resolution_matches_corrected_published_schema: test'
           "${executables[0]}" --list | grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'
+          "${executables[0]}" --list | grep -Fx 'review_inputs_match_published_python: test'
           "${executables[0]}" --nocapture --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()

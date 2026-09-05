@@ -62,8 +62,28 @@ fn response(value: (u16, String, Value), aliases: &mut BTreeMap<String, String>)
 }
 
 pub async fn replay(pool: &PgPool, expected: &Value) {
-    seed(pool).await;
     let [shared, scenarios, _] = fixtures();
+    replay_cases(pool, shared, scenarios, expected).await;
+}
+
+pub async fn replay_inputs(pool: &PgPool, expected: &Value) {
+    static SCENARIOS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let scenarios = SCENARIOS.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-input-scenarios.json"
+        ))
+        .unwrap()
+    });
+    replay_cases(pool, &fixtures()[0], scenarios, expected).await;
+}
+
+async fn replay_cases(
+    pool: &PgPool,
+    shared: &'static Value,
+    scenarios: &'static Value,
+    expected: &Value,
+) {
+    seed(pool).await;
     let preserved_sql = shared["preserved_rows_sql"].as_str().unwrap();
     let preserved: Value = sqlx::query_scalar(preserved_sql)
         .fetch_one(pool)
@@ -78,7 +98,6 @@ pub async fn replay(pool: &PgPool, expected: &Value) {
     });
     let mut aliases = BTreeMap::new();
     let cases = scenarios["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 46);
     assert_eq!(
         expected["observations"].as_array().unwrap().len(),
         cases.len()

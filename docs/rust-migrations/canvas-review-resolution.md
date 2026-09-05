@@ -76,11 +76,26 @@ The aggregate still needs provenance-bound adoption of the official fix.
 
 ## Remaining gates before any cutover
 
-The46 cases are not exhaustive request or concurrency proof. Extend published
-manual-request capture for malformed/empty JSON bytes, content types, mixed
-validation/auth precedence, all body shapes and actor whitespace/priority cases.
-The current parser's generic malformed-JSON envelope and content-type behavior
-are not yet established as parity and must be corrected where capture differs.
+An additional45-case manual-request corpus was captured independently twice from
+the pinned published service on the corrected official schema before changing the
+candidate parser. The native negative control reproduced the empty-body mismatch.
+All45 now replay through native HTTP with complete response and selected database
+state comparison, including no lifecycle calls for these dismissal/input cases.
+It covers empty/null/scalar/array bodies, action/note errors, malformed syntax,
+JSON/vendor/absent/non-JSON content types, authentication precedence, tenant scope,
+actor header priority/whitespace, and the2000/2001-character note boundary.
+The original46-case goldens remain unchanged. The shared published capture/replay
+owners are reused rather than introducing another lifecycle or audit simulation.
+
+JSON syntax decoding precedes management authentication; model validation follows
+it. Non-JSON input is treated as text. A private diagnostic renderer translates
+serde's syntax errors to published character offsets/messages; serde remains the
+parser, with no runtime Python. Nine frozen malformed-request observations also
+run as a library test. This corpus does not establish arbitrary Unicode/encoding,
+every malformed numeric/string form, nonstandard JSON constants, or all media-type
+parameter behavior; extend the reference where broader gates expose differences.
+
+The46+45 cases are not exhaustive request or concurrency proof.
 Verify transport size policy without silently narrowing the Python interface.
 Qualify lifecycle dependency/publication failures, cancellation between claim
 and finalization, additional worker/recovery races and actual remote effects.

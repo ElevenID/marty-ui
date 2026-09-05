@@ -42,8 +42,16 @@ is exercised for suspend/revoke with controlled publication. The exact official
 credentials#266 migration is mounted read-only and hash-verified for these tests;
 this is source-overlay qualification, not a newly released component. All12
 configured schema gates,260 library tests and20 focused CI/image tests pass locally.
-Extended manual HTTP parsing, lifecycle failure/cancellation/provider coverage,
+An additional45-case published manual-request capture agrees across two runs;
+native replay now matches syntax/body/content-type/auth-order and actor-header
+behavior for that corpus, after a reproduced empty-body negative control.
+Broader encoding/transport cases, lifecycle failure/cancellation/provider coverage,
 full hosted qualification and worker/all-consumer cutover remain open.
+
+Job operations #813 merged as `04e2ea2c7ca6107c4c9dc12809272c1190393b1c`
+after source and protected-queue CI/CodeQL passed. Its merged tree
+`e8469359abe331d66e92525e280821ed8451f50b` matches the verified union of the
+reviewed job branch and #807's CI work. Manual review continues in draft #814.
 
 The [native operations read candidate](rust-migrations/canvas-operations-reads.md)
 implements four read APIs in the existing issuance crate, without live routing.

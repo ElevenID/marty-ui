@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod python_json_diagnostic;
 mod python_value;
 
 pub mod canvas_award_candidate;
@@ -44,10 +45,10 @@ pub mod canvas_oauth;
 pub mod canvas_oauth_http;
 pub mod canvas_oauth_postgres;
 pub mod canvas_operations;
-pub mod canvas_review_resolution;
 pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
+pub mod canvas_review_resolution;
 pub mod canvas_sync_lease;
 pub mod canvas_sync_processor;
 pub mod canvas_sync_processor_postgres;

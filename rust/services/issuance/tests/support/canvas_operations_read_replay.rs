@@ -56,7 +56,12 @@ pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, S
         .map(str::to_owned)
         .unwrap_or_else(|| payload.to_string());
     if case["method"] == "POST" {
-        request = request.header("content-type", "application/json");
+        let content_type = case
+            .get("content_type")
+            .map_or(Some("application/json"), Value::as_str);
+        if let Some(value) = content_type {
+            request = request.header("content-type", value);
+        }
     }
     for (key, value) in headers {
         request = request.header(key, value);

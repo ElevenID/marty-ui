@@ -20,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
-async def observe():
+async def observe(scenario_name="canvas-operations-scenarios.json"):
     os.environ["ISSUANCE_API_KEY"] = "synthetic-operations-key"
     os.environ["CANVAS_PORTABLE_INTEGRATION_ENABLED"] = "true"
     os.environ["CANVAS_PILOT_ORGANIZATION_IDS"] = "org-review"
@@ -30,7 +30,7 @@ async def observe():
     from issuance.infrastructure.api import canvas_operations_routes as operations
 
     root = Path("/verification/contracts")
-    scenarios = json.loads((root / "canvas-operations-scenarios.json").read_text())
+    scenarios = json.loads((root / scenario_name).read_text())
     shared = json.loads((root / scenarios["shared_seed"]).read_text())
     engine = create_async_engine(
         "postgresql+asyncpg://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
@@ -169,7 +169,7 @@ async def observe():
                     headers.update(stage.get("headers", {}))
                     for header in stage.get("omit_headers", []):
                         headers.pop(header)
-                    body = dict(stage.get("body", {}))
+                    body = stage.get("body", {})
                     if "note_length" in stage:
                         body["note"] = "n" * stage["note_length"]
                     arguments = {
@@ -178,7 +178,20 @@ async def observe():
                         "headers": headers,
                     }
                     if stage["method"] == "POST":
-                        arguments["json"] = body
+                        if "raw_body" in stage:
+                            arguments["content"] = stage["raw_body"]
+                            if (
+                                stage.get("content_type", "application/json")
+                                is not None
+                            ):
+                                headers["Content-Type"] = stage.get(
+                                    "content_type", "application/json"
+                                )
+                        else:
+                            # Explicit JSON null must remain a body, not httpx's
+                            # sentinel for no json argument.
+                            arguments["content"] = json.dumps(body)
+                            headers["Content-Type"] = "application/json"
                     before_calls = len(calls)
                     competing = None
                     if stage.get("concurrent"):
@@ -196,7 +209,9 @@ async def observe():
                             response = await asyncio.wait_for(first, timeout=5)
                     else:
                         response = await client.request(**arguments)
-                    assert response.status_code == stage["expected_status"], (
+                    assert response.status_code == stage.get(
+                        "expected_status", response.status_code
+                    ), (
                         stage["name"],
                         response.status_code,
                         response.text[:500],
@@ -221,7 +236,9 @@ async def observe():
                         record["competing_response"] = response_projection(competing)
                         assert len(record["lifecycle_calls"]) == 1
                     if stage.get("prepare_review"):
-                        assert len(record["lifecycle_calls"]) == 1
+                        assert len(record["lifecycle_calls"]) == stage.get(
+                            "expected_lifecycle_calls", 1
+                        )
                     public_body = json.dumps(record["body"])
                     assert "synthetic-private" not in public_body
                     assert "subject-private" not in public_body
@@ -258,5 +275,5 @@ async def observe():
         await engine.dispose()
 
 
-def run():
-    return asyncio.run(asyncio.wait_for(observe(), timeout=90))
+def run(scenario_name="canvas-operations-scenarios.json"):
+    return asyncio.run(asyncio.wait_for(observe(scenario_name), timeout=90))

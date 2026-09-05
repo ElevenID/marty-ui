@@ -86,6 +86,16 @@ def prepare():
         }
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
+        if os.environ.get("MARTY_CANVAS_REVIEW_INPUT_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["review_inputs"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_operations_oracle.py"
+                )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
             ("MARTY_CANVAS_ENQUEUE_INPUT_ORACLE", "enqueue_input", "enqueue_inputs"),
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),

@@ -126,6 +126,20 @@ impl PublishedDatabase {
         Self::start_probe_with_migration(None, None, true).await
     }
 
+    pub async fn start_with_review_inputs() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "operations",
+                "review-input",
+                "review_inputs",
+                "MARTY_CANVAS_REVIEW_INPUT_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
     pub async fn start_with_operations_recovery() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((

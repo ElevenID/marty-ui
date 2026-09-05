@@ -371,14 +371,37 @@ async fn resolve_review(
     request: axum::extract::Request,
 ) -> Result<Json<Value>, OperationsError> {
     let headers = request.headers().clone();
-    service.authorize(&headers)?;
     // The transport owns request size limits; this candidate does not add a
     // smaller application-body limit than the released Python endpoint.
     let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
         .await
         .map_err(|_| OperationsError::Internal)?;
-    let payload: Value = serde_json::from_slice(&bytes).map_err(|_| OperationsError::Public(
-        StatusCode::UNPROCESSABLE_ENTITY, json!({"detail":[validation_issue("json_invalid",json!(["body"]),"JSON decode error",Value::Null,None)]})))?;
+    // Published FastAPI decodes JSON before dependencies, but validates the
+    // request model after management authentication. Preserve that ordering.
+    let json_content = header(&headers, "content-type").is_none_or(|value| {
+        let media = value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        media
+            .strip_prefix("application/")
+            .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
+    });
+    let payload = if bytes.is_empty() {
+        Value::Null
+    } else if json_content {
+        serde_json::from_slice(&bytes).map_err(|error| {
+            OperationsError::Public(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"detail":[crate::python_json_diagnostic::diagnostic(&bytes, &error)]}),
+            )
+        })?
+    } else {
+        json!(String::from_utf8_lossy(&bytes))
+    };
+    service.authorize(&headers)?;
     let (action, notes) = review_payload(&payload)?;
     let organization = organization(&headers)?;
     let actor = ["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]
@@ -398,6 +421,12 @@ fn review_payload(
     value: &Value,
 ) -> Result<(crate::canvas_review_resolution::ReviewAction, Option<&str>), OperationsError> {
     use crate::canvas_review_resolution::ReviewAction;
+    if value.is_null() {
+        return Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":[validation_issue("missing",json!(["body"]),"Field required",Value::Null,None)]}),
+        ));
+    }
     let Some(object) = value.as_object() else {
         return Err(OperationsError::Public(
             StatusCode::UNPROCESSABLE_ENTITY,
