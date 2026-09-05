@@ -4769,8 +4769,12 @@ dependencies = [
 name = "marty-release-evidence"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "flate2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
