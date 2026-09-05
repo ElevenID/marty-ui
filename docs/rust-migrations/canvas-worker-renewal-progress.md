@@ -49,6 +49,38 @@ business-effect generation fences and repository CAS checks remain unchanged.
 
 ## Evidence boundary
 
+### Renewal write-failure boundaries
+
+The mandatory native PostgreSQL worker test now adds three cases against the
+unchanged production worker and repositories: lease-write, target-heartbeat,
+and process-heartbeat failure. Each starts both existing controlled processors
+before installing test-only database triggers, then waits for the real minimum
+ten-second renewal interval. No processor, renewal method, cycle, or clock is
+replaced. One shared trigger function raises the selected synthetic database
+error; literal SQL and a bound stage value retain SQL safety checks.
+
+Sequence counters survive the failed statement's rollback and measure attempts,
+not durable success. With two active jobs, lease/target/process write attempts
+must respectively be `2/0/0`, `2/2/0`, and `2/2/2` for those failures. Separate
+row reads prove unchanged leases on lease-write failure, already committed
+renewed leases on either heartbeat failure, and already committed target
+heartbeats only when the subsequent process heartbeat fails. Neither job may
+be marked complete, retried, or dead-lettered; both processor scopes are released.
+The cycle's later idle heartbeat is deliberately excluded from renewal counts.
+
+All three cases passed without a runtime change. A temporary negative control
+moved the process heartbeat before the target heartbeat: the target-failure case
+then failed because two forbidden process-heartbeat attempts occurred. That
+mutation was fully restored; it is not part of the patch.
+
+This extends the frozen Python maintainer's partial-write observations with real
+PostgreSQL errors. It does **not** establish identical whole-job behavior: Python
+awaits its maintainer in the processor's `finally`, while the native helper stops
+the owned processor when renewal fails. Full processor/provider outcomes still
+need differential review; these tests do not authorize weakening native fences
+or deleting the Python consumer. Triggers, counters and fault configuration exist
+only in the existing guarded `*_test` schema and are removed after each case.
+
 The target heartbeat writer cast PostgreSQL's timestamp to display-format text
 before JSON serialization. Its actual stored value failed RFC3339 parsing
 (`ParseError(TooShort)`), unlike the frozen Python repository's
