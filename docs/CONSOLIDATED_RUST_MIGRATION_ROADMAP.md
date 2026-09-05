@@ -45,7 +45,11 @@ the internal `evidence_recovered` claim is rejected by the manual-action-only
 constraint, leaving recovery pending. The frozen outcome is a historical
 negative control, not desired Rust behavior. An official forward migration,
 model alignment and real-database recovery/audit/claim-fencing tests are required
-before operations cutover. No reachable Python feature has been removed.
+before operations cutover. Credentials #266 implements that forward-only fix;
+its real PostgreSQL recovery gate passes locally and on the initial hosted run.
+Both published/current consumer replays pass locally with their respective
+schema heads and unchanged outcomes. Complete fresh CI and protected landing
+remain pending. No reachable Python feature has been removed.
 
 ### Current heartbeat readiness qualification
 
@@ -57,9 +61,8 @@ competing workers, strict boolean metadata and a real database failure.
 It exposed and corrects a zero-age minimum difference; the deployed 120-second
 setting is unchanged. Four native writer/readiness checks additionally cover
 all heartbeat phases and original-start preservation. The configured readiness
-gate and full hosted CI/CodeQL pass. #810 is ready after tree-identical
-integration onto actual #809 merge; fresh integration checks and protected
-landing remain required.
+gate and full hosted CI/CodeQL pass. #810 merged as
+`38f29b14f43b83bf5a8122e2203de0eb9f43db9a`, retaining its reviewed tree.
 This is not complete binding activation or permission to route/delete the worker.
 
 ### Current Canvas initialized-owner adoption

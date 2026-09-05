@@ -53,6 +53,9 @@ official forward migration and corresponding model/repository regression
 coverage; do not rewrite the published migration or loosen tenant/claim fences.
 Verify actual corrected PostgreSQL recovery, rollback and competing-claim
 behavior before accepting a deliberate difference from this baseline.
+Credentials PR #266 provides that forward-only migration and real-database
+regression coverage; protected landing and aggregate qualification are still
+required. Keep this historical golden unchanged when adopting the repair.
 
 ## Next implementation and acceptance gates
 
