@@ -108,8 +108,12 @@ parameter behavior; extend the reference where broader gates expose differences.
 
 The46+45 cases are not exhaustive request or concurrency proof.
 Verify transport size policy without silently narrowing the Python interface.
-Qualify lifecycle dependency/publication failures, cancellation between claim
-and finalization, additional worker/recovery races and actual remote effects.
+The additional [17-case actual lifecycle replay](canvas-lifecycle-delivery.md)
+now verifies publication/mirror failures, two cancellation boundaries and
+concurrent manual resolution. It exposed the pending-only Rust Canvas delivery
+gap; the replacement candidate matches the controlled-port corpus. Actual remote
+provider wiring and all-consumer adoption remain blocked on further qualification.
+Qualify additional worker/recovery races, persistence failures and remote effects.
 Exact timestamp/wire equality and broader issuance/worker/provider gates remain.
 
 Then migrate all intended consumers, delete superseded Python after gates,

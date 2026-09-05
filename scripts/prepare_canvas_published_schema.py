@@ -86,6 +86,16 @@ def prepare():
         }
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
+        if os.environ.get("MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["review_lifecycle"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_operations_oracle.py"
+                )["run"]("canvas-review-lifecycle-scenarios.json")
         if os.environ.get("MARTY_CANVAS_REVIEW_INPUT_ORACLE") == "1":
             import runpy
 

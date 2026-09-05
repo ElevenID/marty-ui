@@ -6,16 +6,18 @@ This is HTTP/state-machine evidence, not timestamp or external lifecycle parity.
 """
 
 import asyncio
+from contextlib import ExitStack
 from datetime import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -28,10 +30,12 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
     from issuance.domain.ports import IIssuanceRepository
     from issuance.infrastructure.adapters import postgres_repository
     from issuance.infrastructure.api import canvas_operations_routes as operations
+    from issuance.infrastructure.api import routes as lifecycle_routes
 
     root = Path("/verification/contracts")
     scenarios = json.loads((root / scenario_name).read_text())
     shared = json.loads((root / scenarios["shared_seed"]).read_text())
+    preserved_sql = scenarios.get("preserved_rows_sql", shared["preserved_rows_sql"])
     engine = create_async_engine(
         "postgresql+asyncpg://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
         hide_parameters=True,
@@ -127,6 +131,62 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
     async def revoke(**arguments):
         await lifecycle("revoke", **arguments)
 
+    async def port_observation(port, credential, action, reason, record=None):
+        async with engine.connect() as connection:
+            claim = (
+                await connection.execute(
+                    text(
+                        "SELECT resolution_claim_token IS NOT NULL AND status='open' "
+                        "AND resolution_claim_action=:action FROM issuance_service.evidence_policy_reviews"
+                    ),
+                    {"action": action},
+                )
+            ).scalar_one()
+        assert claim is True
+        calls.append(
+            {
+                "port": port,
+                "action": action,
+                "credential_id": credential.id,
+                "credential_status": credential.status.value,
+                "reason": reason,
+                "delivery_id": record.id if record else None,
+                "claim_active": claim,
+            }
+        )
+        if stage.get("cancel_at") == port or (
+            stage.get("concurrent") and port == "publication"
+        ):
+            handler_entered.set()
+            await asyncio.wait_for(handler_release.wait(), timeout=5)
+
+    async def publication(credential_id, action, reason=None, credential=None):
+        assert credential_id == credential.id
+        await port_observation("publication", credential, action, reason)
+        if stage.get("publication_failure"):
+            raise HTTPException(
+                status_code=503, detail="Revocation service unavailable"
+            )
+        return {"success": True}
+
+    async def mirror(
+        *,
+        credential,
+        platform,
+        delivery_record,
+        lifecycle_action,
+        reason,
+        secret_resolver,
+    ):
+        assert platform.id == "platform-review"
+        assert callable(secret_resolver)
+        await port_observation(
+            "mirror", credential, lifecycle_action, reason, delivery_record
+        )
+        if stage.get("mirror_failure"):
+            raise RuntimeError("Synthetic Canvas status provider unavailable")
+        return SimpleNamespace(metadata={"provider_status": credential.status.value})
+
     def response_projection(response):
         try:
             body = response.json()
@@ -143,13 +203,28 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
         await sql(shared["seed"] + scenarios["seed"])
         await prepare_review("review-dismiss")
         async with engine.connect() as connection:
-            preserved = (
-                await connection.execute(text(shared["preserved_rows_sql"]))
-            ).scalar_one()
-        with (
-            patch.object(operations, "suspend_credential", suspend),
-            patch.object(operations, "revoke_credential", revoke),
-        ):
+            preserved = (await connection.execute(text(preserved_sql))).scalar_one()
+        with ExitStack() as patches:
+            if scenarios.get("real_lifecycle"):
+                # Actual lifecycle routes and repository persist credentials and
+                # delivery records. Only external publication/status ports are controlled.
+                patches.enter_context(
+                    patch.object(
+                        lifecycle_routes, "_delegate_to_revocation_profile", publication
+                    )
+                )
+                patches.enter_context(
+                    patch.object(
+                        lifecycle_routes, "sync_canvas_credential_status", mirror
+                    )
+                )
+            else:
+                patches.enter_context(
+                    patch.object(operations, "suspend_credential", suspend)
+                )
+                patches.enter_context(
+                    patch.object(operations, "revoke_credential", revoke)
+                )
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
                 base_url="http://synthetic-operations.invalid",
@@ -194,7 +269,26 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
                             headers["Content-Type"] = "application/json"
                     before_calls = len(calls)
                     competing = None
-                    if stage.get("concurrent"):
+                    if stage.get("cancel_at"):
+                        handler_entered.clear()
+                        handler_release.clear()
+                        first = asyncio.create_task(client.request(**arguments))
+                        try:
+                            await asyncio.wait_for(handler_entered.wait(), timeout=5)
+                            competing = await client.request(**arguments)
+                            assert competing.status_code == 409
+                        finally:
+                            first.cancel()
+                            try:
+                                await first
+                            except asyncio.CancelledError:
+                                pass
+                            else:
+                                raise AssertionError(
+                                    "Request must acknowledge cancellation"
+                                )
+                        response = None
+                    elif stage.get("concurrent"):
                         handler_entered.clear()
                         handler_release.clear()
                         first = asyncio.create_task(client.request(**arguments))
@@ -209,7 +303,7 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
                             response = await asyncio.wait_for(first, timeout=5)
                     else:
                         response = await client.request(**arguments)
-                    assert response.status_code == stage.get(
+                    assert response is None or response.status_code == stage.get(
                         "expected_status", response.status_code
                     ), (
                         stage["name"],
@@ -221,25 +315,32 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
                             await connection.execute(text(scenarios["snapshot_sql"]))
                         ).scalar_one()
                         current = (
-                            await connection.execute(text(shared["preserved_rows_sql"]))
+                            await connection.execute(text(preserved_sql))
                         ).scalar_one()
                     assert current == preserved, (
                         "HTTP operations changed synthetic credential/transaction rows"
                     )
                     record = {
                         "name": stage["name"],
-                        **response_projection(response),
+                        **(
+                            response_projection(response)
+                            if response is not None
+                            else {"cancelled": True}
+                        ),
                         "snapshot": normalize(snapshot),
                         "lifecycle_calls": calls[before_calls:],
                     }
                     if competing is not None:
                         record["competing_response"] = response_projection(competing)
-                        assert len(record["lifecycle_calls"]) == 1
-                    if stage.get("prepare_review"):
+                        if not scenarios.get("real_lifecycle"):
+                            assert len(record["lifecycle_calls"]) == 1
+                    if stage.get("prepare_review") and not scenarios.get(
+                        "real_lifecycle"
+                    ):
                         assert len(record["lifecycle_calls"]) == stage.get(
                             "expected_lifecycle_calls", 1
                         )
-                    public_body = json.dumps(record["body"])
+                    public_body = json.dumps(record.get("body"))
                     assert "synthetic-private" not in public_body
                     assert "subject-private" not in public_body
                     observations.append(record)
@@ -268,7 +369,22 @@ async def observe(scenario_name="canvas-operations-scenarios.json"):
                 Path(canvas_sync_jobs.__file__).read_text(encoding="utf-8").encode()
             ).hexdigest(),
             "normalization": "generated UUID identity aliases; validated ISO timestamp presence, not exact wall-clock values",
-            "boundary": "actual ASGI/auth/service/PostgreSQL; controlled external suspend/revoke ports",
+            "boundary": (
+                "actual ASGI/auth/review/lifecycle/PostgreSQL; controlled external status publication and Canvas mirror ports"
+                if scenarios.get("real_lifecycle")
+                else "actual ASGI/auth/service/PostgreSQL; controlled external suspend/revoke ports"
+            ),
+            **(
+                {
+                    "lifecycle_routes_sha256": hashlib.sha256(
+                        Path(lifecycle_routes.__file__)
+                        .read_text(encoding="utf-8")
+                        .encode()
+                    ).hexdigest()
+                }
+                if scenarios.get("real_lifecycle")
+                else {}
+            ),
             "observations": observations,
         }
     finally:

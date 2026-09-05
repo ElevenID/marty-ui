@@ -14,13 +14,13 @@ use marty_issuance_service::{
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
     canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
     canvas_sync_worker_lifecycle::{
-        finish_on_shutdown, spawn_with_postgres_cleanup, WorkerShutdown,
+        finish_on_shutdown, spawn_with_postgres_cleanup, worker_pool_options, WorkerShutdown,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     integration_secret::IntegrationSecretCipher,
 };
 use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::PgPool;
 use tokio::sync::watch;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -44,7 +44,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     });
     let master_key = integration_master_key()?;
     let cipher = IntegrationSecretCipher::from_base64(&master_key)?;
-    let pool = PgPoolOptions::new()
+    let pool = worker_pool_options()
         .min_connections(1)
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))

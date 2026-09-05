@@ -146,6 +146,10 @@ pub async fn assert_process_signals(pool: &PgPool, database_url: &str) {
         return;
     }
     for (index, case) in cases.iter().enumerate() {
+        eprintln!(
+            "actual worker signal case: phase={} signal={}",
+            case["phase"], case["signal"]
+        );
         sqlx::query("TRUNCATE issuance_service.canvas_evidence_sync_jobs, issuance_service.canvas_evidence_sync_targets, issuance_service.canvas_worker_heartbeats")
             .execute(pool).await.unwrap();
         let blocked = case["phase"] == "database_wait";

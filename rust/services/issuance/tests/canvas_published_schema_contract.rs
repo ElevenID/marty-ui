@@ -6,6 +6,134 @@ use tracing::instrument::WithSubscriber;
 mod canvas_operations_read_replay;
 
 #[tokio::test]
+async fn cancelled_pool_release_does_not_wait_for_blocked_query() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    for bounded in [false, true] {
+        let release_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let options = if bounded {
+            marty_issuance_service::canvas_sync_worker_lifecycle::worker_pool_options()
+        } else {
+            let entered = release_entered.clone();
+            PgPoolOptions::new().after_release(move |_, _| {
+                entered.notify_one();
+                Box::pin(async { Ok(true) })
+            })
+        };
+        let pool = options
+            .max_connections(1)
+            .connect(&owned.url)
+            .await
+            .unwrap();
+        let mut lock = admin.begin().await.unwrap();
+        sqlx::query(
+            "LOCK TABLE issuance_service.canvas_worker_heartbeats IN ACCESS EXCLUSIVE MODE",
+        )
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+        let task_pool = pool.clone();
+        let task = tokio::spawn(async move {
+            sqlx::query("SELECT * FROM issuance_service.canvas_worker_heartbeats")
+                .execute(&task_pool)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5),async {
+            loop {
+                let blocked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query='SELECT * FROM issuance_service.canvas_worker_heartbeats')").fetch_one(&admin).await.unwrap();
+                if blocked { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("owned query must reach actual lock wait");
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        // Observe the actual release boundary; do not assume a scheduling sleep
+        // makes the cancelled connection enter driver validation.
+        let settled = if bounded {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while pool.size() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_ok()
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                release_entered.notified(),
+            )
+            .await
+            .is_ok()
+        };
+        let deadline = if bounded {
+            std::time::Duration::from_secs(3)
+        } else {
+            std::time::Duration::from_millis(200)
+        };
+        let closed = tokio::time::timeout(deadline, pool.close()).await.is_ok();
+        // Always release only this test's lock and settle its pool before asserting.
+        lock.rollback().await.unwrap();
+        pool.close().await;
+        assert!(
+            settled,
+            "connection release boundary must be observed while the lock is held"
+        );
+        assert_eq!(
+            closed, bounded,
+            "default pool negative control versus bounded worker release"
+        );
+    }
+    admin.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn review_lifecycle_matches_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let first = canvas_published_database::PublishedDatabase::start_with_review_lifecycle()
+        .await
+        .unwrap();
+    let oracle: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-review-lifecycle-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(first.oracle.as_ref().unwrap(), &oracle);
+    first.close().unwrap();
+    for use_candidate in [false, true] {
+        let native = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&native.url)
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            canvas_review_lifecycle_replay::replay(&pool, &oracle, use_candidate),
+        )
+        .await
+        .expect("lifecycle replay deadline");
+        pool.close().await;
+        native.close().unwrap();
+    }
+}
+
+#[path = "support/canvas_review_lifecycle_replay.rs"]
+mod canvas_review_lifecycle_replay;
+
+#[tokio::test]
 async fn review_inputs_match_published_python() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

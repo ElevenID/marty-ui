@@ -1,9 +1,9 @@
 //! Initialized Canvas worker ownership, including awaited PostgreSQL disposal.
 
-use std::{convert::Infallible, future::Future};
+use std::{convert::Infallible, future::Future, time::Duration};
 
 use mmf_runtime::managed_task::{ManagedTask, TaskCompletion, TaskJoinError};
-use sqlx::PgPool;
+use sqlx::{postgres::PgPoolOptions, Connection, PgPool};
 use tokio::sync::watch;
 
 /// Explicit graceful stop and task cancellation are separate control events.
@@ -11,6 +11,24 @@ use tokio::sync::watch;
 pub enum WorkerShutdown {
     Drain,
     Cancel,
+}
+
+/// Bound validation of a connection whose query future has already returned or
+/// been dropped. SQLx otherwise pings it indefinitely on release; a cancelled
+/// lock-waiting query can then prevent pool.close() from acknowledging cleanup.
+/// This is not a statement deadline and never truncates an owned active query.
+pub fn worker_pool_options() -> PgPoolOptions {
+    PgPoolOptions::new().after_release(|connection, _| {
+        Box::pin(async move {
+            match tokio::time::timeout(Duration::from_secs(1), connection.ping()).await {
+                Ok(result) => result.map(|()| true),
+                // SQLx hard-closes connections when this hook returns an error.
+                Err(_) => Err(sqlx::Error::Protocol(
+                    "Cancelled Canvas connection did not settle on release".into(),
+                )),
+            }
+        })
+    })
 }
 
 /// Own the pool before invoking any fallible worker initialization. Cancellation

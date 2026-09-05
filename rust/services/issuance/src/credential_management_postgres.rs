@@ -7,15 +7,43 @@ use crate::credential_management::{
     ManagedCredential, ManagedCredentialStatus,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PostgresCredentialManagementRepository {
     pool: PgPool,
+    canvas_lifecycle: Option<crate::canvas_lifecycle_delivery::CanvasLifecycleDeliverySynchronizer>,
+}
+
+impl std::fmt::Debug for PostgresCredentialManagementRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresCredentialManagementRepository")
+            .finish_non_exhaustive()
+    }
 }
 
 impl PostgresCredentialManagementRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            canvas_lifecycle: None,
+        }
+    }
+
+    /// Candidate provider adoption is explicit until whole-consumer cutover.
+    #[must_use]
+    pub fn with_canvas_lifecycle(
+        mut self,
+        provider: std::sync::Arc<
+            dyn crate::canvas_lifecycle_delivery::CanvasLifecycleStatusProvider,
+        >,
+    ) -> Self {
+        self.canvas_lifecycle = Some(
+            crate::canvas_lifecycle_delivery::CanvasLifecycleDeliverySynchronizer::new(
+                self.pool.clone(),
+                provider,
+            ),
+        );
+        self
     }
 }
 
@@ -78,6 +106,9 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<(), CredentialManagementPortError> {
+        if let Some(lifecycle) = &self.canvas_lifecycle {
+            return lifecycle.synchronize(credential, action, reason).await;
+        }
         let request = json!({
             "status_sync_state": "pending",
             "last_status_sync_action": action.as_str(),

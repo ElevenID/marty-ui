@@ -126,6 +126,20 @@ impl PublishedDatabase {
         Self::start_probe_with_migration(None, None, true).await
     }
 
+    pub async fn start_with_review_lifecycle() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "operations",
+                "review-lifecycle",
+                "review_lifecycle",
+                "MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
     pub async fn start_with_review_inputs() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((

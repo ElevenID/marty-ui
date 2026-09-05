@@ -33,6 +33,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
+The [actual lifecycle/delivery candidate](rust-migrations/canvas-lifecycle-delivery.md)
+adds17 independently frozen published cases covering durable credential/delivery
+effects, provider failures, cancellation and competing resolution. It exposes and
+replaces the pending-only delivery behavior for the explicitly configured candidate;
+the default runtime adapter is not yet cut over. Bridge/Badgr provider implementation
+and all-consumer adoption remain required. A separate configured database regression
+reproduces a SQLx return-to-pool cancellation race consistent with the hosted worker
+signal failure; bounded post-operation connection validation fixes the local race
+without changing active-query or graceful-drain policy. Linux process gates remain.
+The expanded candidate passes15 configured schema tests,264 library tests,
+5 worker executable tests,22 combined behavior tests,33 workflow/image tests
+and strict Clippy locally. No new deployment or superseded Python deletion occurred.
+
 The [manual review resolver candidate](rust-migrations/canvas-review-resolution.md)
 completes implementation of all eight operations in the candidate router, still
 unrouted. All46 corrected-schema published HTTP/state cases pass without manual
