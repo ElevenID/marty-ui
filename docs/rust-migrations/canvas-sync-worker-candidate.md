@@ -17,7 +17,9 @@ provider, and deliberately keeps Rust's stronger atomic tenant-scoped
 connection/secret cleanup.
 
 The candidate now treats lease and configuration ownership as side-effect
-boundaries: the processor future is dropped on the first failed renewal,
+boundaries: confirmed lease loss drops the processor future; operational
+renewal failures retain bounded processing and fenced outcomes as specified in
+[renewal-job outcomes](canvas-worker-renewal-job-outcomes.md). In addition,
 dead-letter and expired-lease target disables use the leased target generation,
 and platform/binding resources are loaded as one enabled, non-archived,
 generation-bound snapshot. The fact/policy transaction re-locks and verifies
@@ -53,6 +55,13 @@ the rollout gate:
   provider read that did not happen.
 
 ## Hard cutover and deletion gate
+
+The [published-schema processor contract](canvas-published-schema.md) now
+executes real native reconciliation on the published issuance migrations.
+It exposed and corrects a JSON/JSONB fact-commit comparison failure while
+retaining snapshot and lease guards. Local configured evidence passes; hosted
+integration remains required. Controlled provider observations do not qualify
+the actual HTTP provider or every processor/consumer branch.
 
 The [owned-cycle cancellation correction](canvas-worker-owned-cancellation.md)
 closes a demonstrated native child-lifetime gap without serializing jobs or

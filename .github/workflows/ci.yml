@@ -669,6 +669,29 @@ jobs:
         env:
           FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
         run: target/debug/flow-postgres-contract --test-threads=1
+      - name: Test native Canvas against published issuance migrations
+        working-directory: rust
+        shell: bash
+        env:
+          MARTY_CANVAS_PUBLISHED_SCHEMA_TEST: "1"
+        run: |
+          set -euo pipefail
+          # Reuse the frozen oracle pins, not mutable release tags. The test
+          # owns a separate tmpfs database; it never receives a deployment URL.
+          mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' ../contracts/canvas-worker-consumer-range-oracle.json)
+          [[ ${#images[@]} == 2 ]]
+          for image in "${images[@]}"; do
+            [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]]
+            docker pull "$image"
+          done
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.target.name == "canvas_published_schema_contract")
+            | select(.executable != null) | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          "${executables[0]}" --nocapture --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats

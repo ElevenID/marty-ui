@@ -1,0 +1,51 @@
+use sqlx::postgres::PgPoolOptions;
+use std::collections::BTreeSet;
+use tracing::instrument::WithSubscriber;
+
+#[path = "support/canvas_published_database.rs"]
+mod canvas_published_database;
+#[path = "support/canvas_published_processor.rs"]
+mod canvas_published_processor;
+
+#[tokio::test]
+async fn native_canvas_uses_published_migrations_and_constraints() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Published-schema test requires its explicit Docker gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    let revisions: Vec<String> =
+        sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(revisions, ["merge_issuance_heads"]);
+    let constraints: BTreeSet<String> = sqlx::query_scalar(
+        "SELECT c.conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'issuance_service'"
+    ).fetch_all(&pool).await.unwrap().into_iter().collect();
+    for expected in [
+        "fk_canvas_sync_jobs_tenant_target",
+        "ck_canvas_award_candidates_state",
+        "ck_canvas_candidate_observations_revision",
+    ] {
+        assert!(
+            constraints.contains(expected),
+            "published constraint missing: {expected}"
+        );
+    }
+    let metadata_type: String = sqlx::query_scalar("SELECT data_type FROM information_schema.columns WHERE table_schema = 'issuance_service' AND table_name = 'canvas_evidence_sync_targets' AND column_name = 'metadata'").fetch_one(&pool).await.unwrap();
+    assert_eq!(metadata_type, "json");
+    // This subscriber is scoped to synthetic test data, never deployment logs.
+    canvas_published_processor::exercise(&pool)
+        .with_subscriber(tracing_subscriber::fmt().with_test_writer().finish())
+        .await;
+    pool.close().await;
+    owned.close().unwrap();
+}
