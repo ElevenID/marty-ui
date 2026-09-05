@@ -72,6 +72,14 @@ observation reuse, outages, negative/recovered AGS evidence and claimed/dismisse
 state. It discovered and restores the omitted native `roster_remaining` result;
 partial-batch and completed-cycle unit assertions accompany the real-schema
 replay. This still uses controlled transport, not the actual HTTP provider.
+
+The [HTTP-provider follow-up](rust-migrations/canvas-authoritative-http.md) adds
+three passing real REST transport tests using the actual provider/OAuth service
+and shared in-memory OAuth fixtures. It also reproduces an AGS candidate hash
+difference with the provider's full observation shape and restores Python's
+candidate-only projection, preserving learner fields. The unchanged mixed-roster
+baseline and all three configured schema contracts pass locally. Actual AGS/NRPS
+HTTPS, token exchange and complete transport parity remain required.
 Full provider/processor differentials,
 concurrency/rollback, manual resolver, all-consumer cutover and acceptance remain
 required. Reachable Python is retained until those gates pass.

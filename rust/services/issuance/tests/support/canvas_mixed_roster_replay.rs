@@ -63,8 +63,10 @@ impl CanvasAuthoritativeProvider for Provider {
             )
         } else {
             (
-                json!({"completed":true,"score":score,"score_maximum":100.0,"score_percent":score}),
-                json!({"resultScore":stage["score"],"resultMaximum":100,"resultStatus":"FullyGraded"}),
+                // Match the full shared HTTP provider observation. The roster
+                // processor must retain Python's distinct hash projection.
+                json!({"completed":true,"score":score,"score_maximum":100.0,"score_percent":score,"result_status":"FullyGraded"}),
+                json!({"id":"result-7","resultScore":stage["score"],"resultMaximum":100,"resultStatus":"FullyGraded"}),
                 "LTI_AGS_RESULT_READ",
             )
         };

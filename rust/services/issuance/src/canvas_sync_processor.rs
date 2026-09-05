@@ -66,6 +66,19 @@ pub struct CanvasAuthoritativeObservation {
     pub effective_at: Option<DateTime<Utc>>,
 }
 
+impl CanvasAuthoritativeObservation {
+    fn into_candidate(mut self, source: &str) -> Self {
+        // Published background AGS hashes exclude the learner-only result ID
+        // and status assertion. Keep the full shared provider observation for
+        // learner/issued-drift facts; project only at the candidate boundary.
+        if source == "ags_result" {
+            self.assertion.remove("result_status");
+            self.source_payload.remove("id");
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CanvasRosterSnapshot {
     pub canvas_user_ids: Vec<String>,
@@ -578,6 +591,8 @@ impl NativeCanvasSyncProcessor {
                 };
                 match observation {
                     Ok(observation) => {
+                        let observation =
+                            observation.into_candidate(&text(requirement.get("source")));
                         written += usize::from(
                             self.repository
                                 .save_candidate_observation(
@@ -928,6 +943,37 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn candidate_ags_projection_preserves_full_learner_and_rest_observations() {
+        let record = json!({"id":"result-7","resultScore":90,"resultMaximum":100,"resultStatus":"FullyGraded"});
+        let full = CanvasAuthoritativeObservation {
+            assertion: ags_assertion(&record),
+            source_payload: record.as_object().unwrap().clone(),
+            verification_method: "LTI_AGS_RESULT_READ",
+            effective_at: Some(Utc::now()),
+        };
+        let candidate = full.clone().into_candidate("ags_result");
+        assert_eq!(
+            candidate.assertion,
+            json!({"completed":true,"score":90.0,"score_maximum":100.0,"score_percent":90.0})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert_eq!(
+            candidate.source_payload,
+            json!({"resultScore":90,"resultMaximum":100,"resultStatus":"FullyGraded"})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert_eq!(candidate.effective_at, full.effective_at);
+        assert_eq!(candidate.verification_method, full.verification_method);
+        assert_eq!(full.assertion["result_status"], "FullyGraded");
+        assert_eq!(full.source_payload["id"], "result-7");
+        assert_eq!(full.clone().into_candidate("canvas_rest"), full);
+    }
 
     #[test]
     fn all_four_provider_fact_projections_have_exact_assertion_semantics() {
