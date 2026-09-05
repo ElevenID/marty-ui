@@ -23,6 +23,45 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
+### Beta browser correction and selected follow-up release
+
+The live lock selects `v1.1.215` for the beta acceptance corrections, with every
+component pin unchanged. Native verifier migration automation (`#781`) and the
+production UI WebAssembly policy correction (`#782`) are merged; the combined
+protected source is `f20f3e0f5071fdf94078a9222b517188cdd82a82`.
+Selection is not publication, deployment
+or acceptance. Preserve the immutable `v1.1.214` release and failed demo evidence;
+the new release must pass all existing exact-source, image, verifier and public
+stack gates. See [follow-up release plan](rust-migrations/beta-acceptance-follow-up-1.1.215.md).
+
+Actual `v1.1.214` browser testing passed authentication and the custom ElevenID
+Keycloak theme, then failed organization selection because production CSP
+blocked Rust WebAssembly startup. The fix retains Rust ownership and JavaScript
+eval/inline restrictions. Its Chromium regression test covers both permitted
+WASM and a negative control. A test-browser-only header diagnostic restored the
+organization state, but is not qualifying release evidence. Full credential and
+KMS-switching recordings must run against the newly published and deployed
+artifact, without diagnostic overrides. No successful release-bound recording
+or completed 7/14-day acceptance soak is claimed.
+
+Credentials renewal oracle PR `#258` merged at
+`d6b6dd67fd9674eb14388320e65d3ae9642b3b42`, preserving the previously local work
+with 17 new cases and 98 combined passing tests. It observes the
+real Python renewal loop, durable fences and partial heartbeat failures without
+changing runtime or crypto behavior. This does not close PostgreSQL or
+whole-worker parity, configuration-duration differences, readiness or
+all-consumer routing gates; the Rust worker remains unrouted and reachable
+Python remains intact. Owned worktrees are removed only after protected merge
+and exact review-to-merge proof; other workers' changes remain preserved. The
+renewal worktree and branch have now been cleaned after that proof.
+
+Recorder PR `#38` separately merged the targeted `qs` dependency correction at
+`88079b1b91bd7dc4771fde6a5e672323a57689a3`. All 163 Node tests and three
+narration tests passed, and the refreshed locked installation reports zero npm
+audit vulnerabilities. Recording scenarios, assertions and publication controls
+are unchanged. Use the verified recorder revision when binding the next release;
+do not reinterpret previous failed recordings as successful evidence.
+
 ### Successful aggregate beta cutover (supersedes preflight checkpoint below)
 
 `v1.1.214` deployed successfully at **2026-09-05T00:37:57Z**, exact source
@@ -35,16 +74,18 @@ The runner fix now makes that migration explicit in official and local modes.
 See [incident and evidence](rust-migrations/beta-native-verifier-migration-incident-2026-09-05.md).
 
 The first post-cutover event-stream/revocation-profile soak sample passed. Demo
-binding remains `DEPLOYED_PENDING_EVIDENCE`; full credential/browser acceptance,
-Keycloak theme checks and the governed 7/14-day soak windows are NOT complete.
-No new aggregate publication or production promotion is authorized by this
-checkpoint. Canvas worker whole-behavior parity and all-consumer routing remain.
+binding remains `DEPLOYED_PENDING_EVIDENCE`; full credential/browser acceptance
+and the governed 7/14-day soak windows are NOT complete. Theme checks subsequently
+passed as recorded above. This checkpoint does not itself clear release gates
+or authorize production promotion. Canvas worker whole-behavior parity and
+all-consumer routing remain.
 
 Credentials lifecycle oracle PR `#257` merged at
 `84532fe506855417eb37b714b1c33cba83689ce8`, preserving the crypto worker's
 preceding changes. Its owned clean worktree/branch and UI roadmap PR `#780`'s
-owned clean worktree/branch were removed after exact merge proof. Unfinished
-lease-renewal oracle and crypto-worker work remain preserved, not silently deleted.
+owned clean worktree/branch were removed after exact merge proof. The subsequent
+lease-renewal oracle work merged in PR `#258`; crypto-worker work remains
+preserved, not silently deleted.
 
 ### Historical published release and beta preflight checkpoint
 
