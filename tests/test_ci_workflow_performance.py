@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
+import tomllib
 
 import pytest
 import yaml
@@ -319,3 +321,131 @@ def test_closed_pull_request_cache_cleanup_is_rate_limit_safe() -> None:
     assert "retry-after" in script
     assert "2_000 * (2 ** attempt)" in script
     assert "maxDeletions = 2000" in source
+
+
+def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
+    _, ci = _workflow(CI_PATH)
+    _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
+    for name in ("test-rust-services", "rust-lint-policy"):
+        assert ci["jobs"][name]["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
+    for job in warm["jobs"].values():
+        assert job["if"] == "github.ref == 'refs/heads/main'"
+    for job, mode in ((ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
+                      (warm["jobs"]["images"], "READ_WRITE")):
+        credential_step = next(step for step in job["steps"] if step.get("name", "").startswith("Expose compiler"))
+        script = credential_step["with"]["script"]
+        assert "core.setSecret(token)" in script
+        assert f"'SCCACHE_GHA_RW_MODE', '{mode}'" in script
+        build = next(step for step in job["steps"] if "secret-envs" in step.get("with", {}))
+        assert "sccache_token=SCCACHE_GHA_RUNTIME_TOKEN" in build["with"]["secret-envs"]
+        assert "SCCACHE" not in build["with"].get("build-args", "")
+    assert all("cache-to" not in step.get("with", {})
+               for step in ci["jobs"]["test-rust-service-images"]["steps"])
+    dockerfile = (ROOT / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
+    assert "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588" in dockerfile
+    assert "--mount=type=secret,id=sccache_token" in dockerfile
+    assert "export RUSTC_WRAPPER=sccache" in dockerfile
+    assert "cargo build --locked --release" in dockerfile
+    assert "sccache --show-stats" in dockerfile
+    assert "ENV SCCACHE_GHA_RUNTIME_TOKEN" not in dockerfile
+    assert 'ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)"' in dockerfile
+    assert 'ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)"' in dockerfile
+    assert "sccache --start-server && sccache --stop-server" in dockerfile
+    assert dockerfile.index("cargo chef cook") < dockerfile.index("COPY --from=compiler_cache")
+
+
+def test_every_issuance_integration_test_remains_registered() -> None:
+    directory = ROOT / "rust/services/issuance"
+    manifest = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))
+    assert manifest["package"]["autotests"] is False
+    targets = manifest["test"]
+    assert len({target["name"] for target in targets}) == len(targets)
+    registered = [target["path"] for target in targets]
+    harness = (directory / "tests/behavior_suite.rs").read_text(encoding="utf-8")
+    grouped = re.findall(r'#\[path = "([^"]+)"\]', harness)
+    assert len(grouped) == 6
+    registered.extend(f"tests/{name}" for name in grouped)
+    actual = {path.relative_to(directory).as_posix() for path in (directory / "tests").glob("*.rs")}
+    assert len(registered) == len(set(registered))
+    assert set(registered) == actual, "new test files must be registered, never silently skipped"
+    assert all("postgres" not in path and "executable_smoke" not in path for path in grouped)
+
+
+@pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
+@pytest.mark.parametrize("reopened", [False, True])
+def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: str, reopened: bool) -> None:
+    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
+    script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
+    harness = r'''
+      const deleted = [];
+      const entries = [
+        {id: 1, ref: 'refs/pull/23/merge'},
+        {id: 2, ref: 'refs/heads/gh-readonly-queue/main/pr-23-abcdef'},
+        {id: 3, ref: 'refs/heads/main'},
+        {id: 4, ref: 'refs/pull/24/merge'},
+        {id: 5, ref: 'refs/heads/gh-readonly-queue/main/pr-24-abcdef'},
+        {id: 6, ref: 'refs/heads/feature'},
+      ];
+      const github = {
+        request: async (_, params) => {
+          if (params.ref) throw new Error('ref filter hides queue caches');
+          return {data: {actions_caches: entries}};
+        },
+        rest: {
+          pulls: {get: async ({pull_number}) => ({data: {state: pull_number === 23 && !REOPENED ? 'closed' : 'open'}})},
+          actions: {deleteActionsCacheById: async ({cache_id}) => { deleted.push(cache_id); }},
+        },
+      };
+      const summary = {addHeading() {return this}, addRaw() {return this}, async write() {}};
+      const core = {info() {}, warning() {}, summary};
+      const context = {repo: {owner: 'test', repo: 'test'}, eventName: EVENT,
+        payload: {pull_request: {number: 23}}};
+      const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+      await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
+        github, context, core, callback => callback());
+      if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
+    '''.replace("EVENT", json.dumps(event)).replace("REOPENED", json.dumps(reopened)).replace("SCRIPT", json.dumps(script))
+    result = subprocess.run(["node", "--input-type=module", "--eval", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("scenario", ["valid", "empty", "negative", "huge", "traversal", "malformed"])
+def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: Path, scenario: str) -> None:
+    paths = sorted(path.relative_to(ROOT / "ui").as_posix()
+                   for path in (ROOT / "ui/src").rglob("*")
+                   if path.is_file() and re.search(r"\.(test|spec)\.(ts|tsx)$", path.name))
+    plan = {"defaultMilliseconds": 500, "tests": {paths[0]: 123}}
+    if scenario == "empty":
+        plan["tests"] = {}
+    elif scenario in {"negative", "huge"}:
+        plan["tests"][paths[0]] = -1 if scenario == "negative" else 3_600_001
+    elif scenario == "traversal":
+        plan["tests"]["src/../../outside.test.ts"] = 1
+    source = tmp_path / "observations.json"
+    source.write_text("not JSON" if scenario == "malformed" else json.dumps(plan), encoding="utf-8")
+    output = tmp_path / "review.json"
+    result = subprocess.run(
+        ["node", str(ROOT / "ui/scripts/adopt-vitest-timings.mjs"), str(source), "--output", str(output)],
+        capture_output=True, text=True,
+    )
+    if scenario != "valid":
+        assert result.returncode != 0
+        assert not output.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        adopted = json.loads(output.read_text(encoding="utf-8"))
+        assert set(adopted["tests"]) == set(paths)
+        assert adopted["tests"][paths[0]] == 123
+
+
+def test_renewal_matrix_preserves_real_deadlines_and_all_combinations() -> None:
+    source = (ROOT / "rust/services/issuance/tests/support/canvas_worker_renewal_job_outcomes.rs").read_text(encoding="utf-8")
+    assert "tokio::join!(" in source
+    for stage in ("lease", "target", "process"):
+        assert f'isolated_group(pool, "{stage}")' in source
+    assert "Uuid::new_v4().simple()" in source
+    assert "catch_unwind().await" in source.replace("\n", "").replace(" ", "")
+    assert "pool.close().await" in source
+    assert "Duration::from_secs(20)" in source
+    assert "Duration::from_secs(30)" in source
+    assert "sum::<usize>(),60" in re.sub(r"\s+", "", source)

@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use marty_issuance_service::{
     canvas_sync_lease::CanvasSyncLease,
     canvas_sync_worker::{
@@ -143,6 +144,81 @@ async fn change_fence(pool: &PgPool, target: &str, fence: &str) {
 }
 
 pub async fn assert_renewal_job_outcomes(pool: &PgPool) {
+    // Preserve real 20s renewal / 30s deadline behavior. Each group owns a
+    // separate database: its triggers, TRUNCATEs and heartbeat probes cannot
+    // interfere with another group's observations.
+    let (lease, target, process) = tokio::join!(
+        settle_group(isolated_group(pool, "lease")),
+        settle_group(isolated_group(pool, "target")),
+        settle_group(isolated_group(pool, "process")),
+    );
+    // All groups and their cleanup finish before propagating any failed case.
+    let counts = [lease, target, process]
+        .map(|result| result.unwrap_or_else(|panic| std::panic::resume_unwind(panic)));
+    assert_eq!(
+        counts.iter().sum::<usize>(),
+        60,
+        "every frozen renewal/outcome/fence combination must execute"
+    );
+}
+
+type GroupResult = Result<usize, Box<dyn std::any::Any + Send>>;
+
+async fn settle_group(future: impl std::future::Future<Output = GroupResult>) -> GroupResult {
+    // Also catch setup and cleanup panics, so join! never cancels sibling cleanup.
+    std::panic::AssertUnwindSafe(future)
+        .catch_unwind()
+        .await
+        .and_then(std::convert::identity)
+}
+
+#[tokio::test]
+async fn group_failure_does_not_cancel_sibling_cleanup() {
+    let (panicked, failed, completed) = tokio::join!(
+        settle_group(async { panic!("synthetic setup or cleanup failure") }),
+        settle_group(async { Err(Box::new("synthetic assertion failure") as _) }),
+        settle_group(async {
+            tokio::task::yield_now().await;
+            Ok(20)
+        }),
+    );
+    assert!(panicked.is_err());
+    assert!(failed.is_err());
+    assert_eq!(completed.unwrap(), 20);
+}
+
+async fn isolated_group(admin: &PgPool, failed_stage: &str) -> GroupResult {
+    let database = format!("marty_renewal_{}_test", uuid::Uuid::new_v4().simple());
+    assert!(database.starts_with("marty_renewal_") && database.ends_with("_test"));
+    assert!(database
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
+    // SQL identifiers cannot be bound parameters. This identifier consists only
+    // of our fixed prefix/suffix and a generated UUID, validated above.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+        .execute(admin)
+        .await
+        .expect("create isolated renewal test database");
+    let options = (*admin.connect_options()).clone().database(&database);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(6)
+        .connect_lazy_with(options);
+    let result = std::panic::AssertUnwindSafe(async {
+        super::setup_worker_schema(&pool).await;
+        assert_group(&pool, failed_stage).await
+    })
+    .catch_unwind()
+    .await;
+    pool.close().await;
+    // Drop only the uniquely named database created above, never the supplied DB.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
+        .execute(admin)
+        .await
+        .expect("clean up isolated renewal test database");
+    result
+}
+
+async fn assert_group(pool: &PgPool, failed_stage: &str) -> usize {
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../../contracts/canvas-worker-renewal-job-outcomes.json"
     ))
@@ -166,8 +242,15 @@ pub async fn assert_renewal_job_outcomes(pool: &PgPool) {
     assert_eq!(fixture["processor_cleanup_acknowledged"], true);
     assert_eq!(fixture["cutover_authorized"], false);
     let mut observed_cases = 0;
+    assert_eq!(
+        fixture["renewal_failures"],
+        json!(["lease", "target", "process"])
+    );
     for failed_write in fixture["renewal_failures"].as_array().unwrap() {
         let failed_write = failed_write.as_str().unwrap();
+        if failed_write != failed_stage {
+            continue;
+        }
         // Six actual cycles: each write failure with sixteen completing jobs,
         // then four externally cancelled jobs. Grouping only shares real elapsed
         // renewal time; every frozen combination has its own target/job/processor.
@@ -333,7 +416,8 @@ pub async fn assert_renewal_job_outcomes(pool: &PgPool) {
         }
     }
     assert_eq!(
-        observed_cases, 60,
-        "every frozen renewal/outcome/fence combination must execute"
+        observed_cases, 20,
+        "every frozen outcome/fence combination for this write must execute"
     );
+    observed_cases
 }

@@ -379,7 +379,19 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     );
     // Reset only this test's disposable schema after all existing stateful
     // recovery/fencing assertions. Range observations require empty queues.
-    setup_schema(&pool).await;
+    setup_worker_schema(&pool).await;
+    canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
+    canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool).await;
+    canvas_worker_lifecycle_oracle::assert_initialized_pool_disposal(&pool).await;
+    canvas_worker_process_signals::assert_process_signals(&pool, &database_url).await;
+    canvas_worker_renewal_oracle::assert_generation_change_preserves_process_liveness(&pool).await;
+    canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool).await;
+    canvas_worker_renewal_job_outcomes::assert_renewal_job_outcomes(&pool).await;
+    pool.close().await;
+}
+
+async fn setup_worker_schema(pool: &sqlx::PgPool) {
+    setup_schema(pool).await;
     sqlx::query(
         "CREATE TABLE issuance_service.canvas_oauth_connections (
             id text PRIMARY KEY, organization_id text NOT NULL, platform_id text NOT NULL,
@@ -392,17 +404,9 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             revoke_retry_at timestamptz, refresh_lease_owner text,
             refresh_lease_expires_at timestamptz)",
     )
-    .execute(&pool)
+    .execute(pool)
     .await
     .unwrap();
-    canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
-    canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool).await;
-    canvas_worker_lifecycle_oracle::assert_initialized_pool_disposal(&pool).await;
-    canvas_worker_process_signals::assert_process_signals(&pool, &database_url).await;
-    canvas_worker_renewal_oracle::assert_generation_change_preserves_process_liveness(&pool).await;
-    canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool).await;
-    canvas_worker_renewal_job_outcomes::assert_renewal_job_outcomes(&pool).await;
-    pool.close().await;
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {

@@ -9,6 +9,7 @@ on:
       - Cargo.lock
       - rust/**
       - proto/**
+      - contracts/**
       - scripts/load-secrets-env.sh
   workflow_dispatch:
 
@@ -22,6 +23,7 @@ concurrency:
 jobs:
   rust:
     name: Warm Rust cache
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -58,6 +60,7 @@ jobs:
 
   images:
     name: Warm Rust service image cache
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -68,6 +71,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Expose compiler cache credentials to BuildKit secrets
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
       - name: Warm shared image layers
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
@@ -81,3 +95,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
           cache-to: type=gha,mode=max,scope=marty-ui-rust-service-images
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE

@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+autotests = false
 
 [[bin]]
 name = "marty-issuance-service"
@@ -70,3 +71,141 @@ tonic-prost-build.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# Explicit targets let independent behavior modules share one link step.
+# tests/test_ci_workflow_performance.py rejects unregistered test files.
+[[test]]
+name = "canvas_published_schema_contract"
+path = "tests/canvas_published_schema_contract.rs"
+
+[[test]]
+name = "issuance-behavior"
+path = "tests/behavior_suite.rs"
+
+[[test]]
+name = "canvas_award_candidate_approval_behavior"
+path = "tests/canvas_award_candidate_approval_behavior.rs"
+
+[[test]]
+name = "canvas_award_candidate_behavior"
+path = "tests/canvas_award_candidate_behavior.rs"
+
+[[test]]
+name = "canvas_award_candidate_postgres_contract"
+path = "tests/canvas_award_candidate_postgres_contract.rs"
+
+[[test]]
+name = "canvas_event_status_postgres_contract"
+path = "tests/canvas_event_status_postgres_contract.rs"
+
+[[test]]
+name = "canvas_legacy_ingest_behavior"
+path = "tests/canvas_legacy_ingest_behavior.rs"
+
+[[test]]
+name = "canvas_legacy_ingest_http_behavior"
+path = "tests/canvas_legacy_ingest_http_behavior.rs"
+
+[[test]]
+name = "canvas_lti_bootstrap_behavior"
+path = "tests/canvas_lti_bootstrap_behavior.rs"
+
+[[test]]
+name = "canvas_lti_deep_linking_behavior"
+path = "tests/canvas_lti_deep_linking_behavior.rs"
+
+[[test]]
+name = "canvas_lti_deep_linking_postgres_contract"
+path = "tests/canvas_lti_deep_linking_postgres_contract.rs"
+
+[[test]]
+name = "canvas_lti_evidence_behavior"
+path = "tests/canvas_lti_evidence_behavior.rs"
+
+[[test]]
+name = "canvas_lti_evidence_postgres_contract"
+path = "tests/canvas_lti_evidence_postgres_contract.rs"
+
+[[test]]
+name = "canvas_lti_experience_behavior"
+path = "tests/canvas_lti_experience_behavior.rs"
+
+[[test]]
+name = "canvas_lti_launch_behavior"
+path = "tests/canvas_lti_launch_behavior.rs"
+
+[[test]]
+name = "canvas_lti_login_behavior"
+path = "tests/canvas_lti_login_behavior.rs"
+
+[[test]]
+name = "canvas_lti_login_postgres_contract"
+path = "tests/canvas_lti_login_postgres_contract.rs"
+
+[[test]]
+name = "canvas_lti_sync_enqueue_postgres_contract"
+path = "tests/canvas_lti_sync_enqueue_postgres_contract.rs"
+
+[[test]]
+name = "canvas_management_http_behavior"
+path = "tests/canvas_management_http_behavior.rs"
+
+[[test]]
+name = "canvas_management_postgres_contract"
+path = "tests/canvas_management_postgres_contract.rs"
+
+[[test]]
+name = "canvas_oauth_behavior"
+path = "tests/canvas_oauth_behavior.rs"
+
+[[test]]
+name = "canvas_oauth_postgres_contract"
+path = "tests/canvas_oauth_postgres_contract.rs"
+
+[[test]]
+name = "canvas_sync_worker_postgres_contract"
+path = "tests/canvas_sync_worker_postgres_contract.rs"
+
+[[test]]
+name = "credential_admission_behavior"
+path = "tests/credential_admission_behavior.rs"
+
+[[test]]
+name = "credential_postgres_contract"
+path = "tests/credential_postgres_contract.rs"
+
+[[test]]
+name = "credential_signing_behavior"
+path = "tests/credential_signing_behavior.rs"
+
+[[test]]
+name = "didcomm_delivery_atomicity"
+path = "tests/didcomm_delivery_atomicity.rs"
+
+[[test]]
+name = "didcomm_delivery_behavior"
+path = "tests/didcomm_delivery_behavior.rs"
+
+[[test]]
+name = "executable_smoke"
+path = "tests/executable_smoke.rs"
+
+[[test]]
+name = "http_behavior"
+path = "tests/http_behavior.rs"
+
+[[test]]
+name = "initiation_http_behavior"
+path = "tests/initiation_http_behavior.rs"
+
+[[test]]
+name = "issuance_transaction_postgres_contract"
+path = "tests/issuance_transaction_postgres_contract.rs"
+
+[[test]]
+name = "proof_nonce_postgres_contract"
+path = "tests/proof_nonce_postgres_contract.rs"
+
+[[test]]
+name = "token_exchange_behavior"
+path = "tests/token_exchange_behavior.rs"
