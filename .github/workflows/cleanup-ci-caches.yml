@@ -63,13 +63,12 @@ jobs:
               if (seenCacheIds.has(cache.id)) continue;
               seenCacheIds.add(cache.id);
               if (closedNumber !== null && number !== closedNumber) continue;
-              if (closedNumber === null) {
-                if (!pullStates.has(number)) {
-                  const {data: pull} = await github.rest.pulls.get({owner, repo, pull_number: number});
-                  pullStates.set(number, pull.state);
-                }
-                if (pullStates.get(number) !== 'closed') continue;
+              // A queued closed event can run after the PR has reopened.
+              if (!pullStates.has(number)) {
+                const {data: pull} = await github.rest.pulls.get({owner, repo, pull_number: number});
+                pullStates.set(number, pull.state);
               }
+              if (pullStates.get(number) !== 'closed') continue;
               selected.push(cache);
               if (selected.length >= maxDeletions) break;
             }

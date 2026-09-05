@@ -370,7 +370,8 @@ def test_every_issuance_integration_test_remains_registered() -> None:
 
 
 @pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
-def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: str) -> None:
+@pytest.mark.parametrize("reopened", [False, True])
+def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: str, reopened: bool) -> None:
     _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
     script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
     harness = r'''
@@ -389,7 +390,7 @@ def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: 
           return {data: {actions_caches: entries}};
         },
         rest: {
-          pulls: {get: async ({pull_number}) => ({data: {state: pull_number === 23 ? 'closed' : 'open'}})},
+          pulls: {get: async ({pull_number}) => ({data: {state: pull_number === 23 && !REOPENED ? 'closed' : 'open'}})},
           actions: {deleteActionsCacheById: async ({cache_id}) => { deleted.push(cache_id); }},
         },
       };
@@ -400,8 +401,8 @@ def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: 
       const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
       await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
         github, context, core, callback => callback());
-      if (JSON.stringify(deleted) !== '[1,2]') throw new Error(JSON.stringify(deleted));
-    '''.replace("EVENT", json.dumps(event)).replace("SCRIPT", json.dumps(script))
+      if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
+    '''.replace("EVENT", json.dumps(event)).replace("REOPENED", json.dumps(reopened)).replace("SCRIPT", json.dumps(script))
     result = subprocess.run(["node", "--input-type=module", "--eval", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 

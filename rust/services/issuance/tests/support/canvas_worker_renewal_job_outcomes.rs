@@ -148,9 +148,9 @@ pub async fn assert_renewal_job_outcomes(pool: &PgPool) {
     // separate database: its triggers, TRUNCATEs and heartbeat probes cannot
     // interfere with another group's observations.
     let (lease, target, process) = tokio::join!(
-        isolated_group(pool, "lease"),
-        isolated_group(pool, "target"),
-        isolated_group(pool, "process"),
+        settle_group(isolated_group(pool, "lease")),
+        settle_group(isolated_group(pool, "target")),
+        settle_group(isolated_group(pool, "process")),
     );
     // All groups and their cleanup finish before propagating any failed case.
     let counts = [lease, target, process]
@@ -162,10 +162,32 @@ pub async fn assert_renewal_job_outcomes(pool: &PgPool) {
     );
 }
 
-async fn isolated_group(
-    admin: &PgPool,
-    failed_stage: &str,
-) -> Result<usize, Box<dyn std::any::Any + Send>> {
+type GroupResult = Result<usize, Box<dyn std::any::Any + Send>>;
+
+async fn settle_group(future: impl std::future::Future<Output = GroupResult>) -> GroupResult {
+    // Also catch setup and cleanup panics, so join! never cancels sibling cleanup.
+    std::panic::AssertUnwindSafe(future)
+        .catch_unwind()
+        .await
+        .and_then(std::convert::identity)
+}
+
+#[tokio::test]
+async fn group_failure_does_not_cancel_sibling_cleanup() {
+    let (panicked, failed, completed) = tokio::join!(
+        settle_group(async { panic!("synthetic setup or cleanup failure") }),
+        settle_group(async { Err(Box::new("synthetic assertion failure") as _) }),
+        settle_group(async {
+            tokio::task::yield_now().await;
+            Ok(20)
+        }),
+    );
+    assert!(panicked.is_err());
+    assert!(failed.is_err());
+    assert_eq!(completed.unwrap(), 20);
+}
+
+async fn isolated_group(admin: &PgPool, failed_stage: &str) -> GroupResult {
     let database = format!("marty_renewal_{}_test", uuid::Uuid::new_v4().simple());
     assert!(database.starts_with("marty_renewal_") && database.ends_with("_test"));
     assert!(database
