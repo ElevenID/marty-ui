@@ -14,6 +14,10 @@ use marty_issuance_service::{
     canvas_readiness_runtime::{
         CanvasReadinessStateProvider, PostgresCanvasReadinessStateProvider,
     },
+    canvas_sync_processor::CanvasSyncProcessorRepository,
+    canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
+    canvas_sync_worker::CanvasSyncWorkerRepository,
+    canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
 use marty_oid4vci::lti::CanvasLtiPlatformProbe;
 use serde_json::{json, Map};
@@ -69,6 +73,12 @@ fn binding_request(course_id: &str) -> CanvasProgramBindingRequest {
 
 #[tokio::test]
 async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalidates_bindings() {
+    for storage_type in ["json", "jsonb"] {
+        management_contract(storage_type).await;
+    }
+}
+
+async fn management_contract(storage_type: &str) {
     let Some(database_url) = database_url() else {
         eprintln!("skipping Canvas management PostgreSQL contract without database URL");
         return;
@@ -88,6 +98,25 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .await
         .expect("Canvas management PostgreSQL contract database must connect");
     setup_schema(&pool).await;
+    if storage_type == "json" {
+        // These are newly created isolated tables, never a live schema rewrite.
+        for statement in [
+            "ALTER TABLE issuance_service.canvas_platforms ALTER COLUMN connection_config TYPE json USING connection_config::json",
+            "ALTER TABLE issuance_service.canvas_evidence_sync_targets ALTER COLUMN metadata TYPE json USING metadata::json, ALTER COLUMN metadata SET DEFAULT '{}'::json",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+    }
+    for (table, column) in [
+        ("canvas_platforms", "connection_config"),
+        ("canvas_evidence_sync_targets", "metadata"),
+    ] {
+        let actual_type: String = sqlx::query_scalar(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema = 'issuance_service'
+             AND table_name = $1 AND column_name = $2",
+        ).bind(table).bind(column).fetch_one(&pool).await.unwrap();
+        assert_eq!(actual_type, storage_type);
+    }
 
     let now = Utc.with_ymd_and_hms(2026, 8, 30, 22, 0, 0).unwrap();
     let origin = CanvasOriginPolicy::default()
@@ -101,6 +130,27 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
     )
     .unwrap();
     let repository = PostgresCanvasManagementRepository::new(pool.clone());
+    let mut touch_platform = CanvasPlatformRecord::new_draft(
+        "org-touch".to_owned(),
+        platform_request("Touch", false),
+        origin.clone(),
+        now,
+    )
+    .unwrap();
+    touch_platform
+        .connection_config
+        .insert("lti_capability_intent".into(), json!([]));
+    touch_platform
+        .connection_config
+        .insert("unrelated".into(), json!({"nested": [true, null, "keep"]}));
+    repository.create_platform(&touch_platform).await.unwrap();
+    let touched = repository
+        .save_platform_configuration(&touch_platform, 1, false)
+        .await
+        .unwrap()
+        .expect("no-change configuration touch supports stored JSON type");
+    assert_eq!(touched.config_version, 1);
+    assert_eq!(touched.connection_config, touch_platform.connection_config);
     repository.create_platform(&platform).await.unwrap();
     assert_eq!(
         repository.create_platform(&platform).await,
@@ -148,7 +198,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
 
     sqlx::query(
         "UPDATE issuance_service.canvas_platforms
-         SET connection_config = connection_config || '{\"oauth_status\":\"connected\"}'::jsonb,
+         SET connection_config = (connection_config::jsonb - 'lti_capability_intent') || '{\"oauth_status\":\"connected\",\"unrelated\":{\"nested\":[true,null,\"preserved\"]}}'::jsonb,
              enabled = true,
              registration_status = 'active',
              capability_snapshot = '{\"ags\":true}'::jsonb,
@@ -198,6 +248,14 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
     assert!(updated.last_validated_at.is_none());
     assert_eq!(updated.connection_config["enabled_intent"], json!(true));
     assert_eq!(
+        updated.connection_config["unrelated"],
+        json!({"nested": [true, null, "preserved"]})
+    );
+    assert_eq!(
+        updated.connection_config["lti_capability_intent"],
+        json!(["ags", "nrps"])
+    );
+    assert_eq!(
         updated.connection_config["oauth_status"],
         json!("connected")
     );
@@ -238,7 +296,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .is_none());
     sqlx::query(
         "UPDATE issuance_service.canvas_platforms
-         SET connection_config = connection_config
+         SET connection_config = connection_config::jsonb
              || '{\"lti_config_token_hash\":\"digest\",\"oauth_pending_authorization_id\":\"authorization-1\"}'::jsonb
          WHERE id = $1",
     )
@@ -759,6 +817,17 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
     .await
     .unwrap();
     let activated_at = now + chrono::Duration::seconds(15);
+    // Force the conflict-update path as well as the fresh application targets.
+    // Existing unrelated roster progress must survive metadata merging.
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_evidence_sync_targets
+         (id, organization_id, platform_id, binding_id, logical_key, enabled,
+          schedule_seconds, next_run_at, metadata)
+         VALUES ('existing-roster', 'org-management', $1, $2, $3, false, 60, $4,
+                 '{\"unrelated\":{\"cursor\":\"keep\",\"values\":[true,null,42]},\"verified_course_id\":\"old\"}'::json)",
+    ).bind(&conflicting.id).bind(&readiness_binding.id)
+        .bind(format!("roster:{}", readiness_binding.id)).bind(activated_at)
+        .execute(&pool).await.unwrap();
     let activated = repository
         .activate_binding(&CanvasBindingActivation {
             binding: readiness_binding.clone(),
@@ -837,6 +906,10 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .iter()
         .all(|target| target.try_get::<bool, _>("enabled").unwrap()));
     assert_eq!(
+        targets[2].get::<serde_json::Value, _>("metadata")["unrelated"],
+        json!({"cursor": "keep", "values": [true, null, 42]})
+    );
+    assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs
              WHERE status = 'queued'",
@@ -865,6 +938,7 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .unwrap(),
         3
     );
+    assert_roster_cursor_storage(&pool).await;
     let deactivated = repository
         .deactivate_binding(&activated, now + chrono::Duration::seconds(16))
         .await
@@ -1012,6 +1086,79 @@ async fn platform_configuration_is_tenant_hidden_cas_safe_and_atomically_invalid
         .await
         .unwrap()
         .is_none());
+}
+
+async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
+    let worker = PostgresCanvasSyncWorkerRepository::new(pool.clone());
+    let processor = PostgresCanvasSyncProcessorRepository::new(pool.clone());
+    let target = worker
+        .target("org-management", "existing-roster")
+        .await
+        .unwrap()
+        .unwrap();
+    let resources = processor.resources(&target).await.unwrap().unwrap();
+    let original = roster_storage(pool).await;
+    processor
+        .update_roster_cursor(&target, &resources, 25, 40)
+        .await
+        .unwrap();
+    let partial = roster_storage(pool).await;
+    assert_eq!(partial.0["roster_cursor"], 25);
+    assert_eq!(partial.0["roster_size"], 40);
+    assert_eq!(
+        partial.0["roster_cycle_completed_at"],
+        serde_json::Value::Null
+    );
+    for (key, value) in original.0.as_object().unwrap() {
+        assert_eq!(&partial.0[key], value, "cursor update must preserve {key}");
+    }
+    // Compare timestamps from the same database statement, not wall-clock
+    // time after CI scheduling/transport delays.
+    let scheduled_seconds = (partial.1 - partial.2).num_seconds();
+    assert!((59..=60).contains(&scheduled_seconds));
+    processor
+        .update_roster_cursor(&target, &resources, 0, 40)
+        .await
+        .unwrap();
+    let completed = roster_storage(pool).await;
+    assert_eq!(completed.0["roster_cursor"], 0);
+    assert_eq!(completed.0["roster_size"], 40);
+    assert!(completed.0["roster_cycle_completed_at"].as_str().is_some());
+    assert_eq!(
+        completed.1, partial.1,
+        "cycle completion must not reschedule"
+    );
+
+    for dimension in 0..6 {
+        let mut stale_target = target.clone();
+        let mut stale_resources = resources.clone();
+        match dimension {
+            0 => stale_target.id = "other-target".into(),
+            1 => stale_target.organization_id = "other-org".into(),
+            2 => stale_target.platform_id = "other-platform".into(),
+            3 => stale_target.binding_id = "other-binding".into(),
+            4 => stale_target.config_version += 1,
+            _ => stale_resources.platform.config_version += 1,
+        }
+        let failure = processor
+            .update_roster_cursor(&stale_target, &stale_resources, 99, 100)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.code, "canvas_platform_reconfigured");
+        assert!(failure.retryable);
+        assert_eq!(roster_storage(pool).await, completed);
+    }
+}
+
+async fn roster_storage(
+    pool: &sqlx::PgPool,
+) -> (
+    serde_json::Value,
+    chrono::DateTime<Utc>,
+    chrono::DateTime<Utc>,
+) {
+    sqlx::query_as("SELECT metadata, next_run_at, updated_at FROM issuance_service.canvas_evidence_sync_targets WHERE id = 'existing-roster'")
+        .fetch_one(pool).await.unwrap()
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {

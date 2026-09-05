@@ -44,16 +44,41 @@ fn context() -> marty_issuance_service::canvas_lti_experience::CanvasLtiExperien
 
 #[tokio::test]
 async fn deep_linking_snapshot_and_metadata_commit_are_tenant_bound_and_drift_safe() {
+    for storage_type in ["json", "jsonb"] {
+        deep_linking_contract(storage_type).await;
+    }
+}
+
+async fn deep_linking_contract(storage_type: &str) {
     let Some(database_url) = database_url() else {
         eprintln!("skipping Canvas Deep Linking PostgreSQL contract without database URL");
         return;
     };
+    assert!(
+        url::Url::parse(&database_url)
+            .unwrap()
+            .path()
+            .ends_with("_test"),
+        "Canvas PostgreSQL contracts require a dedicated *_test database"
+    );
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&database_url)
         .await
         .expect("issuance PostgreSQL contract database must connect");
     setup_schema(&pool).await;
+    if storage_type == "json" {
+        sqlx::query("ALTER TABLE issuance_service.canvas_lti_launch_states ALTER COLUMN metadata TYPE json USING metadata::json")
+            .execute(&pool).await.unwrap();
+    }
+    let actual_type: String = sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns WHERE table_schema = 'issuance_service'
+         AND table_name = 'canvas_lti_launch_states' AND column_name = 'metadata'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(actual_type, storage_type);
     seed_scope(&pool).await;
     let repository = PostgresCanvasLtiDeepLinkingRepository::new(pool.clone());
     let session_context = context();
@@ -116,6 +141,32 @@ async fn deep_linking_snapshot_and_metadata_commit_are_tenant_bound_and_drift_sa
     .unwrap();
     assert_eq!(stored["unrelated"], "preserved");
     assert_eq!(stored["deep_linking_response"], metadata);
+
+    // Each persisted scope dimension is independently fenced. Rejected writes
+    // must leave the complete session document intact, not only the response.
+    for dimension in 0..8 {
+        let mut stale = scope.clone();
+        match dimension {
+            0 => stale.session_id = "other-session".into(),
+            1 => stale.session_state = "other-state".into(),
+            2 => stale.platform_id = "other-platform".into(),
+            3 => stale.platform_config_version += 1,
+            4 => stale.binding_id = "other-binding".into(),
+            5 => stale.binding_config_version += 1,
+            6 => stale.organization_id = "other-org".into(),
+            _ => stale.canvas_account_id = "other-account".into(),
+        }
+        assert_eq!(
+            repository
+                .persist_response(&stale, &json!({"rejected": true}))
+                .await,
+            Err(CanvasLtiDeepLinkingError::ConfigurationDrift)
+        );
+        let unchanged: Value = sqlx::query_scalar(
+            "SELECT metadata FROM issuance_service.canvas_lti_launch_states WHERE id = 'session-id-1'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(unchanged, stored);
+    }
 
     sqlx::query(
         "UPDATE issuance_service.canvas_program_bindings

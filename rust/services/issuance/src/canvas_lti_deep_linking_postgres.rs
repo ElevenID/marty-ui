@@ -42,7 +42,7 @@ const PERSIST_DEEP_LINKING_RESPONSE: &str = "WITH valid_scope AS (
     )
     UPDATE issuance_service.canvas_lti_launch_states AS session
     SET metadata = jsonb_set(
-        session.metadata,
+        session.metadata::jsonb,
         '{deep_linking_response}',
         $9::jsonb,
         true

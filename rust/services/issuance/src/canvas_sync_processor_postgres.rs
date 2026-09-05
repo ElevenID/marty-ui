@@ -542,7 +542,7 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
-             SET metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
+             SET metadata = COALESCE(metadata::jsonb, '{}'::jsonb) || $4::jsonb,
                  next_run_at = CASE WHEN $5 THEN clock_timestamp() + interval '60 seconds' ELSE next_run_at END,
                  updated_at = clock_timestamp()
              WHERE id = $1 AND organization_id = $2 AND config_version = $3",
