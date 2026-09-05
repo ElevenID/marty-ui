@@ -43,14 +43,23 @@ KMS-switching recordings must run against the newly published and deployed
 artifact, without diagnostic overrides. No successful release-bound recording
 or completed 7/14-day acceptance soak is claimed.
 
-Credentials renewal oracle PR `#258` preserves the previously local work in a
-committed branch with 17 new cases and 98 combined passing tests. It observes the
+Credentials renewal oracle PR `#258` merged at
+`d6b6dd67fd9674eb14388320e65d3ae9642b3b42`, preserving the previously local work
+with 17 new cases and 98 combined passing tests. It observes the
 real Python renewal loop, durable fences and partial heartbeat failures without
 changing runtime or crypto behavior. This does not close PostgreSQL or
 whole-worker parity, configuration-duration differences, readiness or
 all-consumer routing gates; the Rust worker remains unrouted and reachable
 Python remains intact. Owned worktrees are removed only after protected merge
-and exact review-to-merge proof; other workers' changes remain preserved.
+and exact review-to-merge proof; other workers' changes remain preserved. The
+renewal worktree and branch have now been cleaned after that proof.
+
+Recorder PR `#38` separately merged the targeted `qs` dependency correction at
+`88079b1b91bd7dc4771fde6a5e672323a57689a3`. All 163 Node tests and three
+narration tests passed, and the refreshed locked installation reports zero npm
+audit vulnerabilities. Recording scenarios, assertions and publication controls
+are unchanged. Use the verified recorder revision when binding the next release;
+do not reinterpret previous failed recordings as successful evidence.
 
 ### Successful aggregate beta cutover (supersedes preflight checkpoint below)
 

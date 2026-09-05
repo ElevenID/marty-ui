@@ -28,6 +28,12 @@ comparison, provenance gate and production configuration remain unchanged.
 Integration `v1.2.80` remains the separately verified static pin to `v1.1.214`;
 the aggregate continues to use its existing `v1.2.79` qualification harness.
 
+The recorder dependency correction separately merged through recorder PR `#38`
+at `88079b1b91bd7dc4771fde6a5e672323a57689a3`, with 163 Node and three narration
+tests passing, protected-main CI success and zero reported npm vulnerabilities.
+Its only change is the transitive `qs` lock entry. Bind subsequent recordings to
+that verified recorder source; all scenarios and assertion contracts are intact.
+
 Preliminary read-only checks on 2026-09-05 found no `v1.1.215` Git tag or GitHub
 release, no version tag on any of the three release images, and no recent claim
 for this coordinate. The protected claim workflow must repeat its authoritative
