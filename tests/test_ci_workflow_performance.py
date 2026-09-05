@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 
+import pytest
 import yaml
 
 
@@ -105,6 +108,72 @@ def test_ui_timing_refresh_runs_after_the_required_ci_gate() -> None:
     assert "refresh-ui-test-timings" not in yaml.safe_load(
         CI_PATH.read_text(encoding="utf-8")
     )["jobs"]
+
+
+@pytest.mark.parametrize("scenario", ["missing", "empty", "unrelated", "nested", "malformed", "not_directory"])
+def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) -> None:
+    _, document = _workflow(
+        ROOT / ".github" / "workflows" / "refresh-ui-test-timings.yml"
+    )
+    steps = document["jobs"]["refresh"]["steps"]
+    guard = next(step for step in steps if step.get("id") == "observations")
+    assert guard["if"] == "steps.download.outcome == 'success'"
+    for name in ("Produce refreshed timing plan", "Upload refreshed timing plan"):
+        step = next(step for step in steps if step.get("name") == name)
+        assert step["if"] == "steps.observations.outputs.available == 'true'"
+
+    reports = tmp_path / "reports"
+    output = tmp_path / "github-output"
+    if scenario == "not_directory":
+        reports.write_text("not a directory", encoding="utf-8")
+    elif scenario != "missing":
+        reports.mkdir()
+        if scenario == "unrelated":
+            (reports / "notes.txt").write_text("no reports", encoding="utf-8")
+            (reports / "directory.json").mkdir()
+        elif scenario in {"nested", "malformed"}:
+            nested = reports / "shard-1"
+            nested.mkdir()
+            report = {"testResults": [{
+                "name": "/home/runner/work/marty-ui/marty-ui/ui/src/refresh.test.ts",
+                "startTime": 100,
+                "endTime": 150,
+            }]}
+            (nested / "results.json").write_text(
+                json.dumps(report) if scenario == "nested" else "not JSON",
+                encoding="utf-8",
+            )
+
+    script = guard["run"].split("<<'NODE'\n", 1)[1].rsplit("\nNODE", 1)[0]
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", script],
+        env={**os.environ, "TIMINGS_DIRECTORY": str(reports), "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+    )
+    if scenario == "not_directory":
+        assert result.returncode != 0
+        assert not output.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    available = scenario in {"nested", "malformed"}
+    assert output.read_text(encoding="utf-8").strip() == f"available={str(available).lower()}"
+    if not available:
+        assert "skipping timing refresh" in result.stdout
+        return
+
+    plan = tmp_path / "plan.json"
+    refresh = subprocess.run(
+        ["node", str(ROOT / "ui/scripts/update-vitest-timings.mjs"), str(reports), "--output", str(plan)],
+        capture_output=True,
+        text=True,
+    )
+    if scenario == "malformed":
+        assert refresh.returncode != 0
+        assert not plan.exists()
+    else:
+        assert refresh.returncode == 0, refresh.stderr
+        assert json.loads(plan.read_text(encoding="utf-8"))["tests"]["src/refresh.test.ts"] == 50
 
 
 def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
