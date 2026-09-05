@@ -323,6 +323,10 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     assert "cargo build --locked --release" in dockerfile
     assert "sccache --show-stats" in dockerfile
     assert "ENV SCCACHE_GHA_RUNTIME_TOKEN" not in dockerfile
+    assert 'ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)"' in dockerfile
+    assert 'ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)"' in dockerfile
+    assert "sccache --start-server && sccache --stop-server" in dockerfile
+    assert dockerfile.index("cargo chef cook") < dockerfile.index("COPY --from=compiler_cache")
 
 
 def test_every_issuance_integration_test_remains_registered() -> None:
