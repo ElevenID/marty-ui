@@ -92,6 +92,16 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_operations_inputs() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "operations_input",
+            "operations-input",
+            "operations_inputs",
+            "MARTY_CANVAS_OPERATIONS_INPUT_ORACLE=1",
+        )))
+        .await
+    }
+
     async fn start_probe_with_extra(
         oracle: Option<(&str, &str, &str, &str)>,
         extra_fixture: Option<&'static str>,

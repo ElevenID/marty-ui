@@ -712,6 +712,8 @@ jobs:
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
           "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'
           "${executables[0]}" --list | grep -Fx 'operations_match_frozen_published_python: test'
+          "${executables[0]}" --list | grep -Fx 'operations_reads_match_frozen_published_python: test'
+          "${executables[0]}" --list | grep -Fx 'operations_inputs_match_frozen_published_python: test'
           "${executables[0]}" --nocapture --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()

@@ -1,6 +1,7 @@
 # Canvas operations: published HTTP/database baseline
 
-Status: Python behavior captured; native operations not implemented or routed.
+Status: Python behavior captured; four [native read candidates](canvas-operations-reads.md)
+implemented but unrouted. Native writes and full cutover qualification remain.
 This does not qualify worker cutover, Python deletion or production deployment.
 
 The separate operations router owns eight reachable APIs for application
@@ -53,9 +54,9 @@ official forward migration and corresponding model/repository regression
 coverage; do not rewrite the published migration or loosen tenant/claim fences.
 Verify actual corrected PostgreSQL recovery, rollback and competing-claim
 behavior before accepting a deliberate difference from this baseline.
-Credentials PR #266 provides that forward-only migration and real-database
-regression coverage; protected landing and aggregate qualification are still
-required. Keep this historical golden unchanged when adopting the repair.
+Credentials PR #266 merged that forward-only migration and real-database
+regression coverage; aggregate adoption and qualification are still required.
+Keep this historical golden unchanged when adopting the repair.
 
 ## Next implementation and acceptance gates
 
