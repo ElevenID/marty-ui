@@ -3,6 +3,27 @@ use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
 #[tokio::test]
+async fn operations_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_operations()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-operations-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(expected["observations"].as_array().unwrap().len(), 46);
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published operations baseline drifted"
+    );
+    owned.close().unwrap();
+}
+
+#[tokio::test]
 async fn heartbeat_readiness_matches_published_python() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

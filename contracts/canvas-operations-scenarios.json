@@ -1,0 +1,371 @@
+{
+  "schema": "marty.canvas-operations-scenarios/v1",
+  "shared_seed": "canvas-issued-review-scenarios.json",
+  "seed": [
+    "UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=false WHERE id='target-review'",
+    "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at,last_error_code,last_error_summary) VALUES ('job-dead','org-review','target-review','dead_letter',8,8,now(),'{\"facts_changed\":1,\"no_change\":false,\"provider_payload\":{\"token\":\"synthetic-private\"},\"roster_remaining\":2}',now(),now(),'synthetic_failure','Bearer synthetic-private-token')",
+    "INSERT INTO issuance_service.canvas_award_candidates (id,organization_id,platform_id,binding_id,candidate_key,canvas_user_id,lti_subject,state,observed_at,created_at,updated_at) VALUES ('candidate-ops','org-review','platform-review','binding-review','numeric-user:7','7','subject-private','pending_claim',now(),now(),now())"
+  ],
+  "snapshot_sql": "SELECT jsonb_build_object('jobs',(SELECT jsonb_agg(jsonb_build_object('id',id,'target_id',target_id,'status',status,'attempt_count',attempt_count,'max_attempts',max_attempts) ORDER BY id) FROM issuance_service.canvas_evidence_sync_jobs),'targets',(SELECT jsonb_agg(jsonb_build_object('id',id,'enabled',enabled) ORDER BY id) FROM issuance_service.canvas_evidence_sync_targets),'reviews',(SELECT jsonb_agg(jsonb_build_object('id',id,'status',status,'action',resolution_action,'actor',resolved_by,'claim_active',resolution_claim_token IS NOT NULL,'recovery_pending',resolution_recovery_pending) ORDER BY id) FROM issuance_service.evidence_policy_reviews),'resolved_events',(SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'))",
+  "cases": [
+    {
+      "name": "missing_management_key",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs",
+      "expected_status": 401,
+      "omit_headers": [
+        "X-API-Key"
+      ]
+    },
+    {
+      "name": "wrong_management_key",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs",
+      "expected_status": 401,
+      "headers": {
+        "X-API-Key": "synthetic-wrong-key"
+      }
+    },
+    {
+      "name": "missing_tenant",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs",
+      "expected_status": 400,
+      "omit_headers": [
+        "X-Organization-ID"
+      ]
+    },
+    {
+      "name": "foreign_query",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?organization_id=org-foreign",
+      "expected_status": 404
+    },
+    {
+      "name": "jobs_invalid_status",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=invalid",
+      "expected_status": 422
+    },
+    {
+      "name": "jobs_zero_limit",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0",
+      "expected_status": 422
+    },
+    {
+      "name": "jobs_excess_limit",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=501",
+      "expected_status": 422
+    },
+    {
+      "name": "jobs_list",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs",
+      "expected_status": 200
+    },
+    {
+      "name": "jobs_filtered",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?binding_id=binding-review&limit=1",
+      "expected_status": 200
+    },
+    {
+      "name": "jobs_unmatched_binding",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?binding_id=missing",
+      "expected_status": 200
+    },
+    {
+      "name": "candidates_invalid_status",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=invalid",
+      "expected_status": 422
+    },
+    {
+      "name": "candidates_zero_limit",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?limit=0",
+      "expected_status": 422
+    },
+    {
+      "name": "candidates_excess_limit",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?limit=501",
+      "expected_status": 422
+    },
+    {
+      "name": "candidates_list",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates",
+      "expected_status": 200
+    },
+    {
+      "name": "candidates_filtered",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?binding_id=binding-review&limit=1",
+      "expected_status": 200
+    },
+    {
+      "name": "candidates_unmatched_binding",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?binding_id=missing",
+      "expected_status": 200
+    },
+    {
+      "name": "reviews_invalid_status",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=invalid",
+      "expected_status": 422
+    },
+    {
+      "name": "reviews_zero_limit",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?limit=0",
+      "expected_status": 422
+    },
+    {
+      "name": "reviews_excess_limit",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?limit=501",
+      "expected_status": 422
+    },
+    {
+      "name": "reviews_list",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews",
+      "expected_status": 200
+    },
+    {
+      "name": "reviews_filtered",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?binding_id=binding-review&limit=1",
+      "expected_status": 200
+    },
+    {
+      "name": "reviews_unmatched_binding",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?binding_id=missing",
+      "expected_status": 200
+    },
+    {
+      "name": "job_get",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead",
+      "expected_status": 200
+    },
+    {
+      "name": "job_foreign",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead",
+      "expected_status": 404,
+      "headers": {
+        "X-Organization-ID": "org-foreign"
+      }
+    },
+    {
+      "name": "job_missing",
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/missing",
+      "expected_status": 404
+    },
+    {
+      "name": "retry_rollout_closed",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/retry",
+      "expected_status": 409,
+      "rollout": false
+    },
+    {
+      "name": "retry_foreign",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/retry",
+      "expected_status": 404,
+      "headers": {
+        "X-Organization-ID": "org-foreign"
+      }
+    },
+    {
+      "name": "retry_dead_letter",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/retry",
+      "expected_status": 202
+    },
+    {
+      "name": "retry_again",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/retry",
+      "expected_status": 409
+    },
+    {
+      "name": "resolve_queued",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/resolve",
+      "expected_status": 409
+    },
+    {
+      "name": "resolve_dead_letter",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/resolve",
+      "expected_status": 200,
+      "sql": [
+        "UPDATE issuance_service.canvas_evidence_sync_jobs SET status='dead_letter' WHERE id='job-dead'",
+        "UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=false WHERE id='target-review'"
+      ]
+    },
+    {
+      "name": "resolve_again",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/job-dead/resolve",
+      "expected_status": 409
+    },
+    {
+      "name": "review_invalid_action",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-dismiss/resolve",
+      "expected_status": 422,
+      "body": {
+        "action": "other"
+      }
+    },
+    {
+      "name": "review_note_limit",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-dismiss/resolve",
+      "expected_status": 422,
+      "body": {
+        "action": "dismiss"
+      },
+      "note_length": 2001
+    },
+    {
+      "name": "review_foreign",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-dismiss/resolve",
+      "expected_status": 404,
+      "body": {
+        "action": "dismiss"
+      },
+      "headers": {
+        "X-Organization-ID": "org-foreign"
+      }
+    },
+    {
+      "name": "review_dismiss",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-dismiss/resolve",
+      "expected_status": 200,
+      "body": {
+        "action": "dismiss",
+        "note": "  reviewed  "
+      },
+      "headers": {
+        "X-Authenticated-User-ID": "actor-primary",
+        "X-User-ID": "actor-secondary",
+        "X-API-Key-ID": "actor-key"
+      }
+    },
+    {
+      "name": "review_dismiss_again",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-dismiss/resolve",
+      "expected_status": 409,
+      "body": {
+        "action": "dismiss"
+      }
+    },
+    {
+      "name": "review_suspend",
+      "prepare_review": "review-suspend",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-suspend/resolve",
+      "expected_status": 200,
+      "body": {
+        "action": "suspend",
+        "note": "synthetic correction"
+      }
+    },
+    {
+      "name": "review_revoke",
+      "prepare_review": "review-revoke",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-revoke/resolve",
+      "expected_status": 200,
+      "body": {
+        "action": "revoke",
+        "note": "synthetic correction"
+      }
+    },
+    {
+      "name": "review_failed",
+      "prepare_review": "review-failed",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-failed/resolve",
+      "expected_status": 500,
+      "body": {
+        "action": "suspend",
+        "note": "synthetic correction"
+      },
+      "handler_failure": true
+    },
+    {
+      "name": "review_recovered_failure",
+      "prepare_review": "review-recovered_failure",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-recovered_failure/resolve",
+      "expected_status": 500,
+      "body": {
+        "action": "suspend",
+        "note": "synthetic correction"
+      },
+      "handler_failure": true,
+      "recovery_during_handler": true
+    },
+    {
+      "name": "review_recovered_success",
+      "prepare_review": "review-recovered_success",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-recovered_success/resolve",
+      "expected_status": 200,
+      "body": {
+        "action": "suspend",
+        "note": "synthetic correction"
+      },
+      "recovery_during_handler": true
+    },
+    {
+      "name": "review_concurrent",
+      "prepare_review": "review-concurrent",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-concurrent/resolve",
+      "expected_status": 200,
+      "body": {
+        "action": "suspend",
+        "note": "synthetic correction"
+      },
+      "concurrent": true
+    },
+    {
+      "name": "enqueue",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/application-review/canvas-sync",
+      "expected_status": 202
+    },
+    {
+      "name": "enqueue_duplicate",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/application-review/canvas-sync",
+      "expected_status": 202
+    },
+    {
+      "name": "enqueue_foreign",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/application-review/canvas-sync",
+      "expected_status": 404,
+      "headers": {
+        "X-Organization-ID": "org-foreign"
+      }
+    }
+  ]
+}

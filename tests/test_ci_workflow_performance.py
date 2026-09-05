@@ -75,6 +75,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "canvas_published_schema_contract" in gate["run"]
     assert '"${executables[0]}" --list' in gate["run"]
     assert "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in gate["run"]
+    assert "grep -Fx 'operations_match_frozen_published_python: test'" in gate["run"]
     assert '"${executables[0]}" --nocapture --test-threads=1' in gate["run"]
     assert "[[ ${#executables[@]} == 1" in gate["run"]
 
