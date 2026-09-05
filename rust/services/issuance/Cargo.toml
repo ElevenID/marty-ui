@@ -16,7 +16,7 @@ test = false
 [[bin]]
 name = "marty-canvas-sync-worker"
 path = "src/bin/canvas_sync_worker.rs"
-test = false
+test = true
 
 [dependencies]
 aes-gcm.workspace = true

@@ -16,9 +16,13 @@ use marty_issuance_service::canvas_sync_worker::{
     CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult, CanvasSyncTarget,
     CanvasSyncWorker, CanvasSyncWorkerConfig,
 };
+use marty_issuance_service::canvas_sync_worker_lifecycle::{
+    finish_on_shutdown, spawn_with_postgres_cleanup, WorkerShutdown,
+};
+use mmf_runtime::managed_task::{CleanupOutcome, TaskOutcome};
 use serde_json::Value;
-use sqlx::PgPool;
-use tokio::sync::{watch, Notify, Semaphore};
+use sqlx::{pool::PoolConnection, postgres::PgPoolOptions, PgPool, Postgres};
+use tokio::sync::{oneshot, watch, Notify, Semaphore};
 
 use super::canvas_worker_range_oracle::observed_worker;
 
@@ -31,6 +35,14 @@ struct ProcessorState {
 }
 
 struct ActiveProcessor(Arc<ProcessorState>);
+
+struct SignalScope(Arc<AtomicUsize>);
+
+impl Drop for SignalScope {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 impl Drop for ActiveProcessor {
     fn drop(&mut self) {
@@ -231,4 +243,179 @@ pub async fn assert_owned_cycle_lifecycle(pool: &PgPool) {
         vec![("succeeded".to_owned(), true); 2]
     );
     eprintln!("native PostgreSQL lifecycle: owned cancellation, panic isolation, pre-stop and graceful drain passed");
+}
+
+async fn disposal_pool(observer: &PgPool) -> PgPool {
+    // Same already-guarded synthetic *_test database, independent pool owner.
+    // Keeping the observer open permits durable assertions AFTER owner disposal.
+    PgPoolOptions::new()
+        .max_connections(6)
+        .connect_with((*observer.connect_options()).clone())
+        .await
+        .expect("dedicated disposal pool")
+}
+
+async fn join_after_connection_release<F: std::future::Future>(
+    pool: &PgPool,
+    mut join: Pin<&mut F>,
+    held: PoolConnection<Postgres>,
+) -> F::Output {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            _ = &mut join => panic!("join completed before pool disposal started"),
+            () = pool.close_event() => {}
+        }
+    })
+    .await
+    .expect("cleanup must start even while a connection is checked out");
+    assert!(
+        pool.is_closed(),
+        "closed flag means closing started, not finished"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut join)
+            .await
+            .is_err(),
+        "join must await pool disposal, not merely request it"
+    );
+    assert!(
+        pool.size() >= 1,
+        "checked-out connection still belongs to pool"
+    );
+    drop(held);
+    let result = tokio::time::timeout(Duration::from_secs(5), join)
+        .await
+        .expect("join must finish after the held connection is released");
+    assert_eq!(
+        pool.size(),
+        0,
+        "all owned connections disposed before acknowledgment"
+    );
+    assert!(matches!(pool.acquire().await, Err(sqlx::Error::PoolClosed)));
+    result
+}
+
+pub async fn assert_initialized_pool_disposal(observer: &PgPool) {
+    // Replays the initialized return/error floor against real PostgreSQL.
+    // The extra initialization-factory panic case is a native strengthening.
+    for exit in ["return", "error", "initialization-panic"] {
+        let pool = disposal_pool(observer).await;
+        let held = pool.acquire().await.unwrap();
+        let owner = spawn_with_postgres_cleanup(pool.clone(), move |operation_pool| {
+            assert_ne!(
+                exit, "initialization-panic",
+                "synthetic initialization panic"
+            );
+            async move {
+                let (one,): (i32,) = sqlx::query_as("SELECT 1")
+                    .fetch_one(&operation_pool)
+                    .await
+                    .unwrap();
+                assert_eq!(one, 1);
+                if exit == "error" {
+                    Err("synthetic initialized operation failure")
+                } else {
+                    Ok(())
+                }
+            }
+        });
+        let cancellation = owner.cancellation_handle();
+        let signal_drops = Arc::new(AtomicUsize::new(0));
+        let signal_scope = SignalScope(signal_drops.clone());
+        let (stop, _receiver) = watch::channel(false);
+        let mut join = Box::pin(finish_on_shutdown(owner, stop, async move {
+            let _scope = signal_scope;
+            std::future::pending::<WorkerShutdown>().await
+        }));
+        // Waiting for the close event is not a substitute for awaiting join.
+        tokio::time::timeout(Duration::from_secs(5), pool.close_event())
+            .await
+            .unwrap();
+        assert!(
+            !cancellation.cancel(),
+            "late cancellation cannot abort disposal"
+        );
+        let completion = join_after_connection_release(&pool, join.as_mut(), held)
+            .await
+            .unwrap();
+        assert_eq!(completion.cleanup, CleanupOutcome::Completed);
+        assert_eq!(
+            signal_drops.load(Ordering::SeqCst),
+            1,
+            "natural exit owns signal scope too"
+        );
+        match exit {
+            "return" => assert_eq!(completion.outcome, TaskOutcome::Completed(())),
+            "error" => assert_eq!(
+                completion.outcome,
+                TaskOutcome::Failed("synthetic initialized operation failure")
+            ),
+            _ => assert_eq!(completion.outcome, TaskOutcome::Panicked),
+        }
+    }
+
+    // Real run_loop, real SQL and two active controlled processors. Graceful
+    // shutdown and explicit cancellation must remain observably different.
+    for cancel in [false, true] {
+        let pool = disposal_pool(observer).await;
+        let ControlledCycle {
+            worker,
+            state,
+            release,
+        } = controlled_cycle(&pool, None).await;
+        let held = pool.acquire().await.unwrap();
+        let (shutdown, signal) = oneshot::channel();
+        let signal_drops = Arc::new(AtomicUsize::new(0));
+        let signal_scope = SignalScope(signal_drops.clone());
+        let (stop, receiver) = watch::channel(false);
+        let owner = spawn_with_postgres_cleanup(pool.clone(), move |_pool| async move {
+            worker.run_loop(receiver).await
+        });
+        let mut join = Box::pin(finish_on_shutdown(owner, stop, async move {
+            let _scope = signal_scope;
+            signal.await.expect("owned shutdown signal")
+        }));
+        await_both_processors(join.as_mut(), &state).await;
+        if cancel {
+            shutdown.send(WorkerShutdown::Cancel).unwrap();
+        } else {
+            shutdown.send(WorkerShutdown::Drain).unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), &mut join)
+                    .await
+                    .is_err(),
+                "graceful shutdown must drain active processors"
+            );
+            assert_eq!(state.active.load(Ordering::SeqCst), 2);
+            assert!(!pool.is_closed(), "pool must remain available during drain");
+            release.add_permits(2);
+        }
+        let completion = join_after_connection_release(&pool, join.as_mut(), held)
+            .await
+            .unwrap();
+        assert_eq!(completion.cleanup, CleanupOutcome::Completed);
+        if cancel {
+            assert_eq!(completion.outcome, TaskOutcome::Cancelled);
+        } else {
+            assert_eq!(completion.outcome, TaskOutcome::Completed(()));
+        }
+        assert_eq!(state.active.load(Ordering::SeqCst), 0);
+        assert_eq!(state.cleaned.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            signal_drops.load(Ordering::SeqCst),
+            1,
+            "no detached signal helper"
+        );
+        assert_eq!(
+            durable_jobs(observer).await,
+            vec![
+                (
+                    if cancel { "leased" } else { "succeeded" }.to_owned(),
+                    !cancel
+                );
+                2
+            ]
+        );
+    }
+    eprintln!("native PostgreSQL disposal: return, error, initialization panic, active cancellation and graceful drain passed");
 }
