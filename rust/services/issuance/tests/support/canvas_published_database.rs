@@ -29,6 +29,7 @@ pub struct PublishedDatabase {
     postgres: Option<String>,
     probe: Option<String>,
     pub url: String,
+    pub oracle: Option<Value>,
 }
 
 impl PublishedDatabase {
@@ -41,6 +42,60 @@ impl PublishedDatabase {
     }
 
     pub async fn start() -> Result<Self, String> {
+        Self::start_probe(None).await
+    }
+
+    pub async fn start_with_issued_reviews() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "issued_review",
+            "issued-review",
+            "issued_reviews",
+            "MARTY_CANVAS_ISSUED_REVIEW_ORACLE=1",
+        )))
+        .await
+    }
+
+    pub async fn start_with_mixed_roster() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "mixed_roster",
+            "mixed-roster",
+            "mixed_roster",
+            "MARTY_CANVAS_MIXED_ROSTER_ORACLE=1",
+        )))
+        .await
+    }
+
+    pub async fn start_with_heartbeat_readiness() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "heartbeat_readiness",
+            "heartbeat-readiness",
+            "heartbeat_readiness",
+            "MARTY_CANVAS_HEARTBEAT_READINESS_ORACLE=1",
+        )))
+        .await
+    }
+
+    async fn start_probe(oracle: Option<(&str, &str, &str, &str)>) -> Result<Self, String> {
+        Self::start_probe_with_extra(oracle, None).await
+    }
+
+    pub async fn start_with_operations() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "operations",
+                "operations",
+                "operations",
+                "MARTY_CANVAS_OPERATIONS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    async fn start_probe_with_extra(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+    ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -50,6 +105,7 @@ impl PublishedDatabase {
             postgres: None,
             probe: None,
             url: String::new(),
+            oracle: None,
         };
         let label = format!("{LABEL}={}", owned.scope);
         let postgres = docker(&[
@@ -115,7 +171,7 @@ impl PublishedDatabase {
         let fixture_mount = format!("type=bind,source={},target=/verification/contracts/canvas-worker-consumer-range-oracle.json,readonly",
             root.join("contracts/canvas-worker-consumer-range-oracle.json").display());
         let network = format!("container:{postgres}");
-        let probe = docker(&[
+        let mut arguments = vec![
             "create",
             "--pull=never",
             "--label",
@@ -139,7 +195,46 @@ impl PublishedDatabase {
             "python",
             fixture["observed_image"].as_str().unwrap(),
             "/verification/scripts/prepare_canvas_published_schema.py",
-        ])?;
+        ];
+        let (script, scenario, report_key, flag) = oracle.unwrap_or_default();
+        let script_path = format!("scripts/run_canvas_{script}_oracle.py");
+        let scenario_path = format!("contracts/canvas-{scenario}-scenarios.json");
+        let oracle_script_mount = format!(
+            "type=bind,source={},target=/verification/{script_path},readonly",
+            root.join(&script_path).display()
+        );
+        let oracle_scenario_mount = format!(
+            "type=bind,source={},target=/verification/{scenario_path},readonly",
+            root.join(&scenario_path).display()
+        );
+        if oracle.is_some() {
+            // Insert options before the image, never turn them into Python args.
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--env",
+                    flag,
+                    "--mount",
+                    &oracle_script_mount,
+                    "--mount",
+                    &oracle_scenario_mount,
+                ],
+            );
+        }
+        // The operations oracle reuses the existing published-schema seed.
+        // Only this private, statically selected fixture is additionally mounted.
+        let extra_mount = extra_fixture.map(|name| {
+            format!(
+                "type=bind,source={},target=/verification/contracts/{name},readonly",
+                root.join("contracts").join(name).display()
+            )
+        });
+        if let Some(mount) = extra_mount.as_deref() {
+            let index = arguments.len() - 2;
+            arguments.splice(index..index, ["--mount", mount]);
+        }
+        let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());
         eprintln!("Owned published migration probe: {probe}");
@@ -148,7 +243,10 @@ impl PublishedDatabase {
             let state = inspect(&probe)?;
             if state["State"]["Running"] == false {
                 if state["State"]["ExitCode"] != 0 {
-                    return Err("Published migration probe failed (raw logs suppressed)".into());
+                    let report: Value = serde_json::from_str(&docker(&["logs", &probe])?)
+                        .map_err(|_| "Probe failed without a structured diagnostic")?;
+                    return Err(format!("Published probe failed: class={}, frames={} (exception messages suppressed)",
+                        report["error_class"], report["frames"]));
                 }
                 break;
             }
@@ -164,6 +262,14 @@ impl PublishedDatabase {
             return Err("Published migration evidence incomplete".into());
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
+        if oracle.is_some() {
+            owned.oracle = Some(
+                report
+                    .get(report_key)
+                    .ok_or("Missing published behavior oracle")?
+                    .clone(),
+            );
+        }
         Ok(owned)
     }
 

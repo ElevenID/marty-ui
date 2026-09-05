@@ -2,10 +2,135 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[tokio::test]
+async fn operations_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_operations()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-operations-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(expected["observations"].as_array().unwrap().len(), 46);
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published operations baseline drifted"
+    );
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn heartbeat_readiness_matches_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_heartbeat_readiness()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-heartbeat-readiness-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published heartbeat oracle drifted"
+    );
+    owned.close().unwrap();
+    let native = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&native.url)
+        .await
+        .unwrap();
+    canvas_heartbeat_readiness_replay::replay(&pool, &expected).await;
+    pool.close().await;
+    native.close().unwrap();
+}
+
+#[path = "support/canvas_heartbeat_readiness_replay.rs"]
+mod canvas_heartbeat_readiness_replay;
+
+#[path = "support/canvas_issued_review_replay.rs"]
+mod canvas_issued_review_replay;
+#[path = "support/canvas_mixed_roster_replay.rs"]
+mod canvas_mixed_roster_replay;
 #[path = "support/canvas_published_database.rs"]
 mod canvas_published_database;
 #[path = "support/canvas_published_processor.rs"]
 mod canvas_published_processor;
+
+#[tokio::test]
+async fn issued_reviews_match_published_python_without_mutating_credentials() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_issued_reviews()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-issued-review-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published Python drifted from its frozen observations"
+    );
+    owned.close().unwrap();
+    let native = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&native.url)
+        .await
+        .unwrap();
+    canvas_issued_review_replay::replay(&pool, &expected)
+        .with_subscriber(tracing_subscriber::fmt().with_test_writer().finish())
+        .await;
+    pool.close().await;
+    native.close().unwrap();
+}
+
+#[tokio::test]
+async fn mixed_roster_matches_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_mixed_roster()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-mixed-roster-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published Python mixed-roster observations drifted"
+    );
+    owned.close().unwrap();
+    let native = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&native.url)
+        .await
+        .unwrap();
+    canvas_mixed_roster_replay::replay(&pool, &expected)
+        .with_subscriber(tracing_subscriber::fmt().with_test_writer().finish())
+        .await;
+    pool.close().await;
+    native.close().unwrap();
+}
 
 #[tokio::test]
 async fn native_canvas_uses_published_migrations_and_constraints() {

@@ -1,0 +1,33 @@
+{
+  "schema": "marty.canvas-mixed-roster-scenarios/v1",
+  "boundary": "Published processor and database identity-join behavior with controlled provider transport; not HTTP adapter or manual endpoint qualification.",
+  "seed": [
+    "INSERT INTO organization_service.organizations (id,name,slug) VALUES ('org-roster','Synthetic','synthetic-roster')",
+    "INSERT INTO issuance_service.application_templates (id,organization_id,name,credential_template_id,form_fields,evidence_requirements,claim_collection_rules,approval_strategy,application_validity_days,ui_config,notification_config,status,created_at,updated_at) VALUES ('template-roster','org-roster','Synthetic','credential-template','[]','[]','[]','MANUAL',30,'{}','{}','ACTIVE',now(),now())",
+    "INSERT INTO issuance_service.canvas_platforms (id,organization_id,canvas_account_id,canvas_base_url,lti_issuer,lti_client_id,lti_deployment_id,lti_openid_configuration,enabled) VALUES ('platform-roster','org-roster','account','https://canvas.example.edu','https://canvas.example.edu','synthetic-client','deployment','{\"token_endpoint\":\"https://canvas.example.edu/login/oauth2/token\"}',true)",
+    "INSERT INTO issuance_service.canvas_program_bindings (id,organization_id,platform_id,application_template_id,credential_template_id,evidence_requirements,enabled,validated_config_version,activated_at) VALUES ('binding-roster','org-roster','platform-roster','template-roster','credential-template','[{\"requirement_id\":\"rest\",\"source\":\"canvas_rest\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"42\",\"activity_id\":\"9\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true},{\"requirement_id\":\"ags\",\"source\":\"ags_result\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"42\",\"line_item_url\":\"https://canvas.example.edu/api/lti/courses/42/line_items/5\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]',true,1,now())",
+    "INSERT INTO issuance_service.canvas_evidence_sync_targets (id,organization_id,platform_id,binding_id,target_type,logical_key,metadata) VALUES ('target-roster','org-roster','platform-roster','binding-roster','background_roster','roster','{\"verified_binding_id\":\"binding-roster\",\"verified_binding_config_version\":1,\"nrps_context_memberships_url\":\"https://canvas.example.edu/api/lti/courses/42/memberships\"}')"
+  ],
+  "stages": [
+    {"name":"no_identity_no_evidence", "active":true, "score":90},
+    {"name":"subject_verified_is_not_linked", "active":true, "score":90, "action":"subject_verified"},
+    {"name":"linked_but_inactive_membership", "active":false, "score":90, "action":"linked"},
+    {"name":"verified_join_allows_both_sources", "active":true, "score":90},
+    {"name":"duplicate_observations_reused", "active":true, "score":90},
+    {"name":"provider_outage_preserves_heads", "active":true, "score":90, "error":true},
+    {"name":"negative_ags_blocks_pending_claim", "active":true, "score":10},
+    {"name":"positive_ags_recovers_pending_claim", "active":true, "score":90},
+    {"name":"quarantined_identity_blocks_evidence", "active":true, "score":90, "action":"quarantined"},
+    {"name":"relinked_identity_recovers", "active":true, "score":90, "action":"linked"},
+    {"name":"claimed_candidate_is_preserved", "active":true, "score":10, "action":"claimed"},
+    {"name":"dismissed_candidate_is_preserved", "active":true, "score":90, "action":"dismissed"}
+  ],
+  "actions": {
+    "subject_verified": "INSERT INTO issuance_service.canvas_learner_identities (id,organization_id,platform_id,deployment_id,lti_subject,canvas_user_id,status) VALUES ('identity-roster','org-roster','platform-roster','deployment','subject-7','7','subject_verified')",
+    "linked": "UPDATE issuance_service.canvas_learner_identities SET status='linked' WHERE id='identity-roster'",
+    "claimed": "UPDATE issuance_service.canvas_award_candidates SET state='claimed' WHERE canvas_user_id='7'",
+    "dismissed": "UPDATE issuance_service.canvas_award_candidates SET state='dismissed' WHERE canvas_user_id='7'",
+    "quarantined": "UPDATE issuance_service.canvas_learner_identities SET status='quarantined' WHERE id='identity-roster'"
+  },
+  "snapshot_sql": "SELECT jsonb_build_object('candidates',COALESCE((SELECT jsonb_agg(jsonb_build_object('user',c.canvas_user_id,'subject',c.lti_subject,'identity',c.learner_identity_id,'state',c.state,'observations',COALESCE((SELECT jsonb_agg(jsonb_build_object('requirement',o.requirement_id,'assertion',o.assertion,'verification',o.verification,'hash',o.payload_hash,'current',o.is_current,'superseded',o.superseded_observation_id IS NOT NULL) ORDER BY o.requirement_id,o.created_at,o.id) FROM issuance_service.canvas_candidate_observations o WHERE o.candidate_id=c.id),'[]'::jsonb)) ORDER BY c.canvas_user_id,c.lti_subject NULLS FIRST) FROM issuance_service.canvas_award_candidates c),'[]'::jsonb),'cursor',(SELECT metadata->'roster_cursor' FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-roster'),'roster_size',(SELECT metadata->'roster_size' FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-roster'),'applications',(SELECT count(*) FROM issuance_service.applications),'credentials',(SELECT count(*) FROM issuance_service.issued_credentials),'facts',(SELECT count(*) FROM issuance_service.evidence_facts))"
+}

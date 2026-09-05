@@ -1,7 +1,9 @@
 # Native Canvas processor on published issuance migrations
 
-Status: local configured contract passes; hosted integration and protected
-landing are still required. The worker remains unrouted.
+Status: UI #804 is merged at protected
+`e8d4b54c22f79d95a919d302a1a81c01f6e4ff0f`, with its exact reviewed tree and
+successful protected-queue CI33979156327 / CodeQL33979156322.
+The worker remains unrouted.
 
 The published schema exposed a real native defect: the fact-commit snapshot
 guard compared `applications.integration_context` (JSON) directly with a JSONB
@@ -46,8 +48,9 @@ images. Without the flag, normal workspace runs do not invoke Docker and are
 not published-schema evidence. CI explicitly enables the flag in a mandatory
 Rust Service Tests step and validates the exact compiled executable exists.
 
-Only two public test-input files are mounted read-only into the migration
-probe; it has a read-only root and dropped capabilities. PostgreSQL exposes
+The base migration mode mounts two public test-input files read-only. Each
+behavior-oracle mode adds only its own script and data-only scenario file.
+The probe has a read-only root and dropped capabilities. PostgreSQL exposes
 one generated loopback port with fixed synthetic credentials. The containers
 share the test database network namespace, not a deployment network. This
 host-native runner is not network-none. Cleanup verifies exact container IDs,
@@ -56,8 +59,16 @@ No arbitrary database URL or deployment credential is accepted.
 
 ## Remaining gates
 
-The actual HTTP provider, mixed REST/AGS/NRPS identity cases, issued-credential
-correction-review lifecycle, full provider/processor differentials, readiness,
+The follow-on [issued-review differential](canvas-issued-review-parity.md)
+freezes ten actual published Python stages and replays them through Rust on a
+separate published-schema database. Local and original hosted sequential lifecycle
+evidence passes; fresh protected integration, concurrency/rollback and manual
+resolver proof remain open. The [mixed-roster differential](canvas-mixed-roster-parity.md)
+adds twelve locally passing processor/database identity stages with frozen hashes
+and candidate state, and restores the missing `roster_remaining` result field.
+
+The actual HTTP provider, broader identity and correction-review cases,
+full provider/processor differentials, readiness,
 all deployment consumers, aggregate beta cutover and acceptance remain open.
 Passing this contract does not authorize deleting the still-reachable Python
 worker or changing production.

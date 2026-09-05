@@ -31,6 +31,40 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
+### Current operations baseline and recovery blocker
+
+The [operations baseline](rust-migrations/canvas-operations-freeze.md) captures
+46 HTTP/state scenarios across all eight remaining Canvas operations APIs using
+the published Python router, authentication, service and real PostgreSQL.
+Two independent captures agree; all five configured published-schema tests,
+all-target issuance Clippy and twenty focused CI/image tests pass locally.
+Native operations implementation and hosted qualification remain pending.
+
+The failed-handler recovery scenario exposes a published schema defect:
+the internal `evidence_recovered` claim is rejected by the manual-action-only
+constraint, leaving recovery pending. The frozen outcome is a historical
+negative control, not desired Rust behavior. An official forward migration,
+model alignment and real-database recovery/audit/claim-fencing tests are required
+before operations cutover. Credentials #266 implements that forward-only fix;
+its real PostgreSQL recovery gate passes locally and on the initial hosted run.
+Both published/current consumer replays pass locally with their respective
+schema heads and unchanged outcomes. Complete fresh CI and protected landing
+remain pending. No reachable Python feature has been removed.
+
+### Current heartbeat readiness qualification
+
+The [published heartbeat readiness gate](rust-migrations/canvas-heartbeat-readiness.md)
+freezes seventeen actual Python/database observations before Rust replay.
+It compares the full heartbeat readiness check through the shared native SQL,
+runtime and policy owners, including microsecond freshness boundaries,
+competing workers, strict boolean metadata and a real database failure.
+It exposed and corrects a zero-age minimum difference; the deployed 120-second
+setting is unchanged. Four native writer/readiness checks additionally cover
+all heartbeat phases and original-start preservation. The configured readiness
+gate and full hosted CI/CodeQL pass. #810 merged as
+`38f29b14f43b83bf5a8122e2203de0eb9f43db9a`, retaining its reviewed tree.
+This is not complete binding activation or permission to route/delete the worker.
+
 ### Current Canvas initialized-owner adoption
 
 Credentials #265 is merged at protected `e3e79c96ab655f4ac699074c6452cd8c4c43dcb6`:
@@ -55,8 +89,43 @@ a JSON/JSONB comparison failure in the native learner fact-commit guard. Real
 roster and learner effects, four fact types, repeat reads, provider-error head
 preservation and stale-context rejection now execute on the actual issuance
 schema. The provider is controlled and the organization dependency is minimal;
-hosted integration, full provider/processor differentials, all-consumer cutover
-and acceptance remain required. Reachable Python is retained until those gates pass.
+UI #804 is merged at protected `e8d4b54c22f79d95a919d302a1a81c01f6e4ff0f`,
+with its reviewed tree retained and queue CI/CodeQL green.
+The [issued-review differential](rust-migrations/canvas-issued-review-parity.md)
+captures ten published Python lifecycle stages before the Rust replay. Both
+implementations pass locally on separate migrated databases, preserving manual
+claims, recovery, older history and all credential/transaction rows. No runtime
+change was needed for those scenarios. Original hosted CI/CodeQL and the
+configured two-test database gate pass. #805 is merged at protected
+`907aaff8e85052cf8cc76559d8a6aecdcc95ebe4`, with its reviewed tree retained.
+
+The next [mixed-roster differential](rust-migrations/canvas-mixed-roster-parity.md)
+freezes twelve actual published Python stages before native replay. Local parity
+now covers missing/unverified/quarantined identities, active mixed-source joins,
+observation reuse, outages, negative/recovered AGS evidence and claimed/dismissed
+state. It discovered and restores the omitted native `roster_remaining` result;
+partial-batch and completed-cycle unit assertions accompany the real-schema
+replay. #806 is merged at protected
+`6cae40752ceed969e5869dc316f828763484bebe`, with queue CI/CodeQL green and
+its reviewed tree retained. This uses controlled transport, not the actual HTTP provider.
+
+The [HTTP-provider follow-up](rust-migrations/canvas-authoritative-http.md) adds
+three passing real REST transport tests using the actual provider/OAuth service
+and shared in-memory OAuth fixtures. It also reproduces an AGS candidate hash
+difference with the provider's full observation shape and restores Python's
+candidate-only projection, preserving learner fields. The unchanged mixed-roster
+baseline and all three configured schema contracts pass locally. #808 merged
+as `c63eb029229e9326ac3884ed85d5d68bcfeec45d`, retaining its reviewed tree.
+The [actual LTI HTTPS gate](rust-migrations/canvas-lti-https.md) is now implemented
+with child-scoped synthetic trust, untrusted-certificate rejection and real
+token/AGS/NRPS requests. #809's mandatory Linux step passed in job
+`101350558900`: four token requests, three AGS reads and two NRPS pages;
+full CI `33982630708` and Rust CodeQL `33982630748` passed. #809 merged
+as `2bbf74a58c35bddcadddbdab66b400ee29a192a9` after fresh source and queue
+CI/CodeQL success, retaining its reviewed tree.
+Full provider/processor differentials,
+concurrency/rollback, manual resolver, all-consumer cutover and acceptance remain
+required. Reachable Python is retained until those gates pass.
 
 The integrated [renewal-progress follow-up](rust-migrations/canvas-worker-renewal-progress.md)
 retains the initialized pool owner and actual process-signal gate while correcting

@@ -28,6 +28,11 @@ use serde_json::Value;
 use tower::ServiceExt;
 use url::Url;
 
+#[path = "support/canvas_authoritative_http.rs"]
+mod canvas_authoritative_http;
+#[path = "support/canvas_authoritative_https.rs"]
+mod canvas_authoritative_https;
+
 #[derive(Clone, Default)]
 struct MemoryRepository {
     state: Arc<Mutex<RepositoryState>>,

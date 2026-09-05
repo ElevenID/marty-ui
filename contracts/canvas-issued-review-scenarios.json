@@ -1,0 +1,74 @@
+{
+  "schema": "marty.canvas-issued-review-scenarios/v1",
+  "boundary": "Synthetic issued-drift processor and PostgreSQL correction-review lifecycle; controlled provider, not HTTP/signing or manual resolver parity.",
+  "preserved_rows_sql": "SELECT jsonb_build_object('credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c),'transactions',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t))",
+  "seed": [
+    "INSERT INTO organization_service.organizations (id,name,slug) VALUES ('org-review','Synthetic','synthetic-review')",
+    "INSERT INTO issuance_service.application_templates (id,organization_id,name,credential_template_id,form_fields,evidence_requirements,claim_collection_rules,approval_strategy,application_validity_days,ui_config,notification_config,status,created_at,updated_at) VALUES ('template-review','org-review','Synthetic','credential-template','[]','[]','[]','MANUAL',30,'{}','{}','ACTIVE',now(),now())",
+    "INSERT INTO issuance_service.canvas_platforms (id,organization_id,canvas_account_id,canvas_base_url,lti_deployment_id,enabled) VALUES ('platform-review','org-review','account','https://canvas.example.edu','deployment',true)",
+    "INSERT INTO issuance_service.canvas_program_bindings (id,organization_id,platform_id,application_template_id,credential_template_id,evidence_requirements,enabled,validated_config_version,activated_at) VALUES ('binding-review','org-review','platform-review','template-review','credential-template','[{\"requirement_id\":\"assignment\",\"source\":\"canvas_rest\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"42\",\"activity_id\":\"9\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]',true,1,now())",
+    "INSERT INTO issuance_service.issuance_transactions (id,organization_id,credential_template_id,status,pre_auth_code,claims,created_at,expires_at) VALUES ('transaction-review','org-review','credential-template','issued','synthetic-unused-code','{}',now(),now()+interval '1 day')",
+    "INSERT INTO issuance_service.issued_credentials (id,transaction_id,organization_id,credential_template_id,credential_jwt,credential_hash,status,status_updated_at,revoked,issued_at) VALUES ('credential-review','transaction-review','org-review','credential-template','synthetic-not-a-signed-credential','synthetic-hash','active',now(),false,now())",
+    "INSERT INTO issuance_service.applications (id,organization_id,application_template_id,applicant_identifier,form_data,submitted_evidence,status,derived_claims,integration_context,credential_id,created_at,updated_at) VALUES ('application-review','org-review','template-review','synthetic-subject','{}','[]','approved','{}','{\"canvas\":{\"lti_subject\":\"subject-7\",\"canvas_platform_id\":\"platform-review\",\"canvas_program_binding_id\":\"binding-review\"}}','credential-review',now(),now())",
+    "INSERT INTO issuance_service.canvas_learner_identities (id,organization_id,platform_id,deployment_id,lti_subject,canvas_user_id) VALUES ('identity-review','org-review','platform-review','deployment','subject-7','7')",
+    "INSERT INTO issuance_service.canvas_evidence_sync_targets (id,organization_id,platform_id,binding_id,target_type,logical_key,application_id) VALUES ('target-review','org-review','platform-review','binding-review','issued_drift','review','application-review')"
+  ],
+  "stages": [
+    {
+      "name": "initial_permit",
+      "score": 90,
+      "revision": 1
+    },
+    {
+      "name": "deny_after_issue",
+      "score": 10,
+      "revision": 2
+    },
+    {
+      "name": "duplicate_deny",
+      "score": 10,
+      "revision": 2
+    },
+    {
+      "name": "unavailable_preserves_review",
+      "error": "unavailable"
+    },
+    {
+      "name": "automatic_recovery",
+      "score": 90,
+      "revision": 3
+    },
+    {
+      "name": "deny_again",
+      "score": 10,
+      "revision": 4
+    },
+    {
+      "name": "recover_while_claimed",
+      "score": 90,
+      "revision": 5,
+      "action": "claim"
+    },
+    {
+      "name": "deny_while_claimed",
+      "score": 10,
+      "revision": 6
+    },
+    {
+      "name": "recover_after_release",
+      "score": 90,
+      "revision": 7,
+      "action": "release"
+    },
+    {
+      "name": "older_negative_history",
+      "score": 10,
+      "revision": 0
+    }
+  ],
+  "actions": {
+    "claim": "UPDATE issuance_service.evidence_policy_reviews SET resolution_claim_token='synthetic-manual-claim',resolution_claim_action='suspend',resolution_claimed_at=clock_timestamp() WHERE status='open'",
+    "release": "UPDATE issuance_service.evidence_policy_reviews SET resolution_claim_token=NULL,resolution_claim_action=NULL,resolution_claimed_at=NULL WHERE status='open'"
+  },
+  "snapshot_sql": "SELECT jsonb_build_object(\n 'facts',(SELECT count(*) FROM issuance_service.evidence_facts),\n 'head_scores',(SELECT jsonb_agg(f.assertion::jsonb->'score_percent' ORDER BY h.logical_key) FROM issuance_service.evidence_fact_heads h JOIN issuance_service.evidence_facts f ON f.id=h.fact_id),\n 'reviews',COALESCE((SELECT jsonb_agg(jsonb_build_object(\n   'status',r.status,'prior_allowed',r.prior_decision::jsonb->'allowed',\n   'current_allowed',r.current_decision::jsonb->'allowed',\n   'triggering_score',f.assertion::jsonb->'score_percent',\n   'action',r.resolution_action,'resolved_by',r.resolved_by,\n   'resolved_at_present',r.resolved_at IS NOT NULL,\n   'claim_token',r.resolution_claim_token,'claim_action',r.resolution_claim_action,\n   'recovery_pending',r.resolution_recovery_pending) ORDER BY r.created_at,r.id)\n   FROM issuance_service.evidence_policy_reviews r JOIN issuance_service.evidence_facts f ON f.id=r.triggering_fact_id),'[]'::jsonb),\n 'events',(SELECT COALESCE(jsonb_object_agg(event_type,n),'{}'::jsonb) FROM (SELECT event_type,count(*) n FROM issuance_service.issuance_events GROUP BY event_type) e),\n 'application',(SELECT jsonb_build_object('status',status,'credential_id',credential_id,'policy_allowed',integration_context::jsonb->'canvas'->'last_evidence_policy_allowed') FROM issuance_service.applications WHERE id='application-review'),\n 'credential',(SELECT jsonb_build_object('count',count(*),'active',bool_and(status='active' AND revoked=false)) FROM issuance_service.issued_credentials)\n )"
+}
