@@ -1,0 +1,12 @@
+{
+  "id": 33937499784,
+  "name": "Stack release",
+  "path": ".github/workflows/cd.yml",
+  "event": "workflow_dispatch",
+  "head_branch": "main",
+  "head_sha": "1866528ab859ea7007ca34671ad80a62131fd79d",
+  "status": "completed",
+  "conclusion": "success",
+  "repository": {"full_name": "ElevenID/marty-ui"},
+  "head_repository": {"full_name": "ElevenID/marty-ui"}
+}

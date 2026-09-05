@@ -228,7 +228,8 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert 'test "$(git rev-parse HEAD)" = "$EVIDENCE_TOOLING_SHA"' in workflow
     assert 'git cat-file -e "$MARTY_UI_RELEASE_SHA^{commit}"' in workflow
     assert "BETA_SOURCE_ID must be a full 40-character source-snapshot ID" in workflow
-    assert 'test "$(jq -r \'.workflowName\' <<<"$run")" = "Stack release"' in workflow
+    assert '-p marty-release-evidence --bin validate-stack-release-run --' in workflow
+    assert '"$STACK_RELEASE_RUN_ID" "$RELEASE_VERSION" "$MARTY_UI_RELEASE_SHA" <<<"$run"' in workflow
     assert 'gh release download "v$RELEASE_VERSION"' in workflow
     assert "--pattern stack-manifest.json" in workflow
     assert "sha256sum --check --ignore-missing SHA256SUMS" in workflow
@@ -271,6 +272,18 @@ def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
         assert step.get("with", {}).get("toolchain") == "1.95.0", workflow_name
 
 
+def test_both_acceptance_lanes_use_the_same_rust_release_run_validator() -> None:
+    for path in (".github/workflows/e2e-tests.yml", ".github/workflows/wallet-conformance.yml"):
+        workflow = _text(path)
+        assert 'gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RELEASE_RUN_ID"' in workflow
+        assert "cargo run --locked --quiet --manifest-path rust/Cargo.toml" in workflow
+        assert "-p marty-release-evidence --bin validate-stack-release-run --" in workflow
+        assert workflow.index("toolchain: 1.95.0") < workflow.index("--bin validate-stack-release-run")
+        assert '.headBranch\' <<<"$stack_run")' not in workflow
+        assert '.event\' <<<"$run")" = "push"' not in workflow
+        assert "gh attestation verify" in workflow
+
+
 def test_wallet_promotion_uses_signed_stack_and_distinct_release_source_lineage() -> (
     None
 ):
@@ -286,10 +299,8 @@ def test_wallet_promotion_uses_signed_stack_and_distinct_release_source_lineage(
     assert permissions["actions"] == "read"
     assert permissions["attestations"] == "read"
     assert permissions["contents"] == "read"
-    assert (
-        'test "$(jq -r \'.workflowName\' <<<"$stack_run")" = "Stack release"'
-        in workflow
-    )
+    assert '-p marty-release-evidence --bin validate-stack-release-run --' in workflow
+    assert '"$STACK_RELEASE_RUN_ID" "$RELEASE_VERSION" <<<"$stack_run"' in workflow
     assert 'gh release download "v$RELEASE_VERSION"' in workflow
     assert "--pattern stack-manifest.json" in workflow
     assert "sha256sum --check --strict stack-manifest.SHA256" in workflow

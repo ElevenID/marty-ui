@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/oid4vp-contract", "services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/deployment-profile", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/issuance", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
+members = ["crates/oid4vp-contract", "crates/release-evidence", "services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/deployment-profile", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/issuance", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
 resolver = "2"
 
 [workspace.package]
