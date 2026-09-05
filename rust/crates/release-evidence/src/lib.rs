@@ -1,11 +1,12 @@
-//! Pure release-run lineage validation shared by lifecycle and wallet gates.
-//! Input must come from the authenticated repository-scoped GitHub Actions API.
-//! This validates run identity, not publication: callers must also verify the
+//! Shared release-run validation and lossless deployment evidence transport.
+//! Run-validator input comes from the authenticated repository-scoped Actions API.
+//! Run validation checks identity, not publication: callers must also verify the
 //! signed manifest and its exact release/version/source component binding.
 
 use serde::Deserialize;
 
 pub mod demo_qualification;
+pub mod deployment_bundle;
 
 pub const MAX_RUN_BYTES: usize = 1024 * 1024;
 const REPOSITORY: &str = "ElevenID/marty-ui";

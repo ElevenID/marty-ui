@@ -8,8 +8,18 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+base64.workspace = true
+flate2 = "1.1.9"
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "beta-evidence-bundle"
+path = "src/bundle_cli.rs"
 
 [[bin]]
 name = "validate-stack-release-run"
