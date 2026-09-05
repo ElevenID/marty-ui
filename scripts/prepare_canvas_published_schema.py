@@ -68,6 +68,11 @@ def prepare():
         }
         for flag, name, key in [
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),
+            (
+                "MARTY_CANVAS_OPERATIONS_INPUT_ORACLE",
+                "operations_input",
+                "operations_inputs",
+            ),
             ("MARTY_CANVAS_ISSUED_REVIEW_ORACLE", "issued_review", "issued_reviews"),
             ("MARTY_CANVAS_MIXED_ROSTER_ORACLE", "mixed_roster", "mixed_roster"),
             (

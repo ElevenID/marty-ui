@@ -1,0 +1,314 @@
+{
+  "schema": "marty.canvas-operations-inputs/v1",
+  "cases": [
+    {
+      "name": "limit_extra_0",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=__1"
+    },
+    {
+      "name": "limit_extra_1",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1__0"
+    },
+    {
+      "name": "limit_extra_2",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=_1"
+    },
+    {
+      "name": "limit_extra_3",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1_"
+    },
+    {
+      "name": "limit_extra_4",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1.0_0"
+    },
+    {
+      "name": "limit_extra_5",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1_0.00"
+    },
+    {
+      "name": "limit_extra_6",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1._0"
+    },
+    {
+      "name": "limit_extra_7",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1.0_"
+    },
+    {
+      "name": "limit_extra_8",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1.00_"
+    },
+    {
+      "name": "limit_extra_9",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1.0e0"
+    },
+    {
+      "name": "limit_extra_10",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1e0"
+    },
+    {
+      "name": "limit_extra_11",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0x1"
+    },
+    {
+      "name": "limit_extra_12",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=-000"
+    },
+    {
+      "name": "limit_extra_13",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=%C2%A02%C2%A0"
+    },
+    {
+      "name": "limit_extra_14",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=%1C2%1C"
+    },
+    {
+      "name": "limit_extra_15",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1.0000000000"
+    },
+    {
+      "name": "limit_one",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1"
+    },
+    {
+      "name": "limit_default",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=100"
+    },
+    {
+      "name": "limit_max",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=500"
+    },
+    {
+      "name": "limit_zero",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0"
+    },
+    {
+      "name": "limit_excess",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=501"
+    },
+    {
+      "name": "limit_trimmed",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=%202%20"
+    },
+    {
+      "name": "limit_plus",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=%2B2"
+    },
+    {
+      "name": "limit_decimal",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=2.0"
+    },
+    {
+      "name": "limit_leading_zero",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=02"
+    },
+    {
+      "name": "limit_underscore",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1_0"
+    },
+    {
+      "name": "limit_scientific",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1e2"
+    },
+    {
+      "name": "limit_decimal_zeros",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=2.00"
+    },
+    {
+      "name": "limit_fraction",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=2.1"
+    },
+    {
+      "name": "limit_negative_zero",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=-0"
+    },
+    {
+      "name": "limit_negative",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=-2"
+    },
+    {
+      "name": "limit_empty",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit="
+    },
+    {
+      "name": "limit_arabic",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=%D9%A1"
+    },
+    {
+      "name": "limit_fullwidth",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=%EF%BC%91"
+    },
+    {
+      "name": "limit_huge",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=9999999999999999999999999999999999999999"
+    },
+    {
+      "name": "limit_trailing_dot",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=2."
+    },
+    {
+      "name": "limit_leading_dot",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=.0"
+    },
+    {
+      "name": "canvas-sync-jobs_\"queued\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=queued"
+    },
+    {
+      "name": "canvas-sync-jobs_\"leased\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=leased"
+    },
+    {
+      "name": "canvas-sync-jobs_\"retry\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=retry"
+    },
+    {
+      "name": "canvas-sync-jobs_\"succeeded\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=succeeded"
+    },
+    {
+      "name": "canvas-sync-jobs_\"dead_letter\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=dead_letter"
+    },
+    {
+      "name": "canvas-sync-jobs_\"cancelled\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=cancelled"
+    },
+    {
+      "name": "canvas-sync-jobs_\"\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status="
+    },
+    {
+      "name": "canvas-sync-jobs_\" \"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=%20"
+    },
+    {
+      "name": "canvas-sync-jobs_\"INVALID\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=INVALID"
+    },
+    {
+      "name": "canvas-sync-jobs_\"QUEUED\"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=QUEUED"
+    },
+    {
+      "name": "canvas-sync-jobs_\" queued \"",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=%20queued%20"
+    },
+    {
+      "name": "canvas-award-candidates_\"observed\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=observed"
+    },
+    {
+      "name": "canvas-award-candidates_\"identity_link_required\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=identity_link_required"
+    },
+    {
+      "name": "canvas-award-candidates_\"eligible\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=eligible"
+    },
+    {
+      "name": "canvas-award-candidates_\"pending_claim\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=pending_claim"
+    },
+    {
+      "name": "canvas-award-candidates_\"claimed\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=claimed"
+    },
+    {
+      "name": "canvas-award-candidates_\"dismissed\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=dismissed"
+    },
+    {
+      "name": "canvas-award-candidates_\"\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status="
+    },
+    {
+      "name": "canvas-award-candidates_\" \"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=%20"
+    },
+    {
+      "name": "canvas-award-candidates_\"INVALID\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=INVALID"
+    },
+    {
+      "name": "canvas-award-candidates_\"OBSERVED\"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=OBSERVED"
+    },
+    {
+      "name": "canvas-award-candidates_\" observed \"",
+      "path": "/v1/integrations/canvas/canvas-award-candidates?status=%20observed%20"
+    },
+    {
+      "name": "evidence-policy-reviews_\"open\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=open"
+    },
+    {
+      "name": "evidence-policy-reviews_\"dismissed\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=dismissed"
+    },
+    {
+      "name": "evidence-policy-reviews_\"suspended\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=suspended"
+    },
+    {
+      "name": "evidence-policy-reviews_\"revoked\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=revoked"
+    },
+    {
+      "name": "evidence-policy-reviews_\"resolved\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=resolved"
+    },
+    {
+      "name": "evidence-policy-reviews_\"\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status="
+    },
+    {
+      "name": "evidence-policy-reviews_\" \"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=%20"
+    },
+    {
+      "name": "evidence-policy-reviews_\"INVALID\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=INVALID"
+    },
+    {
+      "name": "evidence-policy-reviews_\"OPEN\"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=OPEN"
+    },
+    {
+      "name": "evidence-policy-reviews_\" open \"",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews?status=%20open%20"
+    },
+    {
+      "name": "duplicate_limit_last_wins",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0&limit=1"
+    },
+    {
+      "name": "duplicate_limit_last_invalid",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=1&limit=0"
+    },
+    {
+      "name": "limit_before_missing_tenant",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0",
+      "omit_headers": [
+        "X-Organization-ID"
+      ]
+    },
+    {
+      "name": "auth_before_limit",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0",
+      "omit_headers": [
+        "X-API-Key"
+      ]
+    },
+    {
+      "name": "limit_before_foreign_query",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?limit=0&organization_id=foreign"
+    },
+    {
+      "name": "tenant_before_status",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs?status=invalid",
+      "omit_headers": [
+        "X-Organization-ID"
+      ]
+    }
+  ]
+}

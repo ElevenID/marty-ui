@@ -2,6 +2,54 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_operations_read_replay.rs"]
+mod canvas_operations_read_replay;
+
+#[tokio::test]
+async fn operations_reads_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_operations_read_replay::replay(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn operations_inputs_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_operations_inputs()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-operations-input-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published operations inputs drifted"
+    );
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_operations_read_replay::replay_inputs(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[tokio::test]
 async fn operations_match_frozen_published_python() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
