@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current Canvas initialized-owner adoption
 
+The [process-signal follow-up](rust-migrations/canvas-worker-process-signals.md)
+freezes actual published Python SIGINT exit130, corrects the native exit mapping,
+registers Unix handlers before worker startup, and adds actual-binary Linux
+SIGINT/SIGTERM tests during idle and blocked-SQL phases. Local Windows tests
+cannot establish POSIX delivery; that mandatory hosted gate remains required.
+This does not clear authoritative-provider, published-schema or full-worker parity.
+
 UI #795 is merged at protected `354374618014add2611280cbcb7a63703af0daf2`;
 the configuration candidate below has therefore landed. MMF #102/#103 are
 merged, with current protected revision

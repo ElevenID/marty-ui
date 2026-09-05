@@ -1,4 +1,4 @@
-use std::{env, error::Error, fs, sync::Arc, time::Duration};
+use std::{env, error::Error, fs, process::ExitCode, sync::Arc, time::Duration};
 
 use marty_issuance_service::{
     canvas_lti_tool_signing::{
@@ -26,7 +26,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -50,18 +50,23 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .acquire_timeout(Duration::from_secs(10))
         .connect_lazy(&database_url)?;
     let (stop, receiver) = watch::channel(false);
+    // Register Unix handlers before worker tasks can report database readiness.
+    let shutdown = shutdown_signal();
     let owner = spawn_with_postgres_cleanup(pool, move |pool| {
         run_initialized_worker(pool, config, cipher, receiver)
     });
-    let completion = finish_on_shutdown(owner, stop, shutdown_signal()).await?;
+    let completion = finish_on_shutdown(owner, stop, shutdown).await?;
     completion_result(completion)
 }
 
 fn completion_result(
     completion: TaskCompletion<(), Box<dyn Error + Send + Sync>>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     match (completion.outcome, completion.cleanup) {
-        (TaskOutcome::Completed(()), CleanupOutcome::Completed) => Ok(()),
+        (TaskOutcome::Completed(()), CleanupOutcome::Completed) => Ok(ExitCode::SUCCESS),
+        // Preserve the published asyncio.run SIGINT exit status, but only
+        // after cleanup is acknowledged. This is a non-success process exit.
+        (TaskOutcome::Cancelled, CleanupOutcome::Completed) => Ok(ExitCode::from(130)),
         (TaskOutcome::Failed(error), CleanupOutcome::Completed) => Err(error),
         (outcome, cleanup) => {
             // Inspect both outcomes without logging configuration, SQL or panic
@@ -252,46 +257,38 @@ fn env_bool(name: &str) -> bool {
     })
 }
 
-async fn shutdown_signal() -> WorkerShutdown {
-    let ctrl_c = async {
-        if tokio::signal::ctrl_c().await.is_err() {
+#[cfg(unix)]
+fn shutdown_signal() -> impl std::future::Future<Output = WorkerShutdown> {
+    use tokio::signal::unix::{signal, SignalKind};
+    // These calls register synchronously, not on a later future poll.
+    let interrupt = signal(SignalKind::interrupt());
+    let terminate = signal(SignalKind::terminate());
+    async move {
+        let (Ok(mut interrupt), Ok(mut terminate)) = (interrupt, terminate) else {
             error!(
                 exception_class = "SignalRegistrationError",
-                "Canvas interrupt handler failed"
+                "Canvas signal handler failed"
             );
+            return WorkerShutdown::Cancel;
+        };
+        tokio::select! {
+            _ = interrupt.recv() => WorkerShutdown::Cancel,
+            event = terminate.recv() => {
+                if event.is_some() { WorkerShutdown::Drain } else { WorkerShutdown::Cancel }
+            },
         }
-        // asyncio.run cancels the main task on its first SIGINT. Preserve
-        // cancellation, including awaited disposal, rather than graceful success.
-        WorkerShutdown::Cancel
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                if signal.recv().await.is_some() {
-                    WorkerShutdown::Drain
-                } else {
-                    WorkerShutdown::Cancel
-                }
-            }
-            Err(_) => {
-                error!(
-                    exception_class = "SignalRegistrationError",
-                    "Canvas termination handler failed"
-                );
-                WorkerShutdown::Cancel
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<WorkerShutdown>();
-
-    tokio::select! {
-        action = ctrl_c => action,
-        action = terminate => action,
     }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> WorkerShutdown {
+    if tokio::signal::ctrl_c().await.is_err() {
+        error!(
+            exception_class = "SignalRegistrationError",
+            "Canvas interrupt handler failed"
+        );
+    }
+    WorkerShutdown::Cancel
 }
 
 fn integration_master_key() -> Result<String, Box<dyn Error + Send + Sync>> {
@@ -325,8 +322,29 @@ fn comma_values(name: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{completion_result, first_present_or_else};
+    use super::{completion_result, first_present_or_else, ExitCode};
     use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
+
+    #[test]
+    fn cancelled_process_matches_published_python_sigint_exit_code() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/issuance-canvas-worker-process-signals.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["legacy_observation"]["exit_code"], 130);
+        let result = completion_result(TaskCompletion {
+            outcome: TaskOutcome::Cancelled,
+            cleanup: CleanupOutcome::Completed,
+        });
+        assert!(
+            result.is_ok(),
+            "cancellation needs a distinct process exit status"
+        );
+        assert_eq!(
+            result.unwrap(),
+            ExitCode::from(fixture["legacy_observation"]["exit_code"].as_u64().unwrap() as u8)
+        );
+    }
 
     #[test]
     fn process_success_requires_both_operation_and_cleanup_success() {
@@ -342,7 +360,7 @@ mod tests {
                     outcome,
                     cleanup: CleanupOutcome::Completed,
                 })
-                .is_ok(),
+                .is_ok_and(|exit| exit == ExitCode::SUCCESS),
                 succeeds
             );
         }

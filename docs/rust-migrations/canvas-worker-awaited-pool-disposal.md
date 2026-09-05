@@ -31,6 +31,9 @@ Repeated interrupts do not abort acknowledged cleanup. Forced runtime shutdown,
 process termination and host failure cannot guarantee asynchronous disposal.
 OS process-signal delivery and exact exit-code parity are not established by
 the local injected-control tests.
+The [process-signal follow-up](canvas-worker-process-signals.md) freezes the
+published SIGINT exit130 observation, corrects the binary mapping, and adds
+the required Linux actual-binary PostgreSQL signal gate.
 
 ## Evidence and its limits
 
