@@ -5,6 +5,50 @@ use tracing::instrument::WithSubscriber;
 #[path = "support/canvas_operations_read_replay.rs"]
 mod canvas_operations_read_replay;
 
+#[path = "support/canvas_job_operations_checks.rs"]
+mod canvas_job_operations_checks;
+
+#[tokio::test]
+async fn operations_jobs_match_frozen_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_operations_read_replay::replay_jobs(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn operations_jobs_are_atomic_and_concurrent() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        canvas_job_operations_checks::exercise(&pool),
+    )
+    .await
+    .expect("job operation checks must not deadlock");
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[tokio::test]
 async fn operations_reads_match_frozen_published_python() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

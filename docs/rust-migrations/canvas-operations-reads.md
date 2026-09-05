@@ -4,8 +4,9 @@ The existing Rust issuance crate now contains job list/detail, candidate list,
 and correction-review list handlers. They are exposed only by the candidate
 router; the live issuance router, gateway allowlist and deployed consumers are
 unchanged. All eight operations remain reachable through Python until the
-whole operations/worker cutover is qualified. The four writes are not implemented
-by this read-only increment.
+whole operations/worker cutover is qualified. The follow-up
+[job operations candidate](canvas-job-operations.md) adds enqueue/retry/resolve;
+manual review resolution and full cutover qualification remain outstanding.
 
 The service reuses shared management-key verification, worker job statuses and
 lossless integer parsing. Fixed SQL statements bind every caller value. Public
@@ -49,8 +50,8 @@ every job/candidate pagination boundary. Preserve these remaining gates.
 
 ## Next work, not optional cleanup
 
-Implement application enqueue, dead-letter retry/resolve and manual review
-resolution using the existing enqueue and credential lifecycle owners. Reuse
+Finish the job candidate's extended input gates and implement manual review
+resolution using the existing credential lifecycle owner. Reuse
 the shared review locking/audit mechanisms and qualify recovery on the corrected
 schema from credentials #266, merged as
 `51f0a758a076777cb18a30b1db3f89c74ac23e01`. That repair does not change the

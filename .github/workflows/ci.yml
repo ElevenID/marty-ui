@@ -714,6 +714,8 @@ jobs:
           "${executables[0]}" --list | grep -Fx 'operations_match_frozen_published_python: test'
           "${executables[0]}" --list | grep -Fx 'operations_reads_match_frozen_published_python: test'
           "${executables[0]}" --list | grep -Fx 'operations_inputs_match_frozen_published_python: test'
+          "${executables[0]}" --list | grep -Fx 'operations_jobs_match_frozen_published_python: test'
+          "${executables[0]}" --list | grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'
           "${executables[0]}" --nocapture --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()

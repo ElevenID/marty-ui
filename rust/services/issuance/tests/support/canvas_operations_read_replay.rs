@@ -28,7 +28,7 @@ fn timestamps(value: &mut Value) {
     }
 }
 
-async fn request_case(router: &axum::Router, case: &Value) -> (u16, String, Value) {
+pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, String, Value) {
     let mut headers = std::collections::BTreeMap::from([
         (
             "X-API-Key".to_owned(),
@@ -44,7 +44,9 @@ async fn request_case(router: &axum::Router, case: &Value) -> (u16, String, Valu
     for key in case["omit_headers"].as_array().into_iter().flatten() {
         headers.remove(key.as_str().unwrap());
     }
-    let mut request = Request::builder().uri(case["path"].as_str().unwrap());
+    let mut request = Request::builder()
+        .method(case["method"].as_str().unwrap_or("GET"))
+        .uri(case["path"].as_str().unwrap());
     for (key, value) in headers {
         request = request.header(key, value);
     }
@@ -135,7 +137,7 @@ pub async fn replay_inputs(pool: &PgPool) {
     }
 }
 
-fn fixtures() -> &'static [Value; 3] {
+pub(super) fn fixtures() -> &'static [Value; 3] {
     static FIXTURES: std::sync::OnceLock<[Value; 3]> = std::sync::OnceLock::new();
     FIXTURES.get_or_init(|| {
         [
@@ -155,8 +157,8 @@ fn fixtures() -> &'static [Value; 3] {
     })
 }
 
-pub async fn replay(pool: &PgPool) {
-    let [shared, scenarios, frozen] = fixtures();
+pub(super) async fn seed(pool: &PgPool) {
+    let [shared, scenarios, _] = fixtures();
     for statement in shared["seed"]
         .as_array()
         .unwrap()
@@ -172,6 +174,11 @@ pub async fn replay(pool: &PgPool) {
         (id,organization_id,application_id,credential_id,binding_id,status,prior_decision,current_decision,resolution_recovery_pending,created_at,updated_at) \
         VALUES ('review-dismiss','org-review','application-review','credential-review','binding-review','open','{\"allowed\":true}','{\"allowed\":false}',false,now(),now())")
         .execute(pool).await.unwrap();
+}
+
+pub async fn replay(pool: &PgPool) {
+    let [shared, scenarios, frozen] = fixtures();
+    seed(pool).await;
     let preserved: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
         .fetch_one(pool)
         .await
@@ -229,4 +236,119 @@ pub async fn replay(pool: &PgPool) {
     assert_eq!(status, 500);
     assert_eq!(content_type, "text/plain; charset=utf-8");
     assert_eq!(body, json!("Internal Server Error"));
+}
+
+fn generated_ids(value: &mut Value, aliases: &mut std::collections::BTreeMap<String, String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(key.as_str(), "id" | "target_id")
+                    && value
+                        .as_str()
+                        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                {
+                    let next = format!("$generated-id-{}", aliases.len() + 1);
+                    *value = json!(aliases
+                        .entry(value.as_str().unwrap().into())
+                        .or_insert(next));
+                } else {
+                    generated_ids(value, aliases);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                generated_ids(value, aliases);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn job_router(pool: &PgPool, enabled: bool) -> axum::Router {
+    candidate_router(
+        CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
+            .with_job_operations(enabled, ["org-review".to_owned()].into()),
+    )
+}
+
+pub async fn replay_jobs(pool: &PgPool) {
+    let [shared, scenarios, frozen] = fixtures();
+    seed(pool).await;
+    let preserved: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let initial: Value = sqlx::query_scalar(scenarios["snapshot_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let mut aliases = std::collections::BTreeMap::new();
+    let mut count = 0;
+    let mut manual_cases = 0;
+    for (case, expected) in scenarios["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(frozen["observations"].as_array().unwrap())
+    {
+        if case["method"] == "POST"
+            && case["path"]
+                .as_str()
+                .unwrap()
+                .contains("/evidence-policy-reviews/")
+        {
+            manual_cases += 1;
+            continue;
+        }
+        for statement in case["sql"].as_array().into_iter().flatten() {
+            sqlx::query(statement.as_str().unwrap())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        let router = job_router(pool, case["rollout"].as_bool().unwrap_or(true));
+        let (status, content_type, mut body) = request_case(&router, case).await;
+        timestamps(&mut body);
+        generated_ids(&mut body, &mut aliases);
+        assert_eq!(case["name"], expected["name"]);
+        assert_eq!(
+            json!({"status":status,"content_type":content_type,"body":body}),
+            json!({"status":expected["status"],"content_type":expected["content_type"],"body":expected["body"]}),
+            "job HTTP parity: {}",
+            case["name"]
+        );
+        let mut snapshot: Value = sqlx::query_scalar(scenarios["snapshot_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        generated_ids(&mut snapshot, &mut aliases);
+        // The unchanged 46-case oracle includes manual lifecycle operations.
+        // This 35-case replay qualifies job/target effects, NOT manual review parity.
+        for key in ["jobs", "targets"] {
+            assert_eq!(
+                snapshot[key], expected["snapshot"][key],
+                "{}: {key}",
+                case["name"]
+            );
+        }
+        for key in ["reviews", "resolved_events"] {
+            assert_eq!(snapshot[key], initial[key], "job operation mutated {key}");
+        }
+        let current: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            current, preserved,
+            "job operation mutated credential/transaction rows"
+        );
+        assert_eq!(expected["lifecycle_calls"], json!([]));
+        count += 1;
+    }
+    assert_eq!(count, 35);
+    assert_eq!(
+        manual_cases, 11,
+        "manual resolver qualification remains separate"
+    );
 }

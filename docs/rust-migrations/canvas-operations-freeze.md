@@ -1,7 +1,8 @@
 # Canvas operations: published HTTP/database baseline
 
 Status: Python behavior captured; four [native read candidates](canvas-operations-reads.md)
-implemented but unrouted. Native writes and full cutover qualification remain.
+implemented but unrouted. The follow-up [job candidate](canvas-job-operations.md)
+adds three writes; manual review resolution and full cutover qualification remain.
 This does not qualify worker cutover, Python deletion or production deployment.
 
 The separate operations router owns eight reachable APIs for application
