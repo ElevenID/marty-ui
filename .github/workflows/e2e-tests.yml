@@ -25,6 +25,15 @@ on:
       marty_protocol_sha:
         description: Exact Marty Protocol commit used to validate deployed discovery
         required: true
+      demo_qualification_run_id:
+        description: Completed successful private demo release qualification run
+        required: true
+      demo_recorder_sha:
+        description: Exact reviewed recorder main revision used by qualification
+        required: true
+      demo_deployment_manifest_sha256:
+        description: SHA-256 of the original verified deployment receipt
+        required: true
   repository_dispatch:
     types: [beta-deployed]
 
@@ -62,6 +71,9 @@ jobs:
       MARTY_UI_RELEASE_SHA: ${{ inputs.marty_ui_release_sha || github.event.client_payload.marty_ui_release_sha }}
       BETA_SOURCE_ID: ${{ inputs.beta_source_id || github.event.client_payload.beta_source_id }}
       MARTY_PROTOCOL_SHA: ${{ inputs.marty_protocol_sha || github.event.client_payload.marty_protocol_sha }}
+      DEMO_QUALIFICATION_RUN_ID: ${{ inputs.demo_qualification_run_id || github.event.client_payload.demo_qualification_run_id }}
+      DEMO_RECORDER_SHA: ${{ inputs.demo_recorder_sha || github.event.client_payload.demo_recorder_sha }}
+      DEMO_DEPLOYMENT_MANIFEST_SHA256: ${{ inputs.demo_deployment_manifest_sha256 || github.event.client_payload.demo_deployment_manifest_sha256 }}
       EVIDENCE_TOOLING_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
       CI: "true"
@@ -210,7 +222,9 @@ jobs:
               "$report" >/dev/null
           done
 
-      - name: Dispatch fresh demo release intake
+      # Intake is initiated privately with the original deployment bundle before
+      # this workflow. Never put that bundle in a public event or artifact.
+      - name: Require completed private demo qualification
         env:
           GH_TOKEN: ${{ secrets.DEMO_RECORDER_DISPATCH_TOKEN }}
         shell: bash
@@ -220,16 +234,24 @@ jobs:
             echo "DEMO_RECORDER_DISPATCH_TOKEN is required by the beta-lifecycle environment." >&2
             exit 1
           fi
-          jq -n \
-            --arg event_type marty-ui-beta-deployed \
-            --arg beta_origin "$BETA_ORIGIN" \
-            --arg release_version "$RELEASE_VERSION" \
-            --arg marty_ui_release_sha "$MARTY_UI_RELEASE_SHA" \
-            --arg beta_source_id "$BETA_SOURCE_ID" \
-            '{event_type: $event_type, client_payload: {beta_origin: $beta_origin, release_version: $release_version, marty_ui_release_sha: $marty_ui_release_sha, beta_source_id: $beta_source_id}}' \
-            > tests/artifacts/demo-recorder-dispatch.json
-          gh api --method POST repos/ElevenID/marty-demo-recorder/dispatches \
-            --input tests/artifacts/demo-recorder-dispatch.json
+          [[ "$DEMO_QUALIFICATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DEMO_RECORDER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DEMO_DEPLOYMENT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          private_evidence="$(mktemp -d "$RUNNER_TEMP/demo-qualification.XXXXXX")"
+          gh run download "$DEMO_QUALIFICATION_RUN_ID" \
+            --repo ElevenID/marty-demo-recorder \
+            --name "demo-release-qualification-$RELEASE_VERSION" \
+            --dir "$private_evidence/report"
+          gh api "repos/ElevenID/marty-demo-recorder/actions/runs/$DEMO_QUALIFICATION_RUN_ID" \
+            > "$private_evidence/run.json"
+          cargo run --locked --quiet --manifest-path rust/Cargo.toml \
+            -p marty-release-evidence --bin validate-demo-qualification -- \
+            "$private_evidence/run.json" "$private_evidence/report/release-qualification.json" \
+            "$DEMO_QUALIFICATION_RUN_ID" "$DEMO_RECORDER_SHA" "$RELEASE_VERSION" \
+            "$MARTY_UI_RELEASE_SHA" "$BETA_SOURCE_ID" \
+            "$DEMO_DEPLOYMENT_MANIFEST_SHA256" "$STACK_MANIFEST_SHA256" \
+            > tests/artifacts/demo-qualification.json
 
       - name: Install browser test dependencies
         working-directory: tests
@@ -355,6 +377,9 @@ jobs:
             --arg evidence_tooling_sha "$EVIDENCE_TOOLING_SHA" \
             --arg beta_origin "$BETA_ORIGIN" \
             --arg mip_version "0.5.0" \
+            --arg demo_qualification_run_id "$DEMO_QUALIFICATION_RUN_ID" \
+            --arg demo_recorder_sha "$DEMO_RECORDER_SHA" \
+            --arg demo_deployment_manifest_sha256 "$DEMO_DEPLOYMENT_MANIFEST_SHA256" \
             '{
               run_id: $run_id,
               stack_release_run_id: $stack_release_run_id,
@@ -366,7 +391,10 @@ jobs:
               marty_protocol_sha: $marty_protocol_sha,
               evidence_tooling_sha: $evidence_tooling_sha,
               beta_origin: $beta_origin,
-              mip_version: $mip_version
+              mip_version: $mip_version,
+              demo_qualification_run_id: $demo_qualification_run_id,
+              demo_recorder_sha: $demo_recorder_sha,
+              demo_deployment_manifest_sha256: $demo_deployment_manifest_sha256
             }' > tests/artifacts/release-context.json
 
       - name: Create and activate every organization credential primitive

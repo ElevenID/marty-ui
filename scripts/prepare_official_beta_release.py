@@ -254,7 +254,7 @@ def prepare_release(
             "revision": commit,
             "source": "official-stack-manifest"
             if key != "marty-demo-recorder"
-            else "protected-recorder-main",
+            else "explicit-recorder-revision",
         }
         for key, (repository, commit) in sorted(revisions_by_repository.items())
     }

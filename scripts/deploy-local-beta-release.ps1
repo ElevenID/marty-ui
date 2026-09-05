@@ -281,7 +281,7 @@ function Assert-OfficialReleaseSource([object]$Plan, [switch]$VerifyAttestation)
     }
     $remoteRecorder = @(& git ls-remote https://github.com/ElevenID/marty-demo-recorder.git refs/heads/main)
     if ($LASTEXITCODE -ne 0 -or $remoteRecorder.Count -ne 1 -or ($remoteRecorder[0] -split "\s+", 2)[0] -ne $RecorderRevision) {
-        throw "Recorder revision must match protected marty-demo-recorder main"
+        throw "Recorder revision must match current marty-demo-recorder main"
     }
     if ($VerifyAttestation) {
         Invoke-Checked -FilePath gh -Arguments @(
@@ -762,7 +762,7 @@ $releaseCompose -join "`n" | Set-Content -LiteralPath $releaseComposeFile -Encod
 $script:ComposeFiles += $releaseComposeFile
 
 if ($OfficialStackRelease) {
-    Write-Step "Verify official release source, protected recorder, and artifact attestation"
+    Write-Step "Verify official release source, current recorder revision, and artifact attestation"
     Assert-OfficialReleaseSource -Plan $officialPlan -VerifyAttestation
 }
 else {

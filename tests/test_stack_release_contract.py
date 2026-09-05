@@ -34,7 +34,11 @@ def test_every_workflow_run_download_binds_the_repository_explicitly() -> None:
 
     assert commands
     for workflow_path, command in commands:
-        assert '--repo "$GITHUB_REPOSITORY"' in command, workflow_path
+        if workflow_path.name == "e2e-tests.yml" and '"$DEMO_QUALIFICATION_RUN_ID"' in command:
+            assert '--repo ElevenID/marty-demo-recorder' in command, workflow_path
+            assert '--name "demo-release-qualification-$RELEASE_VERSION"' in command
+        else:
+            assert '--repo "$GITHUB_REPOSITORY"' in command, workflow_path
 
 
 def test_stack_release_consumes_only_immutable_public_components() -> None:

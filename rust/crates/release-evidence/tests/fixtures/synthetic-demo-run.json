@@ -1,0 +1,14 @@
+{
+  "id": 123,
+  "name": "Demo release intake and qualification",
+  "path": ".github/workflows/release-qualification.yml",
+  "event": "workflow_dispatch",
+  "head_branch": "main",
+  "head_sha": "3333333333333333333333333333333333333333",
+  "status": "completed",
+  "conclusion": "success",
+  "repository": { "full_name": "ElevenID/marty-demo-recorder" },
+  "head_repository": { "full_name": "ElevenID/marty-demo-recorder" },
+  "testFixtureOnly": true,
+  "privateMetadata": "private-value"
+}

@@ -5,6 +5,7 @@
 
 use serde::Deserialize;
 
+pub mod demo_qualification;
 pub mod deployment_bundle;
 
 pub const MAX_RUN_BYTES: usize = 1024 * 1024;
@@ -44,6 +45,35 @@ fn is_version(value: &str) -> bool {
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+fn successful_run(
+    bytes: &[u8],
+    run_id: u64,
+    repository: &str,
+    name: &str,
+    path: &str,
+) -> Result<ReleaseRun, &'static str> {
+    if bytes.len() > MAX_RUN_BYTES {
+        return Err("workflow run response exceeds size limit");
+    }
+    let run: ReleaseRun =
+        serde_json::from_slice(bytes).map_err(|_| "invalid workflow run response")?;
+    if run_id == 0
+        || run.id != run_id
+        || run.repository.full_name != repository
+        || run.head_repository.full_name != repository
+    {
+        return Err("workflow run repository or ID mismatch");
+    }
+    if run.status != "completed"
+        || run.conclusion != "success"
+        || run.name != name
+        || run.path != path
+    {
+        return Err("workflow run is not the successful required workflow");
+    }
+    Ok(run)
+}
+
 /// Returns only the validated source SHA; errors never echo API/argument data.
 pub fn validate_release_run(
     bytes: &[u8],
@@ -57,24 +87,13 @@ pub fn validate_release_run(
     {
         return Err("invalid expected release identity");
     }
-    if bytes.len() > MAX_RUN_BYTES {
-        return Err("release run response exceeds size limit");
-    }
-    let run: ReleaseRun =
-        serde_json::from_slice(bytes).map_err(|_| "invalid release run response")?;
-    if run.id != run_id
-        || run.repository.full_name != REPOSITORY
-        || run.head_repository.full_name != REPOSITORY
-    {
-        return Err("release run repository or ID mismatch");
-    }
-    if run.status != "completed"
-        || run.conclusion != "success"
-        || run.name != "Stack release"
-        || run.path != ".github/workflows/cd.yml"
-    {
-        return Err("release run is not a successful stack workflow");
-    }
+    let run = successful_run(
+        bytes,
+        run_id,
+        REPOSITORY,
+        "Stack release",
+        ".github/workflows/cd.yml",
+    )?;
     // Current digest-first releases dispatch on protected main. Preserve
     // historical tag-push evidence, but only for this exact requested version.
     let current = run.event == "workflow_dispatch" && run.head_branch == "main";

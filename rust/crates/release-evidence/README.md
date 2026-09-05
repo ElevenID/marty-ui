@@ -56,6 +56,18 @@ through the approved private evidence workflow, never public issues or logs.
 Do not rewrite a pending template or synthesize expected values from the live
 probe. A qualifying binding report is not fresh recording/device/soak evidence.
 
-The utility and local transport/qualification checks are implemented here.
-Private recorder workflow intake and the lifecycle orchestration handoff still
-need wiring and hosted acceptance; this patch does not claim those are complete.
+## Public lifecycle consumption
+
+`validate-demo-qualification` checks an authenticated, completed private recorder
+run and its downloaded sanitized qualification artifact. It shares release-run
+identity parsing and bounded I/O with the other utilities. It requires the exact
+reviewed recorder revision, release/UI/coordinated-source identities, original
+deployment receipt hash and independently verified signed stack hash. It emits
+only allowlisted verified fields; raw private metadata stays in runner temporary
+storage, not public lifecycle artifacts.
+
+Private intake runs first; public lifecycle receives its successful run ID and
+the expected bindings. See the [operator sequence and evidence limits](../../../../docs/rust-migrations/private-demo-qualification-lifecycle.md).
+The private recorder intake and public consumer are wired, but actual hosted
+acceptance on the next aggregate release remains required. Qualification does
+not claim fresh recordings, device evidence or completed soak.
