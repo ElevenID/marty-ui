@@ -1099,7 +1099,7 @@ jobs:
               exit 1
             fi
           done
-          sha256sum stack-manifest.json ./*.cdx.json ./*.sigstore.json > SHA256SUMS
+          sha256sum stack-manifest.json release-transaction.json ./*.cdx.json ./*.sigstore.json > SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: |
