@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.215` remains deployed to beta at source `1866528ab859ea7007ca34671ad80a62131fd79d`; full recording acceptance is incomplete. The token and Canvas JSON storage corrections are merged, with real-schema regression coverage. This activation selects `v1.1.216` to include those corrections, lossless worker results and the reviewed shared Rust acceptance-lineage validator, without changing any component pin. Selection is not a claim, publication, deployment or acceptance pass. The standalone Rust Canvas worker remains unrouted pending whole-worker/all-consumer gates; reachable Python features are preserved. Demos, feature-preserving branch cleanup and the governed acceptance soak remain open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.216` is published and deployed to beta at source `89c66b07aceb937366390ae194e75ff09fd528b2`. Its first-party KMS switching recording passes all five assertions and the custom Keycloak theme; full lifecycle, all-demo/device and soak acceptance remain incomplete. This draft selects `v1.1.217` to include reviewed browser/CSP/checksum repairs and private demo evidence intake/validation, without changing component pins. It depends on lifecycle PR `#793` landing through protected gates. Selection is not a claim, publication, deployment or acceptance pass. The standalone Rust Canvas worker remains unrouted pending whole-worker/all-consumer gates; reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -31,7 +31,68 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
-### Selected 1.1.216 acceptance follow-up
+### Selected 1.1.217 acceptance follow-up — prerequisite review still required
+
+Release `v1.1.216` (run `33945270048`, source `89c66b07aceb937366390ae194e75ff09fd528b2`)
+passed publication signatures/provenance, exact image/source binding and official
+beta deployment at `05:22:04Z`. Its KMS recording passes create, issue, provider
+switch, stable DID and unpublished-key rejection, with the custom ElevenID
+Keycloak theme and restored provider configuration. This is one completed demo,
+not all recordings or a completed acceptance soak.
+
+Lifecycle run `33947284515` failed because browser contract tests preceded the
+Chromium install. Direct public demo checks also found CSP-blocked Cloudflare
+injection and consented YouTube embedding. Private recorder run `33947609446`
+failed against a pending source template rather than the retained deployment
+receipt. These are acceptance/integration gaps after migration, not evidence that
+the Rust service implementation or all release acceptance was already complete.
+
+Forward corrections now included:
+
+- UI `#789` (`ce9b5dbf09c6febf0ff06ed82f258f02d0fb6afa`): include the signed
+  release transaction in future complete release checksums; preserve published216.
+- UI `#790` (`05fa28eb830e70472713b0dbe6277b7ea87dc18b`): install Chromium and
+  its system dependencies before the unchanged browser contract suite.
+- UI `#791` (`0db570ebf50ae686afba78834bad9c2ca4b687d1`): exact HTTPS CSP
+  origins for the existing beacon and consented YouTube capability, preserving
+  WASM and rejection of inline/eval/unapproved origins.
+- UI `#792` (`136a11bfeb2787a5f11fca0ea0fc0644ae780b94`): native lossless
+  transport of the original three deployment evidence files. Byte/hash integrity
+  is not a replacement for provenance or live portfolio validation.
+- Private recorder `#39` and `#41` are merged; current reviewed main
+  `7858b5843306fbb08e441340f702d9ac3f3f4e21` accepts original official receipts,
+  unpacks private evidence with the exact released Rust utility and emits only a
+  sanitized qualification report. Local qualification passes13 scenarios; an
+  actual hosted run with the new aggregate is still required.
+- UI `#793`, reviewed head `d43161c7dcd640f8bf1c4c388f5522cb910ac0fc`, makes
+  completed private qualification a checked public lifecycle prerequisite. It
+  binds run/reviewed recorder/source/release/original receipt/signed stack hashes,
+  preserves all existing acceptance gates and corrects unsupported recorder
+  protection labels. Its protected merge remains a prerequisite of this draft.
+
+The current recorder repository plan cannot enforce branch protection. Select
+its exact reviewed revision only after terminal green checks; do not treat main
+equality or a private repository's `--auto` option as enforced approval. Published
+216's bound recorder `88079b1b91bd7dc4771fde6a5e672323a57689a3` and original
+receipts/videos remain immutable. New deployment and recording evidence gets a
+fresh release/source/recorder binding, never a relabeled old artifact.
+
+The lock changes only the aggregate coordinate to `1.1.217`. Keep Python issuance
+`0.1.72`, integration qualification `1.2.79`, every immutable component pin and
+calendar/demo VERSION `2026.08.0`. After prerequisite and activation merges,
+claim the exact protected source, publish/verify it, deploy beta only, run private
+intake to completion and then the full public lifecycle, all recordings, genuine
+external device evidence and governed soak. See the
+[release and acceptance checklist](rust-migrations/beta-acceptance-follow-up-1.1.217.md)
+and [private qualification operator sequence](rust-migrations/private-demo-qualification-lifecycle.md).
+
+Owned UI `#789`–`#792` and recorder `#39`/`#41` clean merged worktrees/branches
+were retired after content proof, with caches and failed browser evidence retained.
+Crypto-owned local commits/worktrees remain untouched. The post-host-reboot
+29-container production baseline remained unchanged at `06:46:36Z`; the reboot
+does not justify claiming uninterrupted runtime or changing production.
+
+### Historical 1.1.216 selection — now published and deployed
 
 The candidate includes merged worker-result PR `#784`, Canvas storage PR `#786`
 at `fdcdf7e3b72749db29cb9cef3bf97ad1479075e4`, and token storage PR `#785`
@@ -39,15 +100,15 @@ at `895218b408f20922bda741d51886ec0744a0754f`. Their reviewed changes were
 independently matched against protected merge contents before retiring owned
 branches/worktrees. Shared Rust acceptance-lineage PR `#787` is also included
 at reviewed combined candidate `28b46b4006ed71f330d10041082fb93f5920bd6d`;
-it was queued when this draft was prepared. Its protected merge must be proven
-before this activation is made ready or an exact-main release claim is created.
+it was queued when that draft was prepared and subsequently merged through
+protected gates before activation `#788` and the successful216 release claim.
 
-The live lock changes only the aggregate coordinate to `1.1.216`; all component
+That activation changed only the aggregate coordinate to `1.1.216`; all component
 pins, verifier qualification inputs and retained Python worker are unchanged.
 See [required release and acceptance evidence](rust-migrations/beta-acceptance-follow-up-1.1.216.md)
 and [shared Rust acceptance-lineage correction](rust-migrations/acceptance-release-run-lineage.md).
-The prior beta recording's token failure must pass with the unchanged recorder
-against the new immutable release; local regression success alone is insufficient.
+The prior beta recording's token failure subsequently passed in216's unchanged
+KMS scenario; broader acceptance remains open as recorded above.
 
 Owned merged branches/worktrees for `#784`, `#785`, `#786` and the older `#775`
 branch were retired only after content/merge proof; build/test caches were
@@ -55,7 +116,7 @@ preserved separately. The recorder is clean. Other-worker crypto commits on
 local UI/credentials main and crypto worktrees remain preserved and need their
 own handoff/review; they are not implicitly selected as release inputs.
 
-### Deployed 1.1.215 and real-schema token exchange correction
+### Historical 1.1.215 deployment and real-schema token exchange correction
 
 `v1.1.215` is published (release run `33937499784`, release ID `383105509`)
 and successfully deployed to beta at exact source
