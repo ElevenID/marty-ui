@@ -74,11 +74,22 @@ The aggregate still needs provenance-bound adoption of the official fix.
   and Ruff/fmt/diff checks pass. CI explicitly registers both new schema tests.
   Full hosted qualification is still required for this candidate.
 
+After rebasing the resolver and request-parity correction onto protected #813
+plus #807, all13 configured schema tests pass (74.33s),261 library tests pass
+(4.34s), all-target Clippy passes (21.74s), the combined22-test behavior target
+passes, and33 workflow/image tests pass (1.33s after formatting). The other
+worker's sibling-cleanup regression also passes independently. Git range-diff
+confirms both implementation commits were preserved exactly by the rebase.
+Draft #814 remains open for the remaining qualification; these are local gates,
+not deployed acceptance or an assertion that every malformed request is covered.
+
 ## Remaining gates before any cutover
 
 An additional45-case manual-request corpus was captured independently twice from
 the pinned published service on the corrected official schema before changing the
 candidate parser. The native negative control reproduced the empty-body mismatch.
+The frozen oracle blob is `3bbcf1091a98e4ecfe53f899607dfe365b029cbb`, with
+scenario blob `5d52b3253812321676658ead37fa35ab52fe0466`.
 All45 now replay through native HTTP with complete response and selected database
 state comparison, including no lifecycle calls for these dismissal/input cases.
 It covers empty/null/scalar/array bodies, action/note errors, malformed syntax,

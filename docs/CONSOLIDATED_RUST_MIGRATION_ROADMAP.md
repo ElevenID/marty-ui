@@ -52,6 +52,10 @@ Job operations #813 merged as `04e2ea2c7ca6107c4c9dc12809272c1190393b1c`
 after source and protected-queue CI/CodeQL passed. Its merged tree
 `e8469359abe331d66e92525e280821ed8451f50b` matches the verified union of the
 reviewed job branch and #807's CI work. Manual review continues in draft #814.
+The rebased candidate passes13 configured schema tests,261 library tests,
+22 combined behavior tests,33 workflow/image tests and all-target Clippy locally.
+The merged #813 worktree/local branch are retired, with both ignored caches
+preserved; no Python runtime feature or other-worker branch was removed.
 
 The [native operations read candidate](rust-migrations/canvas-operations-reads.md)
 implements four read APIs in the existing issuance crate, without live routing.

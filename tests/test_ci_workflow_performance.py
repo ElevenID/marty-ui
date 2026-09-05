@@ -76,15 +76,32 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "canvas-worker-consumer-range-oracle.json" in gate["run"]
     assert "canvas_published_schema_contract" in gate["run"]
     assert '"${executables[0]}" --list' in gate["run"]
-    assert "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in gate["run"]
+    assert (
+        "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in gate["run"]
+    )
     assert "grep -Fx 'operations_match_frozen_published_python: test'" in gate["run"]
-    assert "grep -Fx 'operations_reads_match_frozen_published_python: test'" in gate["run"]
-    assert "grep -Fx 'operations_inputs_match_frozen_published_python: test'" in gate["run"]
-    assert "grep -Fx 'operations_jobs_match_frozen_published_python: test'" in gate["run"]
+    assert (
+        "grep -Fx 'operations_reads_match_frozen_published_python: test'" in gate["run"]
+    )
+    assert (
+        "grep -Fx 'operations_inputs_match_frozen_published_python: test'"
+        in gate["run"]
+    )
+    assert (
+        "grep -Fx 'operations_jobs_match_frozen_published_python: test'" in gate["run"]
+    )
     assert "grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'" in gate["run"]
-    assert "grep -Fx 'enqueue_inputs_match_frozen_published_python: test'" in gate["run"]
-    assert "grep -Fx 'operations_resolution_matches_corrected_published_schema: test'" in gate["run"]
-    assert "grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'" in gate["run"]
+    assert (
+        "grep -Fx 'enqueue_inputs_match_frozen_published_python: test'" in gate["run"]
+    )
+    assert (
+        "grep -Fx 'operations_resolution_matches_corrected_published_schema: test'"
+        in gate["run"]
+    )
+    assert (
+        "grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'"
+        in gate["run"]
+    )
     assert "grep -Fx 'review_inputs_match_published_python: test'" in gate["run"]
     assert '"${executables[0]}" --nocapture --test-threads=1' in gate["run"]
     assert "[[ ${#executables[@]} == 1" in gate["run"]
@@ -125,11 +142,14 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
         str(step) for step in rust_job["steps"]
     )
     for group in ("workspace", "verification", "gateway"):
-        assert f'rust-{group}.status' in source
+        assert f"rust-{group}.status" in source
     assert "target/debug/flow-postgres-contract --test-threads=1" in source
     assert "target/debug/verification-postgres-contract" in source
     assert "target/debug/gateway-redis-contract" in source
-    assert "FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test" in source
+    assert (
+        "FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test"
+        in source
+    )
     assert "FLOW_CONTRACT_POSTGRES_URL" not in source
     assert "POSTGRES_DB=marty_atomic_test" not in source
     assert "cargo test --locked -p marty-flow --test postgres_integration" not in source
@@ -156,12 +176,16 @@ def test_ui_timing_refresh_runs_after_the_required_ci_gate() -> None:
     assert "workflows: [CI]" in source
     refresh = document["jobs"]["refresh"]
     assert refresh["if"] == "github.event.workflow_run.conclusion == 'success'"
-    assert "refresh-ui-test-timings" not in yaml.safe_load(
-        CI_PATH.read_text(encoding="utf-8")
-    )["jobs"]
+    assert (
+        "refresh-ui-test-timings"
+        not in yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]
+    )
 
 
-@pytest.mark.parametrize("scenario", ["missing", "empty", "unrelated", "nested", "malformed", "not_directory"])
+@pytest.mark.parametrize(
+    "scenario",
+    ["missing", "empty", "unrelated", "nested", "malformed", "not_directory"],
+)
 def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) -> None:
     _, document = _workflow(
         ROOT / ".github" / "workflows" / "refresh-ui-test-timings.yml"
@@ -185,11 +209,15 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
         elif scenario in {"nested", "malformed"}:
             nested = reports / "shard-1"
             nested.mkdir()
-            report = {"testResults": [{
-                "name": "/home/runner/work/marty-ui/marty-ui/ui/src/refresh.test.ts",
-                "startTime": 100,
-                "endTime": 150,
-            }]}
+            report = {
+                "testResults": [
+                    {
+                        "name": "/home/runner/work/marty-ui/marty-ui/ui/src/refresh.test.ts",
+                        "startTime": 100,
+                        "endTime": 150,
+                    }
+                ]
+            }
             (nested / "results.json").write_text(
                 json.dumps(report) if scenario == "nested" else "not JSON",
                 encoding="utf-8",
@@ -198,7 +226,11 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
     script = guard["run"].split("<<'NODE'\n", 1)[1].rsplit("\nNODE", 1)[0]
     result = subprocess.run(
         ["node", "--input-type=module", "--eval", script],
-        env={**os.environ, "TIMINGS_DIRECTORY": str(reports), "GITHUB_OUTPUT": str(output)},
+        env={
+            **os.environ,
+            "TIMINGS_DIRECTORY": str(reports),
+            "GITHUB_OUTPUT": str(output),
+        },
         capture_output=True,
         text=True,
     )
@@ -208,14 +240,23 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
         return
     assert result.returncode == 0, result.stderr
     available = scenario in {"nested", "malformed"}
-    assert output.read_text(encoding="utf-8").strip() == f"available={str(available).lower()}"
+    assert (
+        output.read_text(encoding="utf-8").strip()
+        == f"available={str(available).lower()}"
+    )
     if not available:
         assert "skipping timing refresh" in result.stdout
         return
 
     plan = tmp_path / "plan.json"
     refresh = subprocess.run(
-        ["node", str(ROOT / "ui/scripts/update-vitest-timings.mjs"), str(reports), "--output", str(plan)],
+        [
+            "node",
+            str(ROOT / "ui/scripts/update-vitest-timings.mjs"),
+            str(reports),
+            "--output",
+            str(plan),
+        ],
         capture_output=True,
         text=True,
     )
@@ -224,7 +265,10 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
         assert not plan.exists()
     else:
         assert refresh.returncode == 0, refresh.stderr
-        assert json.loads(plan.read_text(encoding="utf-8"))["tests"]["src/refresh.test.ts"] == 50
+        assert (
+            json.loads(plan.read_text(encoding="utf-8"))["tests"]["src/refresh.test.ts"]
+            == 50
+        )
 
 
 def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
@@ -240,9 +284,7 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         )
     )
     full = yaml.safe_load(
-        (ROOT / ".github" / "codeql" / "codeql-full.yml").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / ".github" / "codeql" / "codeql-full.yml").read_text(encoding="utf-8")
     )
     policy = json.loads(
         (ROOT / ".github" / "stack-tag-policy.json").read_text(encoding="utf-8")
@@ -273,8 +315,7 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         assert "github.paginate(github.rest.pulls.listFiles" in scope["with"]["script"]
         assert "context.eventName !== 'pull_request'" in scope["with"]["script"]
         assert any(
-            step.get("name") == "Record scoped analysis skip"
-            for step in job["steps"]
+            step.get("name") == "Record scoped analysis skip" for step in job["steps"]
         )
         analysis_steps = [
             step for step in job["steps"] if step.get("name", "").startswith("Analyze")
@@ -307,9 +348,7 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
 
 
 def test_warm_cache_uses_the_same_rust_test_profile() -> None:
-    _source, document = _workflow(
-        ROOT / ".github" / "workflows" / "warm-ci-caches.yml"
-    )
+    _source, document = _workflow(ROOT / ".github" / "workflows" / "warm-ci-caches.yml")
     assert document["jobs"]["rust"]["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
 
 
@@ -336,19 +375,32 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
         assert ci["jobs"][name]["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     for job in warm["jobs"].values():
         assert job["if"] == "github.ref == 'refs/heads/main'"
-    for job, mode in ((ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
-                      (warm["jobs"]["images"], "READ_WRITE")):
-        credential_step = next(step for step in job["steps"] if step.get("name", "").startswith("Expose compiler"))
+    for job, mode in (
+        (ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
+        (warm["jobs"]["images"], "READ_WRITE"),
+    ):
+        credential_step = next(
+            step
+            for step in job["steps"]
+            if step.get("name", "").startswith("Expose compiler")
+        )
         script = credential_step["with"]["script"]
         assert "core.setSecret(token)" in script
         assert f"'SCCACHE_GHA_RW_MODE', '{mode}'" in script
-        build = next(step for step in job["steps"] if "secret-envs" in step.get("with", {}))
+        build = next(
+            step for step in job["steps"] if "secret-envs" in step.get("with", {})
+        )
         assert "sccache_token=SCCACHE_GHA_RUNTIME_TOKEN" in build["with"]["secret-envs"]
         assert "SCCACHE" not in build["with"].get("build-args", "")
-    assert all("cache-to" not in step.get("with", {})
-               for step in ci["jobs"]["test-rust-service-images"]["steps"])
+    assert all(
+        "cache-to" not in step.get("with", {})
+        for step in ci["jobs"]["test-rust-service-images"]["steps"]
+    )
     dockerfile = (ROOT / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
-    assert "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588" in dockerfile
+    assert (
+        "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588"
+        in dockerfile
+    )
     assert "--mount=type=secret,id=sccache_token" in dockerfile
     assert "export RUSTC_WRAPPER=sccache" in dockerfile
     assert "cargo build --locked --release" in dockerfile
@@ -357,7 +409,9 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     assert 'ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)"' in dockerfile
     assert 'ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)"' in dockerfile
     assert "sccache --start-server && sccache --stop-server" in dockerfile
-    assert dockerfile.index("cargo chef cook") < dockerfile.index("COPY --from=compiler_cache")
+    assert dockerfile.index("cargo chef cook") < dockerfile.index(
+        "COPY --from=compiler_cache"
+    )
 
 
 def test_every_issuance_integration_test_remains_registered() -> None:
@@ -371,18 +425,28 @@ def test_every_issuance_integration_test_remains_registered() -> None:
     grouped = re.findall(r'#\[path = "([^"]+)"\]', harness)
     assert len(grouped) == 6
     registered.extend(f"tests/{name}" for name in grouped)
-    actual = {path.relative_to(directory).as_posix() for path in (directory / "tests").glob("*.rs")}
+    actual = {
+        path.relative_to(directory).as_posix()
+        for path in (directory / "tests").glob("*.rs")
+    }
     assert len(registered) == len(set(registered))
-    assert set(registered) == actual, "new test files must be registered, never silently skipped"
-    assert all("postgres" not in path and "executable_smoke" not in path for path in grouped)
+    assert set(registered) == actual, (
+        "new test files must be registered, never silently skipped"
+    )
+    assert all(
+        "postgres" not in path and "executable_smoke" not in path for path in grouped
+    )
 
 
 @pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
 @pytest.mark.parametrize("reopened", [False, True])
-def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: str, reopened: bool) -> None:
+def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(
+    event: str, reopened: bool
+) -> None:
     _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
     script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
-    harness = r'''
+    harness = (
+        r"""
       const deleted = [];
       const entries = [
         {id: 1, ref: 'refs/pull/23/merge'},
@@ -410,16 +474,29 @@ def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: 
       await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
         github, context, core, callback => callback());
       if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
-    '''.replace("EVENT", json.dumps(event)).replace("REOPENED", json.dumps(reopened)).replace("SCRIPT", json.dumps(script))
-    result = subprocess.run(["node", "--input-type=module", "--eval", harness], capture_output=True, text=True)
+    """.replace("EVENT", json.dumps(event))
+        .replace("REOPENED", json.dumps(reopened))
+        .replace("SCRIPT", json.dumps(script))
+    )
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("scenario", ["valid", "empty", "negative", "huge", "traversal", "malformed"])
-def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: Path, scenario: str) -> None:
-    paths = sorted(path.relative_to(ROOT / "ui").as_posix()
-                   for path in (ROOT / "ui/src").rglob("*")
-                   if path.is_file() and re.search(r"\.(test|spec)\.(ts|tsx)$", path.name))
+@pytest.mark.parametrize(
+    "scenario", ["valid", "empty", "negative", "huge", "traversal", "malformed"]
+)
+def test_reviewed_timing_adoption_validates_data_and_preserves_tests(
+    tmp_path: Path, scenario: str
+) -> None:
+    paths = sorted(
+        path.relative_to(ROOT / "ui").as_posix()
+        for path in (ROOT / "ui/src").rglob("*")
+        if path.is_file() and re.search(r"\.(test|spec)\.(ts|tsx)$", path.name)
+    )
     plan = {"defaultMilliseconds": 500, "tests": {paths[0]: 123}}
     if scenario == "empty":
         plan["tests"] = {}
@@ -428,11 +505,20 @@ def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: P
     elif scenario == "traversal":
         plan["tests"]["src/../../outside.test.ts"] = 1
     source = tmp_path / "observations.json"
-    source.write_text("not JSON" if scenario == "malformed" else json.dumps(plan), encoding="utf-8")
+    source.write_text(
+        "not JSON" if scenario == "malformed" else json.dumps(plan), encoding="utf-8"
+    )
     output = tmp_path / "review.json"
     result = subprocess.run(
-        ["node", str(ROOT / "ui/scripts/adopt-vitest-timings.mjs"), str(source), "--output", str(output)],
-        capture_output=True, text=True,
+        [
+            "node",
+            str(ROOT / "ui/scripts/adopt-vitest-timings.mjs"),
+            str(source),
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
     )
     if scenario != "valid":
         assert result.returncode != 0
@@ -445,7 +531,10 @@ def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: P
 
 
 def test_renewal_matrix_preserves_real_deadlines_and_all_combinations() -> None:
-    source = (ROOT / "rust/services/issuance/tests/support/canvas_worker_renewal_job_outcomes.rs").read_text(encoding="utf-8")
+    source = (
+        ROOT
+        / "rust/services/issuance/tests/support/canvas_worker_renewal_job_outcomes.rs"
+    ).read_text(encoding="utf-8")
     assert "tokio::join!(" in source
     for stage in ("lease", "target", "process"):
         assert f'isolated_group(pool, "{stage}")' in source
