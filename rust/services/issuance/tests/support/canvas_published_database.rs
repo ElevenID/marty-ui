@@ -76,6 +76,26 @@ impl PublishedDatabase {
     }
 
     async fn start_probe(oracle: Option<(&str, &str, &str, &str)>) -> Result<Self, String> {
+        Self::start_probe_with_extra(oracle, None).await
+    }
+
+    pub async fn start_with_operations() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "operations",
+                "operations",
+                "operations",
+                "MARTY_CANVAS_OPERATIONS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    async fn start_probe_with_extra(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+    ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -201,6 +221,18 @@ impl PublishedDatabase {
                     &oracle_scenario_mount,
                 ],
             );
+        }
+        // The operations oracle reuses the existing published-schema seed.
+        // Only this private, statically selected fixture is additionally mounted.
+        let extra_mount = extra_fixture.map(|name| {
+            format!(
+                "type=bind,source={},target=/verification/contracts/{name},readonly",
+                root.join("contracts").join(name).display()
+            )
+        });
+        if let Some(mount) = extra_mount.as_deref() {
+            let index = arguments.len() - 2;
+            arguments.splice(index..index, ["--mount", mount]);
         }
         let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;

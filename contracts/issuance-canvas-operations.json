@@ -1,0 +1,103 @@
+{
+  "schema": "marty.issuance-canvas-operations/v1",
+  "status": "behavior-freeze; native implementation and cutover pending",
+  "provenance": {
+    "credentials_snapshot": "e3e79c96ab655f4ac699074c6452cd8c4c43dcb6",
+    "source": "services/issuance/infrastructure/api/canvas_operations_routes.py",
+    "source_blob": "5eb51bf9b4d3993bd94f4441d0d460205e695a18",
+    "image_pins": "canvas-worker-consumer-range-oracle.json",
+    "baseline": "canvas-operations-oracle.json",
+    "baseline_blob": "bdb12fe8937c2e6290810da60081762c22a04f05",
+    "scenarios": "canvas-operations-scenarios.json",
+    "captured_before_native_implementation": true
+  },
+  "route_prefix": "/v1/integrations/canvas",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/applications/{application_id}/canvas-sync",
+      "success_status": 202
+    },
+    {
+      "method": "GET",
+      "path": "/canvas-sync-jobs",
+      "success_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/canvas-sync-jobs/{job_id}",
+      "success_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/canvas-sync-jobs/{job_id}/retry",
+      "success_status": 202
+    },
+    {
+      "method": "POST",
+      "path": "/canvas-sync-jobs/{job_id}/resolve",
+      "success_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/canvas-award-candidates",
+      "success_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/evidence-policy-reviews",
+      "success_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/evidence-policy-reviews/{review_id}/resolve",
+      "success_status": 200
+    }
+  ],
+  "behavior": {
+    "auth": "Existing management key dependency on every route; trusted X-Organization-ID required; claimed foreign organization hidden as 404.",
+    "list_limits": {
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "post_query_filter_window": 500,
+    "public_projections": "Exact existing DTO fields; preserve null versus omitted fields, status normalization, safe error summary and public result allowlist; no raw learner/lease/claim/provider fields.",
+    "retry_resolve": "Reuse normative manual retry/resolve rules in issuance-canvas-sync-worker.json, including rollout and dead-letter-only durable transitions.",
+    "manual_review": "Reuse normative manual_resolution and recovery_during_manual_claim rules in issuance-canvas-sync-worker.json; never duplicate credential suspend/revoke implementation.",
+    "actions": [
+      "dismiss",
+      "suspend",
+      "revoke"
+    ],
+    "note_max_length": 2000,
+    "actor_priority": [
+      "X-Authenticated-User-ID",
+      "X-User-ID",
+      "X-API-Key-ID"
+    ],
+    "enqueue": "Tenant scoped, typed target configuration, idempotent active job, 202; stable not-found/conflict envelopes."
+  },
+  "blocking_legacy_defects": [
+    {
+      "case": "review_recovered_failure",
+      "defect": "Published claim constraint excludes internal evidence_recovered action used by recovery finalization.",
+      "observed": "Manual claim released; review remains open with recovery_pending=true and no new resolution audit.",
+      "required": "After handler failure and observed recovery, restore atomic resolved/evidence_recovered result and audit while retaining tenant, application and claim fences.",
+      "correction_gate": "Official forward migration plus model/repository tests and corrected real PostgreSQL failure/race/rollback observations. Historical baseline is not the required Rust outcome."
+    }
+  ],
+  "limits": [
+    "Controlled external lifecycle ports, not actual suspend/revoke effects",
+    "Timestamp presence/ISO validation, not exact temporal parity",
+    "Only router mounted in ASGI fixture, not deployed middleware",
+    "46 cases are not an exhaustive input/status/filtering/failure/race matrix",
+    "No native operations implementation or deployment changes"
+  ],
+  "deletion_requires": [
+    "Complete Rust operations and shared repository/lifecycle integration",
+    "Whole-worker language-neutral parity and deliberate repair of recorded legacy defect",
+    "All intended deployment consumers routed consistently",
+    "Beta-only acceptance, recordings and soak; production unchanged"
+  ]
+}
