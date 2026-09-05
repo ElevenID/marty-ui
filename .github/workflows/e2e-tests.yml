@@ -68,6 +68,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.95.0
+
       - name: Bind lifecycle to the successful stack release
         id: release
         shell: bash
@@ -85,13 +89,12 @@ jobs:
           git fetch --no-tags --depth=1 origin "$MARTY_UI_RELEASE_SHA"
           git cat-file -e "$MARTY_UI_RELEASE_SHA^{commit}"
 
-          run="$(gh run view "$STACK_RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,event,headBranch,headSha,status,workflowName)"
-          test "$(jq -r '.status' <<<"$run")" = "completed"
-          test "$(jq -r '.conclusion' <<<"$run")" = "success"
-          test "$(jq -r '.event' <<<"$run")" = "push"
-          test "$(jq -r '.headBranch' <<<"$run")" = "v$RELEASE_VERSION"
-          test "$(jq -r '.headSha' <<<"$run")" = "$MARTY_UI_RELEASE_SHA"
-          test "$(jq -r '.workflowName' <<<"$run")" = "Stack release"
+          [[ "$STACK_RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RELEASE_RUN_ID")"
+          verified_release_sha="$(cargo run --locked --quiet --manifest-path rust/Cargo.toml \
+            -p marty-release-evidence --bin validate-stack-release-run -- \
+            "$STACK_RELEASE_RUN_ID" "$RELEASE_VERSION" "$MARTY_UI_RELEASE_SHA" <<<"$run")"
+          test "$verified_release_sha" = "$MARTY_UI_RELEASE_SHA"
 
           mkdir -p tests/artifacts/build-evidence
           gh release download "v$RELEASE_VERSION" \
@@ -156,10 +159,6 @@ jobs:
           repository: Marty-Protocol/Marty-Protocol
           ref: ${{ steps.release.outputs.protocol }}
           path: marty-protocol
-
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
-        with:
-          toolchain: 1.95.0
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:

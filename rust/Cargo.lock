@@ -4766,6 +4766,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-release-evidence"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "marty-revocation-profile"
 version = "0.1.0"
 dependencies = [
