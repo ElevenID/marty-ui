@@ -29,7 +29,7 @@ pub struct PublishedDatabase {
     postgres: Option<String>,
     probe: Option<String>,
     pub url: String,
-    pub issued_reviews: Option<Value>,
+    pub oracle: Option<Value>,
 }
 
 impl PublishedDatabase {
@@ -42,14 +42,30 @@ impl PublishedDatabase {
     }
 
     pub async fn start() -> Result<Self, String> {
-        Self::start_probe(false).await
+        Self::start_probe(None).await
     }
 
     pub async fn start_with_issued_reviews() -> Result<Self, String> {
-        Self::start_probe(true).await
+        Self::start_probe(Some((
+            "issued_review",
+            "issued-review",
+            "issued_reviews",
+            "MARTY_CANVAS_ISSUED_REVIEW_ORACLE=1",
+        )))
+        .await
     }
 
-    async fn start_probe(issued_reviews: bool) -> Result<Self, String> {
+    pub async fn start_with_mixed_roster() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "mixed_roster",
+            "mixed-roster",
+            "mixed_roster",
+            "MARTY_CANVAS_MIXED_ROSTER_ORACLE=1",
+        )))
+        .await
+    }
+
+    async fn start_probe(oracle: Option<(&str, &str, &str, &str)>) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -59,7 +75,7 @@ impl PublishedDatabase {
             postgres: None,
             probe: None,
             url: String::new(),
-            issued_reviews: None,
+            oracle: None,
         };
         let label = format!("{LABEL}={}", owned.scope);
         let postgres = docker(&[
@@ -150,18 +166,25 @@ impl PublishedDatabase {
             fixture["observed_image"].as_str().unwrap(),
             "/verification/scripts/prepare_canvas_published_schema.py",
         ];
-        let oracle_script_mount = format!("type=bind,source={},target=/verification/scripts/run_canvas_issued_review_oracle.py,readonly",
-            root.join("scripts/run_canvas_issued_review_oracle.py").display());
-        let oracle_scenario_mount = format!("type=bind,source={},target=/verification/contracts/canvas-issued-review-scenarios.json,readonly",
-            root.join("contracts/canvas-issued-review-scenarios.json").display());
-        if issued_reviews {
+        let (script, scenario, report_key, flag) = oracle.unwrap_or_default();
+        let script_path = format!("scripts/run_canvas_{script}_oracle.py");
+        let scenario_path = format!("contracts/canvas-{scenario}-scenarios.json");
+        let oracle_script_mount = format!(
+            "type=bind,source={},target=/verification/{script_path},readonly",
+            root.join(&script_path).display()
+        );
+        let oracle_scenario_mount = format!(
+            "type=bind,source={},target=/verification/{scenario_path},readonly",
+            root.join(&scenario_path).display()
+        );
+        if oracle.is_some() {
             // Insert options before the image, never turn them into Python args.
             let index = arguments.len() - 2;
             arguments.splice(
                 index..index,
                 [
                     "--env",
-                    "MARTY_CANVAS_ISSUED_REVIEW_ORACLE=1",
+                    flag,
                     "--mount",
                     &oracle_script_mount,
                     "--mount",
@@ -197,11 +220,11 @@ impl PublishedDatabase {
             return Err("Published migration evidence incomplete".into());
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
-        if issued_reviews {
-            owned.issued_reviews = Some(
+        if oracle.is_some() {
+            owned.oracle = Some(
                 report
-                    .get("issued_reviews")
-                    .ok_or("Missing issued review oracle")?
+                    .get(report_key)
+                    .ok_or("Missing published behavior oracle")?
                     .clone(),
             );
         }

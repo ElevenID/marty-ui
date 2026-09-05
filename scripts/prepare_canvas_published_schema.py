@@ -66,15 +66,20 @@ def prepare():
             "worker_sha256": worker_hash,
             "organization_dependency": "synthetic-minimal",
         }
-        if os.environ.get("MARTY_CANVAS_ISSUED_REVIEW_ORACLE") == "1":
+        for flag, name, key in [
+            ("MARTY_CANVAS_ISSUED_REVIEW_ORACLE", "issued_review", "issued_reviews"),
+            ("MARTY_CANVAS_MIXED_ROSTER_ORACLE", "mixed_roster", "mixed_roster"),
+        ]:
+            if os.environ.get(flag) != "1":
+                continue
             import runpy
 
             with (
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
-                report["issued_reviews"] = runpy.run_path(
-                    "/verification/scripts/run_canvas_issued_review_oracle.py"
+                report[key] = runpy.run_path(
+                    f"/verification/scripts/run_canvas_{name}_oracle.py"
                 )["run"]()
         return report
     finally:
