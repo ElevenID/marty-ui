@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{value::RawValue, Map, Value};
 use thiserror::Error;
 use tokio::{sync::watch, task::JoinSet};
 use tracing::{error, warn};
@@ -343,7 +343,30 @@ pub trait CanvasSyncProcessor: Send + Sync {
     async fn process(
         &self,
         target: &CanvasSyncTarget,
-    ) -> Result<Map<String, Value>, CanvasSyncProcessingError>;
+    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError>;
+}
+
+/// Lossless JSON at the processor-to-durable-result boundary. Unlike `Value`,
+/// this retains integer lexemes outside i64/u64 without enabling arbitrary
+/// precision (and changing serialization) for the shared crypto dependency tree.
+pub type CanvasSyncResult = BTreeMap<String, Box<RawValue>>;
+
+/// Convert native, already-typed processor fields without changing their JSON
+/// types. JSON-facing processors should deserialize `CanvasSyncResult` directly
+/// from the original bytes so large integers never pass through `Value`.
+pub fn canvas_sync_result(
+    fields: Map<String, Value>,
+) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+    fields
+        .into_iter()
+        .map(|(key, value)| serde_json::value::to_raw_value(&value).map(|raw| (key, raw)))
+        .collect::<Result<_, _>>()
+        .map_err(|_| {
+            CanvasSyncProcessingError::terminal(
+                "canvas_sync_result_invalid",
+                "Canvas processor result could not be serialized",
+            )
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -392,7 +415,7 @@ pub trait CanvasSyncWorkerRepository: Send + Sync {
         job: &CanvasSyncJob,
         worker_id: &str,
         target_config_version: i32,
-        result: &Map<String, Value>,
+        result: &CanvasSyncResult,
     ) -> Result<bool, CanvasSyncRepositoryError>;
     async fn fail_job(
         &self,
@@ -924,7 +947,7 @@ fn oauth_error_class(error: &CanvasOAuthError) -> &'static str {
 }
 
 #[must_use]
-pub fn safe_result(input: &Map<String, Value>) -> Map<String, Value> {
+pub fn safe_result(input: &CanvasSyncResult) -> CanvasSyncResult {
     const ALLOWED: &[&str] = &[
         "application_id",
         "candidate_id",
@@ -948,17 +971,29 @@ pub fn safe_result(input: &Map<String, Value>) -> Map<String, Value> {
         .iter()
         .filter(|(key, _)| ALLOWED.contains(&key.as_str()))
         .filter_map(|(key, value)| {
-            let value = match value {
-                Value::Bool(value) => Value::Bool(*value),
-                Value::Null => Value::Null,
-                Value::Number(value) if value.is_i64() => {
-                    Value::from(value.as_i64().unwrap_or_default().max(0))
+            let raw = value.get().trim();
+            let value = if matches!(raw, "true" | "false" | "null") {
+                value.clone()
+            } else if raw.starts_with('"') {
+                let text: String = serde_json::from_str(raw).ok()?;
+                serde_json::value::to_raw_value(&bounded_chars(&text, MAX_RESULT_STRING_CHARS))
+                    .ok()?
+            } else if !raw.is_empty()
+                && raw
+                    .strip_prefix('-')
+                    .unwrap_or(raw)
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit())
+            {
+                if raw.starts_with('-') {
+                    RawValue::from_string("0".to_owned()).expect("zero is valid JSON")
+                } else {
+                    value.clone()
                 }
-                Value::Number(value) if value.is_u64() => Value::from(value.as_u64()),
-                Value::String(value) => {
-                    Value::String(bounded_chars(value, MAX_RESULT_STRING_CHARS))
-                }
-                _ => return None,
+            } else {
+                // Floats (including integral/exponent forms), arrays and
+                // objects are omitted, not coerced to counters or text.
+                return None;
             };
             Some((key.clone(), value))
         })

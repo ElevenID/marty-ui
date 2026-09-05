@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use marty_issuance_service::canvas_sync_worker::{
-    job_retry_delay_seconds, retry_after_seconds, roster_cursor_window, safe_result,
-    CanvasSyncWorkerConfig,
+    canvas_sync_result, job_retry_delay_seconds, retry_after_seconds, roster_cursor_window,
+    safe_result, CanvasSyncWorkerConfig,
 };
 use serde_json::{Map, Value};
 
@@ -147,7 +147,11 @@ fn language_neutral_result_retry_and_cursor_vectors_match() {
     let fixtures = &contract()["executable_fixtures"];
     let sanitization = &fixtures["result_sanitization"];
     let input: Map<String, Value> = sanitization["input"].as_object().expect("input").clone();
-    assert_eq!(Value::Object(safe_result(&input)), sanitization["output"]);
+    let actual = safe_result(&canvas_sync_result(input).unwrap());
+    assert_eq!(
+        serde_json::to_value(actual).unwrap(),
+        sanitization["output"]
+    );
 
     for vector in fixtures["retry_after"]
         .as_array()

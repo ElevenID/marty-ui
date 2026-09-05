@@ -17,8 +17,8 @@ use crate::{
     canvas_issuance_guard::validated_requirements,
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_sync_worker::{
-        CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncTarget, CanvasSyncTargetType,
-        CanvasSyncWorkerConfig,
+        canvas_sync_result, CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult,
+        CanvasSyncTarget, CanvasSyncTargetType, CanvasSyncWorkerConfig,
     },
 };
 
@@ -648,6 +648,15 @@ impl CanvasSyncProcessor for NativeCanvasSyncProcessor {
     async fn process(
         &self,
         target: &CanvasSyncTarget,
+    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+        canvas_sync_result(self.process_fields(target).await?)
+    }
+}
+
+impl NativeCanvasSyncProcessor {
+    async fn process_fields(
+        &self,
+        target: &CanvasSyncTarget,
     ) -> Result<Map<String, Value>, CanvasSyncProcessingError> {
         if !self.config.enabled_for(&target.organization_id) {
             return Ok(Map::from_iter([(
@@ -1266,8 +1275,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            result.get("requirements_checked").and_then(Value::as_u64),
-            Some(4)
+            result.get("requirements_checked").map(|value| value.get()),
+            Some("4")
         );
         let facts = repository.facts.lock().unwrap();
         assert_eq!(facts.len(), 4);
@@ -1320,8 +1329,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            result.get("candidates_seen").and_then(Value::as_u64),
-            Some(1)
+            result.get("candidates_seen").map(|value| value.get()),
+            Some("1")
         );
         assert_eq!(*repository.cursor.lock().unwrap(), Some((1, 2)));
         assert!(repository
@@ -1361,7 +1370,10 @@ mod tests {
             Value::String("2020-01-01T00:00:00Z".into()),
         );
         let result = processor.process(&drift).await.unwrap();
-        assert_eq!(result.get("no_change"), Some(&Value::Bool(true)));
+        assert_eq!(
+            result.get("no_change").map(|value| value.get()),
+            Some("true")
+        );
         assert!(*repository.disabled.lock().unwrap());
         assert!(repository.facts.lock().unwrap().is_empty());
     }

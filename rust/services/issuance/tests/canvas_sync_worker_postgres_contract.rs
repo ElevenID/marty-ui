@@ -1,7 +1,8 @@
 use chrono::{Duration, Utc};
 use marty_issuance_service::{
     canvas_sync_worker::{
-        CanvasSyncJobStatus, CanvasSyncWorkerRepository, JobFailure, WorkerHeartbeat,
+        safe_result, CanvasSyncJobStatus, CanvasSyncResult, CanvasSyncWorkerRepository, JobFailure,
+        WorkerHeartbeat,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
@@ -235,15 +236,27 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         .clone();
     let orphan = race_jobs.iter().find(|job| job.id == "orphan").unwrap();
     assert_eq!(orphan.target_config_version, 0);
+    let processor_result: CanvasSyncResult = serde_json::from_str(
+        r#"{"facts_observed":18446744073709551617,"facts_changed":-18446744073709551617,"policy_allowed":true,"candidate_state":"ready","provider_payload":{"synthetic":"discard"}}"#,
+    ).unwrap();
     assert!(repository
         .complete_job(
             current,
             "race-worker",
             current.target_config_version,
-            &serde_json::Map::new(),
+            &safe_result(&processor_result),
         )
         .await
         .unwrap());
+    let persisted: String = sqlx::query_scalar(
+        "SELECT result::text FROM issuance_service.canvas_evidence_sync_jobs WHERE id = 'complete-current'",
+    ).fetch_one(&pool).await.unwrap();
+    let persisted: CanvasSyncResult = serde_json::from_str(&persisted).unwrap();
+    assert_eq!(persisted.len(), 4);
+    assert_eq!(persisted["facts_observed"].get(), "18446744073709551617");
+    assert_eq!(persisted["facts_changed"].get(), "0");
+    assert_eq!(persisted["policy_allowed"].get(), "true");
+    assert_eq!(persisted["candidate_state"].get(), r#""ready""#);
     sqlx::query(
         "UPDATE issuance_service.canvas_evidence_sync_targets
          SET config_version = 4 WHERE id = 'target-complete-current'",
@@ -270,7 +283,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             stale,
             "race-worker",
             stale.target_config_version,
-            &serde_json::Map::new(),
+            &Default::default(),
         )
         .await
         .unwrap());
@@ -302,7 +315,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
                 &during,
                 "race-worker",
                 during.target_config_version,
-                &serde_json::Map::new(),
+                &Default::default(),
             )
             .await
             .unwrap()

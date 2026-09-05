@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.214` is qualified, published, independently verified and successfully deployed to beta at exact source `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`. Protected release run `33930593794` passed public-stack and all verifier gates; its resume reused the original signed digests. Integration PR `#418` merged the real published static pin at `9f150de07a5a629a46b1eeeb58123ddb3eb86f32`, and its complete artifact workflow passed. Integration `v1.2.80` is published and independently verified at protected source `0c0944424c2f19ad05d99bb7482526104cb5b6d1` after PR `#419` and successful release run `33931821255`. Full credential/browser acceptance, demos and the governed acceptance soak remain. The standalone Canvas worker remains an unrouted Rust candidate pending whole-worker parity and all-consumer gates. Required Python bindings, adapters and reachable worker code are preserved. Production is unchanged.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.214` is qualified, published, independently verified and successfully deployed to beta at exact source `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`. Protected release run `33930593794` passed public-stack and all verifier gates; its resume reused the original signed digests. Integration PR `#418` merged the real published static pin at `9f150de07a5a629a46b1eeeb58123ddb3eb86f32`, and its complete artifact workflow passed. Integration `v1.2.80` is published and independently verified at protected source `0c0944424c2f19ad05d99bb7482526104cb5b6d1` after PR `#419` and successful release run `33931821255`. Full credential/browser acceptance, demos and the governed acceptance soak remain. The standalone Canvas worker remains an unrouted Rust candidate pending whole-worker parity and all-consumer gates. Required Python bindings, adapters and reachable worker code are preserved. No production deployment was performed by this migration lane; the separately observed host restart is recorded below.
 
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
@@ -22,6 +22,32 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
 ## Current execution snapshot — 2026-09-05
+
+### Lossless worker result parity and release in flight
+
+Credentials result-oracle PR `#259` merged at
+`85329f647c1d8c51ad709f1eed97cedcb3bb6464` after all protected queue checks.
+Its full tree matches the reviewed source; the owned worktree and branch were
+removed only after proof, retaining all source/tests on main. Rust replay of
+its unchanged JSON fixture reproduced 34 large-integer mismatches. The fix in
+this change preserves raw JSON values through the processor/result/persistence
+boundary; all 483 JSON combinations and the isolated PostgreSQL result-write
+test pass. See [scope and evidence](rust-migrations/canvas-worker-result-parity.md).
+Whole-worker parity and Python deletion gates remain open.
+
+Release activation PR `#783` merged at
+`1866528ab859ea7007ca34671ad80a62131fd79d`. Claim `33937440015` succeeded;
+ordinary release run `33937499784` uses the same immutable source. UI and
+service image builds/signing passed; verifier and public-stack qualification
+are now queued/running. Publication and deployment are not yet claimed complete.
+This worker change is separate from that release.
+
+The user confirmed an unplanned host restart at `2026-09-05T01:32:02.5000000Z`.
+The old deployment audit is retained; a separate 29-container post-restart
+production baseline was stable through `02:00:54Z`. The coordination hold is
+resolved. This migration lane made no production deployment/restoration and
+must use fresh before/after production invariants for the next beta rollout.
+The interruption does not count as a completed acceptance soak.
 
 ### Beta browser correction and selected follow-up release
 
