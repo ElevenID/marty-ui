@@ -392,7 +392,7 @@ async fn validate_sync_commit_fence(
            AND b.id = $6 AND b.config_version = $3
            AND b.enabled = true AND b.archived_at IS NULL
            AND a.application_template_id = $8 AND a.status = $9
-           AND a.integration_context = $10
+           AND a.integration_context::jsonb = $10::jsonb
            AND at.id = $8 AND at.status = $11
            AND at.approval_policy_set_id IS NOT DISTINCT FROM $12
          FOR SHARE OF t, p, b, a, at",

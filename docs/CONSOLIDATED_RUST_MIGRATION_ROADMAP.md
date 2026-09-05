@@ -40,14 +40,23 @@ behavior. The native [per-job write authorization](rust-migrations/canvas-proces
 follow-up now carries an explicit lease into independent repository handles,
 checks the durable job before resource locks and again before committing effects,
 and rejects unscoped writes across all seven processor effect entry points.
-Initial configured PostgreSQL guard tests pass; complete gates/protected landing
-remain required. The native [renewal-job outcome follow-up](rust-migrations/canvas-worker-renewal-job-outcomes.md)
+UI #801 is merged at protected `e19ef225872f3198b8411bd404101da25c632c21`.
+The native [renewal-job outcome follow-up](rust-migrations/canvas-worker-renewal-job-outcomes.md)
 now preserves bounded processing after operational renewal errors, attempts only
 lease-fenced durable outcomes, and observes the original renewal error afterward.
 Its real PostgreSQL 60-case matrix consumes the unchanged frozen corpus; external
-cancellation remains prompt and is not masked by renewal failure. Exact-head
-and protected landing gates remain required. All-consumer cutover and Python deletion
-remain gated on full authoritative-processor, schema and acceptance evidence.
+cancellation remains prompt and is not masked by renewal failure. UI #802 is
+merged at protected `9da0581d3be2b1e37be044200e2a22cdf752460c`, with its exact
+reviewed tree retained.
+
+The next [published-schema processor gate](rust-migrations/canvas-published-schema.md)
+passes locally against the pinned published migrations. It discovered and fixes
+a JSON/JSONB comparison failure in the native learner fact-commit guard. Real
+roster and learner effects, four fact types, repeat reads, provider-error head
+preservation and stale-context rejection now execute on the actual issuance
+schema. The provider is controlled and the organization dependency is minimal;
+hosted integration, full provider/processor differentials, all-consumer cutover
+and acceptance remain required. Reachable Python is retained until those gates pass.
 
 The integrated [renewal-progress follow-up](rust-migrations/canvas-worker-renewal-progress.md)
 retains the initialized pool owner and actual process-signal gate while correcting

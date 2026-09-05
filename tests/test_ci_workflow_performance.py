@@ -59,6 +59,24 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     assert 'test "$result" = success' in source
 
 
+def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    gate = next(
+        step
+        for step in steps
+        if step.get("name")
+        == "Test native Canvas against published issuance migrations"
+    )
+    assert "if" not in gate
+    assert not gate.get("continue-on-error", False)
+    assert gate["env"] == {"MARTY_CANVAS_PUBLISHED_SCHEMA_TEST": "1"}
+    assert "canvas-worker-consumer-range-oracle.json" in gate["run"]
+    assert "canvas_published_schema_contract" in gate["run"]
+    assert '"${executables[0]}" --nocapture --test-threads=1' in gate["run"]
+    assert "[[ ${#executables[@]} == 1" in gate["run"]
+
+
 def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> None:
     source, document = _workflow(CI_PATH)
     rust_job = document["jobs"]["test-rust-services"]
