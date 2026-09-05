@@ -7,8 +7,14 @@ fn ids(value: &mut Value) {
         Value::Object(object) => {
             for (key, value) in object {
                 if key == "id" {
+                    uuid::Uuid::parse_str(value.as_str().expect("job ID must be a string"))
+                        .unwrap();
                     *value = json!("$job");
                 } else if key == "target_id" {
+                    if value != "target-input" {
+                        uuid::Uuid::parse_str(value.as_str().expect("target ID must be a string"))
+                            .unwrap();
+                    }
                     *value = json!("$target");
                 } else {
                     ids(value);

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import unicodedata
+from uuid import UUID
 from pathlib import Path
 
 import httpx
@@ -45,8 +46,11 @@ async def observe():
             assert datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo
             return "$timestamp"
         if key == "id":
+            UUID(value)
             return "$job"
         if key == "target_id":
+            if value != "target-input":
+                UUID(value)
             return "$target"
         return value
 
