@@ -16,6 +16,9 @@ use crate::{
         CanvasCredentialsSecretResolver, CanvasCredentialsValidationConfig,
     },
     canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
+    canvas_operator_secret::{
+        resolve_canvas_operator_token, CanvasOperatorSecretReader, FileCanvasOperatorSecretReader,
+    },
     canvas_provider_http::{client_for_canvas_origin, CanvasHttpClientPolicy},
     credential_management::{CredentialLifecycleAction, CredentialManagementPortError},
     python_value::{python_string, python_truthy, strip},
@@ -23,7 +26,7 @@ use crate::{
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct CanvasCredentialsStatusConfig {
-    /// Already resolved by the operator configuration/secret owner. No tenant
+    /// Direct token and fixed file selector from the operator owner. No tenant
     /// metadata can select an environment variable or a filesystem path.
     pub provider: CanvasCredentialsValidationConfig,
     /// Legacy operator fallback selects a URL but does not grant origin trust.
@@ -81,6 +84,7 @@ pub trait CanvasStatusTransport: Send + Sync {
 pub struct CanvasCredentialsStatusService {
     config: CanvasCredentialsStatusConfig,
     secrets: Arc<dyn CanvasCredentialsSecretResolver>,
+    operator_secrets: Arc<dyn CanvasOperatorSecretReader>,
     transport: Arc<dyn CanvasStatusTransport>,
 }
 
@@ -111,6 +115,7 @@ impl CanvasCredentialsStatusService {
         Self {
             config,
             secrets,
+            operator_secrets: Arc::new(FileCanvasOperatorSecretReader),
             transport,
         }
     }
@@ -157,12 +162,13 @@ impl CanvasCredentialsStatusService {
                 return Ok(Some(token));
             }
         }
-        Ok(self
-            .config
-            .provider
-            .operator_api_token
-            .clone()
-            .filter(|value| !value.is_empty()))
+        resolve_canvas_operator_token(
+            self.config.provider.operator_api_token.as_deref(),
+            self.config.provider.operator_api_token_file.as_deref(),
+            self.operator_secrets.as_ref(),
+        )
+        .await
+        .map_err(|failure| error(failure.to_string()))
     }
 
     fn provider(&self, sources: &[&Map<String, Value>]) -> String {
@@ -502,6 +508,116 @@ impl CanvasStatusTransport for HttpCanvasStatusTransport {
 mod tests {
     use super::*;
     use std::{sync::Mutex, time::Duration};
+
+    struct SecretPorts {
+        case: Value,
+        files: Mutex<Vec<String>>,
+        lookups: Mutex<Vec<Value>>,
+    }
+
+    #[async_trait]
+    impl CanvasCredentialsSecretResolver for SecretPorts {
+        async fn secret_value(
+            &self,
+            organization: &str,
+            identifier: &str,
+        ) -> Result<Option<String>, ()> {
+            self.lookups
+                .lock()
+                .unwrap()
+                .push(json!({"organization_id":organization,"secret_id":identifier}));
+            Ok(self.case["tenant_value"].as_str().map(str::to_owned))
+        }
+    }
+
+    #[async_trait]
+    impl CanvasOperatorSecretReader for SecretPorts {
+        async fn read(&self, path: &str) -> Result<Vec<u8>, std::io::Error> {
+            assert_eq!(path, "/synthetic/operator-token");
+            self.files.lock().unwrap().push("operator-token".into());
+            let text = match self.case["file"].as_str().unwrap() {
+                "missing" => return Err(std::io::ErrorKind::NotFound.into()),
+                "permission" => return Err(std::io::ErrorKind::PermissionDenied.into()),
+                "directory" => return Err(std::io::ErrorKind::IsADirectory.into()),
+                "invalid_utf8" => return Ok(vec![0xff]),
+                "value" => "synthetic-file\n",
+                "mixed_newlines" => " synthetic-first\r\nsecond\rthird\n ",
+                "empty" => "",
+                "whitespace" => "\u{1c}\u{2003}\n",
+                "unicode_value" => "\u{1c}\u{2003}synthetic-file\u{2003}\u{1c}",
+                _ => panic!("unknown synthetic file kind"),
+            };
+            Ok(text.as_bytes().to_vec())
+        }
+    }
+
+    #[async_trait]
+    impl CanvasStatusTransport for SecretPorts {
+        async fn send(&self, _: CanvasStatusRequest) -> Result<CanvasStatusResponse, String> {
+            panic!("secret helper replay must not perform HTTP")
+        }
+    }
+
+    #[tokio::test]
+    async fn lazy_operator_secret_matches_exact_published_helper_cases() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-provider-configuration-scenarios.json"
+        ))
+        .unwrap();
+        let expected: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-provider-configuration-oracle.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            cases["secrets"].as_array().unwrap().len(),
+            expected["secrets"].as_array().unwrap().len()
+        );
+        for (case, expected) in cases["secrets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(expected["secrets"].as_array().unwrap())
+        {
+            assert_eq!(case["name"], expected["name"]);
+            let ports = Arc::new(SecretPorts {
+                case: case.clone(),
+                files: Mutex::new(Vec::new()),
+                lookups: Mutex::new(Vec::new()),
+            });
+            let mut service = CanvasCredentialsStatusService::new(
+                CanvasCredentialsStatusConfig {
+                    provider: CanvasCredentialsValidationConfig {
+                        operator_api_token: case["direct"].as_str().map(str::to_owned),
+                        operator_api_token_file: case
+                            .get("file")
+                            .map(|_| "/synthetic/operator-token".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ports.clone(),
+                ports.clone(),
+            );
+            service.operator_secrets = ports.clone();
+            let result = service
+                .token("org-review", &metadata_sources(&case["metadata"]))
+                .await;
+            let mut actual = match result {
+                Ok(value) => json!({"value":value.unwrap_or_default()}),
+                Err(failure) => {
+                    assert_eq!(
+                        failure.0,
+                        "Canvas Credentials operator token file is not valid UTF-8"
+                    );
+                    json!({"error_class":"UnicodeDecodeError"})
+                }
+            };
+            actual["name"] = case["name"].clone();
+            actual["files"] = json!(*ports.files.lock().unwrap());
+            actual["secrets"] = json!(*ports.lookups.lock().unwrap());
+            assert_eq!(&actual, expected, "{}", case["name"]);
+        }
+    }
 
     #[tokio::test]
     async fn http_transport_preserves_wire_protocol_and_does_not_follow_redirects() {

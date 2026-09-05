@@ -14,6 +14,10 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use url::Url;
 
+use crate::canvas_operator_secret::{
+    resolve_canvas_operator_token, CanvasOperatorSecretError, CanvasOperatorSecretReader,
+    FileCanvasOperatorSecretReader,
+};
 use crate::canvas_provider_http::{client_for_canvas_origin, CanvasHttpClientPolicy};
 
 #[cfg(test)]
@@ -26,6 +30,7 @@ const MAX_FAILURE_BODY_BYTES: usize = 64 * 1024;
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct CanvasCredentialsValidationConfig {
     pub operator_api_token: Option<String>,
+    pub operator_api_token_file: Option<String>,
     pub provider: Option<String>,
     pub publish_url: Option<String>,
     pub api_base_url: Option<String>,
@@ -43,6 +48,10 @@ impl std::fmt::Debug for CanvasCredentialsValidationConfig {
             .field(
                 "operator_api_token_configured",
                 &self.operator_api_token.is_some(),
+            )
+            .field(
+                "operator_api_token_file_configured",
+                &self.operator_api_token_file.is_some(),
             )
             .field("provider_configured", &self.provider.is_some())
             .field("publish_url_configured", &self.publish_url.is_some())
@@ -139,6 +148,7 @@ pub struct CanvasCredentialsValidationService {
     config: CanvasCredentialsValidationConfig,
     allowed_origins: Arc<BTreeSet<String>>,
     secrets: Arc<dyn CanvasCredentialsSecretResolver>,
+    operator_secrets: Arc<dyn CanvasOperatorSecretReader>,
     transport: Arc<dyn CanvasCredentialsValidationTransport>,
 }
 
@@ -167,6 +177,7 @@ impl CanvasCredentialsValidationService {
             config,
             allowed_origins: Arc::new(allowed_origins),
             secrets,
+            operator_secrets: Arc::new(FileCanvasOperatorSecretReader),
             transport,
         }
     }
@@ -175,21 +186,25 @@ impl CanvasCredentialsValidationService {
         &self,
         organization_id: &str,
         canvas_credentials: &Map<String, Value>,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, CanvasOperatorSecretError> {
         if canvas_credentials.is_empty() {
-            return self
-                .config
-                .operator_api_token
-                .clone()
-                .filter(|value| !value.is_empty());
+            return resolve_canvas_operator_token(
+                self.config.operator_api_token.as_deref(),
+                self.config.operator_api_token_file.as_deref(),
+                self.operator_secrets.as_ref(),
+            )
+            .await;
         }
-        let secret_id = map_text(canvas_credentials, "api_token_secret_id")?;
-        self.secrets
+        let Some(secret_id) = map_text(canvas_credentials, "api_token_secret_id") else {
+            return Ok(None);
+        };
+        Ok(self
+            .secrets
             .secret_value(organization_id, secret_id)
             .await
             .ok()
             .flatten()
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.is_empty()))
     }
 
     fn provider(&self, canvas_credentials: &Map<String, Value>) -> String {
@@ -312,7 +327,14 @@ impl CanvasCredentialsValidator for CanvasCredentialsValidationService {
         canvas_credentials: &Map<String, Value>,
     ) -> CanvasCredentialsValidationResult {
         let provider = self.provider(canvas_credentials);
-        let token = self.token(organization_id, canvas_credentials).await;
+        let token = match self.token(organization_id, canvas_credentials).await {
+            Ok(token) => token,
+            Err(error) => {
+                let mut result = CanvasCredentialsValidationResult::empty(provider);
+                result.error = Some(error.to_string());
+                return result;
+            }
+        };
         if provider == "bridge" {
             let mut result = CanvasCredentialsValidationResult::empty(provider);
             result.token_configured = token.is_some();
@@ -517,8 +539,81 @@ mod tests {
 
     use super::*;
 
+    struct CountingOperatorFile(std::sync::atomic::AtomicUsize);
+    #[async_trait]
+    impl CanvasOperatorSecretReader for CountingOperatorFile {
+        async fn read(&self, path: &str) -> Result<Vec<u8>, std::io::Error> {
+            assert_eq!(path, "/synthetic/operator-token");
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(b"synthetic-file-token\n".to_vec())
+        }
+    }
+
+    #[tokio::test]
+    async fn lazy_operator_file_does_not_weaken_canonical_tenant_validation_policy() {
+        let reader = Arc::new(CountingOperatorFile(std::sync::atomic::AtomicUsize::new(0)));
+        let mut service = CanvasCredentialsValidationService::new(
+            CanvasCredentialsValidationConfig {
+                operator_api_token_file: Some("/synthetic/operator-token".into()),
+                publish_url: Some("https://bridge.example/publish".into()),
+                ..Default::default()
+            },
+            Arc::new(Secret(None)),
+            Arc::new(Transport::default()),
+        );
+        service.operator_secrets = reader.clone();
+        assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let empty = service.validate("org-review", &Map::new()).await;
+        assert!(empty.ok && empty.token_configured);
+        assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let canonical = json!({"provider":"bridge","api_token_secret_id":"missing"});
+        let nonempty = service
+            .validate("org-review", canonical.as_object().unwrap())
+            .await;
+        assert!(nonempty.ok && !nonempty.token_configured);
+        assert_eq!(
+            reader.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "nonempty tenant configuration must not fall back to operator file"
+        );
+    }
+
     #[derive(Debug)]
     struct Secret(Option<String>);
+
+    struct InvalidOperatorFile;
+
+    #[async_trait]
+    impl CanvasOperatorSecretReader for InvalidOperatorFile {
+        async fn read(&self, _: &str) -> Result<Vec<u8>, std::io::Error> {
+            Ok(vec![0xff])
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_operator_utf8_returns_safe_failure_without_provider_http() {
+        let transport = Arc::new(Transport::default());
+        let config = CanvasCredentialsValidationConfig {
+            operator_api_token_file: Some("/synthetic/private-token-path".into()),
+            ..Default::default()
+        };
+        assert!(!format!("{config:?}").contains("private-token-path"));
+        let mut service = CanvasCredentialsValidationService::new(
+            config,
+            Arc::new(Secret(None)),
+            transport.clone(),
+        );
+        service.operator_secrets = Arc::new(InvalidOperatorFile);
+        let result = service.validate("org-review", &Map::new()).await;
+        assert!(!result.ok);
+        assert!(!result.token_configured);
+        assert_eq!(result.status_code, None);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Canvas Credentials operator token file is not valid UTF-8")
+        );
+        assert!(transport.calls.lock().unwrap().is_empty());
+    }
 
     #[async_trait]
     impl CanvasCredentialsSecretResolver for Secret {

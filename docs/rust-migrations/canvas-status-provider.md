@@ -150,12 +150,13 @@ qualification must be rerun after the backend is available.
 ## Remaining gates before cutover
 
 - Close the remaining configuration behavior differences before consumer wiring.
-  Python's fixed token-file helper tolerates OSError/empty files and is invoked
-  lazily after tenant-secret selection; the existing shared Rust configuration
-  loader is eager and rejects unreadable/empty files. Python float parsing accepts
-  lexical/non-finite/range inputs that the existing positive-Duration parser does
-  not. Freeze actual import and consumer behavior, preserve error timing and use
-  the shared MMF numeric parser; do not narrow acceptance just to fit Duration.
+  The [configuration continuation](canvas-provider-configuration.md) replaces eager
+  Canvas token-file loading with one lazy owner and freezes 39 exact-source helper
+  observations. The shared MMF parser now preserves Python float grammar and
+  ordered assignments. Actual module-import and HTTP timeout-consumer behavior
+  remain unqualified; the existing positive-Duration startup boundary still
+  rejects some Python-accepted values. Preserve acceptance and error timing;
+  do not narrow acceptance just to fit Duration.
 - Extend published qualification for alternate URL/port normalization, template
   grammar, metadata shapes, response encodings, secret-lookup outages and safe
   persistent diagnostics. Controlled transport error parity does not prove identical

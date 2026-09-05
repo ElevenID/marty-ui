@@ -140,6 +140,16 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_provider_configuration() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "provider_configuration",
+            "provider-configuration",
+            "provider_configuration",
+            "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE=1",
+        )))
+        .await
+    }
+
     pub async fn start_with_review_lifecycle() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((

@@ -33,6 +33,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
+The latest [provider configuration continuation](rust-migrations/canvas-provider-configuration.md)
+adds one lazy Rust operator-secret owner and 39 independently captured helper
+observations (20 secret, 19 timeout), including file rotation, optional I/O,
+UTF-8, whitespace and newline handling. Validation's canonical tenant policy and
+required non-Canvas secret policies are preserved. MMF float grammar and ordered
+timeout evaluation replace the Rust-only parser; actual network timeout/range
+and full endpoint error parity remain open. Runtime commit `6fdc86272` passed
+CI33997949251 and Rust CodeQL33997949236. New configuration changes require fresh
+hosted checks, including the new pinned-image helper cross-check. Docker's Linux
+engine is currently unavailable locally; this does not qualify a local full gate
+or current deployment health. The reported host restart interrupts continuous
+beta-soak evidence. Production remains unchanged by this lane.
+
 The status provider now has shared runtime configuration/HTTP assembly and a
 63-case published replay through the actual configuration parser. Eight new cases
 correct missing-issuer null projection, legacy BASE_URL trust/fallback and empty
@@ -40,7 +53,7 @@ organization gating, preserving all original 55 observations. A real encrypted
 tenant-vault + credential/delivery PostgreSQL + loopback HTTP contract verifies
 durable mirror failures/recovery and rejects success if the delivery disappears
 after the external call. Normal token-file and timeout precedence are tested.
-Eager/missing-file and numeric edge differences remain explicit cutover blockers;
+At that checkpoint, eager/missing-file and numeric edge differences remained cutover blockers;
 no live consumer has adopted the factory. Prior provider commit `340a0503b` passed
 CI33996860721 and Rust CodeQL33996860698; new changes require fresh hosted gates.
 The new local runtime/fault tests passed before Docker became unavailable; 267

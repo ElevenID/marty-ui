@@ -12,6 +12,23 @@ mod canvas_status_provider_replay;
 mod canvas_status_runtime_contract;
 
 #[tokio::test]
+async fn provider_configuration_matches_published_helpers() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_provider_configuration()
+        .await
+        .unwrap();
+    let oracle = owned.oracle.clone().unwrap();
+    owned.close().unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-provider-configuration-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(oracle, expected);
+}
+
+#[tokio::test]
 async fn status_runtime_preserves_credential_and_delivery_effects() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
