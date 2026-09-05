@@ -1,0 +1,789 @@
+{
+  "boundary": "published ASGI/auth/input validation; empty memory repository, not persistence",
+  "observations": [
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "__1",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_0",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1__0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_1",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "_1",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_2",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1_",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_3",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1.0_0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_4",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "limit_extra_5",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1._0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_6",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1.0_",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_7",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1.00_",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_8",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1.0e0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_9",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1e0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_10",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "0x1",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_11",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "-000",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "limit_extra_12",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "limit_extra_13",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "\u001c2\u001c",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_extra_14",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "limit_extra_15",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_one",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_default",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_max",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "limit_zero",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "le": 500
+            },
+            "input": "501",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be less than or equal to 500",
+            "type": "less_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/less_than_equal"
+          }
+        ]
+      },
+      "name": "limit_excess",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "limit_trimmed",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_plus",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_decimal",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_leading_zero",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "limit_underscore",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "1e2",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_scientific",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "limit_decimal_zeros",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "2.1",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_fraction",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "-0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "limit_negative_zero",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "-2",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "limit_negative",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_empty",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "١",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_arabic",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "１",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_fullwidth",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "le": 500
+            },
+            "input": "9999999999999999999999999999999999999999",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be less than or equal to 500",
+            "type": "less_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/less_than_equal"
+          }
+        ]
+      },
+      "name": "limit_huge",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "2.",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_trailing_dot",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": ".0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be a valid integer, unable to parse string as an integer",
+            "type": "int_parsing",
+            "url": "https://errors.pydantic.dev/2.11/v/int_parsing"
+          }
+        ]
+      },
+      "name": "limit_leading_dot",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"queued\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"leased\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"retry\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"succeeded\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"dead_letter\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"cancelled\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"\"",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Invalid Canvas sync job status"
+      },
+      "name": "canvas-sync-jobs_\" \"",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "Invalid Canvas sync job status"
+      },
+      "name": "canvas-sync-jobs_\"INVALID\"",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\"QUEUED\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-sync-jobs_\" queued \"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"observed\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"identity_link_required\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"eligible\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"pending_claim\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"claimed\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"dismissed\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"\"",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Invalid Canvas award candidate status"
+      },
+      "name": "canvas-award-candidates_\" \"",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "Invalid Canvas award candidate status"
+      },
+      "name": "canvas-award-candidates_\"INVALID\"",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\"OBSERVED\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "canvas-award-candidates_\" observed \"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"open\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"dismissed\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"suspended\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"revoked\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"resolved\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"\"",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Invalid evidence policy review status"
+      },
+      "name": "evidence-policy-reviews_\" \"",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "Invalid evidence policy review status"
+      },
+      "name": "evidence-policy-reviews_\"INVALID\"",
+      "status": 422
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\"OPEN\"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "evidence-policy-reviews_\" open \"",
+      "status": 200
+    },
+    {
+      "body": [],
+      "name": "duplicate_limit_last_wins",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "duplicate_limit_last_invalid",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "limit_before_missing_tenant",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "X-API-Key header is missing"
+      },
+      "name": "auth_before_limit",
+      "status": 401
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "ge": 1
+            },
+            "input": "0",
+            "loc": [
+              "query",
+              "limit"
+            ],
+            "msg": "Input should be greater than or equal to 1",
+            "type": "greater_than_equal",
+            "url": "https://errors.pydantic.dev/2.11/v/greater_than_equal"
+          }
+        ]
+      },
+      "name": "limit_before_foreign_query",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "X-Organization-ID is required for Canvas management"
+      },
+      "name": "tenant_before_status",
+      "status": 400
+    }
+  ],
+  "operations_sha256": "49ed07755bc9a2c4daee61242c8d14334dfe343eebd8b99ef30f88ae5f7e0d83",
+  "pydantic_version": "2.11.7"
+}

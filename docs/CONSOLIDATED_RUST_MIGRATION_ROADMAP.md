@@ -31,25 +31,34 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
-### Current operations baseline and recovery blocker
+### Current operations baseline and recovery repair
+
+The [native operations read candidate](rust-migrations/canvas-operations-reads.md)
+implements four read APIs in the existing issuance crate, without live routing.
+All25 frozen read cases and75 supplementary published input/status cases replay
+locally, alongside500-row review-window and unavailable-database checks.
+Seven configured schema gates and258 library tests pass. The four write APIs,
+full edge/lifecycle qualification and all-consumer cutover remain required.
 
 The [operations baseline](rust-migrations/canvas-operations-freeze.md) captures
 46 HTTP/state scenarios across all eight remaining Canvas operations APIs using
 the published Python router, authentication, service and real PostgreSQL.
-Two independent captures agree; all five configured published-schema tests,
+It merged through #811 as `aac7d9377891564e947042a98a3db24ed8ba92b0`.
+Two independent captures agree; all five original configured published-schema tests,
 all-target issuance Clippy and twenty focused CI/image tests pass locally.
-Native operations implementation and hosted qualification remain pending.
+Native write operations and full hosted/cutover qualification remain pending.
 
 The failed-handler recovery scenario exposes a published schema defect:
 the internal `evidence_recovered` claim is rejected by the manual-action-only
 constraint, leaving recovery pending. The frozen outcome is a historical
 negative control, not desired Rust behavior. An official forward migration,
 model alignment and real-database recovery/audit/claim-fencing tests are required
-before operations cutover. Credentials #266 implements that forward-only fix;
-its real PostgreSQL recovery gate passes locally and on the initial hosted run.
-Both published/current consumer replays pass locally with their respective
-schema heads and unchanged outcomes. Complete fresh CI and protected landing
-remain pending. No reachable Python feature has been removed.
+before operations cutover. Credentials #266 merged that forward-only fix as
+`51f0a758a076777cb18a30b1db3f89c74ac23e01`, retaining its reviewed tree after
+complete fresh CI and protected landing. Actual PostgreSQL recovery and both
+published/current consumer replays pass with respective schema heads and
+unchanged worker outcomes. Aggregate adoption remains pending.
+No reachable Python feature has been removed.
 
 ### Current heartbeat readiness qualification
 

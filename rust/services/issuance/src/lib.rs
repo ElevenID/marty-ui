@@ -41,6 +41,7 @@ pub mod canvas_management_service;
 pub mod canvas_oauth;
 pub mod canvas_oauth_http;
 pub mod canvas_oauth_postgres;
+pub mod canvas_operations;
 pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;

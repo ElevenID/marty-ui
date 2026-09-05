@@ -1,6 +1,6 @@
 {
   "schema": "marty.issuance-canvas-operations/v1",
-  "status": "behavior-freeze; native implementation and cutover pending",
+  "status": "behavior-freeze; four native read candidates; write implementation and cutover pending",
   "provenance": {
     "credentials_snapshot": "e3e79c96ab655f4ac699074c6452cd8c4c43dcb6",
     "source": "services/issuance/infrastructure/api/canvas_operations_routes.py",
@@ -92,7 +92,7 @@
     "Timestamp presence/ISO validation, not exact temporal parity",
     "Only router mounted in ASGI fixture, not deployed middleware",
     "46 cases are not an exhaustive input/status/filtering/failure/race matrix",
-    "No native operations implementation or deployment changes"
+    "Four native read candidates only; write implementation, live routing and deployment remain pending"
   ],
   "deletion_requires": [
     "Complete Rust operations and shared repository/lifecycle integration",
