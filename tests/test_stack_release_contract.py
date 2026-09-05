@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -208,6 +212,86 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert 'release_id="$(gh api' in workflow
     assert 'echo "id=$release_id" >> "$GITHUB_OUTPUT"' in workflow
     assert "pytest tests/oss_stack" in workflow
+
+
+def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> None:
+    """Execute the producer's actual checksum/asset expressions, without publishing."""
+    workflow = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    steps = workflow["jobs"]["publish-manifest"]["steps"]
+    signing = next(
+        step["run"] for step in steps
+        if step.get("name") == "Sign and checksum manifest evidence"
+    )
+    publication = next(step["run"] for step in steps if step.get("id") == "release")
+    checksum_commands = [
+        line for line in signing.splitlines() if line.startswith("sha256sum ")
+    ]
+    asset_commands = [
+        line for line in publication.splitlines() if line.startswith("assets=(")
+    ]
+    assert len(checksum_commands) == len(asset_commands) == 1
+
+    subjects = {
+        "stack-manifest.json",
+        "release-transaction.json",
+        "marty-ui-sbom.cdx.json",
+        "marty-ui-services-sbom.cdx.json",
+        "marty-ui-migrations-sbom.cdx.json",
+    }
+    expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
+    for name in expected_assets:
+        (tmp_path / name).write_bytes(f"fixture:{name}\n".encode())
+
+    # Windows' system bash can be an unconfigured WSL launcher; use Git Bash.
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git is not None, "Git Bash is required for release shell contracts"
+        bash = str(Path(git).resolve().parents[1] / "bin" / "bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash is not None and Path(bash).is_file(), "Bash is required"
+
+    result = subprocess.run(
+        [
+            bash, "--noprofile", "--norc", "-euo", "pipefail", "-c",
+            checksum_commands[0] + "\n" + asset_commands[0]
+            + '\nprintf "%s\\n" "${assets[@]}"',
+        ],
+        cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30,
+    )
+
+    def flat_name(value: str) -> str:
+        name = value.removeprefix("./")
+        assert name and "/" not in name and "\\" not in name
+        assert name not in {".", ".."}
+        return name
+
+    published = [flat_name(line) for line in result.stdout.splitlines()]
+    assert len(published) == len(set(published))
+    assert set(published) == expected_assets | {"SHA256SUMS"}
+    checksummed = []
+    for line in (tmp_path / "SHA256SUMS").read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64}) [ *](.+)", line)
+        assert match is not None
+        digest, name = match.groups()
+        name = flat_name(name)
+        assert name in expected_assets
+        assert digest == hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+        checksummed.append(name)
+    assert len(checksummed) == len(set(checksummed))
+    assert set(checksummed) == set(published) - {"SHA256SUMS"}
+
+    def verify() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [bash, "--noprofile", "--norc", "-c", "sha256sum --check --strict SHA256SUMS"],
+            cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        )
+
+    assert verify().returncode == 0
+    (tmp_path / "release-transaction.json").write_bytes(b"changed transaction\n")
+    corrupted = verify()
+    assert corrupted.returncode != 0
+    assert "release-transaction.json: FAILED" in corrupted.stdout
 
 
 def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> None:
