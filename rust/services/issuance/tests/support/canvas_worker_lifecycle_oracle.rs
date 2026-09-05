@@ -27,10 +27,10 @@ use tokio::sync::{oneshot, watch, Notify, Semaphore};
 use super::canvas_worker_range_oracle::observed_worker;
 
 #[derive(Default)]
-struct ProcessorState {
+pub(super) struct ProcessorState {
     entered: AtomicUsize,
-    active: AtomicUsize,
-    cleaned: AtomicUsize,
+    pub(super) active: AtomicUsize,
+    pub(super) cleaned: AtomicUsize,
     entry: Notify,
 }
 
@@ -85,7 +85,7 @@ impl CanvasSyncProcessor for ControlledProcessor {
     }
 }
 
-async fn await_both_processors<F: std::future::Future>(
+pub(super) async fn await_both_processors<F: std::future::Future>(
     mut cycle: Pin<&mut F>,
     state: &ProcessorState,
 ) {
@@ -102,24 +102,32 @@ async fn await_both_processors<F: std::future::Future>(
     assert_eq!(state.active.load(Ordering::SeqCst), 2);
 }
 
-struct ControlledCycle {
-    worker: CanvasSyncWorker,
-    state: Arc<ProcessorState>,
+pub(super) struct ControlledCycle {
+    pub(super) worker: CanvasSyncWorker,
+    pub(super) state: Arc<ProcessorState>,
     release: Arc<Semaphore>,
 }
 
 async fn controlled_cycle(pool: &PgPool, panic_target: Option<&'static str>) -> ControlledCycle {
+    let config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([(
+        "CANVAS_SYNC_WORKER_ID".to_owned(),
+        "owned-cycle-worker".to_owned(),
+    )]))
+    .unwrap();
+    controlled_cycle_with_config(pool, panic_target, config).await
+}
+
+pub(super) async fn controlled_cycle_with_config(
+    pool: &PgPool,
+    panic_target: Option<&'static str>,
+    config: CanvasSyncWorkerConfig,
+) -> ControlledCycle {
     sqlx::query("TRUNCATE issuance_service.canvas_evidence_sync_jobs, issuance_service.canvas_evidence_sync_targets, issuance_service.canvas_worker_heartbeats")
         .execute(pool).await.unwrap();
     super::seed_target(pool, "owned-cycle-a", 900).await;
     super::seed_target(pool, "owned-cycle-b", 900).await;
     let state = Arc::new(ProcessorState::default());
     let release = Arc::new(Semaphore::new(0));
-    let config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([(
-        "CANVAS_SYNC_WORKER_ID".to_owned(),
-        "owned-cycle-worker".to_owned(),
-    )]))
-    .unwrap();
     let (worker, _) = observed_worker(
         pool,
         config,

@@ -63,6 +63,12 @@ adds actual PostgreSQL disposal proof for return, error, initialization panic,
 active cancellation and graceful drain. Process-signal, whole-worker and
 remaining cutover evidence are still separate gates.
 
+The [renewal progress correction](canvas-worker-renewal-progress.md) preserves
+processor/deadline progress during pending renewal I/O and process liveness after
+a target heartbeat CAS rejects an old generation. Controlled regressions and an
+actual PostgreSQL active-job scenario prove these corrections without weakening
+target-generation fences; broader renewal and whole-worker gates remain.
+
 The [lossless configuration and PostgreSQL range replay](../canvas-worker-lossless-configuration.md)
 now cover all 133 frozen startup vectors and 36 consumer cycles plus three
 two-cycle loops through the actual Rust worker and PostgreSQL repositories.

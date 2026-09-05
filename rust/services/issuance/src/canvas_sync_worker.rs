@@ -690,11 +690,17 @@ impl CanvasSyncWorker {
                     // behavior. Side-effect repositories independently fence
                     // the captured generation, so a live canonical target may
                     // be reconciled without dropping the durable job lease.
-                    return self
+                    let target_exists = self
                         .repository
                         .target(&job.organization_id, &job.target_id)
-                        .await
-                        .map(|target| target.is_some());
+                        .await?
+                        .is_some();
+                    if !target_exists {
+                        return Ok(false);
+                    }
+                    // A rejected old-generation target heartbeat must not
+                    // suppress liveness for the still-owned, renewed job.
+                    // Never write that heartbeat into the newer target.
                 }
                 self.heartbeat("processing", 1).await?;
                 Ok(true)
@@ -1155,16 +1161,22 @@ where
     RF: Future<Output = Result<bool, CanvasSyncRepositoryError>>,
 {
     tokio::pin!(processing);
-    loop {
-        tokio::select! {
-            outcome = &mut processing => return Ok(outcome),
-            () = tokio::time::sleep(interval) => {
-                if !renew().await? {
-                    // Returning drops the pinned processor future immediately.
-                    return Err(EscapedJobError::StaleLease);
-                }
+    let renewal = async {
+        loop {
+            tokio::time::sleep(interval).await;
+            match renew().await {
+                Ok(true) => {}
+                Ok(false) => return EscapedJobError::StaleLease,
+                Err(error) => return error.into(),
             }
         }
+    };
+    // Poll both owned futures throughout renewal I/O. Awaiting renewal inside
+    // a select branch would suspend processing and its wall-clock deadline.
+    // Whichever finishes drops the other future before acknowledgment.
+    tokio::select! {
+        outcome = &mut processing => Ok(outcome),
+        error = renewal => Err(error),
     }
 }
 
@@ -1183,6 +1195,91 @@ mod lease_tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    async fn assert_progress_during_blocked_renewal(deadline: bool) {
+        let processing_dropped = Arc::new(AtomicBool::new(false));
+        let renewal_dropped = Arc::new(AtomicBool::new(false));
+        let processing_guard = DropSignal(processing_dropped.clone());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let processing_release = release.clone();
+        let renewal_entered = tokio::sync::Notify::new();
+        let processing = async move {
+            let _guard = processing_guard;
+            processing_release.notified().await;
+            if deadline {
+                tokio::time::timeout(Duration::from_millis(1), std::future::pending::<u8>()).await
+            } else {
+                Ok(42)
+            }
+        };
+        let mut owned = Box::pin(await_with_lease_renewal(
+            processing,
+            Duration::from_millis(1),
+            || {
+                let guard = DropSignal(renewal_dropped.clone());
+                let entered = &renewal_entered;
+                async move {
+                    let _guard = guard;
+                    entered.notify_one();
+                    std::future::pending::<Result<bool, CanvasSyncRepositoryError>>().await
+                }
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                _ = &mut owned => panic!("work finished before the renewal was blocked"),
+                () = renewal_entered.notified() => {}
+            }
+        })
+        .await
+        .expect("renewal must reach the controlled pending operation");
+        release.notify_one();
+        let result = tokio::time::timeout(Duration::from_millis(100), &mut owned)
+            .await
+            .expect("blocked renewal stalled processor completion or deadline")
+            .unwrap();
+        if deadline {
+            assert!(result.is_err(), "processing deadline must still expire");
+        } else {
+            assert_eq!(result.unwrap(), 42);
+        }
+        assert!(processing_dropped.load(Ordering::SeqCst));
+        assert!(
+            renewal_dropped.load(Ordering::SeqCst),
+            "no pending renewal may escape"
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_processing_is_not_stalled_by_pending_renewal() {
+        assert_progress_during_blocked_renewal(false).await;
+    }
+
+    #[tokio::test]
+    async fn processing_deadline_is_not_stalled_by_pending_renewal() {
+        assert_progress_during_blocked_renewal(true).await;
+    }
+
+    #[tokio::test]
+    async fn renewal_error_still_drops_processing_and_preserves_error_class() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = DropSignal(dropped.clone());
+        let processing = async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        };
+        let result = await_with_lease_renewal(processing, Duration::from_millis(1), || async {
+            Err(CanvasSyncRepositoryError::Unavailable)
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(EscapedJobError::Repository(
+                CanvasSyncRepositoryError::Unavailable
+            ))
+        ));
+        assert!(dropped.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
