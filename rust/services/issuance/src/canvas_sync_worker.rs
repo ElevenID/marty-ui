@@ -16,6 +16,7 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
+use mmf_config::numeric_config::{parse_bounded_python_config_float, PythonConfigInteger};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{value::RawValue, Map, Value};
@@ -42,11 +43,11 @@ const MAX_ATTEMPTS: i32 = 8;
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanvasSyncWorkerConfig {
     pub worker_id: String,
-    pub batch_size: usize,
-    pub lease_seconds: i64,
+    pub batch_size: PythonConfigInteger,
+    pub lease_seconds: PythonConfigInteger,
     pub job_timeout: Duration,
-    pub schedule_limit: usize,
-    pub oauth_revocation_limit: usize,
+    pub schedule_limit: PythonConfigInteger,
+    pub oauth_revocation_limit: PythonConfigInteger,
     pub poll_interval: Duration,
     pub portable_enabled: bool,
     pub pilot_organizations: BTreeSet<String>,
@@ -63,37 +64,51 @@ impl CanvasSyncWorkerConfig {
         let configured_id = values
             .get("CANVAS_SYNC_WORKER_ID")
             .map(String::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty());
-        let host = values
-            .get("HOSTNAME")
-            .or_else(|| values.get("COMPUTERNAME"))
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("canvas-worker");
-        let worker_id = configured_id.map(str::to_owned).unwrap_or_else(|| {
+        let worker_id = if let Some(identity) = configured_id {
+            identity.to_owned()
+        } else {
+            // Match socket.gethostname(), not a mutable HOSTNAME override.
+            let host =
+                hostname::get().map_err(|_| CanvasSyncWorkerConfigError::HostNameUnavailable)?;
             let random = Uuid::new_v4().simple().to_string();
-            format!("{host}-{}-{}", std::process::id(), &random[..8])
-        });
+            format!(
+                "{}-{}-{}",
+                host.to_string_lossy(),
+                std::process::id(),
+                &random[..8]
+            )
+        };
         Ok(Self {
             worker_id,
-            batch_size: parse_usize_floor(values, "CANVAS_SYNC_WORKER_BATCH_SIZE", 10, 1)?,
-            lease_seconds: parse_integer(values, "CANVAS_SYNC_WORKER_LEASE_SECONDS", 120)?.max(30),
-            job_timeout: Duration::from_secs_f64(
-                parse_float(values, "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS", 600.0)?
-                    .clamp(30.0, 3_600.0),
-            ),
-            schedule_limit: parse_usize_floor(values, "CANVAS_SYNC_SCHEDULE_LIMIT", 100, 1)?,
-            oauth_revocation_limit: parse_usize_floor(
+            batch_size: parse_integer_floor(values, "CANVAS_SYNC_WORKER_BATCH_SIZE", "10", 1)?,
+            lease_seconds: parse_integer_floor(
+                values,
+                "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+                "120",
+                30,
+            )?,
+            job_timeout: parse_duration(
+                values,
+                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+                "600",
+                30.0,
+                3_600.0,
+            )?,
+            schedule_limit: parse_integer_floor(values, "CANVAS_SYNC_SCHEDULE_LIMIT", "100", 1)?,
+            oauth_revocation_limit: parse_integer_floor(
                 values,
                 "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
-                25,
+                "25",
                 1,
             )?,
-            poll_interval: Duration::from_secs_f64(
-                parse_float(values, "CANVAS_SYNC_WORKER_POLL_SECONDS", 5.0)?.clamp(0.1, 60.0),
-            ),
+            poll_interval: parse_duration(
+                values,
+                "CANVAS_SYNC_WORKER_POLL_SECONDS",
+                "5",
+                0.1,
+                60.0,
+            )?,
             portable_enabled: parse_python_bool(
                 values.get("CANVAS_PORTABLE_INTEGRATION_ENABLED"),
                 false,
@@ -104,7 +119,16 @@ impl CanvasSyncWorkerConfig {
 
     #[must_use]
     pub fn lease_renewal_interval(&self) -> Duration {
-        Duration::from_secs_f64((self.lease_seconds as f64 / 3.0).clamp(10.0, 30.0))
+        // Apply this derived interval's bounds before machine conversion.
+        // Invalid lease timestamps fail at leasing, before job renewal starts.
+        let seconds = self
+            .lease_seconds
+            .clone()
+            .max(30_u64.into())
+            .min(90_u64.into())
+            .to_u64()
+            .expect("bounded lease renewal interval");
+        Duration::from_secs_f64(seconds as f64 / 3.0)
     }
 
     #[must_use]
@@ -117,47 +141,39 @@ impl CanvasSyncWorkerConfig {
 pub enum CanvasSyncWorkerConfigError {
     #[error("invalid numeric Canvas worker configuration: {name}")]
     InvalidNumber { name: &'static str },
+    #[error("Canvas worker host identity is unavailable")]
+    HostNameUnavailable,
 }
 
-fn parse_integer(
+fn parse_integer_floor(
     values: &BTreeMap<String, String>,
     name: &'static str,
-    default: i64,
-) -> Result<i64, CanvasSyncWorkerConfigError> {
-    values.get(name).map_or(Ok(default), |value| {
-        value
-            .trim()
-            .parse::<i64>()
-            .map_err(|_| CanvasSyncWorkerConfigError::InvalidNumber { name })
-    })
-}
-
-fn parse_usize_floor(
-    values: &BTreeMap<String, String>,
-    name: &'static str,
-    default: i64,
-    minimum: i64,
-) -> Result<usize, CanvasSyncWorkerConfigError> {
-    usize::try_from(parse_integer(values, name, default)?.max(minimum))
+    default: &str,
+    minimum: u64,
+) -> Result<PythonConfigInteger, CanvasSyncWorkerConfigError> {
+    values
+        .get(name)
+        .map(String::as_str)
+        .unwrap_or(default)
+        .parse::<PythonConfigInteger>()
+        .map(|value| value.max(minimum.into()))
         .map_err(|_| CanvasSyncWorkerConfigError::InvalidNumber { name })
 }
 
-fn parse_float(
+fn parse_duration(
     values: &BTreeMap<String, String>,
     name: &'static str,
-    default: f64,
-) -> Result<f64, CanvasSyncWorkerConfigError> {
-    values.get(name).map_or(Ok(default), |value| {
-        let parsed = value
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| CanvasSyncWorkerConfigError::InvalidNumber { name })?;
-        if parsed.is_finite() {
-            Ok(parsed)
-        } else {
-            Err(CanvasSyncWorkerConfigError::InvalidNumber { name })
-        }
-    })
+    default: &str,
+    minimum: f64,
+    maximum: f64,
+) -> Result<Duration, CanvasSyncWorkerConfigError> {
+    parse_bounded_python_config_float(
+        values.get(name).map(String::as_str).unwrap_or(default),
+        minimum,
+        maximum,
+    )
+    .map(Duration::from_secs_f64)
+    .map_err(|_| CanvasSyncWorkerConfigError::InvalidNumber { name })
 }
 
 fn parse_python_bool(value: Option<&String>, default: bool) -> bool {
@@ -304,6 +320,10 @@ pub enum CanvasSyncRepositoryError {
     Unavailable,
     #[error("Canvas synchronization persistence returned invalid state")]
     InvalidState,
+    #[error("Canvas synchronization integer exceeds the SQL consumer range")]
+    IntegerSqlRange,
+    #[error("Canvas synchronization lease exceeds the time consumer range")]
+    DurationRange,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -383,12 +403,15 @@ pub trait CanvasSyncWorkerRepository: Send + Sync {
         &self,
         heartbeat: &WorkerHeartbeat,
     ) -> Result<(), CanvasSyncRepositoryError>;
-    async fn enqueue_due(&self, limit: usize) -> Result<usize, CanvasSyncRepositoryError>;
+    async fn enqueue_due(
+        &self,
+        limit: &PythonConfigInteger,
+    ) -> Result<usize, CanvasSyncRepositoryError>;
     async fn lease_ready(
         &self,
         worker_id: &str,
-        limit: usize,
-        lease_seconds: i64,
+        limit: &PythonConfigInteger,
+        lease_seconds: &PythonConfigInteger,
     ) -> Result<Vec<CanvasSyncJob>, CanvasSyncRepositoryError>;
     async fn target(
         &self,
@@ -408,7 +431,7 @@ pub trait CanvasSyncWorkerRepository: Send + Sync {
         &self,
         job: &CanvasSyncJob,
         worker_id: &str,
-        lease_seconds: i64,
+        lease_seconds: &PythonConfigInteger,
     ) -> Result<bool, CanvasSyncRepositoryError>;
     async fn complete_job(
         &self,
@@ -477,14 +500,14 @@ impl CanvasSyncWorker {
             self.process_oauth_revocations().await;
         let scheduled = self
             .repository
-            .enqueue_due(self.config.schedule_limit)
+            .enqueue_due(&self.config.schedule_limit)
             .await?;
         let leased = self
             .repository
             .lease_ready(
                 &self.config.worker_id,
-                self.config.batch_size,
-                self.config.lease_seconds,
+                &self.config.batch_size,
+                &self.config.lease_seconds,
             )
             .await?;
         self.heartbeat(
@@ -644,7 +667,7 @@ impl CanvasSyncWorker {
             || async {
                 let renewed = self
                     .repository
-                    .renew_lease(&job, &self.config.worker_id, self.config.lease_seconds)
+                    .renew_lease(&job, &self.config.worker_id, &self.config.lease_seconds)
                     .await?;
                 if !renewed {
                     return Ok(false);
@@ -762,7 +785,15 @@ impl CanvasSyncWorker {
     async fn process_oauth_revocations(&self) -> (usize, usize) {
         let due = match self
             .oauth_repository
-            .due_revocations(self.config.oauth_revocation_limit)
+            .due_revocations(
+                self.config
+                    .oauth_revocation_limit
+                    .clone()
+                    .max(1_u64.into())
+                    .min(500_u64.into())
+                    .to_usize()
+                    .expect("bounded OAuth revocation limit"),
+            )
             .await
         {
             Ok(due) => due,
@@ -783,7 +814,14 @@ impl CanvasSyncWorker {
                     "Canvas OAuth revocation heartbeat failed"
                 );
             }
-            let lease_seconds = self.config.lease_seconds.clamp(30, 300);
+            let lease_seconds = self
+                .config
+                .lease_seconds
+                .clone()
+                .max(30_u64.into())
+                .min(300_u64.into())
+                .to_i64()
+                .expect("bounded OAuth lease duration");
             let connection = match self
                 .oauth_repository
                 .acquire_due_revocation(
@@ -925,6 +963,8 @@ impl CanvasSyncRepositoryError {
         match self {
             Self::Unavailable => "CanvasSyncRepositoryUnavailable",
             Self::InvalidState => "CanvasSyncRepositoryInvalidState",
+            Self::IntegerSqlRange => "CanvasSyncIntegerSqlRange",
+            Self::DurationRange => "CanvasSyncDurationRange",
         }
     }
 }

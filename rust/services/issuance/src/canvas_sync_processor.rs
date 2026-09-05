@@ -1212,11 +1212,11 @@ mod tests {
     fn enabled_config() -> CanvasSyncWorkerConfig {
         CanvasSyncWorkerConfig {
             worker_id: "sim".into(),
-            batch_size: 10,
-            lease_seconds: 120,
+            batch_size: 10_u64.into(),
+            lease_seconds: 120_u64.into(),
             job_timeout: std::time::Duration::from_secs(600),
-            schedule_limit: 100,
-            oauth_revocation_limit: 25,
+            schedule_limit: 100_u64.into(),
+            oauth_revocation_limit: 25_u64.into(),
             poll_interval: std::time::Duration::from_secs(5),
             portable_enabled: true,
             pilot_organizations: ["org-1".to_owned()].into_iter().collect(),

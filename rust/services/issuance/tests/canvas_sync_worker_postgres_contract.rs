@@ -40,7 +40,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(repository.enqueue_due(100).await.unwrap(), 1);
+    assert_eq!(repository.enqueue_due(&100_u64.into()).await.unwrap(), 1);
     for (target_id, expected_schedule) in [("target-new", 60_i64), ("target-conflict", 900)] {
         let row: (bool, i64) = sqlx::query_as(
             "SELECT last_enqueued_at IS NOT NULL,
@@ -87,7 +87,10 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .execute(&pool)
     .await
     .unwrap();
-    let recovery_leased = repository.lease_ready("worker-1", 10, 120).await.unwrap();
+    let recovery_leased = repository
+        .lease_ready("worker-1", &10_u64.into(), &120_u64.into())
+        .await
+        .unwrap();
     let retry: (String, String) = sqlx::query_as(
         "SELECT status, last_error_code FROM issuance_service.canvas_evidence_sync_jobs
          WHERE id = 'expired-retry'",
@@ -123,17 +126,17 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         .expect("newly scheduled job is leased");
     assert_eq!(leased.status, CanvasSyncJobStatus::Leased);
     assert!(!repository
-        .renew_lease(&leased, "wrong-worker", 120)
+        .renew_lease(&leased, "wrong-worker", &120_u64.into())
         .await
         .unwrap());
     let mut wrong_generation = leased.clone();
     wrong_generation.attempt_count += 1;
     assert!(!repository
-        .renew_lease(&wrong_generation, "worker-1", 120)
+        .renew_lease(&wrong_generation, "worker-1", &120_u64.into())
         .await
         .unwrap());
     assert!(repository
-        .renew_lease(&leased, "worker-1", 120)
+        .renew_lease(&leased, "worker-1", &120_u64.into())
         .await
         .unwrap());
 
@@ -218,7 +221,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .await
     .unwrap();
     let race_jobs = repository
-        .lease_ready("race-worker", 10, 120)
+        .lease_ready("race-worker", &10_u64.into(), &120_u64.into())
         .await
         .unwrap();
     let current = race_jobs

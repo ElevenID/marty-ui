@@ -27,6 +27,7 @@ chrono.workspace = true
 futures-core.workspace = true
 hex.workspace = true
 hmac.workspace = true
+hostname = { version = "=0.4.2", default-features = false }
 httpdate.workspace = true
 mmf-config.workspace = true
 mmf-core.workspace = true
