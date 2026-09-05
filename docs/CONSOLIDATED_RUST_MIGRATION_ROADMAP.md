@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.215` is qualified, published and deployed to beta at exact source `1866528ab859ea7007ca34671ad80a62131fd79d`. Verifier governance, public/local release markers, the custom Keycloak theme and organization selection pass. Full recording acceptance is incomplete: the deployed token exchange revealed a JSON/JSONB storage mismatch, corrected and regression-tested in this change but not yet released. The standalone Rust Canvas worker remains unrouted pending whole-worker and all-consumer gates. Reachable Python features are preserved. Full demos, branch cleanup and the governed acceptance soak remain. This lane made no production deployment; the separate host restart does not count as global runtime stasis.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.215` remains deployed to beta at source `1866528ab859ea7007ca34671ad80a62131fd79d`; full recording acceptance is incomplete. The token and Canvas JSON storage corrections are merged, with real-schema regression coverage. This activation selects `v1.1.216` to include those corrections, lossless worker results and the reviewed shared Rust acceptance-lineage validator, without changing any component pin. Selection is not a claim, publication, deployment or acceptance pass. The standalone Rust Canvas worker remains unrouted pending whole-worker/all-consumer gates; reachable Python features are preserved. Demos, feature-preserving branch cleanup and the governed acceptance soak remain open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -31,6 +31,30 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
+### Selected 1.1.216 acceptance follow-up
+
+The candidate includes merged worker-result PR `#784`, Canvas storage PR `#786`
+at `fdcdf7e3b72749db29cb9cef3bf97ad1479075e4`, and token storage PR `#785`
+at `895218b408f20922bda741d51886ec0744a0754f`. Their reviewed changes were
+independently matched against protected merge contents before retiring owned
+branches/worktrees. Shared Rust acceptance-lineage PR `#787` is also included
+at reviewed combined candidate `28b46b4006ed71f330d10041082fb93f5920bd6d`;
+it was queued when this draft was prepared. Its protected merge must be proven
+before this activation is made ready or an exact-main release claim is created.
+
+The live lock changes only the aggregate coordinate to `1.1.216`; all component
+pins, verifier qualification inputs and retained Python worker are unchanged.
+See [required release and acceptance evidence](rust-migrations/beta-acceptance-follow-up-1.1.216.md)
+and [shared Rust acceptance-lineage correction](rust-migrations/acceptance-release-run-lineage.md).
+The prior beta recording's token failure must pass with the unchanged recorder
+against the new immutable release; local regression success alone is insufficient.
+
+Owned merged branches/worktrees for `#784`, `#785`, `#786` and the older `#775`
+branch were retired only after content/merge proof; build/test caches were
+preserved separately. The recorder is clean. Other-worker crypto commits on
+local UI/credentials main and crypto worktrees remain preserved and need their
+own handoff/review; they are not implicitly selected as release inputs.
+
 ### Deployed 1.1.215 and real-schema token exchange correction
 
 `v1.1.215` is published (release run `33937499784`, release ID `383105509`)
@@ -43,16 +67,16 @@ port conflict; its failed evidence remains, and no production process was change
 Verifier governance and the first `1.1.215` soak sample passed. The actual
 release-bound recording now passes the custom Keycloak theme and organization
 selection, but token exchange returns HTTP 500 because the native query assumes
-JSONB while the deployed transaction claims column is JSON. This change fixes
+JSONB while the deployed transaction claims column is JSON. Merged PR `#785` fixes
 the Rust query and executes the same contract against both physical types;
 the recorded failure was reproduced before the fix. No live schema change or
 weakened demo assertion is involved. A new immutable release and recording are
 still required; the failed partial video is not acceptance evidence.
 
-See [JSON storage parity and adjacent open findings](rust-migrations/issuance-json-storage-parity.md).
+See [JSON storage parity and resolved adjacent findings](rust-migrations/issuance-json-storage-parity.md).
 The adjacent Canvas storage assumptions and another roster-cursor consumer were
 reproduced and corrected in separately reviewed PR `#786`, with real JSON/JSONB
-contract coverage; its protected checks are still running. Worker result-parity
+contract coverage; its protected merge and review equivalence passed. Worker result-parity
 PR `#784` merged at `380ffbb71edb4a42f98125b70df1ad4c94a1f293`; neither worker
 result parity nor the token/Canvas storage corrections are in deployed `1.1.215`.
 Full worker/consumer parity, feature-preserving branch cleanup, demos and the
@@ -84,16 +108,16 @@ resolved. This migration lane made no production deployment/restoration and
 must use fresh before/after production invariants for the next beta rollout.
 The interruption does not count as a completed acceptance soak.
 
-### Beta browser correction and selected follow-up release
+### Historical 1.1.215 browser correction and activation
 
-The live lock selects `v1.1.215` for the beta acceptance corrections, with every
+The preceding activation selected `v1.1.215` for the beta acceptance corrections, with every
 component pin unchanged. Native verifier migration automation (`#781`) and the
 production UI WebAssembly policy correction (`#782`) are merged; the combined
 protected source is `f20f3e0f5071fdf94078a9222b517188cdd82a82`.
-Selection is not publication, deployment
-or acceptance. Preserve the immutable `v1.1.214` release and failed demo evidence;
-the new release must pass all existing exact-source, image, verifier and public
-stack gates. See [follow-up release plan](rust-migrations/beta-acceptance-follow-up-1.1.215.md).
+That release subsequently passed publication/deployment, but not full recording
+acceptance. Preserve the immutable `v1.1.214` and `v1.1.215` releases and failed
+demo evidence. Every follow-up must pass the same exact-source, image, verifier
+and public-stack gates. See [historical follow-up plan](rust-migrations/beta-acceptance-follow-up-1.1.215.md).
 
 Actual `v1.1.214` browser testing passed authentication and the custom ElevenID
 Keycloak theme, then failed organization selection because production CSP
