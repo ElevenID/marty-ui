@@ -1,14 +1,14 @@
 //! PostgreSQL persistence for the standalone Canvas synchronization worker.
 
 use async_trait::async_trait;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
 use crate::canvas_sync_worker::{
     maximum_attempts, random_job_retry_delay_seconds, CanvasSyncJob, CanvasSyncJobStatus,
-    CanvasSyncRepositoryError, CanvasSyncTarget, CanvasSyncTargetType, CanvasSyncWorkerRepository,
-    JobFailure, WorkerHeartbeat,
+    CanvasSyncRepositoryError, CanvasSyncResult, CanvasSyncTarget, CanvasSyncTargetType,
+    CanvasSyncWorkerRepository, JobFailure, WorkerHeartbeat,
 };
 
 #[derive(Clone)]
@@ -418,7 +418,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         job: &CanvasSyncJob,
         worker_id: &str,
         target_config_version: i32,
-        result: &Map<String, Value>,
+        result: &CanvasSyncResult,
     ) -> Result<bool, CanvasSyncRepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
         // Lock and finalize the lease-owned job first. Expiry recovery uses the
@@ -439,7 +439,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         .bind(&job.organization_id)
         .bind(worker_id)
         .bind(job.attempt_count)
-        .bind(Value::Object(result.clone()))
+        .bind(sqlx::types::Json(result))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(repository_error)?;

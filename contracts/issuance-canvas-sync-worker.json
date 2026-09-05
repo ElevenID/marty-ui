@@ -33,7 +33,15 @@
       "tests/unit/test_canvas_production_persistence.py": "3c558d2ef85de5fc421c5f848b76e2d425dafb91",
       "tests/unit/test_integration_secret_encryption.py": "1d4eb4c25bb70e38df18a983a521246748934040"
     },
-    "object_ids": "git-sha1"
+    "object_ids": "git-sha1",
+    "result_projection_oracle": {
+      "credentials_commit": "85329f647c1d8c51ad709f1eed97cedcb3bb6464",
+      "fixture": "contracts/canvas-worker-result-oracle.json",
+      "fixture_blob": "e3d831c653a3833c3e05a5c0bd3699e104e97cc4",
+      "rust_replay": "rust/services/issuance/tests/canvas_worker_result_oracle.rs",
+      "postgres_round_trip": "rust/services/issuance/tests/canvas_sync_worker_postgres_contract.rs",
+      "scope": "483 JSON field/value observations plus empty/full allowlists and exact large-integer persistence; not whole-worker parity or Python deletion approval"
+    }
   },
   "semantic_boundary": {
     "role": "canvas_sync",

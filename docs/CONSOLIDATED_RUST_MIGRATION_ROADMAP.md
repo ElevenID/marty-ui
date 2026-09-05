@@ -2,6 +2,14 @@
 
 **Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.215` is qualified, published and deployed to beta at exact source `1866528ab859ea7007ca34671ad80a62131fd79d`. Verifier governance, public/local release markers, the custom Keycloak theme and organization selection pass. Full recording acceptance is incomplete: the deployed token exchange revealed a JSON/JSONB storage mismatch, corrected and regression-tested in this change but not yet released. The standalone Rust Canvas worker remains unrouted pending whole-worker and all-consumer gates. Reachable Python features are preserved. Full demos, branch cleanup and the governed acceptance soak remain. This lane made no production deployment; the separate host restart does not count as global runtime stasis.
 
+Prior `v1.1.214` evidence remains retained at source
+`24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
+Integration PR `#418` landed its published static pin at
+`9f150de07a5a629a46b1eeeb58123ddb3eb86f32`; Integration `v1.2.80` is published
+at source `0c0944424c2f19ad05d99bb7482526104cb5b6d1` after PR `#419` and
+release run `33931821255`. That historical static pin does not attest a newer
+beta aggregate; reconcile it after the next qualified release.
+
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
 only and grants no cutover authorization; `v1.2.77` is intermediate evidence
@@ -42,12 +50,39 @@ weakened demo assertion is involved. A new immutable release and recording are
 still required; the failed partial video is not acceptance evidence.
 
 See [JSON storage parity and adjacent open findings](rust-migrations/issuance-json-storage-parity.md).
-Three nearby Canvas storage assumptions require their own executable regression
-coverage and fixes. Worker result-parity PR `#784` has passed all PR checks and
-entered the protected merge queue; it remains separate from this token correction.
+The adjacent Canvas storage assumptions and another roster-cursor consumer were
+reproduced and corrected in separately reviewed PR `#786`, with real JSON/JSONB
+contract coverage; its protected checks are still running. Worker result-parity
+PR `#784` merged at `380ffbb71edb4a42f98125b70df1ad4c94a1f293`; neither worker
+result parity nor the token/Canvas storage corrections are in deployed `1.1.215`.
 Full worker/consumer parity, feature-preserving branch cleanup, demos and the
 governed acceptance soak remain open. The host-restart explanation resolved the
 earlier coordination hold; no production deployment occurred in this lane.
+
+### Merged lossless worker result parity
+
+Credentials result-oracle PR `#259` merged at
+`85329f647c1d8c51ad709f1eed97cedcb3bb6464` after all protected queue checks.
+Its full tree matches the reviewed source; the owned worktree and branch were
+removed only after proof, retaining all source/tests on main. Rust replay of
+its unchanged JSON fixture reproduced 34 large-integer mismatches. The fix in
+PR `#784` preserves raw JSON values through the processor/result/persistence
+boundary; all 483 JSON combinations and the isolated PostgreSQL result-write
+test pass. See [scope and evidence](rust-migrations/canvas-worker-result-parity.md).
+Whole-worker parity and Python deletion gates remain open.
+
+Release activation PR `#783` merged at
+`1866528ab859ea7007ca34671ad80a62131fd79d`. Claim `33937440015` succeeded;
+ordinary release run `33937499784` used the same immutable source and finished
+successfully. Its qualified publication and beta deployment are recorded above.
+The subsequently merged worker change is separate from that published release.
+
+The user confirmed an unplanned host restart at `2026-09-05T01:32:02.5000000Z`.
+The old deployment audit is retained; a separate 29-container post-restart
+production baseline was stable through `02:00:54Z`. The coordination hold is
+resolved. This migration lane made no production deployment/restoration and
+must use fresh before/after production invariants for the next beta rollout.
+The interruption does not count as a completed acceptance soak.
 
 ### Beta browser correction and selected follow-up release
 
