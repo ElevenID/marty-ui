@@ -26,9 +26,10 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ### Beta browser correction and selected follow-up release
 
 The live lock selects `v1.1.215` for the beta acceptance corrections, with every
-component pin unchanged. Before claiming this coordinate, protected source must
-include native verifier migration automation (`#781`) and the production UI
-WebAssembly policy correction (`#782`). Selection is not publication, deployment
+component pin unchanged. Native verifier migration automation (`#781`) and the
+production UI WebAssembly policy correction (`#782`) are merged; the combined
+protected source is `f20f3e0f5071fdf94078a9222b517188cdd82a82`.
+Selection is not publication, deployment
 or acceptance. Preserve the immutable `v1.1.214` release and failed demo evidence;
 the new release must pass all existing exact-source, image, verifier and public
 stack gates. See [follow-up release plan](rust-migrations/beta-acceptance-follow-up-1.1.215.md).
@@ -82,8 +83,8 @@ all-consumer routing remain.
 Credentials lifecycle oracle PR `#257` merged at
 `84532fe506855417eb37b714b1c33cba83689ce8`, preserving the crypto worker's
 preceding changes. Its owned clean worktree/branch and UI roadmap PR `#780`'s
-owned clean worktree/branch were removed after exact merge proof. Unfinished
-lease-renewal oracle work is now committed in PR `#258`; crypto-worker work remains
+owned clean worktree/branch were removed after exact merge proof. The subsequent
+lease-renewal oracle work merged in PR `#258`; crypto-worker work remains
 preserved, not silently deleted.
 
 ### Historical published release and beta preflight checkpoint

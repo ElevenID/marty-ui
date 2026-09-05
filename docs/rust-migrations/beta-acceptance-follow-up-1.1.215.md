@@ -22,6 +22,11 @@ confirmed the correction but does not qualify the released artifact.
   JavaScript eval/inline restrictions and existing allowed origins. The browser
   CI gate executes the configured policy and a negative control.
 
+Both corrections are merged in protected source
+`f20f3e0f5071fdf94078a9222b517188cdd82a82`. Reviewed-file equivalence and the
+exact four-path `#782` merge delta were independently verified before bringing
+this activation branch onto that source.
+
 The selected `v1.1.215` live lock changes only the release coordinate. Every
 component pin, the `eligible` release-state contract, the held example, verifier
 comparison, provenance gate and production configuration remain unchanged.
