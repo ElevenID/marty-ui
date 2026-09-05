@@ -11,6 +11,9 @@ use sqlx::postgres::PgPoolOptions;
 #[path = "support/canvas_worker_range_oracle.rs"]
 mod canvas_worker_range_oracle;
 
+#[path = "support/canvas_worker_lifecycle_oracle.rs"]
+mod canvas_worker_lifecycle_oracle;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
@@ -384,6 +387,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .await
     .unwrap();
     canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
+    canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool).await;
     pool.close().await;
 }
 

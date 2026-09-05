@@ -54,6 +54,12 @@ the rollout gate:
 
 ## Hard cutover and deletion gate
 
+The [owned-cycle cancellation correction](canvas-worker-owned-cancellation.md)
+closes a demonstrated native child-lifetime gap without serializing jobs or
+losing panic isolation. Four real-PostgreSQL scenarios now cover active-cycle
+cancellation, sibling completion after panic, pre-stop and graceful drain.
+Initialized-entry-point disposal remains a separate open gate.
+
 The [lossless configuration and PostgreSQL range replay](../canvas-worker-lossless-configuration.md)
 now cover all 133 frozen startup vectors and 36 consumer cycles plus three
 two-cycle loops through the actual Rust worker and PostgreSQL repositories.

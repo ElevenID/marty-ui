@@ -10,18 +10,20 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fmt,
     future::Future,
+    panic::AssertUnwindSafe,
     sync::Arc,
     time::Duration,
 };
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
+use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt};
 use mmf_config::numeric_config::{parse_bounded_python_config_float, PythonConfigInteger};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{value::RawValue, Map, Value};
 use thiserror::Error;
-use tokio::{sync::watch, task::JoinSet};
+use tokio::sync::watch;
 use tracing::{error, warn};
 use uuid::Uuid;
 
@@ -520,13 +522,20 @@ impl CanvasSyncWorker {
         )
         .await?;
 
-        let mut tasks = JoinSet::new();
+        // Own concurrent job futures in this cycle, rather than spawning
+        // children whose cancellation can outlive the parent. Dropping the
+        // cycle synchronously drops processor and renewal futures together.
+        // Keep per-job panic isolation: one failed job must not cancel siblings.
+        let mut tasks = FuturesUnordered::new();
         for job in leased.iter().cloned() {
             let worker = self.clone();
-            tasks.spawn(async move {
-                let job_id = job.id.clone();
-                (job_id, worker.process_job(job).await)
-            });
+            tasks.push(
+                AssertUnwindSafe(async move {
+                    let job_id = job.id.clone();
+                    (job_id, worker.process_job(job).await)
+                })
+                .catch_unwind(),
+            );
         }
         let mut result = CanvasSyncWorkerCycleResult {
             scheduled,
@@ -535,7 +544,7 @@ impl CanvasSyncWorker {
             oauth_revocations_retried,
             ..CanvasSyncWorkerCycleResult::default()
         };
-        while let Some(outcome) = tasks.join_next().await {
+        while let Some(outcome) = tasks.next().await {
             match outcome {
                 Ok((_, Ok(CanvasSyncJobStatus::Succeeded))) => result.succeeded += 1,
                 Ok((_, Ok(CanvasSyncJobStatus::Retry))) => result.retried += 1,
@@ -548,10 +557,10 @@ impl CanvasSyncWorker {
                         "Canvas sync job escaped outcome handling"
                     );
                 }
-                Err(error) => {
+                Err(_) => {
                     error!(
-                        task_cancelled = error.is_cancelled(),
-                        task_panicked = error.is_panic(),
+                        task_cancelled = false,
+                        task_panicked = true,
                         "Canvas sync job task failed"
                     );
                 }

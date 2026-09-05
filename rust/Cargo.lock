@@ -4584,6 +4584,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "futures-core",
+ "futures-util",
  "hex",
  "hmac 0.12.1",
  "hostname",
