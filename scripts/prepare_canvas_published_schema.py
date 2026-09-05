@@ -69,6 +69,11 @@ def prepare():
         for flag, name, key in [
             ("MARTY_CANVAS_ISSUED_REVIEW_ORACLE", "issued_review", "issued_reviews"),
             ("MARTY_CANVAS_MIXED_ROSTER_ORACLE", "mixed_roster", "mixed_roster"),
+            (
+                "MARTY_CANVAS_HEARTBEAT_READINESS_ORACLE",
+                "heartbeat_readiness",
+                "heartbeat_readiness",
+            ),
         ]:
             if os.environ.get(flag) != "1":
                 continue

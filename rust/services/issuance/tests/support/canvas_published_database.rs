@@ -65,6 +65,16 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_heartbeat_readiness() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "heartbeat_readiness",
+            "heartbeat-readiness",
+            "heartbeat_readiness",
+            "MARTY_CANVAS_HEARTBEAT_READINESS_ORACLE=1",
+        )))
+        .await
+    }
+
     async fn start_probe(oracle: Option<(&str, &str, &str, &str)>) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
