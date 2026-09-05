@@ -1,0 +1,14 @@
+{
+  "qualified": true,
+  "releaseVersion": "1.1.217",
+  "mipVersion": "0.5.0",
+  "sourceId": "1111111111111111111111111111111111111111",
+  "martyUiRevision": "2222222222222222222222222222222222222222",
+  "deploymentManifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "officialStackManifestSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "deployedDemoManifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "scenarioCount": 13,
+  "freshRecordingRequired": true,
+  "testFixtureOnly": true,
+  "privateMetadata": "private-value"
+}

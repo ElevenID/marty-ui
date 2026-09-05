@@ -14,3 +14,7 @@ serde_json.workspace = true
 [[bin]]
 name = "validate-stack-release-run"
 path = "src/main.rs"
+
+[[bin]]
+name = "validate-demo-qualification"
+path = "src/demo_cli.rs"

@@ -1,5 +1,10 @@
 # Acceptance release-run lineage
 
+For the subsequent private-recorder prerequisite, see
+[Private demo qualification before public beta acceptance](private-demo-qualification-lifecycle.md).
+It reuses the run-identity parser below without changing the supported current
+or historical stack-release triggers.
+
 ## Discovered compatibility gap
 
 The lifecycle and wallet acceptance workflows still checked for a tag-branch
