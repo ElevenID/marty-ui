@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.214` is now qualified, published, and independently verified at exact source `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`. Protected release run `33930593794` passed public-stack and all verifier gates; its resume reused the original signed digests. Integration PR `#418` merged the real published static pin at `9f150de07a5a629a46b1eeeb58123ddb3eb86f32`, and its complete artifact workflow passed. Integration `v1.2.80` is published and independently verified at protected source `0c0944424c2f19ad05d99bb7482526104cb5b6d1` after PR `#419` and successful release run `33931821255`. The aggregate beta-only deployment, demos and acceptance soak remain. The standalone Canvas worker remains an unrouted Rust candidate pending whole-worker parity and all-consumer gates. Required Python bindings, adapters and reachable worker code are preserved. Production is unchanged.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.214` is qualified, published, independently verified and successfully deployed to beta at exact source `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`. Protected release run `33930593794` passed public-stack and all verifier gates; its resume reused the original signed digests. Integration PR `#418` merged the real published static pin at `9f150de07a5a629a46b1eeeb58123ddb3eb86f32`, and its complete artifact workflow passed. Integration `v1.2.80` is published and independently verified at protected source `0c0944424c2f19ad05d99bb7482526104cb5b6d1` after PR `#419` and successful release run `33931821255`. Full credential/browser acceptance, demos and the governed acceptance soak remain. The standalone Canvas worker remains an unrouted Rust candidate pending whole-worker parity and all-consumer gates. Required Python bindings, adapters and reachable worker code are preserved. Production is unchanged.
 
 Release-evidence classification remains exact: `v0.1.72` is a valid issuance
 component, not a failed verifier artifact; `v1.2.76` is retained held evidence
@@ -11,7 +11,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-04
+**Last updated:** 2026-09-05
 
 ## Objective
 
@@ -21,9 +21,32 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-04
+## Current execution snapshot — 2026-09-05
 
-### Published release and beta preflight checkpoint
+### Successful aggregate beta cutover (supersedes preflight checkpoint below)
+
+`v1.1.214` deployed successfully at **2026-09-05T00:37:57Z**, exact source
+`24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`. Local and public beta release
+markers passed; all 29 production container invariants remained unchanged.
+Dedicated pilot governance was explicitly authorized, provisioned and validated
+against the running Rust verifier. A skipped native migration was rehearsed
+twice on the backup copy, applied to beta, and the unchanged release redeployed.
+The runner fix now makes that migration explicit in official and local modes.
+See [incident and evidence](rust-migrations/beta-native-verifier-migration-incident-2026-09-05.md).
+
+The first post-cutover event-stream/revocation-profile soak sample passed. Demo
+binding remains `DEPLOYED_PENDING_EVIDENCE`; full credential/browser acceptance,
+Keycloak theme checks and the governed 7/14-day soak windows are NOT complete.
+No new aggregate publication or production promotion is authorized by this
+checkpoint. Canvas worker whole-behavior parity and all-consumer routing remain.
+
+Credentials lifecycle oracle PR `#257` merged at
+`84532fe506855417eb37b714b1c33cba83689ce8`, preserving the crypto worker's
+preceding changes. Its owned clean worktree/branch and UI roadmap PR `#780`'s
+owned clean worktree/branch were removed after exact merge proof. Unfinished
+lease-renewal oracle and crypto-worker work remain preserved, not silently deleted.
+
+### Historical published release and beta preflight checkpoint
 
 Both release boundaries are complete: immutable UI `v1.1.214` and the separate
 static-pin integration `v1.2.80`. The latter does not change the aggregate's
@@ -45,7 +68,8 @@ to make deployment pass.
 The wrapper's completed production invariant passed: 29 containers before and
 after, identical IDs/images/start-state digest, no changes. The three isolated
 rehearsal containers were removed; beta backup evidence remains available.
-No successful beta cutover, release recording, or acceptance soak is claimed.
+At this historical checkpoint no successful beta cutover, release recording,
+or acceptance soak was claimed; the successful cutover above supersedes it.
 Windows PowerShell 5 also failed a read-only Docker-label argument preflight;
 the unchanged release script passed those same arguments under independently
 hash- and Microsoft-signature-verified portable PowerShell 7.6.5. No source

@@ -525,9 +525,11 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert "issuance-migration-rehearsal-verify.log" in script
     assert "issuance-migration-live.log" in script
     assert "issuance-migration-live-verify.log" in script
-    assert script.index("issuance-migration-rehearsal.log") < script.index(
-        'Write-Step "Build marker-bearing application images"'
-    )
+    # The actual verifier runtime must exist before its schema can be rehearsed.
+    # All rehearsals still complete before maintenance/live mutation begins.
+    assert script.index('Write-Step "Build marker-bearing application images"') < script.index(
+        "issuance-migration-rehearsal.log"
+    ) < script.index('Write-Step "Enter maintenance window and apply live migration"')
     assert script.index("migration-live.log") < script.index(
         "issuance-migration-live.log"
     )
