@@ -256,6 +256,34 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert "build-ready-manifest-$RELEASE_VERSION" not in workflow
 
 
+def test_beta_browser_contracts_run_after_chromium_and_system_dependencies() -> None:
+    workflow = yaml.safe_load(_text(".github/workflows/e2e-tests.yml"))
+    steps = workflow["jobs"]["full-stack-credential-lifecycle"]["steps"]
+    names = [step.get("name") for step in steps]
+    required_order = [
+        "Install browser test dependencies",
+        "Cache Chromium",
+        "Install Chromium",
+        "Install Chromium system dependencies",
+        "Test beta evidence and recording contracts",
+        "Require release-bound public demos on beta",
+    ]
+    assert all(names.count(name) == 1 for name in required_order)
+    positions = [names.index(name) for name in required_order]
+    assert positions == sorted(positions)
+    contracts = steps[names.index("Test beta evidence and recording contracts")]
+    assert contracts["run"] == "node --test scripts/*.test.js"
+    assert contracts["working-directory"] == "tests"
+    assert "if" not in contracts
+    assert not contracts.get("continue-on-error", False)
+    install = steps[names.index("Install Chromium")]
+    dependencies = steps[names.index("Install Chromium system dependencies")]
+    assert install["run"] == "npx playwright install --with-deps chromium"
+    assert install["if"] == "steps.playwright-cache.outputs.cache-hit != 'true'"
+    assert dependencies["run"] == "npx playwright install-deps chromium"
+    assert dependencies["if"] == "steps.playwright-cache.outputs.cache-hit == 'true'"
+
+
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
     action = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772"
     matched_steps: list[tuple[str, dict[str, object]]] = []
