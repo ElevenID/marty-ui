@@ -132,6 +132,35 @@ function Invoke-Compose {
     Invoke-Checked -FilePath docker -Arguments $composeArgs
 }
 
+function Invoke-VerificationMigration {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^(sha256:[0-9a-f]{64}|[^@\s]+@sha256:[0-9a-f]{64})$')]
+        [string]$Image,
+        [Parameter(Mandatory = $true)][string]$DatabaseUrl,
+        [Parameter(Mandatory = $true)][string]$LogPath
+    )
+    # The released Rust binary owns schema validation, locking and migration;
+    # do not duplicate its SQL or rely on dependencies during --no-deps cutover.
+    $previousDatabaseUrl = [Environment]::GetEnvironmentVariable("DATABASE_URL", "Process")
+    try {
+        $env:DATABASE_URL = $DatabaseUrl
+        Invoke-DockerLogged -Arguments @(
+            "run", "--rm", "--network", $script:BetaNetwork,
+            "--entrypoint", "/usr/local/bin/marty-verification-service",
+            "--env", "DATABASE_URL", $Image, "migrate"
+        ) -LogPath $LogPath -FailureMessage "Native verification migration failed"
+    }
+    finally {
+        if ($null -eq $previousDatabaseUrl) {
+            Remove-Item Env:\DATABASE_URL -ErrorAction SilentlyContinue
+        }
+        else {
+            [Environment]::SetEnvironmentVariable("DATABASE_URL", $previousDatabaseUrl, "Process")
+        }
+    }
+}
+
 function Invoke-ComposeLogged {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,
@@ -822,6 +851,35 @@ if (-not $OfficialStackRelease) {
     )
 }
 
+$env:MARTY_RELEASE_VERSION = $releaseVersion
+$env:MARTY_UI_SHA = $sourceId
+if (-not $OfficialStackRelease) {
+    Write-Step "Build marker-bearing application images"
+    $applicationBuildArguments = @(
+        "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
+    )
+    # Build serially before rehearsal so the actual local verifier runtime,
+    # not a separately built migration artifact, owns the rehearsal schema.
+    foreach ($service in $script:ApplicationBuildServices) {
+        Write-Host "Building release image: $service"
+        Invoke-Compose -Arguments ($applicationBuildArguments + @($service))
+    }
+}
+
+if ($OfficialStackRelease) {
+    $verificationMigrationImage = $env:MARTY_SERVICES_IMAGE
+}
+else {
+    $verificationMigrationImage = & docker image inspect "elevenid-local/verification:$releaseVersion" --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $verificationMigrationImage -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Could not pin the local verification runtime image before rehearsal"
+    }
+    # Keep the exact rehearsed local image even if another process retags it.
+    $verificationImageOverride = Join-Path $script:ArtifactDir "verification-runtime-image.yml"
+    Write-Utf8Text -Path $verificationImageOverride -Content "services:`n  verification:`n    image: $verificationMigrationImage`n"
+    $script:ComposeFiles += $verificationImageOverride
+}
+
 Write-Step "Rehearse one-way migration on isolated beta copy"
 $copySuffix = $sourceId.Substring(0, 12)
 $copyContainer = "elevenid-beta-copy-$copySuffix"
@@ -893,6 +951,10 @@ try {
         -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal-verify.log") `
         -FailureMessage "Issuance migration rehearsal verification failed"
+    foreach ($verificationPass in 1..2) {
+        Invoke-VerificationMigration -Image $verificationMigrationImage -DatabaseUrl $copyUrl `
+            -LogPath (Join-Path $logsDir "verification-migration-rehearsal-$verificationPass.log")
+    }
 }
 finally {
     foreach ($expectedContainer in $rehearsalContainers) {
@@ -903,21 +965,7 @@ finally {
     }
 }
 
-$env:MARTY_RELEASE_VERSION = $releaseVersion
-$env:MARTY_UI_SHA = $sourceId
 if (-not $OfficialStackRelease) {
-    Write-Step "Build marker-bearing application images"
-    $applicationBuildArguments = @(
-        "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
-    )
-    # BuildKit bake can schedule every Compose target concurrently and exhaust the
-    # local Docker Desktop VM. Build one immutable target at a time so a release
-    # cannot take the currently healthy beta stack down through builder pressure.
-    foreach ($service in $script:ApplicationBuildServices) {
-        Write-Host "Building release image: $service"
-        Invoke-Compose -Arguments ($applicationBuildArguments + @($service))
-    }
-
     Write-Step "Build marker-bearing public UI image"
     $uiImage = "elevenid-local/ui:$releaseVersion"
     Invoke-Checked -FilePath docker -Arguments @(
@@ -1067,6 +1115,9 @@ try {
             -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
             -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
             -FailureMessage "Live issuance migration verification failed"
+        Invoke-VerificationMigration -Image $verificationMigrationImage `
+            -DatabaseUrl "postgresql://marty:${martyDbPassword}@postgres:5432/marty" `
+            -LogPath (Join-Path $logsDir "verification-migration-live.log")
     }
     finally {
         if ($null -eq $previousBaoToken) {
@@ -1202,6 +1253,7 @@ $deploymentManifest = [ordered]@{
     official_stack_manifest_sha256 = if ($OfficialStackRelease) { [string]$officialPlan.stack_manifest_sha256 } else { $null }
     runtime_config_root = $script:RuntimeConfigRoot
     runtime_config_manifest_sha256 = Get-FileSha256 $script:RuntimeConfigManifestPath
+    verification_migration_image = $verificationMigrationImage
     component_revisions = $componentRevisions
     deployed_demo_manifest = "deployed-demo-manifest.json"
     deployed_demo_manifest_sha256 = Get-FileSha256 $deployedDemoManifestPath
