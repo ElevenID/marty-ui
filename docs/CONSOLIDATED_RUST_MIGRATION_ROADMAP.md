@@ -31,6 +31,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
+### Current heartbeat readiness qualification
+
+The [published heartbeat readiness gate](rust-migrations/canvas-heartbeat-readiness.md)
+freezes seventeen actual Python/database observations before Rust replay.
+It compares the full heartbeat readiness check through the shared native SQL,
+runtime and policy owners, including microsecond freshness boundaries,
+competing workers, strict boolean metadata and a real database failure.
+It exposed and corrects a zero-age minimum difference; the deployed 120-second
+setting is unchanged. Four native writer/readiness checks additionally cover
+all heartbeat phases and original-start preservation. The configured readiness
+gate passes locally; hosted integration and protected landing remain required.
+This is not complete binding activation or permission to route/delete the worker.
+
 ### Current Canvas initialized-owner adoption
 
 Credentials #265 is merged at protected `e3e79c96ab655f4ac699074c6452cd8c4c43dcb6`:
@@ -62,8 +75,8 @@ captures ten published Python lifecycle stages before the Rust replay. Both
 implementations pass locally on separate migrated databases, preserving manual
 claims, recovery, older history and all credential/transaction rows. No runtime
 change was needed for those scenarios. Original hosted CI/CodeQL and the
-configured two-test database gate pass; #805's identical-tree integration onto
-the actual #804 merge is ready with fresh protected checks running.
+configured two-test database gate pass. #805 is merged at protected
+`907aaff8e85052cf8cc76559d8a6aecdcc95ebe4`, with its reviewed tree retained.
 
 The next [mixed-roster differential](rust-migrations/canvas-mixed-roster-parity.md)
 freezes twelve actual published Python stages before native replay. Local parity
@@ -71,19 +84,25 @@ now covers missing/unverified/quarantined identities, active mixed-source joins,
 observation reuse, outages, negative/recovered AGS evidence and claimed/dismissed
 state. It discovered and restores the omitted native `roster_remaining` result;
 partial-batch and completed-cycle unit assertions accompany the real-schema
-replay. This still uses controlled transport, not the actual HTTP provider.
+replay. #806 is merged at protected
+`6cae40752ceed969e5869dc316f828763484bebe`, with queue CI/CodeQL green and
+its reviewed tree retained. This uses controlled transport, not the actual HTTP provider.
 
 The [HTTP-provider follow-up](rust-migrations/canvas-authoritative-http.md) adds
 three passing real REST transport tests using the actual provider/OAuth service
 and shared in-memory OAuth fixtures. It also reproduces an AGS candidate hash
 difference with the provider's full observation shape and restores Python's
 candidate-only projection, preserving learner fields. The unchanged mixed-roster
-baseline and all three configured schema contracts pass locally. Actual AGS/NRPS
-HTTPS, token exchange and complete transport parity remain required.
+baseline and all three configured schema contracts pass locally. #808's
+identical-tree integration onto the actual #806 merge is ready under normal
+protected auto-merge, with fresh CI and Rust CodeQL passing and merge-queue
+CI/CodeQL running at the reviewed integration tree.
 The [actual LTI HTTPS gate](rust-migrations/canvas-lti-https.md) is now implemented
 with child-scoped synthetic trust, untrusted-certificate rejection and real
-token/AGS/NRPS requests. Local compilation is not Linux execution proof; its
-explicit mandatory hosted step remains pending.
+token/AGS/NRPS requests. #809's mandatory Linux step passed in job
+`101350558900`: four token requests, three AGS reads and two NRPS pages;
+full CI `33982630708` and Rust CodeQL `33982630748` passed. #809 remains draft
+until the actual #808 protected merge is integrated and fresh checks pass.
 Full provider/processor differentials,
 concurrency/rollback, manual resolver, all-consumer cutover and acceptance remain
 required. Reachable Python is retained until those gates pass.

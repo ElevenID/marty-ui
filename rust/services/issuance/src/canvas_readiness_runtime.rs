@@ -566,7 +566,9 @@ impl CanvasReadinessStateProvider for PostgresCanvasReadinessStateProvider {
         &self,
         evaluated_at: DateTime<Utc>,
     ) -> Result<bool, CanvasReadinessDependencyError> {
-        let max_age = chrono::Duration::from_std(self.worker_max_age)
+        // Preserve the published repository's max(1, max_age_seconds) boundary.
+        // The deployed caller uses 120 seconds; zero must still match for other consumers.
+        let max_age = chrono::Duration::from_std(self.worker_max_age.max(Duration::from_secs(1)))
             .map_err(|_| CanvasReadinessDependencyError)?;
         let metadata = sqlx::query_scalar::<_, Value>(
             "SELECT metadata

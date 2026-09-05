@@ -1,0 +1,21 @@
+{
+  "evaluated_at": "2026-09-01T00:00:00+00:00",
+  "cases": [
+    {"name": "absent", "max_age_seconds": 120, "rows": []},
+    {"name": "wrong_role", "max_age_seconds": 120, "rows": [{"id": "other", "role": "other", "age_us": 0, "metadata": {"processor_configured": true}}]},
+    {"name": "stale_by_one_microsecond", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 120000001, "metadata": {"processor_configured": true}}]},
+    {"name": "inclusive_cutoff", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 120000000, "metadata": {"processor_configured": true}}]},
+    {"name": "fresh_by_one_microsecond", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 119999999, "metadata": {"processor_configured": true}}]},
+    {"name": "latest_unconfigured_wins", "max_age_seconds": 120, "rows": [{"id": "older", "age_us": 1000000, "metadata": {"processor_configured": true}}, {"id": "latest", "age_us": 0, "metadata": {"processor_configured": false}}]},
+    {"name": "latest_configured_wins", "max_age_seconds": 120, "rows": [{"id": "older", "age_us": 1000000, "metadata": {"processor_configured": false}}, {"id": "latest", "age_us": 0, "metadata": {"processor_configured": true}}]},
+    {"name": "newer_other_role_ignored", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 1000000, "metadata": {"processor_configured": true}}, {"id": "other", "role": "other", "age_us": 0, "metadata": {"processor_configured": false}}]},
+    {"name": "string_true_is_not_boolean", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 0, "metadata": {"processor_configured": "true"}}]},
+    {"name": "integer_one_is_not_boolean", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 0, "metadata": {"processor_configured": 1}}]},
+    {"name": "missing_configuration", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 0, "metadata": {}}]},
+    {"name": "nonobject_metadata", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 0, "metadata": [true]}]},
+    {"name": "null_configuration", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": 0, "metadata": {"processor_configured": null}}]},
+    {"name": "future_timestamp_legacy_behavior", "max_age_seconds": 120, "rows": [{"id": "worker", "age_us": -1000000, "metadata": {"processor_configured": true}}]},
+    {"name": "zero_age_clamps_to_one_second", "max_age_seconds": 0, "rows": [{"id": "worker", "age_us": 1000000, "metadata": {"processor_configured": true}}]},
+    {"name": "zero_age_stale_after_clamped_cutoff", "max_age_seconds": 0, "rows": [{"id": "worker", "age_us": 1000001, "metadata": {"processor_configured": true}}]}
+  ]
+}

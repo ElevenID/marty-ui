@@ -2,6 +2,40 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[tokio::test]
+async fn heartbeat_readiness_matches_published_python() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_heartbeat_readiness()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-heartbeat-readiness-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        owned.oracle.as_ref().unwrap(),
+        &expected,
+        "published heartbeat oracle drifted"
+    );
+    owned.close().unwrap();
+    let native = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&native.url)
+        .await
+        .unwrap();
+    canvas_heartbeat_readiness_replay::replay(&pool, &expected).await;
+    pool.close().await;
+    native.close().unwrap();
+}
+
+#[path = "support/canvas_heartbeat_readiness_replay.rs"]
+mod canvas_heartbeat_readiness_replay;
+
 #[path = "support/canvas_issued_review_replay.rs"]
 mod canvas_issued_review_replay;
 #[path = "support/canvas_mixed_roster_replay.rs"]

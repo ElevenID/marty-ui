@@ -710,6 +710,7 @@ jobs:
             | select(.executable != null) | .executable
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'
           "${executables[0]}" --nocapture --test-threads=1
       - name: Report compiler cache effectiveness
         if: always()
