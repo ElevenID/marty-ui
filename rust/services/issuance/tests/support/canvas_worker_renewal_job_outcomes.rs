@@ -171,7 +171,9 @@ async fn isolated_group(
     assert!(database
         .bytes()
         .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
-    sqlx::query(&format!("CREATE DATABASE {database}"))
+    // SQL identifiers cannot be bound parameters. This identifier consists only
+    // of our fixed prefix/suffix and a generated UUID, validated above.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
         .execute(admin)
         .await
         .expect("create isolated renewal test database");
@@ -187,7 +189,7 @@ async fn isolated_group(
     .await;
     pool.close().await;
     // Drop only the uniquely named database created above, never the supplied DB.
-    sqlx::query(&format!("DROP DATABASE {database}"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
         .execute(admin)
         .await
         .expect("clean up isolated renewal test database");
