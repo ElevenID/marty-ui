@@ -1497,6 +1497,9 @@ jobs:
       - name: Install Chromium system dependencies
         working-directory: tests
         run: npx playwright install-deps chromium
+      - name: Verify production CSP permits Rust WASM but blocks JavaScript eval
+        working-directory: tests
+        run: node --test scripts/ui-wasm-csp.test.js
       - name: Build and verify the public demo platform
         working-directory: tests
         run: npm run test:demo-platform
