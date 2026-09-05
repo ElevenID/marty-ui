@@ -16,6 +16,7 @@ use crate::{
     canvas_award_candidate::python_canonical_json,
     canvas_issuance_guard::validated_requirements,
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
+    canvas_sync_lease::{lease_lost, CanvasSyncLease},
     canvas_sync_worker::{
         canvas_sync_result, CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult,
         CanvasSyncTarget, CanvasSyncTargetType, CanvasSyncWorkerConfig,
@@ -128,6 +129,10 @@ pub trait CanvasAuthoritativeProvider: Send + Sync {
 
 #[async_trait]
 pub trait CanvasSyncProcessorRepository: Send + Sync {
+    /// Bind a distinct repository instance to this job; never mutate a shared
+    /// current-job slot while concurrently processing another lease.
+    fn for_lease(self: Arc<Self>, lease: CanvasSyncLease)
+        -> Arc<dyn CanvasSyncProcessorRepository>;
     async fn resources(
         &self,
         target: &CanvasSyncTarget,
@@ -648,8 +653,19 @@ impl CanvasSyncProcessor for NativeCanvasSyncProcessor {
     async fn process(
         &self,
         target: &CanvasSyncTarget,
+        lease: &CanvasSyncLease,
     ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
-        canvas_sync_result(self.process_fields(target).await?)
+        if lease.organization_id != target.organization_id
+            || lease.target_id != target.id
+            || lease.worker_id != self.config.worker_id
+        {
+            return Err(lease_lost());
+        }
+        let scoped = Self {
+            repository: self.repository.clone().for_lease(lease.clone()),
+            ..self.clone()
+        };
+        canvas_sync_result(scoped.process_fields(target).await?)
     }
 }
 
@@ -948,6 +964,16 @@ mod tests {
 
     #[async_trait]
     impl CanvasSyncProcessorRepository for SimulatorRepository {
+        fn for_lease(
+            self: Arc<Self>,
+            lease: CanvasSyncLease,
+        ) -> Arc<dyn CanvasSyncProcessorRepository> {
+            assert_eq!(
+                lease.organization_id,
+                self.resources.platform.organization_id
+            );
+            self
+        }
         async fn resources(
             &self,
             _: &CanvasSyncTarget,
@@ -1209,6 +1235,20 @@ mod tests {
         }
     }
 
+    async fn run_simulated(
+        processor: &NativeCanvasSyncProcessor,
+        target: CanvasSyncTarget,
+    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+        let lease = CanvasSyncLease {
+            job_id: "simulator-job".into(),
+            organization_id: target.organization_id.clone(),
+            target_id: target.id.clone(),
+            worker_id: processor.config.worker_id.clone(),
+            attempt_count: 1,
+        };
+        processor.process(&target, &lease).await
+    }
+
     fn enabled_config() -> CanvasSyncWorkerConfig {
         CanvasSyncWorkerConfig {
             worker_id: "sim".into(),
@@ -1270,8 +1310,7 @@ mod tests {
             500,
             5000,
         );
-        let result = processor
-            .process(&target(CanvasSyncTargetType::LearnerApplication))
+        let result = run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication))
             .await
             .unwrap();
         assert_eq!(
@@ -1324,8 +1363,7 @@ mod tests {
             1,
             2,
         );
-        let result = processor
-            .process(&target(CanvasSyncTargetType::BackgroundRoster))
+        let result = run_simulated(&processor, target(CanvasSyncTargetType::BackgroundRoster))
             .await
             .unwrap();
         assert_eq!(
@@ -1369,7 +1407,7 @@ mod tests {
             "drift_until".into(),
             Value::String("2020-01-01T00:00:00Z".into()),
         );
-        let result = processor.process(&drift).await.unwrap();
+        let result = run_simulated(&processor, drift).await.unwrap();
         assert_eq!(
             result.get("no_change").map(|value| value.get()),
             Some("true")

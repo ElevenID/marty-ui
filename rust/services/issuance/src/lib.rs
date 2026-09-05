@@ -44,6 +44,7 @@ pub mod canvas_oauth_postgres;
 pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
+pub mod canvas_sync_lease;
 pub mod canvas_sync_processor;
 pub mod canvas_sync_processor_postgres;
 pub mod canvas_sync_provider_http;

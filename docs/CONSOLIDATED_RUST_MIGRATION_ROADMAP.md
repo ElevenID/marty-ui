@@ -33,6 +33,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current Canvas initialized-owner adoption
 
+Credentials #265 is merged at protected `e3e79c96ab655f4ac699074c6452cd8c4c43dcb6`:
+60 actual complete-job cases freeze outcome persistence after renewal failure,
+including later owner/expiry/attempt fences and the legacy cancellation-masking
+behavior. The native [per-job write authorization](rust-migrations/canvas-processor-job-authorization.md)
+follow-up now carries an explicit lease into independent repository handles,
+checks the durable job before resource locks and again before committing effects,
+and rejects unscoped writes across all seven processor effect entry points.
+Initial configured PostgreSQL guard tests pass; complete gates/protected landing
+remain required. Renewal-error outcome handling is not changed yet. Preserve
+legitimate fenced results next without copying cancellation masking or weakening
+the existing tenant/resource checks. All-consumer cutover and Python deletion
+remain gated on full authoritative-processor, schema and acceptance evidence.
+
 The integrated [renewal-progress follow-up](rust-migrations/canvas-worker-renewal-progress.md)
 retains the initialized pool owner and actual process-signal gate while correcting
 three reproduced differences: processing/deadline stalls during renewal I/O,

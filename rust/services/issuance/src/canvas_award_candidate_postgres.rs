@@ -328,11 +328,27 @@ pub(crate) async fn record_fact_and_policy(
     )
     .await?
     .ok_or(CanvasAwardCandidateRepositoryError::Unavailable)?;
+    if let Some(fence) = sync_fence {
+        if !fence
+            .lease
+            .lock_current(
+                &mut database,
+                &application.organization_id,
+                &fence.target_id,
+            )
+            .await
+            .map_err(repository_error)?
+        {
+            database.rollback().await.map_err(repository_error)?;
+            return Err(CanvasAwardCandidateRepositoryError::Unavailable);
+        }
+    }
     database.commit().await.map_err(repository_error)?;
     Ok(decision.get("allowed").and_then(Value::as_bool) == Some(true))
 }
 
 pub(crate) struct CanvasSyncCommitFence {
+    pub lease: crate::canvas_sync_lease::CanvasSyncLease,
     pub target_id: String,
     pub target_config_version: i32,
     pub platform_id: String,
@@ -350,6 +366,14 @@ async fn validate_sync_commit_fence(
     application: &CanvasLtiBootstrapApplication,
     fence: &CanvasSyncCommitFence,
 ) -> Result<(), CanvasAwardCandidateRepositoryError> {
+    if !fence
+        .lease
+        .lock_current(database, &application.organization_id, &fence.target_id)
+        .await
+        .map_err(repository_error)?
+    {
+        return Err(CanvasAwardCandidateRepositoryError::Unavailable);
+    }
     let current: Option<i32> = sqlx::query_scalar(
         "SELECT 1
          FROM issuance_service.canvas_evidence_sync_targets t

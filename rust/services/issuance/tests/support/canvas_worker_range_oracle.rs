@@ -171,6 +171,7 @@ impl CanvasSyncProcessor for NoJobsExpected {
     async fn process(
         &self,
         _: &CanvasSyncTarget,
+        _: &marty_issuance_service::canvas_sync_lease::CanvasSyncLease,
     ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
         panic!("empty-queue corpus must never invoke a job processor");
     }

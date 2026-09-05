@@ -66,6 +66,7 @@ impl CanvasSyncProcessor for ControlledProcessor {
     async fn process(
         &self,
         target: &CanvasSyncTarget,
+        _: &marty_issuance_service::canvas_sync_lease::CanvasSyncLease,
     ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
         self.state.active.fetch_add(1, Ordering::SeqCst);
         let _active = ActiveProcessor(self.state.clone());
