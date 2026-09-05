@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.216` is published and deployed to beta at source `89c66b07aceb937366390ae194e75ff09fd528b2`. Its first-party KMS switching recording passes all five assertions and the custom Keycloak theme; full lifecycle, all-demo/device and soak acceptance remain incomplete. This draft selects `v1.1.217` to include reviewed browser/CSP/checksum repairs and private demo evidence intake/validation, without changing component pins. It depends on lifecycle PR `#793` landing through protected gates. Selection is not a claim, publication, deployment or acceptance pass. The standalone Rust Canvas worker remains unrouted pending whole-worker/all-consumer gates; reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: its shared lossless configuration and native PostgreSQL consumer-range replay now pass locally, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -31,7 +31,49 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
-### Selected 1.1.217 acceptance follow-up — prerequisite review still required
+### Current 1.1.217 evidence and Canvas configuration progress
+
+UI `#793` and activation `#794` have merged through protected gates. Release
+run `33954137368` and hosted lifecycle run `33955914598` are terminal successes
+at exact source `4596afaca3724e60a8dadbd4e227b6e765cb495c`. Official beta deployment
+completed at `08:36:34Z`. The fresh KMS recording passes all five assertions,
+loads the custom ElevenID Keycloak theme, and restores provider configuration.
+It is one recording, not the complete demo portfolio or external device proof.
+Three operational soak samples pass, latest captured at `10:05:15Z`; this does
+not complete the required 7–14-day soak. The host reboot remains an explicit
+interruption. Read-only inspection at `10:24:29Z` matches the post-reboot
+29-container production baseline; no production mutation is part of this work.
+
+Credentials `#260` freezes 64 actual-Python numeric lexical vectors; `#262`
+freezes 36 real PostgreSQL consumer cycles and three two-cycle error-recovery
+loops. MMF `#101` merged the shared Rust numeric parser at protected revision
+`9534d0e3be66bd63d65ee672516da8b8df5206af`. This candidate adopts that owner,
+preserves OS-generated/explicit identity behavior and arbitrary-size integer
+configuration, and checks bounds at the SQL, timestamp and OAuth consumers.
+There is no second parser or new Python runtime implementation.
+
+Local native evidence: 133 full-factory vectors; 247 library, three worker and
+five factory tests; all ten issuance Canvas/proof-nonce PostgreSQL contract
+executables; all-target issuance clippy; and the three issuance candidate
+contract tests pass. The SQL worker executable replays all 36 cycles and three
+two-cycle loops using actual production repositories and actual worker entry
+points. An altered expected OAuth row count fails the real replay; the original
+fixture was restored and the suite passed again. The native suite uses an
+isolated synthetic contract schema, not published-migration proof. Full hosted
+workspace CI and protected landing remain required for this candidate.
+See [configuration and consumer evidence](canvas-worker-lossless-configuration.md).
+
+Next: land the reviewed candidate, reconcile the remaining loader/lifecycle,
+active-job/provider/concurrency and readiness observations, then change every
+intended worker consumer and delete superseded Python only after those gates.
+Complete remaining recordings, genuine device evidence, aggregate acceptance,
+integration repinning and feature-preserving owner-branch cleanup. These local
+tests do not authorize worker routing, Python deletion or another deployment.
+
+### Historical 1.1.217 selection — prerequisites subsequently completed
+
+The following records the selection-time findings; the current snapshot above
+supersedes its pending prerequisite/publication/deployment statuses.
 
 Release `v1.1.216` (run `33945270048`, source `89c66b07aceb937366390ae194e75ff09fd528b2`)
 passed publication signatures/provenance, exact image/source binding and official
@@ -424,7 +466,7 @@ The 31-route language-neutral Canvas management floor is
 |---|---:|---|
 | Implemented and merged in Rust | 31 | The complete frozen surface: platform lifecycle, registration/install, probes, readiness, scope/catalog, program-binding CRUD/validation/activation/deactivation, encrypted integration-secret CRUD, provider validation, application approval, evidence-event status, and the three default-disabled legacy evidence/AGS/NRPS adapters through one shared Rust ingest kernel. PR `#717` merged at `a6b375bb0` |
 | Provenance-bound native beta routing merged | 31 | `ElevenID/marty-credentials#248` merged as `7f09c1e5a767f1401dff3b22adae9f8ae8cc1465`; PR `#717` binds its canonical-LF hash, declares all 31 routes native, updates Gateway routing and supplies the beta-only Canvas configuration. Production and self-host routing remain unchanged |
-| Standalone synchronization worker | Fenced Rust candidate implemented; routing and Python deletion not started | `contracts/issuance-canvas-sync-worker.json` pins the complete Python worker/processor/oracle boundary. PR `#742` merged the bounded Rust candidate at `50b0985f4`; PR `#754` adds generation-fenced application/platform/candidate/cursor persistence, canonical target reload, persisted LTI trust-profile binding, explicit OAuth 429 handling, shutdown and deployed-secret parity, and target-reconfiguration race coverage. Credentials PR `#254` merged actual-Python configuration observations at `9a3b22dbbdb58936ba915894c1ce61bbea1dfb8e` (15 portable cases and 18 malformed-number combinations); whitespace, non-finite durations, numeric separators and integer-range differences remain unresolved. This advances but does not close the first legacy oracle gap. The candidate remains non-routed until all legacy oracle gaps, whole-worker differential, database rollback, readiness, consumer-routing and beta-soak deletion gates pass |
+| Standalone synchronization worker | Fenced Rust candidate implemented; routing and Python deletion not started | `contracts/issuance-canvas-sync-worker.json` pins the complete Python worker/processor/oracle boundary. PR `#742` merged the bounded Rust candidate at `50b0985f4`; PR `#754` adds generation-fenced application/platform/candidate/cursor persistence, canonical target reload, persisted LTI trust-profile binding, explicit OAuth 429 handling, shutdown and deployed-secret parity, and target-reconfiguration race coverage. Credentials `#254`, `#260` and `#262` freeze baseline, lexical and real PostgreSQL consumer observations. This candidate adopts MMF `#101` and passes all 133 startup vectors plus 36 native SQL cycles and three two-cycle loops locally, including the previously flagged whitespace/non-finite/separator/integer-range differences. Full hosted CI and protected landing remain required. The candidate remains non-routed until all legacy oracle gaps, whole-worker differential, database rollback, readiness, consumer-routing and beta-soak deletion gates pass |
 
 Thus, all 31 routes and their beta routing are merged but not yet deployed.
 The final post-rebase maintainer and protected-queue gates passed 220 Rust
@@ -615,10 +657,12 @@ that candidate. Credentials PR `#254` freezes actual-Python configuration
 observations, with 44 combined new/existing worker tests passing. PR `#255`
 merged the actual processor-loader oracle at
 `d035a31790c4895431585a44804639a90dbdad94`, with 71 combined tests passing.
-PR `#257` adds ten actual loop/disposal/cancellation observations and passes
-81 combined local tests; it remains in protected cross-platform merge checks.
-These observations advance, but do not close, configuration reconciliation,
-native processor replacement or whole-worker lifecycle parity. Coordinate ownership with
+PR `#257` merged ten actual loop/disposal/cancellation observations at
+`84532fe506855417eb37b714b1c33cba83689ce8`. Subsequent `#260` and `#262` add
+lexical and real SQL range/loop observations. The current Rust candidate passes
+their numeric/identity factory and consumer replay locally using shared MMF
+`#101`; full hosted landing remains required. Loader/disposal/active-job and
+whole-worker lifecycle parity are still open. Coordinate ownership with
 the crypto worker before touching shared Credentials files. Python deletion
 remains gated on whole-worker differential, failure, persistence, readiness,
 every-consumer routing and beta-soak evidence.

@@ -8,6 +8,9 @@ use marty_issuance_service::{
 };
 use sqlx::postgres::PgPoolOptions;
 
+#[path = "support/canvas_worker_range_oracle.rs"]
+mod canvas_worker_range_oracle;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
@@ -20,6 +23,13 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         eprintln!("skipping Canvas worker PostgreSQL contract without database URL");
         return;
     };
+    assert!(
+        url::Url::parse(&database_url)
+            .expect("Canvas worker PostgreSQL contract URL must parse")
+            .path()
+            .ends_with("_test"),
+        "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL must name a dedicated *_test database"
+    );
     let pool = PgPoolOptions::new()
         .max_connections(6)
         .connect(&database_url)
@@ -40,7 +50,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(repository.enqueue_due(100).await.unwrap(), 1);
+    assert_eq!(repository.enqueue_due(&100_u64.into()).await.unwrap(), 1);
     for (target_id, expected_schedule) in [("target-new", 60_i64), ("target-conflict", 900)] {
         let row: (bool, i64) = sqlx::query_as(
             "SELECT last_enqueued_at IS NOT NULL,
@@ -87,7 +97,10 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .execute(&pool)
     .await
     .unwrap();
-    let recovery_leased = repository.lease_ready("worker-1", 10, 120).await.unwrap();
+    let recovery_leased = repository
+        .lease_ready("worker-1", &10_u64.into(), &120_u64.into())
+        .await
+        .unwrap();
     let retry: (String, String) = sqlx::query_as(
         "SELECT status, last_error_code FROM issuance_service.canvas_evidence_sync_jobs
          WHERE id = 'expired-retry'",
@@ -123,17 +136,17 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         .expect("newly scheduled job is leased");
     assert_eq!(leased.status, CanvasSyncJobStatus::Leased);
     assert!(!repository
-        .renew_lease(&leased, "wrong-worker", 120)
+        .renew_lease(&leased, "wrong-worker", &120_u64.into())
         .await
         .unwrap());
     let mut wrong_generation = leased.clone();
     wrong_generation.attempt_count += 1;
     assert!(!repository
-        .renew_lease(&wrong_generation, "worker-1", 120)
+        .renew_lease(&wrong_generation, "worker-1", &120_u64.into())
         .await
         .unwrap());
     assert!(repository
-        .renew_lease(&leased, "worker-1", 120)
+        .renew_lease(&leased, "worker-1", &120_u64.into())
         .await
         .unwrap());
 
@@ -218,7 +231,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     .await
     .unwrap();
     let race_jobs = repository
-        .lease_ready("race-worker", 10, 120)
+        .lease_ready("race-worker", &10_u64.into(), &120_u64.into())
         .await
         .unwrap();
     let current = race_jobs
@@ -352,6 +365,26 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             .unwrap(),
         Some(CanvasSyncJobStatus::DeadLetter),
     );
+    // Reset only this test's disposable schema after all existing stateful
+    // recovery/fencing assertions. Range observations require empty queues.
+    setup_schema(&pool).await;
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_oauth_connections (
+            id text PRIMARY KEY, organization_id text NOT NULL, platform_id text NOT NULL,
+            canvas_base_url text NOT NULL, platform_config_version integer NOT NULL,
+            client_id text NOT NULL, client_secret_ref text NOT NULL,
+            capabilities jsonb NOT NULL, scopes jsonb NOT NULL,
+            access_token_secret_ref text, refresh_token_secret_ref text,
+            token_expires_at timestamptz, status text NOT NULL,
+            revoke_retry_count integer NOT NULL, updated_at timestamptz NOT NULL,
+            revoke_retry_at timestamptz, refresh_lease_owner text,
+            refresh_lease_expires_at timestamptz)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
+    pool.close().await;
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {

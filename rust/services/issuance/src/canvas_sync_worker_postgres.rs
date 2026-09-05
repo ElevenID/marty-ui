@@ -1,6 +1,8 @@
 //! PostgreSQL persistence for the standalone Canvas synchronization worker.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Datelike, TimeDelta, Utc};
+use mmf_config::numeric_config::PythonConfigInteger;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tracing::error;
@@ -59,7 +61,10 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         Ok(())
     }
 
-    async fn enqueue_due(&self, limit: usize) -> Result<usize, CanvasSyncRepositoryError> {
+    async fn enqueue_due(
+        &self,
+        limit: &PythonConfigInteger,
+    ) -> Result<usize, CanvasSyncRepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
         let due = sqlx::query(
             "SELECT id, organization_id, schedule_seconds
@@ -117,9 +122,12 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
     async fn lease_ready(
         &self,
         worker_id: &str,
-        limit: usize,
-        lease_seconds: i64,
+        limit: &PythonConfigInteger,
+        lease_seconds: &PythonConfigInteger,
     ) -> Result<Vec<CanvasSyncJob>, CanvasSyncRepositoryError> {
+        // The legacy repository computes this before opening a transaction,
+        // even on an empty queue. Preserve that range/error and timing boundary.
+        let lease_expires_at = lease_deadline(Utc::now(), lease_seconds)?;
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
         recover_expired_final(&mut transaction).await?;
         recover_expired_retry(&mut transaction).await?;
@@ -142,7 +150,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                 "UPDATE issuance_service.canvas_evidence_sync_jobs
                  SET status = 'leased', attempt_count = attempt_count + 1,
                      lease_owner = $2,
-                     lease_expires_at = clock_timestamp() + make_interval(secs => $3),
+                     lease_expires_at = $3,
                      started_at = COALESCE(started_at, clock_timestamp()),
                      result = jsonb_set(COALESCE(result::jsonb, '{}'::jsonb),
                          '{target_config_version}',
@@ -160,7 +168,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
             )
             .bind(id)
             .bind(worker_id)
-            .bind(lease_seconds.max(30))
+            .bind(lease_expires_at)
             .fetch_one(&mut *transaction)
             .await
             .map_err(repository_error)?;
@@ -392,11 +400,12 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         &self,
         job: &CanvasSyncJob,
         worker_id: &str,
-        lease_seconds: i64,
+        lease_seconds: &PythonConfigInteger,
     ) -> Result<bool, CanvasSyncRepositoryError> {
+        let lease_expires_at = lease_deadline(Utc::now(), lease_seconds)?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_jobs
-             SET lease_expires_at = clock_timestamp() + make_interval(secs => $5),
+             SET lease_expires_at = $5,
                  updated_at = clock_timestamp()
              WHERE id = $1 AND organization_id = $2 AND status = 'leased'
                AND lease_owner = $3 AND lease_expires_at > clock_timestamp()
@@ -406,7 +415,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         .bind(&job.organization_id)
         .bind(worker_id)
         .bind(job.attempt_count)
-        .bind(lease_seconds.max(30))
+        .bind(lease_expires_at)
         .execute(&self.pool)
         .await
         .map_err(repository_error)?;
@@ -719,8 +728,28 @@ async fn disable_target(pool: &PgPool, target: &CanvasSyncTarget) {
     }
 }
 
-fn limit_as_i64(limit: usize) -> Result<i64, CanvasSyncRepositoryError> {
-    i64::try_from(limit.max(1)).map_err(|_| CanvasSyncRepositoryError::InvalidState)
+fn limit_as_i64(limit: &PythonConfigInteger) -> Result<i64, CanvasSyncRepositoryError> {
+    limit
+        .clone()
+        .max(1_u64.into())
+        .to_i64()
+        .ok_or(CanvasSyncRepositoryError::IntegerSqlRange)
+}
+
+fn lease_deadline(
+    now: DateTime<Utc>,
+    lease_seconds: &PythonConfigInteger,
+) -> Result<DateTime<Utc>, CanvasSyncRepositoryError> {
+    let seconds = lease_seconds
+        .clone()
+        .max(30_u64.into())
+        .to_i64()
+        .ok_or(CanvasSyncRepositoryError::DurationRange)?;
+    let delta = TimeDelta::try_seconds(seconds).ok_or(CanvasSyncRepositoryError::DurationRange)?;
+    now.checked_add_signed(delta)
+        // Python datetime's year range is narrower than chrono/PostgreSQL's.
+        .filter(|deadline| (1..=9999).contains(&deadline.year()))
+        .ok_or(CanvasSyncRepositoryError::DurationRange)
 }
 
 fn repository_error(error: sqlx::Error) -> CanvasSyncRepositoryError {
@@ -737,5 +766,68 @@ struct UuidString;
 impl UuidString {
     fn generate() -> String {
         uuid::Uuid::new_v4().to_string()
+    }
+}
+
+#[cfg(test)]
+mod numeric_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn sql_range_conversion_is_checked_and_does_not_truncate_or_cap() {
+        assert_eq!(limit_as_i64(&i64::MAX.into()), Ok(i64::MAX));
+        assert_eq!(limit_as_i64(&(-1_i64).into()), Ok(1));
+        for value in ["9223372036854775808", "18446744073709551616"] {
+            assert_eq!(
+                limit_as_i64(&value.parse().unwrap()),
+                Err(CanvasSyncRepositoryError::IntegerSqlRange)
+            );
+        }
+        assert_eq!(
+            limit_as_i64(&"9".repeat(4300).parse().unwrap()),
+            Err(CanvasSyncRepositoryError::IntegerSqlRange)
+        );
+    }
+
+    #[test]
+    fn lease_timestamp_obeys_python_datetime_boundary_and_minimum() {
+        let now = DateTime::parse_from_rfc3339("9999-12-31T23:59:29.999999Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expected = DateTime::parse_from_rfc3339("9999-12-31T23:59:59.999999Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for seconds in [-1_i64, 0, 29, 30] {
+            assert_eq!(lease_deadline(now, &seconds.into()), Ok(expected));
+        }
+        assert_eq!(
+            lease_deadline(now, &31_u64.into()),
+            Err(CanvasSyncRepositoryError::DurationRange)
+        );
+        for value in ["9223372036854775807", "9223372036854775808"] {
+            assert_eq!(
+                lease_deadline(Utc::now(), &value.parse().unwrap()),
+                Err(CanvasSyncRepositoryError::DurationRange)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_lease_fails_before_opening_even_an_unavailable_database() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(100))
+            .connect_lazy("postgresql://oracle:synthetic-local-only@127.0.0.1:9/never_connect")
+            .unwrap();
+        let repository = PostgresCanvasSyncWorkerRepository::new(pool);
+        assert_eq!(
+            repository
+                .lease_ready(
+                    "oracle-worker",
+                    &1_u64.into(),
+                    &"9".repeat(4300).parse().unwrap()
+                )
+                .await,
+            Err(CanvasSyncRepositoryError::DurationRange),
+        );
     }
 }

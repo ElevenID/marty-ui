@@ -54,6 +54,12 @@ the rollout gate:
 
 ## Hard cutover and deletion gate
 
+The [lossless configuration and PostgreSQL range replay](../canvas-worker-lossless-configuration.md)
+now cover all 133 frozen startup vectors and 36 consumer cycles plus three
+two-cycle loops through the actual Rust worker and PostgreSQL repositories.
+This closes the tested numeric/identity differences, not the remaining
+whole-worker loader, lifecycle, provider, readiness or routing requirements.
+
 Landing an unrouted Rust candidate is not authorization to cut over the
 worker. Every item in
 `contracts/issuance-canvas-sync-worker.json` under

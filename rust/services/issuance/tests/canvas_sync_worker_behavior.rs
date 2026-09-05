@@ -17,11 +17,11 @@ fn contract() -> Value {
 #[test]
 fn configuration_matches_frozen_defaults_bounds_and_failures() {
     let defaults = CanvasSyncWorkerConfig::from_values(&BTreeMap::new()).expect("defaults");
-    assert_eq!(defaults.batch_size, 10);
-    assert_eq!(defaults.lease_seconds, 120);
+    assert_eq!(defaults.batch_size.to_u64(), Some(10));
+    assert_eq!(defaults.lease_seconds.to_i64(), Some(120));
     assert_eq!(defaults.job_timeout.as_secs_f64(), 600.0);
-    assert_eq!(defaults.schedule_limit, 100);
-    assert_eq!(defaults.oauth_revocation_limit, 25);
+    assert_eq!(defaults.schedule_limit.to_u64(), Some(100));
+    assert_eq!(defaults.oauth_revocation_limit.to_u64(), Some(25));
     assert_eq!(defaults.poll_interval.as_secs_f64(), 5.0);
     assert!(!defaults.worker_id.is_empty());
 
@@ -42,9 +42,9 @@ fn configuration_matches_frozen_defaults_bounds_and_failures() {
         ),
     ]))
     .expect("bounded configuration");
-    assert_eq!(bounded.worker_id, "explicit-worker");
-    assert_eq!(bounded.batch_size, 1);
-    assert_eq!(bounded.lease_seconds, 30);
+    assert_eq!(bounded.worker_id, " explicit-worker ");
+    assert_eq!(bounded.batch_size.to_u64(), Some(1));
+    assert_eq!(bounded.lease_seconds.to_i64(), Some(30));
     assert_eq!(bounded.job_timeout.as_secs_f64(), 3_600.0);
     assert_eq!(bounded.poll_interval.as_secs_f64(), 0.1);
 
