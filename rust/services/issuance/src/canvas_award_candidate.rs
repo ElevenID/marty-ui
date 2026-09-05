@@ -529,18 +529,7 @@ pub(crate) fn python_canonical_json(value: &Value) -> String {
 }
 
 fn python_json_number(value: &serde_json::Number) -> String {
-    if value.is_i64() || value.is_u64() {
-        return value.to_string();
-    }
-    let Some(value) = value.as_f64() else {
-        return value.to_string();
-    };
-    let rendered = format!("{value:?}");
-    let Some((mantissa, exponent)) = rendered.split_once('e') else {
-        return rendered;
-    };
-    let exponent = exponent.parse::<i32>().unwrap_or_default();
-    format!("{mantissa}e{exponent:+03}")
+    crate::python_value::number(value)
 }
 
 fn python_json_string(value: &str) -> String {

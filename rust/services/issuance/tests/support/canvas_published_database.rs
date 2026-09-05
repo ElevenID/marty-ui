@@ -102,6 +102,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_enqueue_inputs() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "enqueue_input",
+                "enqueue-input",
+                "enqueue_inputs",
+                "MARTY_CANVAS_ENQUEUE_INPUT_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     async fn start_probe_with_extra(
         oracle: Option<(&str, &str, &str, &str)>,
         extra_fixture: Option<&'static str>,

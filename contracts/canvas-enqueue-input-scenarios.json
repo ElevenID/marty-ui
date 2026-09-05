@@ -1,0 +1,220 @@
+{
+  "schema": "marty.canvas-enqueue-input-scenarios/v1",
+  "default_context": {
+    "canvas": {
+      "canvas_platform_id": "platform-review",
+      "canvas_program_binding_id": "binding-review"
+    }
+  },
+  "identifier_values": [
+    null,
+    false,
+    true,
+    0,
+    1,
+    -2,
+    1.25,
+    0.00001,
+    10000000000000000,
+    "",
+    " ",
+    "x",
+    "\u001cx\u001f",
+    " x ",
+    [],
+    [
+      true,
+      null,
+      "x"
+    ],
+    {},
+    {
+      "b": true,
+      "a": null
+    },
+    {
+      "text": "it's \"quoted\""
+    },
+    [
+      "é",
+      "😀"
+    ],
+    [
+      "\n\t"
+    ],
+    [
+      "\u001c"
+    ],
+    {
+      "value": [
+        false,
+        1.25
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "baseline"
+    },
+    {
+      "name": "rollout_closed",
+      "rollout": false
+    },
+    {
+      "name": "missing_before_rollout",
+      "application": "missing",
+      "rollout": false
+    },
+    {
+      "name": "foreign",
+      "headers": {
+        "X-Organization-ID": "foreign"
+      }
+    },
+    {
+      "name": "missing_key",
+      "omit_headers": [
+        "X-API-Key"
+      ]
+    },
+    {
+      "name": "empty_key",
+      "headers": {
+        "X-API-Key": ""
+      }
+    },
+    {
+      "name": "missing_tenant",
+      "omit_headers": [
+        "X-Organization-ID"
+      ]
+    },
+    {
+      "name": "platform_disabled",
+      "platform_enabled": false
+    },
+    {
+      "name": "binding_disabled",
+      "binding_enabled": false
+    },
+    {
+      "name": "context_0",
+      "context": null
+    },
+    {
+      "name": "context_1",
+      "context": []
+    },
+    {
+      "name": "context_2",
+      "context": {}
+    },
+    {
+      "name": "context_3",
+      "context": {
+        "canvas": []
+      }
+    },
+    {
+      "name": "context_4",
+      "context": {
+        "canvas": {}
+      }
+    },
+    {
+      "name": "context_5",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": false
+        }
+      }
+    },
+    {
+      "name": "context_6",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": 0
+        }
+      }
+    },
+    {
+      "name": "context_7",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": [
+            "platform-review"
+          ]
+        }
+      }
+    },
+    {
+      "name": "context_8",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": "missing",
+          "canvas_program_binding_id": "binding-review"
+        }
+      }
+    },
+    {
+      "name": "context_9",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": "platform-review"
+        }
+      }
+    },
+    {
+      "name": "context_10",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": "\u001cplatform-review\u001f",
+          "canvas_program_binding_id": "binding-review"
+        }
+      }
+    },
+    {
+      "name": "context_11",
+      "context": {
+        "canvas": {
+          "canvas_platform_id": " platform-review ",
+          "canvas_program_binding_id": "binding-review"
+        }
+      }
+    },
+    {
+      "name": "metadata_0",
+      "metadata": null
+    },
+    {
+      "name": "metadata_1",
+      "metadata": []
+    },
+    {
+      "name": "metadata_2",
+      "metadata": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "metadata_3",
+      "metadata": {
+        "kept": "synthetic",
+        "last_requested_from": "old"
+      }
+    },
+    {
+      "name": "learner",
+      "credential_id": null
+    },
+    {
+      "name": "empty_body",
+      "raw_body": ""
+    },
+    {
+      "name": "invalid_json_body",
+      "raw_body": "not-json"
+    }
+  ]
+}

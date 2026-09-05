@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+mod python_value;
+
 pub mod canvas_award_candidate;
 pub mod canvas_award_candidate_approval;
 pub mod canvas_award_candidate_approval_postgres;

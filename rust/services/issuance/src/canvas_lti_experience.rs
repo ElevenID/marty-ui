@@ -573,27 +573,7 @@ pub(crate) fn first_truthy<const N: usize>(values: [Option<&Value>; N]) -> Optio
         .find(|value| python_truthy(value))
 }
 
-pub(crate) fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64() != Some(0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
-pub(crate) fn python_string(value: &Value) -> Option<String> {
-    match value {
-        Value::Null => Some("None".to_owned()),
-        Value::Bool(true) => Some("True".to_owned()),
-        Value::Bool(false) => Some("False".to_owned()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::String(value) => Some(value.clone()),
-        Value::Array(_) | Value::Object(_) => Some(value.to_string()),
-    }
-}
+pub(crate) use crate::python_value::{python_string, python_truthy};
 
 pub(crate) fn portable_canvas_pilot_enabled(
     enabled: bool,

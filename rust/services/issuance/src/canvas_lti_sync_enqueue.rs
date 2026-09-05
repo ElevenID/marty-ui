@@ -328,7 +328,7 @@ fn required_text(
         .get(name)
         .filter(|value| python_truthy(value))
         .and_then(python_string)
-        .map(|value| value.trim().to_owned())
+        .map(|value| crate::python_value::strip(&value).to_owned())
         .filter(|value| !value.is_empty())
         .ok_or(ApplicationSyncEnqueueError::MissingContext(name))
 }
@@ -336,4 +336,34 @@ fn required_text(
 fn sync_error(cause: sqlx::Error) -> ApplicationSyncEnqueueError {
     error!(%cause, "Canvas bootstrap sync enqueue query failed");
     ApplicationSyncEnqueueError::RepositoryUnavailable
+}
+
+#[cfg(test)]
+mod captured_identifier_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn enqueue_identifiers_match_published_python() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-enqueue-input-scenarios.json"
+        ))
+        .unwrap();
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-enqueue-input-oracle.json"
+        ))
+        .unwrap();
+        let inputs = scenarios["identifier_values"].as_array().unwrap();
+        let expected = frozen["identifiers"].as_array().unwrap();
+        assert_eq!(inputs.len(), expected.len());
+        for (input, expected) in inputs.iter().zip(expected) {
+            let context = Map::from_iter([("field".into(), input.clone())]);
+            let actual = match required_text(&context, "field") {
+                Ok(value) => json!({"value":value}),
+                Err(ApplicationSyncEnqueueError::MissingContext(name)) => json!({"missing":name}),
+                Err(other) => panic!("unexpected identifier error {other:?}"),
+            };
+            assert_eq!(&actual, expected, "published identifier input: {input}");
+        }
+    }
 }

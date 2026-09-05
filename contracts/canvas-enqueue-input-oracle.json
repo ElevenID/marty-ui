@@ -1,0 +1,734 @@
+{
+  "boundary": "published ASGI/auth/service/PostgreSQL plus direct shared identifier conversion",
+  "identifiers": [
+    {
+      "missing": "field"
+    },
+    {
+      "missing": "field"
+    },
+    {
+      "value": "True"
+    },
+    {
+      "missing": "field"
+    },
+    {
+      "value": "1"
+    },
+    {
+      "value": "-2"
+    },
+    {
+      "value": "1.25"
+    },
+    {
+      "value": "1e-05"
+    },
+    {
+      "value": "10000000000000000"
+    },
+    {
+      "missing": "field"
+    },
+    {
+      "missing": "field"
+    },
+    {
+      "value": "x"
+    },
+    {
+      "value": "x"
+    },
+    {
+      "value": "x"
+    },
+    {
+      "missing": "field"
+    },
+    {
+      "value": "[True, None, 'x']"
+    },
+    {
+      "missing": "field"
+    },
+    {
+      "value": "{'b': True, 'a': None}"
+    },
+    {
+      "value": "{'text': 'it\\'s \"quoted\"'}"
+    },
+    {
+      "value": "['é', '😀']"
+    },
+    {
+      "value": "['\\n\\t\\x7f']"
+    },
+    {
+      "value": "['\\x1c']"
+    },
+    {
+      "value": "{'value': [False, 1.25]}"
+    }
+  ],
+  "observations": [
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "baseline",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "created_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_rollout_disabled",
+          "message": "Portable Canvas synchronization is not enabled for this organization"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "rollout_closed",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_not_found",
+          "message": "Canvas application not found"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "missing_before_rollout",
+      "status": 404,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_not_found",
+          "message": "Canvas application not found"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "foreign",
+      "status": 404,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": "X-API-Key header is missing"
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "missing_key",
+      "status": 401,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": "X-API-Key header is missing"
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "empty_key",
+      "status": 401,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": "X-Organization-ID is required for Canvas management"
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "missing_tenant",
+      "status": 400,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_binding_inactive",
+          "message": "Canvas platform and program binding must be active before synchronization"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "platform_disabled",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_binding_inactive",
+          "message": "Canvas platform and program binding must be active before synchronization"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "binding_disabled",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_0",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_1",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_2",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_3",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_4",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_5",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_platform_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_6",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_program_binding_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_7",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_binding_not_found",
+          "message": "Canvas binding not found"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_8",
+      "status": 404,
+      "targets": null
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_application_context_incomplete",
+          "message": "Canvas application context is missing canvas_program_binding_id"
+        }
+      },
+      "content_type": "application/json",
+      "jobs": null,
+      "name": "context_9",
+      "status": 409,
+      "targets": null
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "context_10",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "created_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "context_11",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "created_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "metadata_0",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "last_requested_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "metadata_1",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "last_requested_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "metadata_2",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "last_requested_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "metadata_3",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "kept": "synthetic",
+            "last_requested_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "learner_application",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "learner",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "created_from": "application_sync_api"
+          },
+          "schedule_seconds": 900,
+          "target_type": "learner_application"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "empty_body",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "created_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "attempt_count": 0,
+        "available_at": "$timestamp",
+        "binding_id": "binding-review",
+        "candidate_id": null,
+        "completed_at": null,
+        "created_at": "$timestamp",
+        "id": "$job",
+        "last_error_code": null,
+        "last_error_summary": null,
+        "max_attempts": 8,
+        "organization_id": "org-review",
+        "platform_id": "platform-review",
+        "result": {},
+        "started_at": null,
+        "status": "queued",
+        "target_id": "$target",
+        "target_type": "issued_drift",
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "jobs": [
+        {
+          "attempt_count": 0,
+          "max_attempts": 8,
+          "status": "queued"
+        }
+      ],
+      "name": "invalid_json_body",
+      "status": 202,
+      "targets": [
+        {
+          "enabled": true,
+          "metadata": {
+            "created_from": "application_sync_api"
+          },
+          "schedule_seconds": 21600,
+          "target_type": "issued_drift"
+        }
+      ]
+    }
+  ],
+  "operations_sha256": "49ed07755bc9a2c4daee61242c8d14334dfe343eebd8b99ef30f88ae5f7e0d83",
+  "service_sha256": "4d5a5eb9a9ffed3d87d857f3e3fcc61740616c8f492fa75818871d0bd738c592"
+}

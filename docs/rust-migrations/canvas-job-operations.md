@@ -44,17 +44,38 @@ applies to operations and both LTI callers without a duplicate enqueue owner.
   full retry field resets, stopped-target preservation, tenant hiding and
   validation precedence are exercised. These are native invariants, not a new
   published differential corpus.
-- Nine configured schema tests pass locally (47.40s), as do 258 library tests
-  (7.91s), all-target Clippy (25.35s) and 20 workflow/image tests (0.65s).
+- A supplementary published capture freezes 28 actual enqueue HTTP/database
+  cases and 23 direct identifier conversions before correcting Rust. Two
+  independent captures agree. Malformed contexts, missing/empty auth headers,
+  tenant/rollout precedence, inactive bindings/platforms, metadata shapes,
+  learner scheduling and ignored malformed/empty bodies are covered. Native
+  replay compares full normalized HTTP responses, target/job projections and
+  unchanged full credential/transaction rows. New golden blob:
+  `082a0996d4d33c8dc01012e6da725d81e7212d3c`.
+- Negative controls found decimal/exponent conversion (`0.00001` versus Python
+  `1e-05`) and control-whitespace-padded IDs (native404 versus Python202).
+  The shared Rust value formatter now preserves Python compound repr, nested
+  booleans/nulls, quote escaping and number display. Canonical JSON delegates
+  number display to the same owner. Enqueue uses its Python whitespace trim.
+  The existing LTI helper exports remain intact, avoiding separate conversions.
+- `python-text-semantics.json` freezes all printable codepoint ranges and
+  whitespace from the published Python Unicode15.0 runtime, independently
+  repeated before the fix. Its711 sorted ranges are compiled into Rust and
+  loaded once; no runtime Python or new dependency is added. The published
+  gate compares the complete table on every run, detecting image-version drift.
+  These data rows are a compatibility contract, not additional service logic.
+- Ten configured schema tests pass locally (67.27s), as do 260 library tests
+  (9.03s), all-target Clippy (38.35s), 51 existing candidate/LTI behavior tests,
+  and 20 workflow/image tests (0.82s).
   Ruff, changed Rust formatting and diff checks pass. CI explicitly verifies registration
-  of both new tests before running the configured schema executable. Hosted
+  of all three new tests before running the configured schema executable. Hosted
   qualification remains required for this increment.
 
-This is not exhaustive input or concurrency coverage. In particular, extend
-published enqueue observations for malformed integration contexts, non-string
-identifiers/Python string conversion (the existing shared conversion is not an
-exact Python repr for compound JSON), Unicode stripping, missing/inactive
-bindings, empty credential IDs where schema-permitted, and metadata variants.
+This is not exhaustive input or concurrency coverage. Mismatched bindings,
+empty credential IDs where schema-permitted, very-large JSON numbers, arbitrary
+compound identifiers used as actual database keys, and all malformed JSON
+string representations remain part of broader qualification. The 23 direct
+identifier cases do not prove every possible numeric or string representation.
 Exact timestamp/wire equality and all interleavings with active workers remain
 separate gates. Do not infer complete parity or authorize deletion from this
 candidate's current passing cases.

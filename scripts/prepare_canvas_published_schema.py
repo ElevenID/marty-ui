@@ -67,6 +67,7 @@ def prepare():
             "organization_dependency": "synthetic-minimal",
         }
         for flag, name, key in [
+            ("MARTY_CANVAS_ENQUEUE_INPUT_ORACLE", "enqueue_input", "enqueue_inputs"),
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),
             (
                 "MARTY_CANVAS_OPERATIONS_INPUT_ORACLE",

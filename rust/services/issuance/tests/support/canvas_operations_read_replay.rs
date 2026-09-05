@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
-fn timestamps(value: &mut Value) {
+pub(super) fn timestamps(value: &mut Value) {
     match value {
         Value::Object(object) => {
             for (key, value) in object {
@@ -52,7 +52,13 @@ pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, S
     }
     let response = router
         .clone()
-        .oneshot(request.body(Body::empty()).unwrap())
+        .oneshot(
+            request
+                .body(Body::from(
+                    case["raw_body"].as_str().unwrap_or("").to_owned(),
+                ))
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = response.status().as_u16();

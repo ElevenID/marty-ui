@@ -46,9 +46,13 @@ The [job operations candidate](rust-migrations/canvas-job-operations.md) now add
 enqueue and dead-letter retry/resolve using the shared enqueue owner. All35
 read/job cases from the unchanged46-case golden pass, plus native official-schema
 concurrency, rollback, canonical-ID and LTI compatibility checks. Review exposed
-and corrected the shared non-object metadata merge. Nine configured schema gates,
-258 library tests and20 focused CI/image tests pass locally. Manual review
-resolution, expanded enqueue input/worker-interleaving qualification, hosted
+and corrected the shared non-object metadata merge. A supplementary published
+capture adds28 actual enqueue HTTP/database cases and23 identifier conversions;
+it reproduced and corrects numeric display and control-whitespace differences.
+One shared Rust formatter consumes the frozen published Unicode15.0 text rules,
+with no runtime Python or new dependency. Ten configured schema gates,
+260 library tests,51 candidate/LTI behavior tests and20 focused CI/image tests
+pass locally. Manual review resolution, broader input/worker-interleaving qualification, hosted
 checks and all-consumer cutover remain required. No live routing has changed.
 
 The [operations baseline](rust-migrations/canvas-operations-freeze.md) captures
