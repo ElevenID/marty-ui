@@ -1,6 +1,7 @@
 # Canvas renewal progress and process-liveness parity
 
 Review against the frozen worker and renewal oracle found two native gaps.
+Integration review also reproduced a target-heartbeat timestamp formatting gap.
 Neither correction changes tenant/lease/attempt/target-generation fences,
 provider behavior, routes, deployment consumers or dependency pins.
 
@@ -47,6 +48,14 @@ scopes are then cleaned, and neither leased job is falsely completed. Actual
 business-effect generation fences and repository CAS checks remain unchanged.
 
 ## Evidence boundary
+
+The target heartbeat writer cast PostgreSQL's timestamp to display-format text
+before JSON serialization. Its actual stored value failed RFC3339 parsing
+(`ParseError(TooShort)`), unlike the frozen Python repository's
+`heartbeat_at.isoformat()`. The actual two-job SQL scenario now checks both
+persisted timestamps. Passing the typed timestamp directly to PostgreSQL's JSON
+builder preserves ISO timestamp serialization without adding a second formatter;
+the regression passes after that one-expression correction.
 
 The existing minimum interval and legacy ordering/fence/error observations remain
 in `marty-credentials/docs/CANVAS_WORKER_RENEWAL_ORACLE.md`. Its tests execute

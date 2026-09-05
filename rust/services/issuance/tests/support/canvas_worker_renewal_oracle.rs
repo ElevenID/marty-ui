@@ -27,6 +27,20 @@ pub async fn assert_generation_change_preserves_process_liveness(pool: &PgPool) 
         controlled_cycle_with_config(pool, None, config).await;
     let mut cycle = Box::pin(worker.run_cycle());
     await_both_processors(cycle.as_mut(), &state).await;
+    // The frozen Python repository serializes heartbeat_at.isoformat().
+    // A PostgreSQL display-format string is not the portable wire timestamp.
+    let target_heartbeats: Vec<String> = sqlx::query_scalar(
+        "SELECT metadata->>'worker_heartbeat_at'
+         FROM issuance_service.canvas_evidence_sync_targets ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(target_heartbeats.len(), 2);
+    for value in target_heartbeats {
+        DateTime::parse_from_rfc3339(&value)
+            .expect("actual target heartbeat must retain the legacy ISO timestamp shape");
+    }
     let (heartbeat_before,): (DateTime<Utc>,) = sqlx::query_as(
         "SELECT last_heartbeat_at FROM issuance_service.canvas_worker_heartbeats
          WHERE worker_id = 'renewal-oracle'",
