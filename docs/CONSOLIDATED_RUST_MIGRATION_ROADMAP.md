@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current Canvas initialized-owner adoption
 
+The integrated [renewal-progress follow-up](rust-migrations/canvas-worker-renewal-progress.md)
+retains the initialized pool owner and actual process-signal gate while correcting
+three reproduced differences: processing/deadline stalls during renewal I/O,
+suppressed process liveness after target CAS loss, and non-ISO target-heartbeat
+timestamp serialization. Local combined tests pass; protected landing and the
+remaining renewal failure/order, provider and whole-worker gates remain required.
+
 The [process-signal follow-up](rust-migrations/canvas-worker-process-signals.md)
 freezes actual published Python SIGINT exit130, corrects the native exit mapping,
 registers Unix handlers before worker startup, and adds actual-binary Linux

@@ -209,7 +209,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
              SET metadata = COALESCE(metadata::jsonb, '{}'::jsonb)
                             || jsonb_build_object(
                                  'worker_id', $5::text,
-                                 'worker_heartbeat_at', clock_timestamp()::text
+                                 'worker_heartbeat_at', clock_timestamp()
                                ),
                  updated_at = clock_timestamp()
              WHERE id = $1 AND organization_id = $2 AND config_version = $3

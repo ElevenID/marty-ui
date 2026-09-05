@@ -107,6 +107,9 @@ describe('IssuancePage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('issued-credentials-page')).toBeInTheDocument();
     });
+    // The page shell precedes two independent requests. Wait for a named row
+    // to establish that both inventory and template labels have rendered.
+    const credentialRow = await screen.findByRole('row', { name: /open badge login template/i });
 
     expect(screen.getByRole('heading', { name: 'Issued Credentials' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search issued credentials' })).toBeInTheDocument();
@@ -123,7 +126,6 @@ describe('IssuancePage', () => {
     expect(summary).toHaveTextContent('Selected credential');
     expect(summary).toHaveTextContent('Renewed from');
     expect(summary).toHaveTextContent('Eligible for policies that require an active credential');
-    const credentialRow = screen.getByRole('row', { name: /open badge login template/i });
     expect(credentialRow).toHaveAttribute(
       'data-credential-record-id',
       'issued-rec-1',
