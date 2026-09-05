@@ -36,12 +36,39 @@ Additional tests cover the generated identity's hostname/PID/nonce format,
 checked signed SQL bounds, lease date bounds, and lease-range failure before an
 unavailable database connection. Existing processor/worker assertions remain.
 
-## Remaining gates — do not confuse startup proof with cutover
+## Native PostgreSQL consumer replay
 
-This is not yet whole-worker parity. The full 36-cycle/3-loop corpus must execute
-against real native PostgreSQL repositories, including event order, error phase
-and loop survival; updated existing SQL recovery/renewal/race tests must run on
-an isolated database. Full service/workspace CI, maintainer review and protected
-merge remain required. All broader worker/provider/concurrency/readiness gates
+The existing mandatory `canvas_sync_worker_postgres_contract` executable now
+also runs every frozen consumer observation through the actual Rust factory,
+`CanvasSyncWorker::run_cycle` / `run_loop`, and PostgreSQL worker/OAuth
+repositories. A test-only adapter records operation entry/outcome and supplies
+the owned loop stop signal; all repository operations delegate to production
+implementations. The empty-queue processor rejects unexpected work.
+
+The comparison preserves event order, phase, result counts and loop survival.
+Only the two explicitly frozen Python exception/driver identities map to
+language-neutral `integer_sql_range` and `duration_range` categories; unexpected
+errors and extra/missing events fail. OAuth query errors cannot be hidden by
+the worker's recovery path because the observed queue outcome is also checked.
+
+Local PostgreSQL 15.17 replay passed all 36 cycles and three two-cycle loops,
+together with the existing recovery/renewal/fencing/race assertions. A negative
+control changed the expected empty OAuth row count to one and failed on the
+first real cycle. The original fixture was restored before the final replay.
+The fixture itself remains unchanged from the recorded upstream Git blob.
+
+Local database isolation: a new digest-pinned PostgreSQL container, ephemeral
+tmpfs data, synthetic credentials, and a random port bound only to loopback.
+These Rust tests use the existing contract suite's synthetic schema (plus the
+OAuth queue projection), not an assertion that published migrations were run.
+The legacy oracle separately records published-migration provenance. No beta
+or production database is used. Set `MARTY_ISSUANCE_POSTGRES_CONTRACT_URL` only
+to a disposable `*_test` database: the suite deliberately replaces its schema.
+Without that variable the SQL test skips, which is not database evidence.
+
+## Remaining gates — do not confuse consumer proof with cutover
+
+This is not yet whole-worker parity. Full service/workspace CI, maintainer
+review and protected merge remain required. All broader worker/provider/concurrency/readiness gates
 still apply before routing changes or deleting the retained Python worker.
 No release coordinate, production route, deployment or beta evidence is changed.

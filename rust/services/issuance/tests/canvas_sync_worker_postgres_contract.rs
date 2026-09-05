@@ -8,6 +8,9 @@ use marty_issuance_service::{
 };
 use sqlx::postgres::PgPoolOptions;
 
+#[path = "support/canvas_worker_range_oracle.rs"]
+mod canvas_worker_range_oracle;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
@@ -20,6 +23,13 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
         eprintln!("skipping Canvas worker PostgreSQL contract without database URL");
         return;
     };
+    assert!(
+        url::Url::parse(&database_url)
+            .expect("Canvas worker PostgreSQL contract URL must parse")
+            .path()
+            .ends_with("_test"),
+        "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL must name a dedicated *_test database"
+    );
     let pool = PgPoolOptions::new()
         .max_connections(6)
         .connect(&database_url)
@@ -355,6 +365,26 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             .unwrap(),
         Some(CanvasSyncJobStatus::DeadLetter),
     );
+    // Reset only this test's disposable schema after all existing stateful
+    // recovery/fencing assertions. Range observations require empty queues.
+    setup_schema(&pool).await;
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_oauth_connections (
+            id text PRIMARY KEY, organization_id text NOT NULL, platform_id text NOT NULL,
+            canvas_base_url text NOT NULL, platform_config_version integer NOT NULL,
+            client_id text NOT NULL, client_secret_ref text NOT NULL,
+            capabilities jsonb NOT NULL, scopes jsonb NOT NULL,
+            access_token_secret_ref text, refresh_token_secret_ref text,
+            token_expires_at timestamptz, status text NOT NULL,
+            revoke_retry_count integer NOT NULL, updated_at timestamptz NOT NULL,
+            revoke_retry_at timestamptz, refresh_lease_owner text,
+            refresh_lease_expires_at timestamptz)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
+    pool.close().await;
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {
