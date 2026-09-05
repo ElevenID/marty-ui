@@ -75,6 +75,10 @@ unsafe_code = "forbid"
 # Explicit targets let independent behavior modules share one link step.
 # tests/test_ci_workflow_performance.py rejects unregistered test files.
 [[test]]
+name = "canvas_published_schema_contract"
+path = "tests/canvas_published_schema_contract.rs"
+
+[[test]]
 name = "issuance-behavior"
 path = "tests/behavior_suite.rs"
 
