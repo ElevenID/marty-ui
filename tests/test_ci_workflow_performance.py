@@ -77,6 +77,26 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "[[ ${#executables[@]} == 1" in gate["run"]
 
 
+def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:
+    _source, document = _workflow(CI_PATH)
+    gate = next(
+        step
+        for step in document["jobs"]["test-rust-services"]["steps"]
+        if step.get("name") == "Test native Canvas AGS/NRPS over real HTTPS"
+    )
+    assert "if" not in gate
+    assert not gate.get("continue-on-error", False)
+    assert "python3 --version" in gate["run"] and "openssl version" in gate["run"]
+    assert "canvas_oauth_behavior" in gate["run"]
+    assert "length == 1" in gate["run"]
+    assert "actual_ags_nrps_https_uses_child_scoped_trust" in gate["run"]
+    assert '"$https_executable" --list' in gate["run"]
+    assert (
+        '"$https_executable" "$https_test" --exact --nocapture --test-threads=1'
+        in gate["run"]
+    )
+
+
 def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> None:
     source, document = _workflow(CI_PATH)
     rust_job = document["jobs"]["test-rust-services"]
