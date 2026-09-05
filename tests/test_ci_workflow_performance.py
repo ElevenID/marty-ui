@@ -107,6 +107,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "grep -Fx 'status_provider_matches_published_python: test'" in gate["run"]
     assert "grep -Fx 'status_provider_matches_frozen_protocol: test'" in gate["run"]
     assert (
+        "grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'"
+        in gate["run"]
+    )
+    assert (
         "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
         in gate["run"]
     )

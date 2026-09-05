@@ -1,6 +1,14 @@
 {
   "schema": "marty.canvas-status-provider-scenarios/v1",
   "cases": [
+    {"name":"bridge_missing_issuer","action":"suspend","provider":"bridge","issuer_id":""},
+    {"name":"bridge_blank_issuer","action":"suspend","provider":"bridge","issuer_id":"  "},
+    {"name":"bridge_zero_issuer","action":"suspend","provider":"bridge","issuer_id":"","metadata":{"issuer_id":0}},
+    {"name":"bridge_false_issuer","action":"suspend","provider":"bridge","issuer_id":"","metadata":{"issuer_id":false}},
+    {"name":"badgr_legacy_base_untrusted","action":"revoke","provider":"badgr","api_base_url":"","legacy_base_url":"https://legacy-provider.example.invalid"},
+    {"name":"badgr_legacy_base_allowlisted","action":"revoke","provider":"badgr","api_base_url":"","legacy_base_url":"https://legacy-provider.example.invalid","allowed_api_origins":"https://legacy-provider.example.invalid"},
+    {"name":"badgr_primary_base_wins","action":"revoke","provider":"badgr","api_base_url":"https://primary-provider.example.invalid","legacy_base_url":"https://legacy-provider.example.invalid"},
+    {"name":"empty_delivery_organization","action":"suspend","provider":"bridge","delivery_organization":"","pilot_organizations":", ,"},
     {
       "name": "bridge_success",
       "action": "suspend",

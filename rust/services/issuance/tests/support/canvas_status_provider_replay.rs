@@ -3,12 +3,10 @@
 use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_credentials_status::{
-        CanvasCredentialsStatusConfig, CanvasCredentialsStatusService, CanvasStatusRequest,
-        CanvasStatusResponse, CanvasStatusTransport,
+        CanvasCredentialsStatusService, CanvasStatusRequest, CanvasStatusResponse,
+        CanvasStatusTransport,
     },
-    canvas_credentials_validation::{
-        CanvasCredentialsSecretResolver, CanvasCredentialsValidationConfig,
-    },
+    canvas_credentials_validation::CanvasCredentialsSecretResolver,
     canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
     credential_management::{CredentialLifecycleAction, ManagedCredential},
 };
@@ -146,51 +144,77 @@ pub async fn replay(expected: &Value) {
             status_list_entries: Vec::new(),
         };
         let platform = json!({"id":"platform-review","organization_id":case["platform_organization"].as_str().unwrap_or("org-review"),"canvas_account_id":"account"});
-        let delivery = json!({"id":"delivery-provider","organization_id":"org-review",
+        let delivery = json!({"id":"delivery-provider","organization_id":case["delivery_organization"].as_str().unwrap_or("org-review"),
             "credential_id":case["delivery_credential"].as_str().unwrap_or("credential-review"),
             "transaction_id":case["delivery_transaction"].as_str().unwrap_or("transaction-review"),
             "external_credential_id":case.get("external_credential_id").cloned().unwrap_or(json!("external-assertion")),
             "external_issuer_id":case["external_issuer_id"],
             "metadata":case.get("metadata").cloned().unwrap_or(json!({"canvas_program_binding_id":"binding-review"}))});
-        let config = CanvasCredentialsStatusConfig {
-            portable_enabled: case["rollout"].as_bool().unwrap_or(true),
-            pilot_organizations: case["pilot_organizations"]
-                .as_str()
-                .unwrap_or("org-review")
-                .split(',')
-                .map(|value| value.trim().to_owned())
-                .collect(),
-            status_sync_url: Some(
+        let entries = [
+            (
+                "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+                if case["rollout"] == false {
+                    "false"
+                } else {
+                    "true"
+                },
+            ),
+            (
+                "CANVAS_PILOT_ORGANIZATION_IDS",
+                case["pilot_organizations"].as_str().unwrap_or("org-review"),
+            ),
+            (
+                "CANVAS_CREDENTIALS_PROVIDER",
+                case["provider"].as_str().unwrap(),
+            ),
+            (
+                "CANVAS_CREDENTIALS_PUBLISH_URL",
+                case["publish_url"].as_str().unwrap_or(""),
+            ),
+            (
+                "CANVAS_CREDENTIALS_ISSUER_ID",
+                case["issuer_id"].as_str().unwrap_or("configured-issuer"),
+            ),
+            (
+                "CANVAS_CREDENTIALS_API_BASE_URL",
+                case["api_base_url"]
+                    .as_str()
+                    .unwrap_or("https://api.badgr.io"),
+            ),
+            (
+                "CANVAS_CREDENTIALS_BASE_URL",
+                case["legacy_base_url"].as_str().unwrap_or(""),
+            ),
+            (
+                "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+                case["allowed_api_origins"].as_str().unwrap_or(""),
+            ),
+            (
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
                 case["sync_url"]
                     .as_str()
-                    .unwrap_or("https://bridge.example.invalid/status")
-                    .into(),
+                    .unwrap_or("https://bridge.example.invalid/status"),
             ),
-            revoke_url_template: case["revoke_url_template"].as_str().map(str::to_owned),
-            provider: CanvasCredentialsValidationConfig {
-                provider: Some(case["provider"].as_str().unwrap().into()),
-                publish_url: case["publish_url"].as_str().map(str::to_owned),
-                issuer_id: Some("configured-issuer".into()),
-                api_base_url: Some(
-                    case["api_base_url"]
-                        .as_str()
-                        .unwrap_or("https://api.badgr.io")
-                        .into(),
-                ),
-                allowed_api_origins: case["allowed_api_origins"]
-                    .as_str()
-                    .unwrap_or("")
-                    .split(',')
-                    .map(str::to_owned)
-                    .collect(),
-                operator_api_token: if case["operator_token"].as_str() == Some("") {
-                    None
+            (
+                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+                case["revoke_url_template"].as_str().unwrap_or(""),
+            ),
+            (
+                "CANVAS_CREDENTIALS_API_TOKEN",
+                if case["operator_token"].as_str() == Some("") {
+                    ""
                 } else {
-                    Some("synthetic-operator-token".into())
+                    "synthetic-operator-token"
                 },
-                ..Default::default()
-            },
-        };
+            ),
+        ];
+        let runtime = marty_issuance_service::config::IssuanceServiceConfig::from_values(
+            entries
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned())),
+        )
+        .expect("actual runtime configuration");
+        let config = runtime.canvas_credentials_status;
         let service = CanvasCredentialsStatusService::new(config, ports.clone(), ports.clone());
         let reason = case
             .get("reason")

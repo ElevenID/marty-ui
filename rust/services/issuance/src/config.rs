@@ -9,6 +9,7 @@ use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::canvas_credentials_status::CanvasCredentialsStatusConfig;
 use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -62,6 +63,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_credentials_api_origins: Vec<String>,
     pub canvas_credentials_validation: CanvasCredentialsValidationConfig,
+    pub canvas_credentials_status: CanvasCredentialsStatusConfig,
     pub canvas_credentials_validation_timeout: Duration,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
@@ -219,6 +221,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 "canvas_credentials_validation_timeout",
                 &self.canvas_credentials_validation_timeout,
             )
+            .field("canvas_credentials_status", &self.canvas_credentials_status)
             .field(
                 "canvas_allow_private_base_urls",
                 &self.canvas_allow_private_base_urls,
@@ -490,7 +493,7 @@ impl IssuanceServiceConfig {
                     .with_detail("cause", error.to_string())
                 })
             })?;
-        let canvas_pilot_organizations =
+        let canvas_pilot_organizations: BTreeSet<String> =
             comma_separated_values(&values, "CANVAS_PILOT_ORGANIZATION_IDS")
                 .into_iter()
                 .collect();
@@ -568,6 +571,20 @@ impl IssuanceServiceConfig {
                 "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
             ),
             allowed_api_origins: canvas_credentials_api_origins.clone(),
+        };
+        let canvas_credentials_status = CanvasCredentialsStatusConfig {
+            provider: canvas_credentials_validation.clone(),
+            legacy_api_base_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_BASE_URL"),
+            status_sync_url: optional_environment_value(
+                &values,
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+            ),
+            revoke_url_template: optional_environment_value(
+                &values,
+                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+            ),
+            portable_enabled: canvas_portable_enabled,
+            pilot_organizations: canvas_pilot_organizations.clone(),
         };
         let canvas_credentials_validation_timeout = positive_float_seconds(
             &values,
@@ -649,6 +666,7 @@ impl IssuanceServiceConfig {
             canvas_private_origin_allowlist,
             canvas_credentials_api_origins,
             canvas_credentials_validation,
+            canvas_credentials_status,
             canvas_credentials_validation_timeout,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
@@ -1382,6 +1400,100 @@ mod tests {
             .expect_err("invalid Canvas Credentials timeout");
             assert_eq!(error.code, ErrorCode::Configuration);
         }
+    }
+
+    #[test]
+    fn canvas_status_reuses_operator_secret_loading_timeout_and_rollout_configuration() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../contracts/canvas-status-operator-token.txt"
+        );
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_API_TOKEN_FILE", fixture),
+            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "2.75"),
+            ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true"),
+            ("CANVAS_PILOT_ORGANIZATION_IDS", " org-review, ,org-review "),
+            (
+                "CANVAS_CREDENTIALS_BASE_URL",
+                " https://synthetic-legacy.example.invalid ",
+            ),
+            (
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+                " https://synthetic-bridge.example.invalid/status ",
+            ),
+            (
+                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+                " {api_base_url}/custom/{external_credential_id} ",
+            ),
+        ]))
+        .unwrap();
+        let status = &config.canvas_credentials_status;
+        assert_eq!(status.provider, config.canvas_credentials_validation);
+        assert_eq!(
+            status.provider.operator_api_token.as_deref(),
+            Some("synthetic-operator-file-token")
+        );
+        assert_eq!(
+            status.legacy_api_base_url.as_deref(),
+            Some("https://synthetic-legacy.example.invalid")
+        );
+        assert!(
+            status.provider.allowed_api_origins.is_empty(),
+            "legacy fallback cannot grant trust"
+        );
+        assert_eq!(
+            status.status_sync_url.as_deref(),
+            Some("https://synthetic-bridge.example.invalid/status")
+        );
+        assert_eq!(
+            status.revoke_url_template.as_deref(),
+            Some("{api_base_url}/custom/{external_credential_id}")
+        );
+        assert!(status.portable_enabled);
+        assert_eq!(
+            status
+                .pilot_organizations
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["org-review"]
+        );
+        assert_eq!(
+            config.canvas_credentials_validation_timeout,
+            std::time::Duration::from_millis(2750)
+        );
+        let debug = format!("{config:?}");
+        for private in [
+            "synthetic-operator-file-token",
+            "synthetic-legacy",
+            "synthetic-bridge",
+            "custom/",
+        ] {
+            assert!(!debug.contains(private));
+        }
+
+        let direct = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_API_TOKEN", " synthetic-direct-token "),
+            (
+                "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+                "synthetic-unused-missing-file",
+            ),
+            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "1.5"),
+            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "3.25"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            direct
+                .canvas_credentials_status
+                .provider
+                .operator_api_token
+                .as_deref(),
+            Some(" synthetic-direct-token ")
+        );
+        assert_eq!(
+            direct.canvas_credentials_validation_timeout,
+            std::time::Duration::from_millis(3250)
+        );
     }
 
     #[test]

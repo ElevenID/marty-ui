@@ -21,11 +21,13 @@ use crate::{
     python_value::{python_string, python_truthy, strip},
 };
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct CanvasCredentialsStatusConfig {
     /// Already resolved by the operator configuration/secret owner. No tenant
     /// metadata can select an environment variable or a filesystem path.
     pub provider: CanvasCredentialsValidationConfig,
+    /// Legacy operator fallback selects a URL but does not grant origin trust.
+    pub legacy_api_base_url: Option<String>,
     pub status_sync_url: Option<String>,
     pub revoke_url_template: Option<String>,
     pub portable_enabled: bool,
@@ -36,6 +38,10 @@ impl std::fmt::Debug for CanvasCredentialsStatusConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CanvasCredentialsStatusConfig")
             .field("provider", &self.provider)
+            .field(
+                "legacy_api_base_url_configured",
+                &self.legacy_api_base_url.is_some(),
+            )
             .field(
                 "status_sync_url_configured",
                 &self.status_sync_url.is_some(),
@@ -79,6 +85,24 @@ pub struct CanvasCredentialsStatusService {
 }
 
 impl CanvasCredentialsStatusService {
+    /// Shared runtime assembly, also exercised by the database + HTTP contract.
+    /// Live consumer adoption remains a separate cutover gate.
+    pub fn from_runtime(
+        config: &crate::config::IssuanceServiceConfig,
+        secrets: Arc<dyn CanvasCredentialsSecretResolver>,
+    ) -> Self {
+        Self::new(
+            config.canvas_credentials_status.clone(),
+            secrets,
+            Arc::new(HttpCanvasStatusTransport::new(CanvasHttpClientPolicy {
+                timeout: config.canvas_credentials_validation_timeout,
+                private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+                allow_private_networks: config.canvas_allow_private_base_urls,
+                allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+            })),
+        )
+    }
+
     pub fn new(
         config: CanvasCredentialsStatusConfig,
         secrets: Arc<dyn CanvasCredentialsSecretResolver>,
@@ -184,7 +208,12 @@ impl CanvasCredentialsStatusService {
                 "canvas_credentials_api_base_url",
                 "canvas_credentials_base_url",
             ],
-            self.config.provider.api_base_url.as_deref(),
+            self.config
+                .provider
+                .api_base_url
+                .as_deref()
+                .filter(|value| !strip(value).is_empty())
+                .or(self.config.legacy_api_base_url.as_deref()),
         );
         let value = if configured.is_empty() {
             DEFAULT_API_BASE_URL
@@ -231,6 +260,7 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
         let credential = context.credential;
         let organization = delivery["organization_id"].as_str().unwrap_or_default();
         if !self.config.portable_enabled
+            || strip(organization).is_empty()
             || !self
                 .config
                 .pilot_organizations
@@ -313,15 +343,20 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
                 .filter(|value| python_truthy(value))
                 .cloned()
                 .unwrap_or_else(|| {
-                    json!(config_value(
+                    let issuer = config_value(
                         &sources,
                         &[
                             "canvas_credentials_issuer_id",
                             "issuer_id",
-                            "external_issuer_id"
+                            "external_issuer_id",
                         ],
-                        self.config.provider.issuer_id.as_deref()
-                    ))
+                        self.config.provider.issuer_id.as_deref(),
+                    );
+                    if issuer.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(issuer)
+                    }
                 });
             let payload = json!({"issuer_id":issuer, "canvas_platform_id":platform["id"],
                 "canvas_program_binding_id":delivery["metadata"]["canvas_program_binding_id"],

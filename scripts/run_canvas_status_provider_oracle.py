@@ -79,11 +79,13 @@ async def observe():
                 "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
                 "CANVAS_CREDENTIALS_PUBLISH_URL": case.get("publish_url", ""),
                 "CANVAS_CREDENTIALS_BADGECLASS_ID": "",
-                "CANVAS_CREDENTIALS_ISSUER_ID": "configured-issuer",
+                "CANVAS_CREDENTIALS_ISSUER_ID": case.get(
+                    "issuer_id", "configured-issuer"
+                ),
                 "CANVAS_CREDENTIALS_API_BASE_URL": case.get(
                     "api_base_url", "https://api.badgr.io"
                 ),
-                "CANVAS_CREDENTIALS_BASE_URL": "",
+                "CANVAS_CREDENTIALS_BASE_URL": case.get("legacy_base_url", ""),
                 "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST": case.get(
                     "allowed_api_origins", ""
                 ),
@@ -95,6 +97,7 @@ async def observe():
             credential = await repo.get_credential("credential-review")
             platform = await repo.get_canvas_platform("platform-review")
             delivery = await repo.get_delivery_record("delivery-provider")
+            delivery.organization_id = case.get("delivery_organization", "org-review")
             action = case["action"]
             credential.status = {
                 "suspend": CredentialStatus.SUSPENDED,

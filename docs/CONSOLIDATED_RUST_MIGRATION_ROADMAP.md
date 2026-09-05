@@ -33,7 +33,23 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
-The [Canvas lifecycle status provider candidate](rust-migrations/canvas-status-provider.md)
+The status provider now has shared runtime configuration/HTTP assembly and a
+63-case published replay through the actual configuration parser. Eight new cases
+correct missing-issuer null projection, legacy BASE_URL trust/fallback and empty
+organization gating, preserving all original 55 observations. A real encrypted
+tenant-vault + credential/delivery PostgreSQL + loopback HTTP contract verifies
+durable mirror failures/recovery and rejects success if the delivery disappears
+after the external call. Normal token-file and timeout precedence are tested.
+Eager/missing-file and numeric edge differences remain explicit cutover blockers;
+no live consumer has adopted the factory. Prior provider commit `340a0503b` passed
+CI33996860721 and Rust CodeQL33996860698; new changes require fresh hosted gates.
+The new local runtime/fault tests passed before Docker became unavailable; 267
+library tests, 33 workflow/image tests and strict Clippy passed. The final full
+schema run was blocked at container creation for all17 Docker-dependent tests;
+only its Docker-free replay passed. This is not a green full-suite result. The
+daemon reports `Docker Desktop is unable to start`; no restart was attempted.
+
+The initial [Canvas lifecycle status provider candidate](rust-migrations/canvas-status-provider.md)
 now implements bridge POST and Badgr DELETE synchronization plus canonical-only
 suspend/reinstate, with 55 independently frozen published protocol cases matching
 the Rust replay and a fresh published-image capture. Shared provider primitives

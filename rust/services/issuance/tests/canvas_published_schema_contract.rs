@@ -8,6 +8,27 @@ mod canvas_operations_read_replay;
 #[path = "support/canvas_status_provider_replay.rs"]
 mod canvas_status_provider_replay;
 
+#[path = "support/canvas_status_runtime_contract.rs"]
+mod canvas_status_runtime_contract;
+
+#[tokio::test]
+async fn status_runtime_preserves_credential_and_delivery_effects() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[tokio::test]
 async fn status_provider_matches_frozen_protocol() {
     canvas_status_provider_replay::replay(&canvas_status_provider_replay::frozen()).await;
