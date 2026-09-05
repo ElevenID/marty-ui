@@ -80,6 +80,10 @@ difference with the provider's full observation shape and restores Python's
 candidate-only projection, preserving learner fields. The unchanged mixed-roster
 baseline and all three configured schema contracts pass locally. Actual AGS/NRPS
 HTTPS, token exchange and complete transport parity remain required.
+The [actual LTI HTTPS gate](rust-migrations/canvas-lti-https.md) is now implemented
+with child-scoped synthetic trust, untrusted-certificate rejection and real
+token/AGS/NRPS requests. Local compilation is not Linux execution proof; its
+explicit mandatory hosted step remains pending.
 Full provider/processor differentials,
 concurrency/rollback, manual resolver, all-consumer cutover and acceptance remain
 required. Reachable Python is retained until those gates pass.
