@@ -1,7 +1,8 @@
 # Native Canvas processor on published issuance migrations
 
-Status: local configured contract passes; hosted integration and protected
-landing are still required. The worker remains unrouted.
+Status: the initial configured contract passes locally and in hosted
+CI33976979089. Fresh protected-main integration and landing remain required.
+The worker remains unrouted.
 
 The published schema exposed a real native defect: the fact-commit snapshot
 guard compared `applications.integration_context` (JSON) directly with a JSONB
@@ -55,6 +56,11 @@ UUID labels, probe topology and disposable database storage before removal.
 No arbitrary database URL or deployment credential is accepted.
 
 ## Remaining gates
+
+The follow-on [issued-review differential](canvas-issued-review-parity.md)
+freezes ten actual published Python stages and replays them through Rust on a
+separate published-schema database. Local sequential lifecycle evidence passes;
+hosted integration, concurrency/rollback and manual resolver proof remain open.
 
 The actual HTTP provider, mixed REST/AGS/NRPS identity cases, issued-credential
 correction-review lifecycle, full provider/processor differentials, readiness,

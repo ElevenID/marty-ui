@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import traceback
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -59,12 +60,23 @@ def prepare():
             )
         if revisions != fixture["migration_revisions"]:
             raise RuntimeError("Published migration head mismatch")
-        return {
+        report = {
             "status": "passed",
             "migration_revisions": revisions,
             "worker_sha256": worker_hash,
             "organization_dependency": "synthetic-minimal",
         }
+        if os.environ.get("MARTY_CANVAS_ISSUED_REVIEW_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["issued_reviews"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_issued_review_oracle.py"
+                )["run"]()
+        return report
     finally:
         engine.dispose()
 
@@ -74,5 +86,20 @@ if __name__ == "__main__":
         print(json.dumps(prepare(), sort_keys=True))
     except BaseException as failure:
         # Never echo database parameters, SQL values, or exception messages.
-        print(json.dumps({"status": "failed", "error_class": type(failure).__name__}))
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "error_class": type(failure).__name__,
+                    "frames": [
+                        {
+                            "file": Path(frame.filename).name,
+                            "line": frame.lineno,
+                            "function": frame.name,
+                        }
+                        for frame in traceback.extract_tb(failure.__traceback__)[-5:]
+                    ],
+                }
+            )
+        )
         raise SystemExit(1) from None
