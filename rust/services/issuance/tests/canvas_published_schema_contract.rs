@@ -2,6 +2,8 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_provider_recovery_replay.rs"]
+mod canvas_worker_provider_recovery_replay;
 #[path = "support/canvas_worker_provider_signals_replay.rs"]
 mod canvas_worker_provider_signals_replay;
 #[path = "support/canvas_worker_rest_replay.rs"]
@@ -9,6 +11,15 @@ mod canvas_worker_rest_replay;
 
 #[test]
 fn worker_provider_signals_match_frozen_published_process() {
+    assert_worker_provider_https("signals");
+}
+
+#[test]
+fn worker_provider_recovery_matches_frozen_published_process() {
+    assert_worker_provider_https("recovery");
+}
+
+fn assert_worker_provider_https(scenario: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
@@ -23,6 +34,7 @@ fn worker_provider_signals_match_frozen_published_process() {
     let output = std::process::Command::new("python3")
         .arg(root.join("scripts/test_canvas_worker_provider_signals_https.py"))
         .arg(std::env::current_exe().unwrap())
+        .arg(scenario)
         .output()
         .unwrap();
     assert!(
@@ -36,6 +48,15 @@ fn worker_provider_signals_match_frozen_published_process() {
 
 #[tokio::test]
 async fn worker_provider_signals_native_child() {
+    worker_provider_child("signals").await;
+}
+
+#[tokio::test]
+async fn worker_provider_recovery_native_child() {
+    worker_provider_child("recovery").await;
+}
+
+async fn worker_provider_child(scenario: &str) {
     let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NATIVE_ORIGIN") else {
         return;
     };
@@ -53,7 +74,16 @@ async fn worker_provider_signals_native_child() {
         .await
         .unwrap();
     let signal = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NAME").unwrap();
-    canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await;
+    match scenario {
+        "signals" => {
+            canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await
+        }
+        "recovery" => {
+            canvas_worker_provider_recovery_replay::replay(&pool, &owned.url, &origin, &signal)
+                .await
+        }
+        _ => panic!("unknown static provider scenario"),
+    }
     pool.close().await;
     owned.close().unwrap();
 }

@@ -22,17 +22,23 @@ def wait_for(child, predicate, description, timeout=30):
         time.sleep(0.01)
 
 
-def run(executable):
+def run(executable, scenario="signals"):
     assert sys.platform == "linux", "Actual POSIX worker signals require Linux"
+    assert scenario in {"signals", "recovery"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / "contracts/canvas-worker-rest-scenarios.json").read_text()
     )
     reference = json.loads(
-        (root / "contracts/canvas-worker-provider-signals-oracle.json").read_text()
+        (root / f"contracts/canvas-worker-provider-{scenario}-oracle.json").read_text()
     )
-    assert set(reference) == {"SIGINT", "SIGTERM", "SIGKILL"}
-    for signal_name in ["SIGINT", "SIGTERM", "SIGKILL"]:
+    cases = (
+        ["SIGINT", "SIGTERM", "SIGKILL"]
+        if scenario == "signals"
+        else ["renewal", "recovery"]
+    )
+    assert set(reference) == set(cases)
+    for signal_name in cases:
         with WorkerHttpsFixture() as https:
             https.stage = {**spec["stages"][0], "hold_response": True}
             certificate_root = Path(https.certificates.name)
@@ -51,7 +57,7 @@ def run(executable):
             child = subprocess.Popen(
                 [
                     executable,
-                    "worker_provider_signals_native_child",
+                    f"worker_provider_{scenario}_native_child",
                     "--exact",
                     "--nocapture",
                 ],
@@ -65,19 +71,33 @@ def run(executable):
                 wait_for(child, https.received.is_set, "actual HTTPS request")
                 # Synchronize the test harness only, never the worker or DB.
                 (control / "request-received").touch(exist_ok=False)
-                if signal_name == "SIGTERM":
+                release_response = scenario == "recovery" or signal_name == "SIGTERM"
+                if release_response:
                     wait_for(
-                        child, (control / "release-response").is_file, "verified drain"
+                        child,
+                        (control / "release-response").is_file,
+                        "verified pending-I/O state",
                     )
                     https.release.set()
-                stdout, stderr = child.communicate(timeout=60)
+                if scenario == "recovery" and signal_name == "recovery":
+                    wait_for(
+                        child,
+                        (control / "reclaimer-idle").is_file,
+                        "recovery retry",
+                        timeout=45,
+                    )
+                    assert len(https.requests) == 1, (
+                        "Recovery bypassed retry eligibility"
+                    )
+                    (control / "reclaimer-observed").touch(exist_ok=False)
+                stdout, stderr = child.communicate(timeout=90)
                 assert child.returncode == 0, (
                     f"Native {signal_name} failed: {stdout} {stderr}"
                 )
-                assert https.release.is_set() == (signal_name == "SIGTERM")
+                assert https.release.is_set() == release_response
                 assert https.requests == reference[signal_name]["requests"]
                 print(
-                    f"Native worker active-provider {signal_name} passed (1 actual HTTPS request)"
+                    f"Native worker active-provider {signal_name} passed ({len(https.requests)} actual HTTPS requests)"
                 )
             finally:
                 # Release a fixture response even on failure, allowing native
@@ -92,6 +112,8 @@ def run(executable):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("Expected the exact compiled published-schema executable")
-    run(sys.argv[1])
+    if len(sys.argv) not in {2, 3}:
+        raise SystemExit(
+            "Expected the exact compiled published-schema executable [signals|recovery]"
+        )
+    run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

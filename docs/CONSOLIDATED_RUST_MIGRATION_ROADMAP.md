@@ -38,7 +38,9 @@ now has two matching captures per case. A real pending HTTPS request spans lease
 and both heartbeat renewal without generation change. After forced process loss,
 real lease expiry and retry eligibility lead to the same job succeeding on attempt
 two with issuance/token ciphertext preserved. Reference regeneration passes
-locally; native adoption and final-attempt/concurrency/fence cases remain open.
+locally; native replay now implements both cases using the shared signal/HTTPS
+and Rust persistence owners, with Linux qualification pending. Final-attempt,
+concurrency and ownership-fence cases remain open.
 
 The [active-provider signal reference](rust-migrations/canvas-worker-provider-signals.md)
 now records SIGINT, SIGTERM and SIGKILL against actual published worker processes

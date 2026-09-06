@@ -6,6 +6,7 @@ import importlib
 import json
 from pathlib import Path
 import ssl
+from types import SimpleNamespace
 
 import pytest
 
@@ -101,3 +102,25 @@ def test_certificate_failure_removes_owned_temporary_directory(
             pytest.fail("Failed fixture must not enter its body")
     assert len(directories) == 1
     assert not directories[0].exists()
+
+
+def test_native_marker_wait_stops_on_observed_condition(fixture_module):
+    native = importlib.import_module("test_canvas_worker_provider_signals_https")
+    native.wait_for(SimpleNamespace(), lambda: True, "already observed")
+
+
+def test_native_marker_wait_reports_terminal_child_diagnostic(fixture_module):
+    native = importlib.import_module("test_canvas_worker_provider_signals_https")
+    child = SimpleNamespace(
+        poll=lambda: 1, communicate=lambda **_: ("synthetic-out", "synthetic-error")
+    )
+    with pytest.raises(AssertionError, match="synthetic-out synthetic-error"):
+        native.wait_for(child, lambda: False, "request")
+
+
+def test_native_marker_wait_has_a_bounded_deadline(fixture_module):
+    native = importlib.import_module("test_canvas_worker_provider_signals_https")
+    with pytest.raises(AssertionError, match="Timed out waiting for request"):
+        native.wait_for(
+            SimpleNamespace(poll=lambda: None), lambda: False, "request", timeout=0
+        )

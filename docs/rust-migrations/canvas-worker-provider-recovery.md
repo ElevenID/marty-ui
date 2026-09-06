@@ -1,7 +1,7 @@
 # Actual provider renewal and process-loss recovery
 
 Status: independent published-process reference captured twice and regeneration
-gate passed locally; native adoption open. No cutover, reachable Python
+gate passed locally; native replay implemented and awaiting Linux qualification. No cutover, reachable Python
 deletion or deployment follows from this work.
 
 The existing owned HTTPS, published-schema, worker process and encrypted OAuth
@@ -50,3 +50,32 @@ not evidence of final-attempt crash handling, concurrent reclaimers/schedulers,
 owner-fence loss, target-generation mutation or finally/disposal execution. Keep
 those requirements in the complete worker cutover inventory; do not infer them
 from an owned process exit or a successful normal renewal.
+
+## Native replay
+
+The mandatory `worker_provider_recovery_matches_frozen_published_process` parent
+uses the same real HTTPS and owned process coordination as the signal gate. Two
+fresh-schema native children reuse the Rust seed, OAuth, generation-fence and
+full issued-row/ciphertext preservation owners. The Python parent checks exact
+authenticated requests, including a handshake confirming one request at the
+reclaimer's idle retry boundary. No application/database clock is advanced.
+
+The native child observes actual lease and both heartbeat advancement, preserves
+the original generation, and compares every recorded business-state field. After
+forced loss it waits for actual expiry, observes the durable retry, stops the
+reclaimer, waits for actual retry eligibility and requires same-job attempt-two
+success with original start time preserved. All waits are bounded and owned
+processes are reaped. The shared pending-response fixture is unchanged.
+
+Expired-lease recovery retains Rust's existing internal target-generation field
+in the retry result. As with leased state, the comparison explicitly requires the
+known integer generation 1 plus every other published field. This allowance is
+restricted to leased jobs or retries classified `canvas_worker_lease_expired`;
+ordinary retry/terminal results are not relaxed. Successful completion must match
+the unchanged published result exactly. Negative tests cover wrong classifications
+and forbid applying the internal-field comparison to successful terminal state.
+
+Local validation: native test executable compiles, strict Clippy passes, both
+exact-fence comparison tests pass and 60 affected Python tests pass. Fresh Linux
+execution of both new cases and all prior signal/REST/facts/retry gates remains
+required. Local compilation is not native runtime qualification.

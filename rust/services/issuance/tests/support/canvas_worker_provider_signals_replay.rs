@@ -7,13 +7,28 @@ use serde_json::Value;
 use sqlx::PgPool;
 use std::{path::PathBuf, time::Duration};
 
-fn assert_leased_state(observed: Value, published: &Value, target_generation: i32) {
+pub(super) fn assert_leased_state(observed: Value, published: &Value, target_generation: i32) {
+    for job in published["jobs"].as_array().unwrap() {
+        assert_eq!(job["status"], "leased");
+    }
+    assert_generation_fenced_state(observed, published, target_generation);
+}
+
+pub(super) fn assert_generation_fenced_state(
+    observed: Value,
+    published: &Value,
+    target_generation: i32,
+) {
     // The native repository retains this internal fence for safe final-attempt
     // recovery. Public job views omit it. Assert its exact expected value and
     // every other field; never strip arbitrary native result metadata to pass.
     let mut expected = published.clone();
     for job in expected["jobs"].as_array_mut().unwrap() {
-        assert_eq!(job["status"], "leased");
+        assert!(
+            job["status"] == "leased"
+                || (job["status"] == "retry"
+                    && job["last_error_code"] == "canvas_worker_lease_expired")
+        );
         assert_eq!(job["result"], serde_json::json!({}));
         job["result"] = serde_json::json!({"target_config_version": target_generation});
     }
@@ -46,7 +61,7 @@ fn leased_state_requires_exact_native_generation_and_all_other_fields() {
     assert_eq!(published["jobs"][0]["result"], serde_json::json!({}));
 }
 
-async fn snapshot(pool: &PgPool, fixture: &WorkerFixture) -> Value {
+pub(super) async fn snapshot(pool: &PgPool, fixture: &WorkerFixture) -> Value {
     let mut state = serde_json::Map::new();
     for (key, query) in [
         ("jobs", fixture.spec["jobs_sql"].as_str().unwrap()),
@@ -62,14 +77,35 @@ async fn snapshot(pool: &PgPool, fixture: &WorkerFixture) -> Value {
     Value::Object(state)
 }
 
-pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &str) {
-    assert!(matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL"));
-    let fixture = prepare(pool, origin, "rest").await;
+#[test]
+fn expired_retry_requires_exact_generation_without_relaxing_terminal_results() {
     let reference: Value = serde_json::from_str(include_str!(
-        "../../../../../contracts/canvas-worker-provider-signals-oracle.json"
+        "../../../../../contracts/canvas-worker-provider-recovery-oracle.json"
     ))
     .unwrap();
-    let expected = &reference[signal];
+    let published = &reference["recovery"]["reclaimed"];
+    let mut native = published.clone();
+    native["jobs"][0]["result"] = serde_json::json!({"target_config_version": 1});
+    assert_generation_fenced_state(native.clone(), published, 1);
+    for field in ["last_error_code", "status"] {
+        let mut invalid = native.clone();
+        invalid["jobs"][0][field] = Value::String("unexpected".into());
+        assert!(
+            std::panic::catch_unwind(|| assert_generation_fenced_state(invalid, published, 1))
+                .is_err()
+        );
+    }
+    assert!(std::panic::catch_unwind(|| assert_leased_state(native, published, 1)).is_err());
+    let completed = &reference["recovery"]["completed"];
+    assert!(std::panic::catch_unwind(|| assert_generation_fenced_state(
+        completed.clone(),
+        completed,
+        1
+    ))
+    .is_err());
+}
+
+pub(super) fn control_directory() -> PathBuf {
     let control = PathBuf::from(std::env::var("MARTY_CANVAS_WORKER_SIGNAL_CONTROL").unwrap())
         .canonicalize()
         .unwrap();
@@ -81,22 +117,52 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &st
         certificate.parent().unwrap().join("native-control")
     );
     assert!(control.is_dir());
-    let mut worker = OwnedWorker::start_with_environment(
-        database_url,
-        "worker-rest",
-        &worker_environment(origin),
-    );
+    control
+}
+
+pub(super) async fn await_marker(
+    control: &std::path::Path,
+    marker: &str,
+    worker: &mut OwnedWorker,
+) {
+    assert!(matches!(marker, "request-received" | "reclaimer-observed"));
     tokio::time::timeout(Duration::from_secs(20), async {
-        while !control.join("request-received").is_file() {
+        while !control.join(marker).is_file() {
             assert!(
                 worker.0.try_wait().unwrap().is_none(),
-                "worker exited before actual HTTPS request"
+                "worker exited before parent observation"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("parent must observe actual provider I/O");
+    .expect("parent must acknowledge actual provider observation");
+}
+
+pub(super) fn mark(control: &std::path::Path, marker: &str) {
+    assert!(matches!(marker, "release-response" | "reclaimer-idle"));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(control.join(marker))
+        .unwrap();
+}
+
+pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &str) {
+    assert!(matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL"));
+    let fixture = prepare(pool, origin, "rest").await;
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-provider-signals-oracle.json"
+    ))
+    .unwrap();
+    let expected = &reference[signal];
+    let control = control_directory();
+    let mut worker = OwnedWorker::start_with_environment(
+        database_url,
+        "worker-rest",
+        &worker_environment(origin),
+    );
+    await_marker(&control, "request-received", &mut worker).await;
     assert_leased_state(snapshot(pool, &fixture).await, &expected["before"], 1);
     worker.signal(signal);
     if signal == "SIGTERM" {
@@ -109,11 +175,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &st
             "TERM exited before provider drain"
         );
         assert_leased_state(snapshot(pool, &fixture).await, &expected["before"], 1);
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(control.join("release-response"))
-            .unwrap();
+        mark(&control, "release-response");
     }
     let status = worker.wait().await;
     match signal {
