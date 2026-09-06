@@ -19,6 +19,27 @@ async fn main() -> Result<(), String> {
         _ => return Err("expected scenario [--output ABSOLUTE_NEW_FILE]".into()),
     };
     use canvas_published_database::PublishedDatabase;
+    if scenario == "worker-retry-after" {
+        let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        let mut matrix = serde_json::Map::new();
+        for case in scenarios["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let owned = PublishedDatabase::start_with_worker_retry_after(name).await?;
+            matrix.insert(
+                name.into(),
+                owned
+                    .oracle
+                    .as_ref()
+                    .ok_or("missing Retry-After oracle")?
+                    .clone(),
+            );
+            owned.close()?;
+        }
+        return emit_capture(&serde_json::Value::Object(matrix), output.as_deref());
+    }
     let owned = match scenario.as_str() {
         "validation-boundary" => PublishedDatabase::start_with_validation_boundary().await?,
         "status-provider" => PublishedDatabase::start_with_status_provider().await?,
@@ -40,7 +61,7 @@ async fn main() -> Result<(), String> {
         "worker-reclaimers-retry" => PublishedDatabase::start_with_worker_reclaimers_retry().await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-retry-after, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
                     .into(),
             )
         }
@@ -49,19 +70,26 @@ async fn main() -> Result<(), String> {
         .oracle
         .as_ref()
         .ok_or("published fixture did not return an oracle")?;
-    let capture = if let Some(path) = output {
+    let capture = emit_capture(observation, output.as_deref());
+    let cleanup = owned.close();
+    capture?;
+    cleanup
+}
+
+fn emit_capture(
+    observation: &serde_json::Value,
+    output: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if let Some(path) = output {
         // Generated evidence can exceed terminal transport limits. Exclusive
         // creation never overwrites earlier captures or an existing reference.
-        capture_file(observation, &path).map(|()| {
+        capture_file(observation, path).map(|()| {
             println!("CANVAS_PUBLISHED_ORACLE_FILE={}", path.display());
         })
     } else {
         println!("CANVAS_PUBLISHED_ORACLE={observation}");
         Ok(())
-    };
-    let cleanup = owned.close();
-    capture?;
-    cleanup
+    }
 }
 
 fn capture_file(observation: &serde_json::Value, path: &std::path::Path) -> Result<(), String> {

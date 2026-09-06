@@ -1,6 +1,7 @@
 """Fixture ownership/failure tests; not application worker parity evidence."""
 
 from concurrent.futures import ThreadPoolExecutor
+from email.utils import parsedate_to_datetime
 from http.client import HTTPSConnection, RemoteDisconnected
 import importlib
 import json
@@ -24,6 +25,60 @@ def client_for(fixture):
         context=ssl.create_default_context(cafile=str(fixture.cert)),
         timeout=5,
     )
+
+
+@pytest.mark.parametrize("offset", [-60, 60])
+def test_response_time_retry_after_date(fixture_module, offset):
+    stage = {
+        "headers": {"X-Synthetic": "retained"},
+        "retry_after_offset_seconds": offset,
+    }
+    headers = fixture_module.response_headers(stage, now=1700000000)
+    assert (
+        parsedate_to_datetime(headers["Retry-After"]).timestamp() == 1700000000 + offset
+    )
+    assert headers["Retry-After"].endswith(" GMT")
+    assert headers["X-Synthetic"] == "retained"
+    assert stage["headers"] == {"X-Synthetic": "retained"}
+
+
+@pytest.mark.parametrize("offset", [True, False, "60", 0.5, -86402, 86402])
+def test_invalid_retry_after_date_offset_is_rejected(fixture_module, offset):
+    with pytest.raises(AssertionError):
+        fixture_module.response_headers({"retry_after_offset_seconds": offset}, now=0)
+
+
+@pytest.mark.parametrize("header", ["Retry-After", "retry-after", "RETRY-AFTER"])
+def test_conflicting_retry_after_headers_are_rejected(fixture_module, header):
+    with pytest.raises(AssertionError):
+        fixture_module.response_headers(
+            {"headers": {header: "37"}, "retry_after_offset_seconds": 60}, now=0
+        )
+
+
+def test_static_headers_remain_unchanged(fixture_module):
+    stage = {"headers": {"Retry-After": "37"}}
+    headers = fixture_module.response_headers(stage)
+    assert headers == stage["headers"]
+    assert headers is not stage["headers"]
+    assert fixture_module.response_headers({}) == {}
+
+
+def test_actual_https_emits_recorded_retry_after_date(fixture_module, monkeypatch):
+    monkeypatch.setattr(fixture_module.time, "time", lambda: 1700000000)
+    with fixture_module.WorkerHttpsFixture() as fixture:
+        fixture.stage = {"status": 429, "body": {}, "retry_after_offset_seconds": 60}
+        client = client_for(fixture)
+        try:
+            client.request("GET", "/synthetic-rate-limit")
+            response = client.getresponse()
+            assert response.status == 429
+            assert response.read() == b"{}"
+            header = response.getheader("Retry-After")
+            assert fixture.retry_after_dates == [header]
+            assert parsedate_to_datetime(header).timestamp() == 1700000060
+        finally:
+            client.close()
 
 
 def test_real_https_response_and_owned_cleanup(fixture_module):

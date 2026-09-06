@@ -1,7 +1,9 @@
 # Packaged worker startup and configuration sources
 
-Status: all 24 cases passed against a fresh locally built Linux native image;
-hosted exact-head qualification remains pending. This extends the [image preflight](canvas-worker-image-entrypoint.md)
+Status: all 24 cases passed locally and in hosted image job `101527827400`
+at `505dcf50660e3ca74004d1765bb642c47fc234e7` (CI `34048520936`).
+The hosted startup markers are recorded at 2026-09-06 17:39:03 UTC.
+This extends the [image preflight](canvas-worker-image-entrypoint.md)
 and [frozen startup reference](canvas-worker-startup.md), not whole-worker
 acceptance or permission to switch deployed consumers.
 
@@ -48,7 +50,7 @@ produce the required worker heartbeat and the harness rejected it at its bounded
 deadline. All labelled fixture containers were gone afterward. This validates
 the failure path, not any positive native-image startup claim.
 
-Hosted 24-case image execution, provider/signing/OAuth effects, all deployment
+Provider/signing/OAuth effects, all deployment
 consumer definitions, migration ordering, headless health semantics and beta
 acceptance remain separate requirements in the
 [cutover inventory](canvas-worker-cutover-readiness.md). Production and persistent
@@ -66,5 +68,6 @@ all 24 packaged startup cases from clean source `2e282db33`. The test-only image
 It was built from the pinned CI issuance Dockerfile; release compilation passed.
 All exact heartbeat/liveness/empty-queue/SIGINT and synthetic-secret-log checks
 passed, and no labelled fixture containers remained after completion. No
-deployment image was replaced or published. Fresh hosted image and full runtime
-regression gates remain required before landing this extension.
+deployment image was replaced or published. Hosted image execution subsequently
+passed at `505dcf506` as recorded above; full runtime regression and the remaining
+cutover gates must also pass before switching consumers.

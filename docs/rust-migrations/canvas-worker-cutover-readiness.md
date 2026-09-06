@@ -2,7 +2,8 @@
 
 Status: latest qualified composed checkpoint `e424761f532bcba72b3c352b203fba4c7bc381bb`,
 including eight image-preflight cases and 65 configured runtime tests; newer
-24-case packaged startup passes locally but awaits hosted qualification. PR #814 draft and
+24-case packaged startup passes locally and in image job101527827400 at `505dcf506`;
+that head's complete runtime job is still being checked. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -52,6 +53,11 @@ That qualifies these four fact projections for gate 12; broader worker/consumer
 requirements and fresh exact-head checks for later extensions remain required.
 
 ## Normative legacy-gap reconciliation
+
+The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
+actual published-worker scheduling cases, including HTTP dates and oversized
+integer clamping. Two captures agree; native adoption remains pending. Gate 8
+is not closed by this reference alone.
 
 The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual
 same-job retry eligibility, recovery and provider failure/OAuth rejection

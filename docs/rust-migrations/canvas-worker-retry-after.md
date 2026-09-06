@@ -1,0 +1,61 @@
+# Actual worker Retry-After deadline reference
+
+Status: seven independently captured published-worker cases are frozen. Two
+complete captures match byte-for-byte with SHA-256
+`043023af2b132ed5be9a86be3b3c9b05832baa78f80e762234f8ac873290c017`.
+Native adoption and exact-head Linux qualification remain pending. This extends
+[retry/rejection evidence](canvas-worker-retry-reference.md), not whole-worker
+acceptance or permission to delete or switch deployed consumers.
+
+Each case uses a fresh database with the official published migrations, one
+actual worker process, encrypted synthetic OAuth storage and one authenticated
+HTTPS 429 response. The existing REST process, database, HTTPS and preservation
+owners are reused. No job deadline, attempt, lease or application clock is edited.
+The existing fixture makes the target due only before starting its first worker.
+
+| Header | Observed durable scheduling requirement |
+| --- | --- |
+| HTTP date generated 60 seconds ahead at response time | Deadline within 1.1 seconds of that actual HTTP date |
+| HTTP date 60 seconds in the past | Normal first-attempt backoff, 15–20 seconds |
+| `not-a-delay`, `-9`, `0` | Normal first-attempt backoff, 15–20 seconds |
+| `86401`, `184467440737095516160000` | Clamp to 86,400 seconds |
+
+For numeric/backoff cases the database compares `available_at-updated_at`, with
+0.1 seconds of tolerance for separately evaluated timestamps. The HTTP-date
+allowance accounts for whole-second parsing/truncation; it is checked against
+the actual emitted header, not a sampled or rewritten clock. Raw date values
+are not frozen. Only the asserted deadline predicate is projected as a stable
+boolean alongside the complete existing durable-state and preservation evidence.
+
+Every case requires one attempt-one retry, no facts, the exact idle heartbeat,
+OAuth state, preserved issued rows and token ciphertext. The original REST
+37-second predicate remains false for these cases. Raw reference SIGINT exit is
+-2. The expectation file is whitespace-only formatted from the capture without
+reserializing numeric tokens; no native output supplies expectations.
+
+`worker_retry_after_reference_matches_published_process` regenerates every case
+and compares its full observation. Scenario/reference key sets and uniqueness
+must match. The configured CI runner requires the test by exact name. Fixture
+tests cover dynamic dates over real TLS, invalid/conflicting date inputs,
+unchanged static headers and ownership cleanup. Full local Python validation:
+880 passed, one existing opt-in verifier containerd/Buildx test skipped; strict
+Rust Clippy and affected Ruff checks passed.
+
+Configured local worker regression completed: 30 test entries passed in 362.57
+seconds, with 36 unrelated entries filtered out. This regenerates the new and
+all prior published-worker references after the shared HTTPS fixture change.
+Linux-only native parent/helper entries do not establish native execution on
+Windows; the new corpus still needs actual native replay and full Linux CI.
+The capture-file preservation test, Bash syntax and diff checks also passed.
+
+Review found fixed-width parsing in both the provider and worker Rust helpers.
+The large positive integer is therefore a specific native-adoption risk to
+reproduce through the actual worker path before changing shared parsing. Preserve
+all existing HTTP/provider behavior and stronger ownership fences; do not weaken
+this reference to match an overflow fallback.
+
+This corpus establishes retry scheduling, not execution after a one-day delay,
+remote OAuth revocation, every header grammar, or all error/privacy boundaries.
+Continue the [14-gate cutover inventory](canvas-worker-cutover-readiness.md).
+Production, persistent self-host, consumer definitions and reachable Python
+features are unchanged.

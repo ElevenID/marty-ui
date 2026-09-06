@@ -1,0 +1,14 @@
+{
+  "schema": "marty.canvas-worker-retry-after-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "scope": "Each case owns a fresh published-schema database and one actual authenticated HTTPS worker cycle. Observe a durable retry without mutating job timing. HTTP dates are generated at response time and checked against the persisted deadline; all other bounds are observed relative to the job update time. No retry execution or remote OAuth-revocation claim.",
+  "cases": [
+    {"name": "http_date_future", "retry_after_offset_seconds": 60, "timing": "http_date"},
+    {"name": "http_date_past", "retry_after_offset_seconds": -60, "timing": "bounds", "delay_bounds": [15, 20]},
+    {"name": "malformed", "headers": {"Retry-After": "not-a-delay"}, "timing": "bounds", "delay_bounds": [15, 20]},
+    {"name": "negative", "headers": {"Retry-After": "-9"}, "timing": "bounds", "delay_bounds": [15, 20]},
+    {"name": "zero", "headers": {"Retry-After": "0"}, "timing": "bounds", "delay_bounds": [15, 20]},
+    {"name": "clamped", "headers": {"Retry-After": "86401"}, "timing": "bounds", "delay_bounds": [86400, 86400]},
+    {"name": "huge_integer", "headers": {"Retry-After": "184467440737095516160000"}, "timing": "bounds", "delay_bounds": [86400, 86400]}
+  ]
+}

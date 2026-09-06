@@ -1,0 +1,513 @@
+{
+  "http_date_future": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "http_date_future",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "http_date",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "http_date_past": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "http_date_past",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "malformed": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "malformed",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "negative": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "negative",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "zero": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "zero",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "clamped": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "clamped",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "huge_integer": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": false,
+            "last_error_code": "canvas_rate_limited",
+            "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 8,
+            "result": {},
+            "retry_delay_matches_37_seconds": false,
+            "retry_scheduled": true,
+            "started": true,
+            "status": "retry"
+          }
+        ],
+        "name": "huge_integer",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": true,
+          "status": "connected"
+        },
+        "requests": [
+          {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-worker-rest-token",
+            "method": "GET",
+            "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+          }
+        ],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": false,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-retry-after-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  }
+}

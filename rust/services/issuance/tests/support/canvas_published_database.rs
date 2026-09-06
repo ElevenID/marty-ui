@@ -245,6 +245,32 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_retry_after(case: &str) -> Result<Self, String> {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        if !scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["name"] == case)
+        {
+            return Err("unsupported owned worker Retry-After case".into());
+        }
+        let flag = format!("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE={case}");
+        Self::start_probe_with_extra(
+            Some((
+                "worker_retry_after",
+                "worker-retry-after",
+                "worker_retry_after",
+                &flag,
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_provider_recovery(case: &str) -> Result<Self, String> {
         if !matches!(case, "renewal" | "recovery") {
             return Err("unsupported owned worker recovery case".into());
@@ -529,6 +555,7 @@ impl PublishedDatabase {
             "worker_rest"
                 | "worker_facts"
                 | "worker_retry"
+                | "worker_retry_after"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -610,6 +637,7 @@ impl PublishedDatabase {
             script,
             "worker_facts"
                 | "worker_retry"
+                | "worker_retry_after"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"

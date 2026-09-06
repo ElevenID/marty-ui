@@ -33,11 +33,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
+now freezes seven actual published-worker cases across HTTP dates, malformed,
+negative/zero and clamped/oversized integer headers. Two independent captures
+match exactly; native replay remains the next implementation step. This is
+reference-side evidence for gate 8, not a completed worker cutover.
+
 The [packaged startup/configuration gate](rust-migrations/canvas-worker-image-startup.md)
 passes locally for all eight frozen startup cases under three key/database
 configuration modes (24 starts), using the fresh Linux image from `2e282db33`.
 It reuses the official migration probe and exact startup observations; hosted
-exact-head execution remains pending. A known pre-worker image was correctly
+image job101527827400 at `505dcf506` also passed all 24 cases. A known pre-worker image was correctly
 rejected, and fixture resources were cleaned up after both controls. This is
 not a consumer cutover.
 
@@ -47,7 +53,8 @@ an eight-case packaged preflight gate. The dedicated CI image preserves its API
 default and existing secret-loader path. All eight real-image cases and API health
 passed at `e424761f5` (image job101523616820 in CI34046951418). The same head's
 65 configured runtime tests passed in 1151.92 seconds, and Rust CodeQL34046951414
-passed. The newer 24-case extension passes locally but awaits hosted execution.
+passed. The newer 24-case extension passes locally and in hosted image job101527827400;
+the complete runtime job for `505dcf506` is still being checked.
 Compose/Kubernetes consumers and whole-worker cutover gates are unchanged.
 
 The [retryable competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers-retry.md)

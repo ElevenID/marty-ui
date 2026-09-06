@@ -87,6 +87,15 @@ def prepare():
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
         provider_signal = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL")
+        retry_after_case = os.environ.get("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE")
+        if retry_after_case is not None:
+            from run_canvas_worker_retry_after_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_retry_after"] = run(retry_after_case)
         if provider_signal is not None:
             if provider_signal not in {"SIGINT", "SIGTERM", "SIGKILL"}:
                 raise ValueError("Unsupported owned worker signal")

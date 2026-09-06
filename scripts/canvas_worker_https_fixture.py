@@ -1,19 +1,34 @@
 """Owned loopback HTTPS fixture shared by published worker observations."""
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from email.utils import formatdate
 import json
 from pathlib import Path
 import ssl
 import tempfile
 from threading import Event, Thread
+import time
 
 from test_canvas_lti_https import create_loopback_certificate
+
+
+def response_headers(response, now=None):
+    headers = dict(response.get("headers", {}))
+    if "retry_after_offset_seconds" in response:
+        offset = response["retry_after_offset_seconds"]
+        assert type(offset) is int and -86401 <= offset <= 86401
+        assert not any(key.lower() == "retry-after" for key in headers)
+        headers["Retry-After"] = formatdate(
+            (time.time() if now is None else now) + offset, usegmt=True
+        )
+    return headers
 
 
 class WorkerHttpsFixture:
     def __init__(self):
         self.stage = {}
         self.requests = []
+        self.retry_after_dates = []
         self.failures = []
         self.received = Event()
         self.release = Event()
@@ -55,7 +70,10 @@ class WorkerHttpsFixture:
                     self.send_response(response["status"])
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
-                    for key, value in response.get("headers", {}).items():
+                    headers = response_headers(response)
+                    if "retry_after_offset_seconds" in response:
+                        owner.retry_after_dates.append(headers["Retry-After"])
+                    for key, value in headers.items():
                         self.send_header(key, value)
                     self.end_headers()
                     self.wfile.write(body)
