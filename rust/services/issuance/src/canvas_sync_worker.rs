@@ -32,11 +32,11 @@ use crate::{
         CanvasOAuthConnection, CanvasOAuthError, CanvasOAuthPlatformPatch, CanvasOAuthProvider,
         CanvasOAuthProviderError, CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
+    canvas_provider_http::{parse_canvas_retry_after, MAX_RETRY_AFTER_SECONDS},
     integration_secret::integration_secret_id_from_ref,
 };
 
 pub const CANVAS_SYNC_ROLE: &str = "canvas_sync";
-const MAX_RETRY_AFTER_SECONDS: u64 = 86_400;
 const MAX_RESULT_STRING_CHARS: usize = 200;
 const MAX_ERROR_CODE_CHARS: usize = 120;
 const MAX_ERROR_SUMMARY_CHARS: usize = 500;
@@ -1079,19 +1079,7 @@ pub fn safe_result(input: &CanvasSyncResult) -> CanvasSyncResult {
 
 #[must_use]
 pub fn retry_after_seconds(value: &str, now: DateTime<Utc>) -> Option<u64> {
-    let normalized = value.trim();
-    if let Ok(seconds) = normalized.parse::<i64>() {
-        return Some(seconds.max(0).cast_unsigned().min(MAX_RETRY_AFTER_SECONDS));
-    }
-    let retry_at = httpdate::parse_http_date(normalized).ok()?;
-    let retry_at: DateTime<Utc> = retry_at.into();
-    Some(
-        (retry_at - now)
-            .num_seconds()
-            .max(0)
-            .cast_unsigned()
-            .min(MAX_RETRY_AFTER_SECONDS),
-    )
+    parse_canvas_retry_after(value, now)
 }
 
 #[must_use]

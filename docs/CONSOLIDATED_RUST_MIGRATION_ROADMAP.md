@@ -36,9 +36,11 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,
 negative/zero and clamped/oversized integer headers. Two independent captures
-match exactly; native replay is implemented and awaiting Linux execution, with
-oversized-integer parsing still a specific runtime risk to resolve. This is
-reference-side evidence for gate 8, not a completed worker cutover.
+match exactly; native replay is implemented and awaiting Linux qualification.
+Focused tests confirmed oversized-integer fallback in both Rust helpers; a
+single shared parser correction now passes local regressions and a real HTTP
+provider test. Full composed Linux qualification remains required for gate 8;
+this is not a completed worker cutover.
 
 The [packaged startup/configuration gate](rust-migrations/canvas-worker-image-startup.md)
 passes locally for all eight frozen startup cases under three key/database

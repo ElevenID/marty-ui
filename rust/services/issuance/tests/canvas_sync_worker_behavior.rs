@@ -15,6 +15,24 @@ fn contract() -> Value {
 }
 
 #[test]
+fn worker_retry_after_preserves_frozen_oversized_day_clamp() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+    ))
+    .unwrap();
+    let case = scenarios["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "huge_integer")
+        .unwrap();
+    assert_eq!(
+        retry_after_seconds(case["headers"]["Retry-After"].as_str().unwrap(), Utc::now()),
+        case["delay_bounds"][0].as_u64(),
+    );
+}
+
+#[test]
 fn configuration_matches_frozen_defaults_bounds_and_failures() {
     let defaults = CanvasSyncWorkerConfig::from_values(&BTreeMap::new()).expect("defaults");
     assert_eq!(defaults.batch_size.to_u64(), Some(10));

@@ -3,8 +3,9 @@
 Status: seven independently captured published-worker cases are frozen. Two
 complete captures match byte-for-byte with SHA-256
 `043023af2b132ed5be9a86be3b3c9b05832baa78f80e762234f8ac873290c017`.
-Native replay is implemented; actual Linux execution and any demonstrated runtime
-corrections remain pending. This extends
+Native replay is implemented; a focused Rust regression demonstrated integer
+overflow fallback and the shared parser correction passes locally. Actual Linux
+whole-worker qualification of the correction remains pending. This extends
 [retry/rejection evidence](canvas-worker-retry-reference.md), not whole-worker
 acceptance or permission to delete or switch deployed consumers.
 
@@ -50,10 +51,10 @@ Windows; the new corpus still needs actual native replay and full Linux CI.
 The capture-file preservation test, Bash syntax and diff checks also passed.
 
 Review found fixed-width parsing in both the provider and worker Rust helpers.
-The large positive integer is therefore a specific native-adoption risk to
-reproduce through the actual worker path before changing shared parsing. Preserve
-all existing HTTP/provider behavior and stronger ownership fences; do not weaken
-this reference to match an overflow fallback.
+Focused provider and worker tests using the frozen oversized value both failed
+with `None` instead of `Some(86400)` before the correction. This is direct parser
+evidence, not an actual Linux whole-worker observation. Preserve the frozen
+clamp, existing HTTP/provider behavior and stronger ownership fences.
 
 The new mandatory `worker_retry_after_matches_frozen_published_process` parent
 uses the existing native REST child and its official-schema/OAuth/process owner.
@@ -68,8 +69,9 @@ Comparator tests reject missing/duplicate evidence, naive timestamps, out-of-ran
 deadlines and a short overflow-fallback delay; positive date/boundary cases pass.
 Dispatch tests retain all four REST/fact and five retry stages and require seven
 separate new child executions. These fixture tests and Windows compilation are
-not native Linux parity evidence. Application parsing is unchanged pending the
-actual composed observation; this checkpoint must not be called a gate-8 pass.
+not native Linux parity evidence. The pushed replay checkpoint `f9ee06b42` keeps
+application parsing unchanged so its full Linux run can independently expose the
+composed difference. Neither that checkpoint nor a focused parser test closes gate 8.
 
 Native-replay checkpoint local validation: 899 Python tests passed in 44.60
 seconds, with the same existing opt-in skip; 52 affected comparator/CI tests
@@ -78,6 +80,34 @@ seconds: all seven published cases regenerated, while the Linux-only native
 parent returned on Windows. The 65 other entries were filtered, not executed.
 Strict all-target Clippy passed. The next full configured Linux suite has 67
 entries and must execute the new parent as well as retain all prior cases.
+
+## Shared parser correction
+
+The provider and worker now delegate to one `parse_canvas_retry_after` owner in
+`canvas_provider_http`, with one shared 86,400-second constant. It reuses the
+already-pinned MMF `PythonConfigInteger` parser, applies the lower/upper bounds
+before machine conversion, and retains the existing HTTP-date calculation.
+There is no second integer grammar, Python runtime dependency, new crate pin,
+new OAuth owner or replacement generation fence.
+
+Read-only inspection of the immutable published issuance image confirmed its
+`parse_canvas_retry_after` uses Python `int` followed by the same bounds, with
+the 4,300-digit runtime policy. The observed module SHA-256 is
+`ab5b5a6de0e1c3ed45838e6ca0c1df1c84f3eb311de41060a60754769d7ac6b3`.
+Unit checks cover signed/oversized values, valid and malformed separators,
+4,300/4,301-digit boundaries, existing date vectors and missing/non-text headers.
+The response adapter still rejects non-text headers; typed integer parsing
+retains the platform's Unicode-decimal behavior.
+
+Both previously failing regressions pass. An additional real-HTTP authoritative
+provider test observes one authenticated request and a rate-limit result with
+the frozen one-day clamp, reusing the original provider/OAuth fixture. This test
+has in-memory OAuth state and does not replace the actual-process/schema gate.
+Local results: 329 library, 34 management HTTP, 20 OAuth/provider and 23
+issuance/worker behavior tests passed; strict all-target Clippy passed; 899
+Python tests passed in 41.83 seconds with the same existing opt-in skip.
+The frozen reference/scenario files are unchanged. Full Linux runtime and
+image qualification of this correction remain required before cutover.
 
 This corpus establishes retry scheduling, not execution after a one-day delay,
 remote OAuth revocation, every header grammar, or all error/privacy boundaries.

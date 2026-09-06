@@ -56,8 +56,10 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized
-integer clamping. Two captures agree; native replay is implemented but pending Linux
-execution and any demonstrated runtime corrections. Gate 8
+integer clamping. Two captures agree; native replay is implemented. Focused Rust
+tests confirmed overflow fallback and the shared lossless parser correction
+passes local tests, including actual HTTP provider transport. Full composed Linux
+qualification remains pending. Gate 8
 is not closed by this reference alone.
 
 The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual
