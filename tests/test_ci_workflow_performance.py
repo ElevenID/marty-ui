@@ -382,6 +382,7 @@ def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> Non
     assert "ACTIONS_CACHE_SERVICE_V2=true" in script
     assert script.index("SCCACHE_GHA_RW_MODE=READ_WRITE") < script.index("SCCACHE_GHA_RW_MODE=READ_ONLY")
     assert script.count("sccache rustc") == 2
+    assert script.count("--emit=link,dep-info") == 2
     assert script.count("sccache --stop-server") == 2
     assert "exit !hit" in script
 

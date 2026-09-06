@@ -12,14 +12,14 @@ export ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)"
 export SCCACHE_GHA_RW_MODE=READ_WRITE
 probe_dir=$(mktemp -d /tmp/marty-cache-probe.XXXXXXXX)
 printf 'pub const NONCE: &str = "%s";\n' "$1" > "$probe_dir/probe.rs"
-sccache rustc --crate-name marty_cache_probe --crate-type=rlib "$probe_dir/probe.rs" --out-dir "$probe_dir"
+sccache rustc --crate-name marty_cache_probe --crate-type=rlib --emit=link,dep-info "$probe_dir/probe.rs" --out-dir "$probe_dir"
 sccache --stop-server
-rm "$probe_dir/libmarty_cache_probe.rlib"
+rm "$probe_dir/libmarty_cache_probe.rlib" "$probe_dir/marty_cache_probe.d"
 export SCCACHE_GHA_RW_MODE=READ_ONLY
-sccache rustc --crate-name marty_cache_probe --crate-type=rlib "$probe_dir/probe.rs" --out-dir "$probe_dir"
+sccache rustc --crate-name marty_cache_probe --crate-type=rlib --emit=link,dep-info "$probe_dir/probe.rs" --out-dir "$probe_dir"
 sccache --stop-server > "$probe_dir/stats"
 cat "$probe_dir/stats"
 awk '$1 == "Cache" && $2 == "hits" && $3 == "(Rust)" && $4 >= 1 { hit = 1 } END { exit !hit }' "$probe_dir/stats"
 test -s "$probe_dir/libmarty_cache_probe.rlib"
-rm "$probe_dir/probe.rs" "$probe_dir/libmarty_cache_probe.rlib" "$probe_dir/stats"
+rm "$probe_dir/probe.rs" "$probe_dir/libmarty_cache_probe.rlib" "$probe_dir/marty_cache_probe.d" "$probe_dir/stats"
 rmdir "$probe_dir"
