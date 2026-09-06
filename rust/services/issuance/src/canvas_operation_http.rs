@@ -22,6 +22,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use url::Url;
 
 use crate::{
+    canvas_content_decoder::CanvasContentDecoder,
     canvas_network_timeout::{CanvasNetworkBudget, CanvasNetworkPhase, CanvasNetworkTimeout},
     canvas_provider_http::{resolve_canvas_origin, CanvasOriginPolicy},
 };
@@ -38,6 +39,8 @@ pub enum CanvasOperationHttpError {
     Request,
     #[error("Provider response unavailable")]
     Response,
+    #[error("Provider response content decoding failed")]
+    Decoding,
     #[error("Provider {0:?} operation timed out")]
     Timeout(CanvasNetworkPhase),
 }
@@ -193,20 +196,43 @@ impl Stream for ResponseStream {
 pub(crate) struct CanvasOperationResponse {
     pub response: reqwest::Response,
     phase: Arc<AtomicU8>,
+    decoders: Vec<CanvasContentDecoder>,
+    finished: bool,
 }
 impl CanvasOperationResponse {
-    pub async fn bytes(self) -> Result<Bytes, CanvasOperationHttpError> {
-        self.response
-            .bytes()
+    pub async fn chunk(&mut self) -> Result<Option<Bytes>, CanvasOperationHttpError> {
+        if self.finished {
+            return Ok(None);
+        }
+        let chunk = self
+            .response
+            .chunk()
             .await
-            .map_err(|_| failed(&self.phase, CanvasOperationHttpError::Response))
+            .map_err(|_| failed(&self.phase, CanvasOperationHttpError::Response))?;
+        self.finished = chunk.is_none();
+        if self.decoders.is_empty() {
+            return Ok(chunk);
+        }
+        let mut decoded = chunk.unwrap_or_default().to_vec();
+        for decoder in &mut self.decoders {
+            decoded = decoder.decode(&decoded)?;
+        }
+        if self.finished && decoded.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Bytes::from(decoded)))
+        }
+    }
+    pub async fn bytes(mut self) -> Result<Bytes, CanvasOperationHttpError> {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = self.chunk().await? {
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(Bytes::from(bytes))
     }
     #[cfg(test)]
     pub async fn text(self) -> Result<String, CanvasOperationHttpError> {
-        self.response
-            .text()
-            .await
-            .map_err(|_| failed(&self.phase, CanvasOperationHttpError::Response))
+        Ok(String::from_utf8_lossy(&self.bytes().await?).into_owned())
     }
 }
 
@@ -309,6 +335,10 @@ impl CanvasOperationHttpClient {
             .body(Full::new(Bytes::from(body)))
             .map_err(|_| CanvasOperationHttpError::Request)?;
         *request.headers_mut() = headers;
+        request
+            .headers_mut()
+            .entry(http::header::ACCEPT_ENCODING)
+            .or_insert(http::HeaderValue::from_static("gzip, deflate"));
         let authority = &origin[url::Position::BeforeHost..url::Position::AfterPort];
         request.headers_mut().insert(
             http::header::HOST,
@@ -320,6 +350,7 @@ impl CanvasOperationHttpClient {
             .await
             .map_err(|_| failed(&phase, CanvasOperationHttpError::Request))?;
         let (parts, body) = response.into_parts();
+        let decoders = CanvasContentDecoder::from_headers(&parts.headers);
         let stream = ResponseStream {
             stream: Box::pin(body.into_data_stream()),
             _driver: driver,
@@ -328,6 +359,8 @@ impl CanvasOperationHttpClient {
         Ok(CanvasOperationResponse {
             response: reqwest::Response::from(response),
             phase,
+            decoders,
+            finished: false,
         })
     }
 }
@@ -464,6 +497,22 @@ mod tests {
                 | "json_utf32_le_bom"
                 | "json_utf32_be_bom"
                 | "text_utf8_bom"
+                | "gzip_json"
+                | "deflate_json"
+                | "raw_deflate_json"
+                | "stacked_json"
+                | "double_gzip_json"
+                | "mixed_case_gzip"
+                | "unknown_encoding"
+                | "unsupported_br"
+                | "gzip_trailing_bytes"
+                | "gzip_without_trailer"
+                | "gzip_invalid"
+                | "deflate_invalid"
+                | "gzip_success_invalid"
+                | "stacked_headers"
+                | "gzip_progress"
+                | "gzip_stall"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),
@@ -498,7 +547,7 @@ mod tests {
             ));
         }
         let result = async {
-            let response = client
+            let mut response = client
                 .send(
                     http::Method::GET,
                     Url::parse(&format!("{origin}/{path}")).unwrap(),
@@ -507,7 +556,10 @@ mod tests {
                 )
                 .await?;
             let status = response.response.status().as_u16();
-            let body = if case["projection"] == "excerpt" {
+            let body = if case["projection"] == "discard" {
+                while response.chunk().await?.is_some() {}
+                Value::Null
+            } else if case["projection"] == "excerpt" {
                 json!(crate::canvas_credentials_protocol::response_excerpt(
                     &response.bytes().await?
                 ))
@@ -524,6 +576,7 @@ mod tests {
                 CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Read) => "ReadTimeout",
                 CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Write) => "WriteTimeout",
                 CanvasOperationHttpError::Connect | CanvasOperationHttpError::Tls => "ConnectError",
+                CanvasOperationHttpError::Decoding => "DecodingError",
                 _ => panic!("unexpected fixture outcome: {error:?}"),
             }}),
         };

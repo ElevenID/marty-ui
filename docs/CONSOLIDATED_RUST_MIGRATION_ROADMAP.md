@@ -33,6 +33,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Compressed-response qualification extends the shared TLS corpus to47 cases,
+preserving all31 prior observations. The immutable published image supports
+gzip/deflate/identity, not Brotli. Two independent captures freeze16 added
+compression, error and progress cases; unchanged Rust failed them. Shared
+streaming Rust decoding now passes native47 replay and is used by both failed
+response projection and successful validation draining. Actual status transport
+also preserves gzip-compressed UTF-16 JSON. General text charset and remaining
+transport/configuration/all-consumer gates remain open.
+Local291 library tests, supporting worker/API/behavior suites, strict Clippy and
+all21 configured published-image tests pass. Offline dependency bans/licenses/
+sources pass; fresh hosted advisory and image checks remain required.
+
 Unicode JSON qualification extends the shared TLS corpus to31 cases, preserving
 the previous21 observations. The exact published helper accepts UTF-8 BOM and
 UTF-16/32 JSON in either byte order, with/without BOM, independently of the text

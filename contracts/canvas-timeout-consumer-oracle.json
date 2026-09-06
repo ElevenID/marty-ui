@@ -181,6 +181,107 @@
       },
       "name": "text_utf8_bom",
       "status": 403
+    },
+    {
+      "body": {
+        "accept_encoding": "gzip, deflate",
+        "accepted": true
+      },
+      "name": "gzip_json",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "deflate_json",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "raw_deflate_json",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "stacked_json",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "double_gzip_json",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "mixed_case_gzip",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "unknown_encoding",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "unsupported_br",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "gzip_trailing_bytes",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "gzip_without_trailer",
+      "status": 403
+    },
+    {
+      "error_class": "DecodingError",
+      "name": "gzip_invalid"
+    },
+    {
+      "error_class": "DecodingError",
+      "name": "deflate_invalid"
+    },
+    {
+      "error_class": "DecodingError",
+      "name": "gzip_success_invalid"
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "stacked_headers",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "gzip_progress",
+      "status": 403
+    },
+    {
+      "error_class": "ReadTimeout",
+      "name": "gzip_stall"
     }
   ],
   "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",

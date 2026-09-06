@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import zlib
 from urllib.parse import urlparse
 
 import httpx
@@ -103,6 +104,71 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            compressed_cases = {
+                "/gzip_json": "gzip",
+                "/deflate_json": "deflate",
+                "/raw_deflate_json": "deflate",
+                "/stacked_json": "gzip, deflate",
+                "/double_gzip_json": "gzip, gzip",
+                "/mixed_case_gzip": " GZip ",
+                "/unknown_encoding": "synthetic-unknown",
+                "/unsupported_br": "br",
+                "/gzip_trailing_bytes": "gzip",
+                "/gzip_without_trailer": "gzip",
+                "/gzip_invalid": "gzip",
+                "/deflate_invalid": "deflate",
+                "/gzip_success_invalid": "gzip",
+                "/stacked_headers": "gzip, deflate",
+                "/gzip_progress": "gzip",
+                "/gzip_stall": "gzip",
+            }
+            if self.path in compressed_cases:
+                body = b'{"accepted":true}'
+                if self.path == "/gzip_json":
+                    body = json.dumps(
+                        {
+                            "accepted": True,
+                            "accept_encoding": self.headers.get("accept-encoding"),
+                        }
+                    ).encode()
+                encoding = compressed_cases[self.path]
+                if "invalid" in self.path:
+                    body = b"not a compressed stream"
+                elif self.path == "/raw_deflate_json":
+                    body = zlib.compress(body, wbits=-15)
+                elif encoding not in {"synthetic-unknown", "br"}:
+                    for coding in encoding.lower().split(","):
+                        body = zlib.compress(
+                            body, wbits=31 if coding.strip() == "gzip" else 15
+                        )
+                if self.path == "/gzip_trailing_bytes":
+                    body += b"synthetic unused bytes"
+                if self.path == "/gzip_without_trailer":
+                    body = body[:-8]
+                self.send_response(200 if self.path == "/gzip_success_invalid" else 403)
+                for coding in (
+                    encoding.split(",")
+                    if self.path == "/stacked_headers"
+                    else [encoding]
+                ):
+                    self.send_header("Content-Encoding", coding.strip())
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                if self.path == "/gzip_progress":
+                    for offset in range(0, len(body), 3):
+                        time.sleep(0.1)
+                        self.wfile.write(body[offset : offset + 3])
+                        self.wfile.flush()
+                elif self.path == "/gzip_stall":
+                    self.wfile.write(body[:10])
+                    self.wfile.flush()
+                    time.sleep(0.6)
+                    self.wfile.write(body[10:])
+                else:
+                    self.wfile.write(body)
+                self.wfile.flush()
+                return
             unicode_cases = {
                 "/json_utf8_bom": ("utf-8-sig", b""),
                 "/json_utf16_le": ("utf-16-le", b""),
@@ -268,6 +334,8 @@ async def observe(source, response_source, cases, origin, trust):
                         if case.get("projection") == "excerpt"
                         else response.text,
                     }
+                    if case.get("projection") == "discard":
+                        result["body"] = None
             except httpx.HTTPError as failure:
                 result = {"error_class": type(failure).__name__}
             except TimeoutError:

@@ -518,7 +518,7 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
             // Published HTTPX get() consumes the body before returning. Drain
             // without retaining it: headers alone cannot attest success when a
             // later read stalls or the peer truncates the response.
-            while response.response.chunk().await.map_err(|_| ())?.is_some() {}
+            while response.chunk().await.map_err(|_| ())?.is_some() {}
             None
         } else {
             // HTTPX consumes the entire response before JSON/excerpt projection.
@@ -646,7 +646,7 @@ mod tests {
         use std::time::Duration;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        for mode in ["progress", "truncated", "stalled"] {
+        for mode in ["progress", "truncated", "stalled", "compressed_invalid"] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let origin = format!("http://{}", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
@@ -657,6 +657,10 @@ mod tests {
                     socket.read_exact(&mut byte).await.unwrap();
                     request.push(byte[0]);
                     assert!(request.len() < 8192);
+                }
+                if mode == "compressed_invalid" {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 6\r\n\r\nresult").await.unwrap();
+                    return;
                 }
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nx-request-id: synthetic-body\r\n\r\nr").await.unwrap();
                 if mode == "progress" {

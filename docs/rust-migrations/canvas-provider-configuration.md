@@ -316,3 +316,57 @@ decompression, exceptional non-scalar Unicode/JSON boundary behavior and the
 remaining transport/configuration/all-consumer gates are not qualified here.
 The draft stays open; no production/beta deployment or reachable Python deletion
 occurred in this continuation.
+
+## Decode compressed content in the shared response reader
+
+Read-only inspection of the immutable published issuance image confirms its
+installed HTTPX decoders are gzip, deflate and identity; Brotli is absent.
+The TLS corpus adds16 observations (47 total, all previous31 unchanged). Two
+independent exact-source captures agree before native changes. Cases cover
+gzip/zlib/raw-deflate JSON, reverse stacked decoding, duplicate header fields,
+case normalization, unknown/unsupported coding behavior, trailing unused bytes,
+missing gzip trailer, invalid compressed data including HTTP200, and progressive
+versus stalled compressed reads. Gzip also captures the actual default
+Accept-Encoding header as gzip, deflate.
+
+The unchanged native negative control returned compressed bytes as excerpts and
+accepted an invalid gzip HTTP200 body. The replacement introduces one private
+CanvasContentDecoder shared through CanvasOperationResponse.chunk/bytes, rather
+than separate validation/status implementations. It applies supported codings
+in reverse header order, preserves first-call-only raw-deflate fallback, and
+projects safe typed decoding errors. Both failed-body reads and successful
+validation draining use this owner; callers cannot infer success from headers
+while skipping decoding. Socket operation budgets, origin pinning, certificate
+verification, redirect policy and response completion remain unchanged.
+
+The decoder retains the published distinction between a missing compression
+trailer and an HTTP framing truncation, and ignores unused bytes after the first
+compressed stream as Python's zlib object does. No relaxed HTTP completion or new
+response-size policy is introduced. Tests use only bounded synthetic loopback
+responses. The native transport advertises the same default supported encodings
+without overriding an explicitly supplied Accept-Encoding header.
+
+The existing real status socket fixture now sends gzip-compressed UTF-16 JSON:
+the transport returns the original decompressed bytes and shared JSON parsing
+preserves the fields independently of its declared ASCII charset. The actual
+validation transport additionally rejects invalid gzip on HTTP200. Three new
+unit tests cover tiny input chunks with larger decoded output, first-call-only
+raw fallback, and checksum failure versus the published missing-trailer case.
+
+Dependency review: reuse locked flate2 1.1.9 with its zlib-rs feature; the offline
+lock update adds only zlib-rs 0.6.7 (Zlib license). No existing package version is
+changed. This pure-Rust backend provides gzip-aware streaming zlib semantics;
+Cargo feature unification also selects it for other flate2 consumers in the build.
+Fresh hosted supply-chain and wider Rust checks are therefore required, with no
+license/advisory waivers. General text charsets, exceptional JSON boundaries and
+remaining provider/transport/all-consumer adoption gates remain open.
+
+Final local qualification:291 library tests PASS (10.51s);5 worker,28 management
+HTTP (0.06s),22 behavior (0.02s),40 workflow/image/ownership (2.26s) PASS; strict
+all-target Clippy PASS (25.97s). Native47 TLS replay passes on final source. Full
+configured21 published-image tests PASS (142.41s; none ignored/filtered), including
+the expanded47-case TLS corpus and existing managed validation/status/persistence
+comparisons. No deployment or reachable Python deletion occurred.
+The existing offline dependency bans/licenses/sources gate also passes without
+policy changes (duplicate-version warnings remain); hosted advisory checking is
+still required for the new head.

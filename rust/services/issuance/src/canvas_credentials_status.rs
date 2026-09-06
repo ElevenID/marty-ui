@@ -673,7 +673,13 @@ mod tests {
                         .encode_utf16()
                         .flat_map(u16::to_le_bytes)
                         .collect::<Vec<_>>();
-                    let mut response = bytes.into_response();
+                    let mut encoder =
+                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                    std::io::Write::write_all(&mut encoder, &bytes).unwrap();
+                    let mut response = encoder.finish().unwrap().into_response();
+                    response
+                        .headers_mut()
+                        .insert("content-encoding", "gzip".parse().unwrap());
                     response.headers_mut().insert(
                         "content-type",
                         "application/json; charset=ascii".parse().unwrap(),

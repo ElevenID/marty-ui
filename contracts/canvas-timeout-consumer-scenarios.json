@@ -31,6 +31,22 @@
     {"name":"json_utf32_be","seconds":"2","response":"json_utf32_be","projection":"excerpt"},
     {"name":"json_utf32_le_bom","seconds":"2","response":"json_utf32_le_bom","projection":"excerpt"},
     {"name":"json_utf32_be_bom","seconds":"2","response":"json_utf32_be_bom","projection":"excerpt"},
-    {"name":"text_utf8_bom","seconds":"2","response":"text_utf8_bom","projection":"excerpt"}
+    {"name":"text_utf8_bom","seconds":"2","response":"text_utf8_bom","projection":"excerpt"},
+{"name":"gzip_json","seconds":"2","response":"gzip_json","projection":"excerpt"},
+{"name":"deflate_json","seconds":"2","response":"deflate_json","projection":"excerpt"},
+{"name":"raw_deflate_json","seconds":"2","response":"raw_deflate_json","projection":"excerpt"},
+{"name":"stacked_json","seconds":"2","response":"stacked_json","projection":"excerpt"},
+{"name":"double_gzip_json","seconds":"2","response":"double_gzip_json","projection":"excerpt"},
+{"name":"mixed_case_gzip","seconds":"2","response":"mixed_case_gzip","projection":"excerpt"},
+{"name":"unknown_encoding","seconds":"2","response":"unknown_encoding","projection":"excerpt"},
+{"name":"unsupported_br","seconds":"2","response":"unsupported_br","projection":"excerpt"},
+{"name":"gzip_trailing_bytes","seconds":"2","response":"gzip_trailing_bytes","projection":"excerpt"},
+{"name":"gzip_without_trailer","seconds":"2","response":"gzip_without_trailer","projection":"excerpt"},
+{"name":"gzip_invalid","seconds":"2","response":"gzip_invalid","projection":"excerpt"},
+{"name":"deflate_invalid","seconds":"2","response":"deflate_invalid","projection":"excerpt"},
+{"name":"gzip_success_invalid","seconds":"2","response":"gzip_success_invalid","projection":"discard"},
+{"name":"stacked_headers","seconds":"2","response":"stacked_headers","projection":"excerpt"},
+{"name":"gzip_progress","seconds":"0.5","response":"gzip_progress","projection":"excerpt"},
+{"name":"gzip_stall","seconds":"0.2","response":"gzip_stall","projection":"excerpt"}
   ]
 }
