@@ -534,6 +534,13 @@
       },
       "name": "text_multibyte_hz",
       "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "你好𐀀􏿿�0�0A�"
+      },
+      "name": "text_gb18030",
+      "status": 403
     }
   ],
   "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",

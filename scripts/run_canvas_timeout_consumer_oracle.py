@@ -410,6 +410,10 @@ class Handler(BaseHTTPRequestHandler):
                     "7b226d657373616765223a22636166e9227d",
                 ),
                 "/text_long_latin1": ("text/plain; charset=latin1", "e9" * 1001),
+                "/text_gb18030": (
+                    "text/plain; charset=gb18030",
+                    "c4e3bac390308130e3329a35ff30ff3041803041",
+                ),
             }
             for name in multibyte_owner().NAMES:
                 text_cases[f"/text_multibyte_{name}"] = (
@@ -671,14 +675,18 @@ async def observe(source, response_source, cases, origin, trust):
 
 
 @cache
-def multibyte_owner():
+def codec_owner(name):
     spec = importlib.util.spec_from_file_location(
-        "canvas_multibyte_codec_oracle",
-        Path(__file__).with_name("canvas_multibyte_codec_oracle.py"),
+        name,
+        Path(__file__).with_name(name + ".py"),
     )
     multibyte = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(multibyte)
     return multibyte
+
+
+def multibyte_owner():
+    return codec_owner("canvas_multibyte_codec_oracle")
 
 
 def run(source=None, response_source=None):
@@ -707,6 +715,7 @@ def run(source=None, response_source=None):
         "unicode_text_codecs": unicode_text_codecs(response_source),
         "charset_headers": charset_headers(response_source),
         "multibyte_codecs": multibyte_owner().run(),
+        "gb18030_codec": codec_owner("canvas_gb18030_codec_oracle").observe(),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)

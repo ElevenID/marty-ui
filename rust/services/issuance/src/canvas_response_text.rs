@@ -331,17 +331,29 @@ mod tests {
     fn multibyte_response_cases_match_published_codecs() {
         for (_, source) in multibyte::SOURCES {
             let frozen: serde_json::Value = serde_json::from_str(source).unwrap();
-            for case in frozen["cases"].as_array().unwrap() {
-                let bytes = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
-                for alias in frozen["aliases"].as_array().unwrap() {
-                    let header = format!("text/plain; charset={}", alias.as_str().unwrap());
-                    assert_eq!(
-                        response_text(&bytes, Some(&header)).unwrap(),
-                        case["text"].as_str().unwrap(),
-                        "published codec {}",
-                        frozen["name"]
-                    );
-                }
+            assert_published_codec_cases(&frozen);
+        }
+    }
+
+    #[test]
+    fn gb18030_response_cases_match_published_codec() {
+        let frozen = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-gb18030-codec.json"
+        ))
+        .unwrap();
+        assert_published_codec_cases(&frozen);
+    }
+
+    fn assert_published_codec_cases(frozen: &serde_json::Value) {
+        for case in frozen["cases"].as_array().unwrap() {
+            let bytes = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
+            for alias in frozen["aliases"].as_array().unwrap() {
+                let header = format!("text/plain; charset={}", alias.as_str().unwrap());
+                assert_eq!(
+                    response_text(&bytes, Some(&header)).unwrap(),
+                    case["text"].as_str().unwrap(),
+                    "published codec {alias}"
+                );
             }
         }
     }

@@ -148,6 +148,14 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         serde_json::Value::Object(multibyte),
         "published multibyte machines and independent decoder observations"
     );
+    let gb18030: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-gb18030-codec.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        oracle["gb18030_codec"], gb18030,
+        "published GB18030 mappings and independent observations"
+    );
 }
 
 #[tokio::test]

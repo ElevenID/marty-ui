@@ -101,7 +101,7 @@ and the existing 68 TLS observations pass. Fresh hosted checks remain required.
 
 ## Remaining gates
 
-Unqualified multibyte/stateful codecs (including GB18030, EUC-KR and ISO-2022),
+Unqualified multibyte/stateful codecs (including EUC-KR and ISO-2022),
 UTF-7 and special/escape codecs, including their encoded-parameter-label use,
 exceptional header metadata such as Python's decimal-conversion limit for very
 long continuation ordinals, exceptional JSON values and other configuration or
@@ -191,3 +191,29 @@ library, 5 worker, 28 managed HTTP, 22 behavior, 70 workflow/image/ownership/cut
 tests and strict Clippy pass. Dependencies, lockfile, reachable Python and
 deployments are unchanged. Other codec families and broader adoption gates above
 remain open; this is not whole-worker cutover approval.
+
+## GB18030 continuation
+
+The [GB18030 artifact](../../contracts/canvas-gb18030-codec.md) preserves its
+distinct variable-width consumption behavior with 207 compact mapping ranges,
+a two-byte table and one shared strict/replacement Rust decoder. Two immutable
+image captures agreed before implementation; the old UTF-8 fallback failed the
+new response corpus. Native tests compare independent published decoder hashes
+for every single/two-byte input, all 1,587,600 four-byte pointers, and 88,741
+byte-class sequences per mode. All 428 full-response examples pass for both
+recorded labels, including supplementary/noncharacter and malformed input.
+
+The shared response/strict-label dispatch initializes only the selected codec
+family. Dependencies and lockfiles are unchanged; Python additions are offline
+test capture tooling, not a runtime shim. The published-image gate regenerates
+and compares the complete GB18030 artifact. Two published-helper TLS captures
+agree, retain all earlier 83 observations, and match the native 84-case replay.
+Whole-worker and all-consumer adoption remain open; reachable Python and
+deployments are unchanged.
+
+Final gates: 301 library, 5 worker, 28 management HTTP, 22 behavior, 70 affected
+workflow/image/ownership/cutover tests and strict Clippy pass. All 23 configured
+published-image/schema tests pass in 158.38 seconds with none ignored/filtered,
+including complete GB18030 regeneration and the expanded TLS observations.
+The preceding `cf8246918` hosted checks are green; the continuation requires its
+own hosted qualification before landing.

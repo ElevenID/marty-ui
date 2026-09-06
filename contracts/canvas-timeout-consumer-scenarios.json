@@ -83,6 +83,7 @@
 {"name":"text_multibyte_euc_jp","seconds":"2","response":"text_multibyte_euc_jp","projection":"excerpt"},
 {"name":"text_multibyte_euc_jis_2004","seconds":"2","response":"text_multibyte_euc_jis_2004","projection":"excerpt"},
 {"name":"text_multibyte_euc_jisx0213","seconds":"2","response":"text_multibyte_euc_jisx0213","projection":"excerpt"},
-{"name":"text_multibyte_hz","seconds":"2","response":"text_multibyte_hz","projection":"excerpt"}
+{"name":"text_multibyte_hz","seconds":"2","response":"text_multibyte_hz","projection":"excerpt"},
+{"name":"text_gb18030","seconds":"2","response":"text_gb18030","projection":"excerpt"}
   ]
 }

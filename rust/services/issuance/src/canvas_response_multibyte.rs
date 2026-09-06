@@ -3,6 +3,9 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{collections::BTreeMap, io::Read, sync::OnceLock};
 
+#[path = "canvas_response_gb18030.rs"]
+mod gb18030;
+
 const VALID: u32 = 1 << 31;
 
 pub(super) const SOURCES: &[(&str, &str)] = &[
@@ -79,7 +82,7 @@ struct Frozen {
     finals: Vec<u32>,
 }
 
-pub(super) struct Machine {
+struct Machine {
     transitions: Vec<u32>,
     outputs: Vec<String>,
     finals: Vec<u32>,
@@ -147,17 +150,42 @@ impl Machine {
     }
 }
 
-pub(super) fn lookup(name: &str) -> Option<&'static Machine> {
+pub(super) struct Codec(CodecKind);
+
+enum CodecKind {
+    Machine(Machine),
+    Gb18030(gb18030::Decoder),
+}
+
+impl Codec {
+    pub(super) fn decode(&self, bytes: &[u8], strict: bool) -> Option<String> {
+        match &self.0 {
+            CodecKind::Machine(machine) => machine.decode(bytes, strict),
+            CodecKind::Gb18030(decoder) => decoder.decode(bytes, strict),
+        }
+    }
+}
+
+pub(super) fn lookup(name: &str) -> Option<&'static Codec> {
+    if name == "gb18030" {
+        static GB18030: OnceLock<Codec> = OnceLock::new();
+        return Some(GB18030.get_or_init(|| Codec(CodecKind::Gb18030(gb18030::Decoder::new()))));
+    }
     // Do not inflate the CJK tables for UTF-8 or unsupported declarations.
     if !SOURCES.iter().any(|(candidate, _)| *candidate == name) {
         return None;
     }
-    static MACHINES: OnceLock<BTreeMap<&'static str, Machine>> = OnceLock::new();
+    static MACHINES: OnceLock<BTreeMap<&'static str, Codec>> = OnceLock::new();
     MACHINES
         .get_or_init(|| {
             SOURCES
                 .iter()
-                .map(|(name, source)| (*name, Machine::from_frozen(name, source)))
+                .map(|(name, source)| {
+                    (
+                        *name,
+                        Codec(CodecKind::Machine(Machine::from_frozen(name, source))),
+                    )
+                })
                 .collect()
         })
         .get(name)
@@ -168,7 +196,7 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
-    fn record(digest: &mut Sha256, value: Option<String>) {
+    pub(super) fn record(digest: &mut Sha256, value: Option<String>) {
         match value {
             None => digest.update([0]),
             Some(text) => {

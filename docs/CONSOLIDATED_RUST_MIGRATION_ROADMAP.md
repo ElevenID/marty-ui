@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-05
+**Last updated:** 2026-09-06
 
 ## Objective
 
@@ -29,9 +29,23 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-05
+## Current execution snapshot — 2026-09-06
 
 ### Current transport integration and merge gates
+
+GB18030 now has a native compact range/pair decoder shared by response text and
+strict encoded labels. Two independent immutable-image captures agreed before
+implementation; the previous UTF-8 fallback failed the regression. Rust matches
+all 1,587,600 four-byte pointers, all single/two-byte inputs, 88,741 byte-class
+sequences per mode and 428 response examples across two labels. The 84-case native
+TLS replay passes and preserves the previous 83 observations. Local 301 library,
+5 worker, 28 managed HTTP, 22 behavior, 70 affected Python checks and strict Clippy
+pass. All 23 configured published-image/schema tests pass (158.38 seconds, none
+ignored/filtered), including full artifact regeneration. The preceding `cf8246918`
+head is hosted-green; this continuation still requires fresh hosted qualification.
+Details and format:
+[GB18030 evidence](../contracts/canvas-gb18030-codec.md). PR #814 remains draft and
+unrouted; no deployment or reachable-Python deletion occurs.
 
 Multibyte response qualification adds 15 East Asian codecs through a shared native
 state-machine decoder, also reused for strict encoded charset labels. Independently
@@ -44,7 +58,7 @@ observation unchanged. Local 299 library, 5 worker, 28 managed HTTP, 22 behavior
 70 workflow/image/ownership/cutover checks, strict Clippy and all 23 configured
 image/schema tests pass. No dependencies or runtime Python are added. The prior
 integration head `ded29ea7c` CI and Rust CodeQL passed; new source still requires
-its own hosted checks. GB18030, EUC-KR, ISO-2022, UTF-7/special/escape codecs,
+its own hosted checks. EUC-KR, ISO-2022, UTF-7/special/escape codecs,
 exceptional metadata/JSON/configuration/transport behavior and whole-worker/all-
 consumer adoption remain open. No deployment or reachable-Python deletion occurs.
 
