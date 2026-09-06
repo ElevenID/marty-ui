@@ -13,14 +13,25 @@ from threading import Thread
 from test_canvas_lti_https import create_loopback_certificate
 
 
-def run(executable):
+def run(executable, scenario="rest"):
+    assert scenario in {"rest", "facts"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
-        (root / "contracts/canvas-worker-rest-scenarios.json").read_text()
+        (root / f"contracts/canvas-worker-{scenario}-scenarios.json").read_text()
     )
+    if "extends" in spec:
+        base = json.loads((root / "contracts" / spec["extends"]).read_text())
+        spec = {**base, **spec}
     reference = json.loads(
-        (root / "contracts/canvas-worker-rest-oracle.json").read_text()
+        (root / f"contracts/canvas-worker-{scenario}-oracle.json").read_text()
     )
+    responses = [
+        response
+        for stage in spec["stages"]
+        for response in (
+            stage["responses"].values() if "responses" in stage else [stage]
+        )
+    ]
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -39,8 +50,8 @@ def run(executable):
             )
             # Unexpected extra reads fail the request-count check, never wrap.
             stage = (
-                spec["stages"][index]
-                if index < len(spec["stages"])
+                responses[index]
+                if index < len(responses)
                 else {"status": 500, "body": {}}
             )
             body = json.dumps(stage["body"], separators=(",", ":")).encode()
@@ -68,6 +79,7 @@ def run(executable):
             environment = dict(os.environ)
             environment.update(
                 MARTY_CANVAS_WORKER_REST_NATIVE_ORIGIN=f"https://127.0.0.1:{server.server_port}",
+                MARTY_CANVAS_WORKER_REST_SCENARIO=scenario,
                 SSL_CERT_FILE=str(cert),
                 SSL_CERT_DIR=str(empty_ca_directory),
             )
@@ -87,7 +99,9 @@ def run(executable):
                 for request in observation["requests"]
             ]
             assert requests == expected, "Actual worker HTTPS requests differ"
-            print("Native worker replay passed all four frozen HTTPS stages")
+            print(
+                f"Native worker {scenario} replay passed all four frozen HTTPS stages ({len(requests)} requests)"
+            )
         finally:
             if thread is not None:
                 server.shutdown()
@@ -97,6 +111,8 @@ def run(executable):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("Expected the exact compiled published-schema test executable")
-    run(sys.argv[1])
+    if len(sys.argv) not in {2, 3}:
+        raise SystemExit(
+            "Expected the exact compiled published-schema executable [rest|facts]"
+        )
+    run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "rest")

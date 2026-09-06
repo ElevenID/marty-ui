@@ -7,6 +7,15 @@ mod canvas_worker_rest_replay;
 
 #[test]
 fn worker_rest_matches_frozen_published_process() {
+    assert_worker_https("rest");
+}
+
+#[test]
+fn worker_facts_match_frozen_published_process() {
+    assert_worker_https("facts");
+}
+
+fn assert_worker_https(scenario: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
@@ -21,6 +30,7 @@ fn worker_rest_matches_frozen_published_process() {
     let output = std::process::Command::new("python3")
         .arg(root.join("scripts/test_canvas_worker_rest_https.py"))
         .arg(std::env::current_exe().unwrap())
+        .arg(scenario)
         .output()
         .unwrap();
     assert!(
@@ -49,7 +59,9 @@ async fn worker_rest_native_child() {
         .connect(&owned.url)
         .await
         .unwrap();
-    canvas_worker_rest_replay::replay(&pool, &owned.url, &origin).await;
+    let scenario = std::env::var("MARTY_CANVAS_WORKER_REST_SCENARIO").unwrap();
+    assert!(matches!(scenario.as_str(), "rest" | "facts"));
+    canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, scenario == "facts").await;
     pool.close().await;
     owned.close().unwrap();
 }

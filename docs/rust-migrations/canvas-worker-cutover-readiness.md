@@ -39,13 +39,13 @@ executes four nonempty published worker processes with real HTTPS, encrypted
 OAuth storage and the official schema. Positive, negative, duplicate and
 rate-limited outcomes are frozen twice. Native composed-worker replay is now
 implemented using the real binary and native persistence; its mandatory Linux
-execution result remains pending. The reference gate alone does not close that
-side of the boundary.
+execution passed at `0982a4a2c` (CI 34033818678, Rust 34033818668). That qualifies the
+four assignment stages, not every worker/provider/consumer boundary.
 
 The [all-four-fact reference](canvas-worker-facts-reference.md) extends the same
 actual published-process harness across assignment, quiz, module and course
 reads, including partial rate limiting. Two independent captures agree; native
-adoption is pending. This is additional reference evidence for gate 12, not a
+adoption is implemented and awaiting Linux execution. This is evidence for gate 12, not a
 claim that its native or broader whole-worker requirements are closed.
 
 ## Normative legacy-gap reconciliation

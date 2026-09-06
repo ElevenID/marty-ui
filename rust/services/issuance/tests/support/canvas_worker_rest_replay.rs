@@ -13,12 +13,13 @@ use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
 
 const CIPHERTEXT_SQL: &str = "SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets WHERE id='worker-rest-token'";
 
-pub async fn replay(pool: &PgPool, database_url: &str, origin: &str) {
+pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: bool) {
     let origin_url = url::Url::parse(origin).unwrap();
     assert_eq!(origin_url.scheme(), "https");
     assert_eq!(origin_url.host_str(), Some("127.0.0.1"));
     assert!(origin_url.port().is_some());
     static SPEC: OnceLock<Value> = OnceLock::new();
+    static FACTS_SPEC: OnceLock<Value> = OnceLock::new();
     static SHARED: OnceLock<Value> = OnceLock::new();
     let spec = SPEC.get_or_init(|| {
         serde_json::from_str(include_str!(
@@ -26,21 +27,43 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str) {
         ))
         .unwrap()
     });
+    let spec = if all_facts {
+        FACTS_SPEC.get_or_init(|| {
+            let extension: Value = serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-worker-facts-scenarios.json"
+            ))
+            .unwrap();
+            let mut combined = spec.clone();
+            combined
+                .as_object_mut()
+                .unwrap()
+                .extend(extension.as_object().unwrap().clone());
+            combined
+        })
+    } else {
+        spec
+    };
     let shared = SHARED.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-issued-review-scenarios.json"
         ))
         .unwrap()
     });
-    let reference: Value = serde_json::from_str(include_str!(
-        "../../../../../contracts/canvas-worker-rest-oracle.json"
-    ))
+    let reference: Value = serde_json::from_str(if all_facts {
+        include_str!("../../../../../contracts/canvas-worker-facts-oracle.json")
+    } else {
+        include_str!("../../../../../contracts/canvas-worker-rest-oracle.json")
+    })
     .unwrap();
     for statement in shared["seed"].as_array().unwrap() {
         sqlx::raw_sql(statement.as_str().unwrap())
             .execute(pool)
             .await
             .unwrap();
+    }
+    if let Some(requirements) = spec.get("requirements") {
+        sqlx::query("UPDATE issuance_service.canvas_program_bindings SET evidence_requirements=$1 WHERE id='binding-review'")
+            .bind(requirements).execute(pool).await.unwrap();
     }
     sqlx::query("UPDATE issuance_service.canvas_platforms SET canvas_base_url=$1")
         .bind(origin)

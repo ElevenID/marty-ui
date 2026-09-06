@@ -1,6 +1,7 @@
 # Whole-worker reference for all four Canvas REST facts
 
-Status: independently frozen published reference; native adoption pending.
+Status: independently frozen published reference; native adoption implemented,
+awaiting its required Linux execution result.
 This extends the [assignment-only reference](canvas-worker-rest-reference.md)
 without replacing its inputs or expected observations.
 
@@ -45,11 +46,18 @@ regenerate unchanged after the shared harness extension. Native adoption must
 retain both corpora and use the actual worker binary, HTTPS and encrypted OAuth
 persistence; that execution result is still pending.
 
-Local validation: the configured image/schema executable passed41tests in
-336.36seconds, including both reference regenerations. Its Linux-native parent
+The native `worker_facts_match_frozen_published_process` gate now reuses the
+assignment replay's actual process/database/OAuth owners and checks this second
+corpus. The shared HTTPS parent supplies the 16 frozen responses and checks all
+actual requests; Rust compares every stage's durable state and unchanged issued
+rows/ciphertext. Both assignment and all-fact parent gates remain mandatory.
+No production runtime or expected observations were modified for adoption.
+
+Reference validation at `853e9f099`: the configured executable passed 41 tests in
+336.36 seconds, including both reference regenerations. Its Linux-native parent
 and fixture-child entries do not establish native HTTPS execution on Windows.
-Strict all-target Clippy, formatting, Bash syntax and53affected Python contracts
-passed. Hosted exact-head qualification remains required.
+Native adoption compiles; strict all-target Clippy, formatting, Bash syntax and
+53 affected Python contracts passed. Hosted exact-head qualification is required.
 
 This reference alone closes no deployment or whole-worker gate. Continue the
 full [14-gate and consumer inventory](canvas-worker-cutover-readiness.md), including

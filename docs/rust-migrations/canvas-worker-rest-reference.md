@@ -1,8 +1,8 @@
 # Composed Canvas worker / REST reference
 
-Status: independent published reference frozen; native composed-worker replay
-is implemented and awaiting its required Linux execution result. This is not
-Rust cutover or deployment proof.
+Status: independent published reference frozen; the actual native assignment
+worker replay passed Linux CI at `0982a4a2caec758babc508f6d31c3703a53ef4f7`.
+This is not whole-worker cutover or deployment proof.
 
 ## Actual execution boundary
 
@@ -85,6 +85,14 @@ separate.
 
 ## Required continuation
 
+Hosted CI `34033818678` and Rust CodeQL `34033818668` passed for that exact head.
+The configured published-schema log records all four actual native HTTPS stages
+passing, with all 40 tests passing in 538.16 seconds. The earlier unconfigured
+40-test run in 0.38 seconds is not used as runtime evidence. The actual result is
+in the [configured database job](https://github.com/ElevenID/marty-ui/actions/runs/34033818678/job/101488200805).
+The [all-four-fact extension](canvas-worker-facts-reference.md) has a separate
+native adoption gate; the assignment result does not qualify it.
+
 Local qualification passed all 38 configured published-image/schema tests with
 zero failures, ignored or filtered cases (329.34 seconds), including regeneration
 of the new reference and the existing startup replay. The 53 affected Python
@@ -112,8 +120,8 @@ preserve stronger native safety/event behavior where explicitly established.
 The certificate helper's existing AGS/NRPS HTTPS gate remains mandatory on Linux.
 A direct Windows invocation failed at its trusted-child read with both the
 unchanged committed helper and this refactor; it is not claimed as a passing
-Windows gate or weakened to bypass platform trust. The original runtime head's
-hosted CI and Rust analysis are green; this checkpoint needs fresh hosted checks.
+Windows gate or weakened to bypass platform trust. The assignment replay's
+hosted CI and Rust analysis are green; the all-fact extension needs its own checks.
 
 Continue the complete [worker cutover inventory](canvas-worker-cutover-readiness.md),
 including other facts/providers, OAuth refresh/revocation, failures/recovery,

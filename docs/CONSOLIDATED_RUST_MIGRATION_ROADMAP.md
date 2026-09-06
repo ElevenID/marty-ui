@@ -38,7 +38,9 @@ captures actual published assignment, quiz, module and course reads through the
 shared worker/HTTPS/OAuth/schema harness. Two captures match byte-for-byte. Its
 partial-rate-limit stage preserves three successful fact writes while the job
 retries and the negative assignment keeps policy denied. Native adoption is
-pending; the original assignment-only reference is retained.
+implemented, awaiting its mandatory Linux result; the original assignment-only
+reference is retained. The assignment-only actual native worker gate passed at
+`0982a4a2c` with exact-head CI34033818678 and Rust CodeQL34033818668 successful.
 
 The [composed worker REST reference](rust-migrations/canvas-worker-rest-reference.md)
 now freezes four actual published worker processes using real HTTPS and encrypted
@@ -47,9 +49,9 @@ evidence, duplicate reuse and a 429 retry honoring Retry-After37. Two finalized
 captures agree byte-for-byte. Issued credential/transaction rows and encrypted
 token bytes remain unchanged, with selected job/fact/review/heartbeat projections
 recorded. The published HTTPS constraint remains intact; fixture-specific trust
-is isolated to the test child. Native composed-worker replay is now implemented
-with the actual binary and native OAuth storage, awaiting its mandatory Linux
-execution result; Windows compile/lint is not a runtime pass. This remains
+is isolated to the test child. Native assignment replay passed in the configured
+Linux database job with the actual binary and native OAuth storage; the fast
+unconfigured test run and Windows compile/lint are not runtime evidence. This remains
 separate from complete worker qualification. Startup head `017c7e423` now has
 successful hosted CI and Rust analysis.
 
