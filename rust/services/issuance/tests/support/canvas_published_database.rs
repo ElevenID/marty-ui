@@ -150,6 +150,20 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_utf7_consumer() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "utf7_consumer",
+                "utf7-consumer",
+                "utf7_consumer",
+                "MARTY_CANVAS_UTF7_CONSUMER_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -359,6 +373,24 @@ impl PublishedDatabase {
                     &ordinal_mount,
                 ],
             );
+        }
+        let utf7_helpers: Vec<String> = if script == "utf7_consumer" {
+            ["validation_boundary", "status_provider"]
+                .into_iter()
+                .map(|name| {
+                    let path = format!("scripts/run_canvas_{name}_oracle.py");
+                    format!(
+                        "type=bind,source={},target=/verification/{path},readonly",
+                        root.join(&path).display()
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for mount in &utf7_helpers {
+            let index = arguments.len() - 2;
+            arguments.splice(index..index, ["--mount", mount]);
         }
         let script_path = format!("scripts/run_canvas_{script}_oracle.py");
         let scenario_path = format!("contracts/canvas-{scenario}-scenarios.json");

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod python_json_diagnostic;
+mod python_text;
 mod python_value;
 
 pub mod canvas_award_candidate;

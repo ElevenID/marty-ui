@@ -19,15 +19,28 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
-async def observe():
+async def observe(cases=None, *, delivery_lifecycle=False):
     from issuance.domain.entities import CredentialStatus
     from issuance.infrastructure.adapters import canvas_credentials_adapter as adapter
     from issuance.infrastructure.adapters.postgres_repository import (
         PostgresIssuanceRepository,
     )
 
+    if delivery_lifecycle:
+        from issuance.infrastructure.api import routes as lifecycle_routes
+
+        assert (
+            hashlib.sha256(
+                Path(lifecycle_routes.__file__).read_text(encoding="utf-8").encode()
+            ).hexdigest()
+            == "2b6d2eb7cec34bb4596ef9b758d8af02a3172337e89bad3b5d26b558d0dd00b7"
+        )
+
     root = Path("/verification/contracts")
-    scenarios = json.loads((root / "canvas-status-provider-scenarios.json").read_text())
+    if cases is None:
+        cases = json.loads(
+            (root / "canvas-status-provider-scenarios.json").read_text()
+        )["cases"]
     shared = json.loads((root / "canvas-issued-review-scenarios.json").read_text())
     engine = create_async_engine(
         "postgresql+asyncpg://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
@@ -48,6 +61,17 @@ async def observe():
             return "$timestamp"
         return value
 
+    async def delivery_snapshot():
+        async with engine.connect() as connection:
+            return (
+                await connection.execute(
+                    text(
+                        "SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d "
+                        "WHERE id='delivery-provider'"
+                    )
+                )
+            ).scalar_one()
+
     try:
         async with engine.begin() as connection:
             for statement in shared["seed"]:
@@ -61,7 +85,15 @@ async def observe():
             preserved = (
                 await connection.execute(text(shared["preserved_rows_sql"]))
             ).scalar_one()
-        for case in scenarios["cases"]:
+        for case in cases:
+            if delivery_lifecycle:
+                # Fresh synthetic delivery state for each independent boundary.
+                async with engine.begin() as connection:
+                    await connection.exec_driver_sql(
+                        "UPDATE issuance_service.credential_delivery_records "
+                        "SET metadata='{}',last_error=NULL WHERE id='delivery-provider'"
+                    )
+                delivery_before = await delivery_snapshot()
             environment = {
                 "CANVAS_PORTABLE_INTEGRATION_ENABLED": "true"
                 if case.get("rollout", True)
@@ -219,6 +251,37 @@ async def observe():
                         "error_class": type(failure).__name__,
                         "error": str(failure),
                     }
+                if delivery_lifecycle:
+                    before_lifecycle_requests = len(requests)
+                    try:
+                        await lifecycle_routes._sync_canvas_lifecycle_delivery_record(
+                            delivery,
+                            credential,
+                            repo,
+                            lifecycle_action=action,
+                            reason=case.get("reason", "synthetic reason"),
+                        )
+                        lifecycle = {"returned": True}
+                    except Exception as failure:
+                        lifecycle = {
+                            "error_class": type(failure).__name__,
+                            "error": str(failure),
+                        }
+                    persisted = await repo.get_delivery_record("delivery-provider")
+                    lifecycle["persisted"] = normalize(
+                        {
+                            "metadata": persisted.metadata,
+                            "last_error": persisted.last_error,
+                            "status": persisted.status.value,
+                        }
+                    )
+                    lifecycle["provider_requests"] = (
+                        len(requests) - before_lifecycle_requests
+                    )
+                    lifecycle["row_unchanged"] = (
+                        await delivery_snapshot() == delivery_before
+                    )
+                    outcome["delivery_lifecycle"] = lifecycle
             if "response_hex" in case:
                 assert outcome.get("error_class") == case["expected_error_class"], (
                     case["name"],
@@ -243,6 +306,18 @@ async def observe():
                 Path(adapter.__file__).read_text(encoding="utf-8").encode()
             ).hexdigest(),
             "normalization": "validated datetime presence and synthetic bearer-token labels; selected contractual HTTP headers",
+            **(
+                {
+                    "delivery_lifecycle_boundary": "actual delivery sync helper and repository save; independent synthetic starting rows; credential transition and publication not invoked",
+                    "lifecycle_routes_sha256": hashlib.sha256(
+                        Path(lifecycle_routes.__file__)
+                        .read_text(encoding="utf-8")
+                        .encode()
+                    ).hexdigest(),
+                }
+                if delivery_lifecycle
+                else {}
+            ),
             "observations": observations,
         }
     finally:

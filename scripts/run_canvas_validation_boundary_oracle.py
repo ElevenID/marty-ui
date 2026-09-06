@@ -19,7 +19,7 @@ from unittest.mock import patch
 import httpx
 
 
-async def observe():
+async def observe(cases=None):
     os.environ["ISSUANCE_API_KEY"] = "synthetic-validation-key"
     from issuance import main
     from issuance.domain.ports import IIssuanceRepository
@@ -47,11 +47,12 @@ async def observe():
         actual = hashlib.sha256(Path(module.__file__).read_text().encode()).hexdigest()
         assert actual == expected, f"published {name} source drifted"
         sources[name] = actual
-    cases = json.loads(
-        Path(
-            "/verification/contracts/canvas-validation-boundary-scenarios.json"
-        ).read_text()
-    )["cases"]
+    if cases is None:
+        cases = json.loads(
+            Path(
+                "/verification/contracts/canvas-validation-boundary-scenarios.json"
+            ).read_text()
+        )["cases"]
     observations = []
     for case in cases:
         files, lookups, requests, exceptions = [], [], [], []

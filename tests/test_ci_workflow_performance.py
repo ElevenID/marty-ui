@@ -208,6 +208,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'utf7_consumer_diagnostic_matches_published_boundaries: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'"
         in published
     )

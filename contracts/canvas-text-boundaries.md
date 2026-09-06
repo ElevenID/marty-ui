@@ -77,8 +77,51 @@ handling are required before UTF-7 adoption.
 This diagnostic is not a native UTF-7 parity gate and is not wired into the
 general timeout runner. It requires the installed published adapter and
 Starlette; the lighter local TLS environment is not assumed to provide them.
-Full managed-application and provider lifecycle behavior, strict encoded-label
-handling and broader UTF-7 malformed/incremental inputs remain unqualified.
+The separate `canvas-utf7-consumer-oracle.json` now freezes twelve managed-app,
+twelve provider and twelve delivery-helper/save observations, with two independent
+image captures agreeing. `canvas-utf7-consumer-scenarios.json` covers lone high/low
+surrogates, a combined supplementary scalar, positions 999/1000, ordinary text,
+and both 200/403 provider responses. It reuses the existing application/provider
+fixtures; only non-scalar observation strings receive the codepoint marker.
+
+Validation renders HTTP 500 for retained surrogates, but successful responses
+discard the upstream body and a truncated-away surrogate permits rendering.
+The status provider returns non-scalar metadata on success or includes the
+non-scalar excerpt in its RuntimeError on refusal. The actual published delivery
+helper then attempts the real repository save: retained surrogates fail with
+DBAPIError, leaving the starting delivery row unchanged. Complete, unnormalized
+before/after row snapshots verify that failed saves preserve every column, not
+merely the displayed metadata/error fields. Successful-response metadata hits
+PostgreSQL's JSON validation; refusal text can fail the driver's UTF-8
+argument encoding. Supplementary scalar text and truncated-away surrogates save
+successfully. The lifecycle route source is pinned at SHA-256
+`2b6d2eb7cec34bb4596ef9b758d8af02a3172337e89bad3b5d26b558d0dd00b7`.
+
+The new required image test regenerates this entire diagnostic artifact. It
+does not call the full credential transition/publication route and does not
+qualify a native UTF-7 decoder. Backend exception text is diagnostic provenance,
+not a requirement to imitate SQLAlchemy SQL strings in Rust; externally visible
+failure behavior and unchanged persistence still need end-to-end native proof.
+
+`python_text.rs` provides the native lossless text foundation. Its private
+representation uses String for scalar text and codepoints only when necessary.
+It does not merge adjacent surrogates, accepts Unicode noncharacters, rejects
+out-of-range values, and returns the original text when explicit scalar conversion
+fails. Shared production excerpt logic now delegates to this owner, retaining
+bounded prefix allocation. Three native tests cover all 39 frozen excerpt/scalar
+conversion boundaries plus codepoint validation and bounded iterator consumption.
+This is text-representation/excerpt qualification, not UTF-7 decoding or JSON
+serialization qualification. Complete decoding must precede excerpt truncation.
+
+Native UTF-7 decoding, strict encoded labels, broader malformed/incremental
+inputs, lossless response/metadata/error values and full credential-route behavior
+remain open.
+
+One specific integration question remains: the current native credential route
+maps `CanvasRetryUnavailable` to HTTP 503. This delivery-helper diagnostic does
+not establish the published full credential route's response to the database
+failure. Capture that route and its credential/publication/event effects before
+choosing the native error policy; do not infer parity from the helper alone.
 
 ## Reproduction
 
@@ -97,3 +140,7 @@ The published regeneration gate is
 `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`; leaving that variable unset does not
 qualify the image comparison. The native socket gate uses
 `scripts/run_canvas_timeout_consumer_oracle.py --native-executable <test-binary>`.
+
+Capture the application/provider/delivery diagnostic with the existing disposable
+fixture example: `capture_canvas_published_oracle utf7-consumer`. Its configured
+regeneration test is `utf7_consumer_diagnostic_matches_published_boundaries`.

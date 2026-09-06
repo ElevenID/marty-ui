@@ -107,6 +107,7 @@ def prepare():
                     "/verification/scripts/run_canvas_operations_oracle.py"
                 )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
+            ("MARTY_CANVAS_UTF7_CONSUMER_ORACLE", "utf7_consumer", "utf7_consumer"),
             ("MARTY_CANVAS_VALIDATION_BOUNDARY_ORACLE", "validation_boundary", "validation_boundary"),
             (
                 "MARTY_CANVAS_TIMEOUT_CONSUMER_ORACLE",

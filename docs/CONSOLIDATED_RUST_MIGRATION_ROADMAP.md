@@ -33,6 +33,27 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Lossless native text groundwork now preserves Python codepoints without implicit
+replacement, escaping or surrogate folding. Shared excerpt logic uses this owner;
+three tests replay the 39 frozen helper text boundaries and verify validation,
+supplementary/noncharacter handling and bounded prefix consumption. UTF-7 itself
+is not yet implemented or adopted.
+
+Two independent image captures now cover twelve UTF-7 managed-app, twelve
+provider and twelve real delivery-helper/save observations. Retained surrogates
+produce managed HTTP 500 or a failed delivery save with unchanged persisted state;
+truncated-away surrogates and supplementary scalar text succeed. This distinguishes
+rendering from provider values and database encoding/JSON validation. A required
+26th configured image test regenerates the diagnostic. Full credential transition,
+publication and native UTF-7/metadata/error integration remain open; this evidence
+does not qualify that broader scope. Details are in the text-boundary document.
+Local gates pass: 309 library, 5 worker, 28 managed HTTP, 22 behavior, 70 affected
+Python and 99 native TLS cases, plus strict Clippy and formatting. The full 26-test
+configured image suite passed in 217.10 seconds. Subsequent whole-row diagnostic
+strengthening passed its updated image comparison and the unchanged 90-case
+provider comparison. Preceding `a75e2fa43` CI and Rust analysis are green; this
+checkpoint still requires fresh hosted qualification.
+
 Continuation-ordinal parity now preserves the published interpreter's 4,300-digit
 limit without inventing a machine-integer cap. The previous implementation failed
 the independently captured regression; native checks now match all 60 new

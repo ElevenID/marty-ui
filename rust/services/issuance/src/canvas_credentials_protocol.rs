@@ -102,12 +102,10 @@ fn response_json(bytes: &[u8]) -> Option<Value> {
 }
 
 pub(crate) fn truncate_text(text: &str) -> String {
-    let mut chars = text.chars();
-    let mut excerpt = chars.by_ref().take(MAX_EXCERPT_CHARS).collect::<String>();
-    if chars.next().is_some() {
-        excerpt.push('…');
-    }
-    excerpt
+    crate::python_text::PythonText::excerpt(text.chars().map(u32::from), MAX_EXCERPT_CHARS)
+        .expect("Rust chars are valid Python codepoints")
+        .into_scalar()
+        .expect("a scalar prefix and scalar ellipsis remain scalar")
 }
 
 pub(crate) fn quote_identifier(value: &str) -> String {
