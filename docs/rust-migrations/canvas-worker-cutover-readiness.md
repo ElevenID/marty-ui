@@ -1,9 +1,10 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `505dcf50660e3ca74004d1765bb642c47fc234e7`,
+Status: latest qualified composed checkpoint `a6826de39d2d34a6163a11e78761353191337815`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 65 configured runtime tests (CI34048520936 and Rust CodeQL34048520957).
-The newer Retry-After replay still awaits its own Linux qualification. PR #814 draft and
+and 67 configured runtime tests (CI34051487770 and Rust CodeQL34051487785).
+All seven actual native Retry-After cases passed; the newer validation replay
+still awaits its own Linux qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -66,9 +67,12 @@ The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized
 integer clamping. Two captures agree; native replay is implemented. Focused Rust
 tests confirmed overflow fallback and the shared lossless parser correction
-passes local tests, including actual HTTP provider transport. Full composed Linux
-qualification remains pending. Gate 8
-is not closed by this reference alone.
+passes local tests, including actual HTTP provider transport. Correction
+`a6826de39` passed all 67 configured Linux tests in 1264.77 seconds, including
+all seven actual native HTTPS/deadline cases (runtime job101535819282).
+Image job101535819407 passed eight preflight and 24 startup cases; CI34051487770
+and Rust CodeQL34051487785 succeeded. This qualifies the frozen scheduling
+boundary, not remote OAuth, every header grammar or the whole-worker cutover.
 
 The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual
 same-job retry eligibility, recovery and provider failure/OAuth rejection

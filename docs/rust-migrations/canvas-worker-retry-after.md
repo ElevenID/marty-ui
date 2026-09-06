@@ -115,8 +115,14 @@ passes and one failure in 1064.79 seconds. Future/past dates, malformed,
 negative, zero and ordinary clamp stages passed with actual HTTPS requests;
 `huge_integer` alone failed the persisted-deadline comparison. Image
 job101532215068 and Rust CodeQL34050156545 passed. Correction `a6826de39`
-is now pushed for fresh CI34051487770/Rust CodeQL34051487785. This is a pending
-correction qualification, not a whole-worker pass.
+subsequently passed CI34051487770/Rust CodeQL34051487785. Runtime
+job101535819282 recorded all seven actual native HTTPS/deadline cases passing,
+including `huge_integer`, and all 67 configured tests passed in 1264.77 seconds
+at 18:51:50 UTC. The separate unconfigured 67-test run in 0.34 seconds is not
+runtime evidence. Image job101535819407 passed eight entrypoint cases at
+18:36:18 UTC and all 24 startup/configuration cases at 18:36:39 UTC, retaining
+the original issuance API health check. This qualifies the frozen scheduling
+boundary at `a6826de39`, not a whole-worker pass or the newer validation replay.
 
 This corpus establishes retry scheduling, not execution after a one-day delay,
 remote OAuth revocation, every header grammar, or all error/privacy boundaries.

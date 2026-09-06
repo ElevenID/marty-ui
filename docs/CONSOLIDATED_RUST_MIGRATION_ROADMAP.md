@@ -46,14 +46,17 @@ this does not close gate 9.
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,
 negative/zero and clamped/oversized integer headers. Two independent captures
-match exactly; native replay is implemented and awaiting Linux qualification.
+match exactly; native replay is implemented and qualified on Linux.
 Focused tests confirmed oversized-integer fallback in both Rust helpers; a
 single shared parser correction now passes local regressions and a real HTTP
 provider test. The uncorrected replay at `f9ee06b42` confirmed the oversized-header
 failure in Linux (66 configured passes, one failure; CI34050156566).
-Correction `a6826de39` is pushed and awaiting fresh CI34051487770 and
-Rust CodeQL34051487785. Full composed Linux qualification remains required for gate 8;
-this is not a completed worker cutover.
+Correction `a6826de39` passed CI34051487770 and Rust CodeQL34051487785:
+all 67 configured runtime tests passed in 1264.77 seconds, explicitly including
+all seven native HTTPS/deadline cases. Image job101535819407 passed eight
+preflight and 24 packaged startup cases. This qualifies the frozen scheduling
+boundary; it is not a completed worker cutover. Later checkpoints still need
+their own exact-head checks.
 
 The [packaged startup/configuration gate](rust-migrations/canvas-worker-image-startup.md)
 passes locally for all eight frozen startup cases under three key/database
