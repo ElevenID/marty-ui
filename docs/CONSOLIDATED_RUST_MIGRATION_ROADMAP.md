@@ -107,11 +107,14 @@ privacy observations, fresh exact-head qualification and whole-worker acceptance
 remain required before closing gates 13/14.
 Existing frozen observations, reachable features and other-worker code remain untouched.
 
-Latest UI checkpoint `2354f509bedd4d6e53e80bacc766b603b7e9f3a0` passed
-CI34061058905 and all exact-head checks, including Rust CodeQL34061058903. Runtime
-job101561575585 passed 70 configured tests in 1530.37 seconds, with twenty
-actual native validation/failure cases and all three configured PostgreSQL
-worker-contract entries in 95.15 seconds. Its image job also passed.
+Latest qualified UI checkpoint `5bf3f77ee8841043ef84248d3a24d96b3b8142e4` passed
+CI34062785614 and all applicable exact-head checks, including Rust CodeQL34062785658.
+Runtime job101566211338 passed 70 configured tests in 1534.56 seconds, retaining
+the actual native validation/failure cases, and all four configured PostgreSQL
+worker-contract entries in 95.03 seconds. Its image job also passed. This qualifies
+the six-case privacy checkpoint; the subsequent twelve-case processing extension
+and [OAuth DELETE fixture preparation](rust-migrations/canvas-worker-oauth-revocation.md)
+require fresh hosted qualification.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 

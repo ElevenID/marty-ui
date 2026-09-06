@@ -113,6 +113,13 @@ hosted qualification; it does not close the whole-worker gates.
 
 ## Unexpected processing boundary
 
+The preceding six-case checkpoint `5bf3f77ee8841043ef84248d3a24d96b3b8142e4`
+subsequently passed CI34062785614 and all applicable exact-head checks, including
+Rust CodeQL34062785658. The configured Linux worker database group passed all
+four entries in 95.03 seconds; the separate 70-entry published-schema/runtime
+group passed in 1534.56 seconds (job101566211338). The image job also passed.
+This qualification predates the following processing extension.
+
 The first six worker cases were already passing when the remaining processing
 cases were added. With the new typed carrier but before handler integration,
 all six processing cases failed because no unexpected-job event was emitted.
