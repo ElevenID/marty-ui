@@ -150,6 +150,16 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_validation_boundary() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "validation_boundary",
+            "validation-boundary",
+            "validation_boundary",
+            "MARTY_CANVAS_VALIDATION_BOUNDARY_ORACLE=1",
+        )))
+        .await
+    }
+
     pub async fn start_with_timeout_consumer() -> Result<Self, String> {
         Self::start_probe(Some((
             "timeout_consumer",

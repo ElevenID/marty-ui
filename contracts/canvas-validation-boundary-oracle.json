@@ -1,0 +1,435 @@
+{
+  "boundary": "published create_app middleware, managed route and full adapter; lifespan disabled; synthetic repository/file/HTTP ports",
+  "observations": [
+    {
+      "body": {
+        "api_base_url": null,
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "Unsupported Canvas Credentials provider: unknown",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "unknown",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": false,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "unsupported_skips_bad_file",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": null,
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "Unsupported Canvas Credentials provider: unknown",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "unknown",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": false,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [
+        {
+          "kind": "metadata",
+          "secret_id": "secret-review"
+        }
+      ],
+      "name": "unsupported_skips_tenant_value",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "bridge_invalid_file",
+      "requests": [],
+      "status": 500
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "bridge_missing_url_invalid_file",
+      "requests": [],
+      "status": 500
+    },
+    {
+      "body": {
+        "api_base_url": null,
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "CANVAS_CREDENTIALS_PUBLISH_URL is not configured",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "bridge",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "bridge_missing_url_with_token",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": null,
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": null,
+        "issuer_id": null,
+        "ok": true,
+        "provider": "bridge",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": false,
+        "validated_at": "$timestamp",
+        "validation_url": "https://bridge.example.invalid/publish"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "bridge_without_token",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": null,
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": null,
+        "issuer_id": null,
+        "ok": true,
+        "provider": "bridge",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://bridge.example.invalid/publish"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "bridge_direct_skips_bad_file",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_invalid_file",
+      "requests": [],
+      "status": 500
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_invalid_scope_invalid_file",
+      "requests": [],
+      "status": 500
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "CANVAS_CREDENTIALS_BADGECLASS_ID is required for real Canvas Credentials publish",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_missing_badge_with_token",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token",
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_missing_issuer_reads_twice",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": false,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token",
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_missing_issuer_rotates_empty",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [
+        "operator-token",
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_missing_issuer_rotates_invalid",
+      "requests": [],
+      "status": 500
+    },
+    {
+      "body": {
+        "api_base_url": "http://provider.invalid",
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "Canvas Credentials API base URL must be a trusted HTTPS URL",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_invalid_base_with_token",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": null,
+        "badgeclass_id": null,
+        "error": "CANVAS_CREDENTIALS_ASSERTION_SCOPE must be 'badgeclasses' or 'issuers'",
+        "issuer_id": null,
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": null
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_invalid_scope_with_token",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": "CANVAS_CREDENTIALS_API_TOKEN is required for Canvas Credentials validation",
+        "issuer_id": "issuer-review",
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": null,
+        "response_excerpt": null,
+        "status_code": null,
+        "token_configured": false,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "real_without_token",
+      "requests": [],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": null,
+        "issuer_id": "issuer-review",
+        "ok": true,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": null,
+        "status_code": 200,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [
+        "operator-token"
+      ],
+      "lookups": [],
+      "name": "real_file_success",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-file",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": null,
+        "issuer_id": "issuer-review",
+        "ok": true,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": null,
+        "status_code": 200,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [
+        {
+          "kind": "metadata",
+          "secret_id": "secret-review"
+        },
+        {
+          "kind": "value",
+          "organization_id": "org-review",
+          "secret_id": "secret-review"
+        }
+      ],
+      "name": "real_tenant_skips_bad_file",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-tenant",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Canvas Credentials API token secret was not found"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [
+        {
+          "kind": "metadata",
+          "secret_id": "secret-review"
+        }
+      ],
+      "name": "tenant_wrong_owner_blocks_adapter",
+      "requests": [],
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Canvas Credentials configuration requires an organization-owned API token secret"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "tenant_missing_reference_blocks_adapter",
+      "requests": [],
+      "status": 400
+    }
+  ],
+  "sources": {
+    "adapter": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",
+    "main": "bdbbc759b41ba40c9218221c8ac4dc0075cfb5f330e9fd3b33dd99e8aef5b475",
+    "router": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+  }
+}

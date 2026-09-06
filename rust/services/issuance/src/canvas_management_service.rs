@@ -61,6 +61,8 @@ pub enum CanvasManagementRepositoryError {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CanvasPlatformManagementError {
+    #[error("Canvas Credentials validation failed internally")]
+    CanvasCredentialsValidationFailed,
     #[error(transparent)]
     Security(#[from] TransactionReadError),
     #[error(transparent)]
@@ -794,10 +796,10 @@ impl CanvasPlatformManagementService {
         let canvas_credentials = self
             .validated_canvas_credentials(organization_id, Some(&request.canvas_credentials))
             .await?;
-        Ok(self
-            .canvas_credentials_validator()?
+        self.canvas_credentials_validator()?
             .validate(organization_id, &canvas_credentials)
-            .await)
+            .await
+            .map_err(|_| CanvasPlatformManagementError::CanvasCredentialsValidationFailed)
     }
 
     pub async fn list_integration_secrets(

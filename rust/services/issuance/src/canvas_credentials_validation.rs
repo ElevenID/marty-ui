@@ -142,7 +142,27 @@ pub trait CanvasCredentialsValidator: Send + Sync {
         &self,
         organization_id: &str,
         canvas_credentials: &Map<String, Value>,
-    ) -> CanvasCredentialsValidationResult;
+    ) -> Result<CanvasCredentialsValidationResult, CanvasCredentialsValidationError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CanvasCredentialsValidationError {
+    #[error(transparent)]
+    OperatorSecret(#[from] CanvasOperatorSecretError),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ValidationPreparationError {
+    #[error("{0}")]
+    Configuration(String),
+    #[error(transparent)]
+    OperatorSecret(#[from] CanvasOperatorSecretError),
+}
+
+impl From<String> for ValidationPreparationError {
+    fn from(error: String) -> Self {
+        Self::Configuration(error)
+    }
 }
 
 #[derive(Clone)]
@@ -165,6 +185,14 @@ impl std::fmt::Debug for CanvasCredentialsValidationService {
 }
 
 impl CanvasCredentialsValidationService {
+    /// Override the trusted operator file reader without allowing tenant paths.
+    pub fn with_operator_secret_reader(
+        mut self,
+        reader: Arc<dyn CanvasOperatorSecretReader>,
+    ) -> Self {
+        self.operator_secrets = reader;
+        self
+    }
     #[must_use]
     pub fn new(
         config: CanvasCredentialsValidationConfig,
@@ -327,103 +355,89 @@ impl CanvasCredentialsValidator for CanvasCredentialsValidationService {
         &self,
         organization_id: &str,
         canvas_credentials: &Map<String, Value>,
-    ) -> CanvasCredentialsValidationResult {
+    ) -> Result<CanvasCredentialsValidationResult, CanvasCredentialsValidationError> {
         let provider = self.provider(canvas_credentials);
-        let token = match self.token(organization_id, canvas_credentials).await {
-            Ok(token) => token,
-            Err(error) => {
-                let mut result = CanvasCredentialsValidationResult::empty(provider);
-                result.error = Some(error.to_string());
-                return result;
-            }
-        };
         if provider == "bridge" {
+            let token = self.token(organization_id, canvas_credentials).await?;
             let mut result = CanvasCredentialsValidationResult::empty(provider);
             result.token_configured = token.is_some();
             let Some(publish_url) = self.config.publish_url.clone() else {
                 result.error = Some("CANVAS_CREDENTIALS_PUBLISH_URL is not configured".to_owned());
-                return result;
+                return Ok(result);
             };
             result.ok = true;
             result.validation_url = Some(publish_url);
-            return result;
+            return Ok(result);
         }
         if !matches!(provider.as_str(), "badgr_api" | "canvas_credentials_api") {
             let mut result = CanvasCredentialsValidationResult::empty(&provider);
             result.error = Some(format!(
                 "Unsupported Canvas Credentials provider: {provider}"
             ));
-            return result;
+            return Ok(result);
         }
 
-        let mut result = CanvasCredentialsValidationResult::empty(&provider);
-        let (api_base_url, api_origin) = match self.base_url(canvas_credentials) {
+        // Preserve the published try/catch boundary, including the second lazy
+        // token lookup after URL construction fails. File rotation is observable.
+        let prepared: Result<_, ValidationPreparationError> = async {
+            let (api_base_url, api_origin) = self.base_url(canvas_credentials)?;
+            let scope = self.assertion_scope(canvas_credentials)?;
+            let issuer_id = map_text(canvas_credentials, "issuer_id")
+                .map(str::to_owned).or_else(|| self.config.issuer_id.clone());
+            let badgeclass_id = map_text(canvas_credentials, "badgeclass_id")
+                .map(str::to_owned).or_else(|| self.config.badgeclass_id.clone());
+            if badgeclass_id.is_none() {
+                return Err(ValidationPreparationError::Configuration(
+                    "CANVAS_CREDENTIALS_BADGECLASS_ID is required for real Canvas Credentials publish".into()));
+            }
+            let token = self.token(organization_id, canvas_credentials).await?;
+            let validation_url = self.validation_url(&api_base_url, &scope, issuer_id.as_deref(), badgeclass_id.as_deref())?;
+            let mut result = CanvasCredentialsValidationResult::empty(&provider);
+            result.api_base_url = Some(api_base_url);
+            result.assertion_scope = Some(scope);
+            result.issuer_id = issuer_id;
+            result.badgeclass_id = badgeclass_id;
+            result.validation_url = Some(validation_url);
+            Ok((result, api_origin, token))
+        }.await;
+        let (mut result, api_origin, token) = match prepared {
             Ok(value) => value,
-            Err(error) => {
+            Err(ValidationPreparationError::OperatorSecret(error)) => return Err(error.into()),
+            Err(ValidationPreparationError::Configuration(error)) => {
+                let mut result = CanvasCredentialsValidationResult::empty(&provider);
                 result.api_base_url = map_text(canvas_credentials, "api_base_url")
                     .map(str::to_owned)
                     .or_else(|| self.config.api_base_url.clone())
                     .or_else(|| Some(DEFAULT_API_BASE_URL.to_owned()));
-                result.token_configured = token.is_some();
+                result.token_configured = self
+                    .token(organization_id, canvas_credentials)
+                    .await?
+                    .is_some();
                 result.error = Some(error);
-                return result;
+                return Ok(result);
             }
         };
-        result.api_base_url = Some(api_base_url.clone());
-        let scope = match self.assertion_scope(canvas_credentials) {
-            Ok(scope) => scope,
-            Err(error) => {
-                result.token_configured = token.is_some();
-                result.error = Some(error);
-                return result;
-            }
-        };
-        result.assertion_scope = Some(scope.clone());
-        result.issuer_id = map_text(canvas_credentials, "issuer_id")
-            .map(str::to_owned)
-            .or_else(|| self.config.issuer_id.clone());
-        result.badgeclass_id = map_text(canvas_credentials, "badgeclass_id")
-            .map(str::to_owned)
-            .or_else(|| self.config.badgeclass_id.clone());
-        if result.badgeclass_id.is_none() {
-            result.token_configured = token.is_some();
-            result.error = Some(
-                "CANVAS_CREDENTIALS_BADGECLASS_ID is required for real Canvas Credentials publish"
-                    .to_owned(),
-            );
-            return result;
-        }
-        let validation_url = match self.validation_url(
-            &api_base_url,
-            &scope,
-            result.issuer_id.as_deref(),
-            result.badgeclass_id.as_deref(),
-        ) {
-            Ok(url) => url,
-            Err(error) => {
-                result.token_configured = token.is_some();
-                result.error = Some(error);
-                return result;
-            }
-        };
-        result.validation_url = Some(validation_url.clone());
         let Some(token) = token else {
             result.error = Some(
                 "CANVAS_CREDENTIALS_API_TOKEN is required for Canvas Credentials validation"
                     .to_owned(),
             );
-            return result;
+            return Ok(result);
         };
         result.token_configured = true;
         let response = match self
             .transport
-            .get(&api_origin, &validation_url, &token)
+            .get(
+                &api_origin,
+                result.validation_url.as_deref().expect("prepared URL"),
+                &token,
+            )
             .await
         {
             Ok(response) => response,
             Err(()) => {
                 result.error = Some("Canvas Credentials validation request failed".to_owned());
-                return result;
+                return Ok(result);
             }
         };
         result.status_code = Some(response.status_code);
@@ -436,7 +450,7 @@ impl CanvasCredentialsValidator for CanvasCredentialsValidationService {
             ));
             result.response_excerpt = response.response_excerpt;
         }
-        result
+        Ok(result)
     }
 }
 
@@ -646,13 +660,14 @@ mod tests {
         );
         service.operator_secrets = reader.clone();
         assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 0);
-        let empty = service.validate("org-review", &Map::new()).await;
+        let empty = service.validate("org-review", &Map::new()).await.unwrap();
         assert!(empty.ok && empty.token_configured);
         assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
         let canonical = json!({"provider":"bridge","api_token_secret_id":"missing"});
         let nonempty = service
             .validate("org-review", canonical.as_object().unwrap())
-            .await;
+            .await
+            .unwrap();
         assert!(nonempty.ok && !nonempty.token_configured);
         assert_eq!(
             reader.0.load(std::sync::atomic::Ordering::SeqCst),
@@ -674,7 +689,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_operator_utf8_returns_safe_failure_without_provider_http() {
+    async fn invalid_operator_utf8_returns_typed_error_without_provider_http() {
         let transport = Arc::new(Transport::default());
         let config = CanvasCredentialsValidationConfig {
             operator_api_token_file: Some("/synthetic/private-token-path".into()),
@@ -688,12 +703,11 @@ mod tests {
         );
         service.operator_secrets = Arc::new(InvalidOperatorFile);
         let result = service.validate("org-review", &Map::new()).await;
-        assert!(!result.ok);
-        assert!(!result.token_configured);
-        assert_eq!(result.status_code, None);
         assert_eq!(
-            result.error.as_deref(),
-            Some("Canvas Credentials operator token file is not valid UTF-8")
+            result,
+            Err(CanvasCredentialsValidationError::OperatorSecret(
+                CanvasOperatorSecretError::InvalidUtf8
+            ))
         );
         assert!(transport.calls.lock().unwrap().is_empty());
     }
@@ -766,7 +780,10 @@ mod tests {
             Arc::new(Secret(Some("sensitive-token".to_owned()))),
             transport.clone(),
         );
-        let result = service.validate("org-1", &credentials("badgr_api")).await;
+        let result = service
+            .validate("org-1", &credentials("badgr_api"))
+            .await
+            .unwrap();
         assert!(!result.ok);
         assert_eq!(result.status_code, Some(403));
         assert_eq!(result.request_id.as_deref(), Some("request-1"));
@@ -801,7 +818,10 @@ mod tests {
             transport.clone(),
         );
 
-        let result = service.validate("org-1", &credentials("badgr_api")).await;
+        let result = service
+            .validate("org-1", &credentials("badgr_api"))
+            .await
+            .unwrap();
 
         assert!(result.ok);
         assert_eq!(result.status_code, Some(204));
@@ -820,7 +840,8 @@ mod tests {
             transport.clone(),
         )
         .validate("org-1", &credentials("bridge"))
-        .await;
+        .await
+        .unwrap();
         assert!(!bridge.ok);
         assert_eq!(
             bridge.error.as_deref(),
@@ -833,7 +854,8 @@ mod tests {
             transport.clone(),
         )
         .validate("org-1", &credentials("badgr_api"))
-        .await;
+        .await
+        .unwrap();
         assert!(!foreign_origin.ok);
         assert!(foreign_origin.error.unwrap().contains("ALLOWLIST"));
         assert!(transport.calls.lock().unwrap().is_empty());
@@ -852,7 +874,8 @@ mod tests {
             transport.clone(),
         )
         .validate("org-1", &Map::new())
-        .await;
+        .await
+        .unwrap();
         assert!(result.ok);
         assert_eq!(result.provider, "bridge");
         assert!(result.token_configured);

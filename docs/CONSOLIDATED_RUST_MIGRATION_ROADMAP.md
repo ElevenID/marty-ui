@@ -33,6 +33,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [managed validation boundary](rust-migrations/canvas-validation-boundary.md)
+now freezes20 responses and lookup/file/HTTP effects from the actual published
+application middleware, route and adapter; two independent captures agree. The
+native full management router matches all20 after restoring typed UTF-8 failures
+as plain500 responses, unsupported-provider short-circuiting, configuration-error
+result shape, and the second lazy token lookup that observes file rotation.
+Canonical tenant-secret checks are unchanged. Local285 library,5 worker,
+28 management HTTP,22 behavior and40 ownership/workflow/image tests plus strict
+Clippy pass. The new mandatory published-image gate expands the schema suite to21.
+The complete configured21-test run passes (134.71s), with no ignored/filtered cases.
+Fresh hosted qualification is required; source completion is not deployment.
+
 The native operation-deadline owner is now wired in the candidate source to both
 status synchronization and credentials-validation HTTP. Startup retains the
 original floating-point value rather than rejecting Python-accepted timeout
@@ -50,15 +62,17 @@ Final full configured schema qualification passes all20 tests (126.72s), includi
 both lifecycle variants. An earlier19/20 run failed at Docker cleanup; it is
 retained as failed evidence, not reclassified or masked by excluding a test.
 
-Draft#814 remains unmerged. Hosted head40fccb65e has two failures with one cause:
+Draft#814 remains unmerged. Prior hosted head40fccb65e had two failures with one cause:
 the loopback certificate fixture's four Python crypto imports lacked ownership
 metadata. Exact test-only allowances now document those imports; a regression
 proves they authorize neither service imports nor duplicate fixture imports.
 No guard logic, scan scope or production crypto owner was relaxed. Native TLS
-replay is now a mandatory CI step. These integration changes require fresh hosted
-checks after commit; prior-head green checks cannot qualify them.
+replay is now a mandatory CI step. Transport headcd5396ef2 completed CI34002852973
+and Rust CodeQL34002852955 successfully. The new validation-boundary repair above
+requires its own fresh hosted checks; prior-head green checks cannot qualify it.
 
-Remaining cutover gates include managed-validation error/lookup ordering,
+The20-case validation continuation above supersedes the earlier error/lookup
+ordering finding for its frozen inputs. Remaining cutover gates include broader
 URL/template/response-encoding behavior, backpressured writes and early replies,
 whole-worker/runtime adoption and every deployment consumer. No reachable Python
 was deleted or pending-only lifecycle default switched. No deployment changed.

@@ -1,0 +1,25 @@
+{
+  "schema": "marty.canvas-validation-boundary-scenarios/v1",
+  "cases": [
+    {"name":"unsupported_skips_bad_file","provider":"unknown","files":["invalid_utf8"]},
+    {"name":"unsupported_skips_tenant_value","provider":"unknown","files":["invalid_utf8"],"config":{"api_token_secret_id":"secret-review"}},
+    {"name":"bridge_invalid_file","provider":"bridge","files":["invalid_utf8"]},
+    {"name":"bridge_missing_url_invalid_file","provider":"bridge","publish_url":"","files":["invalid_utf8"]},
+    {"name":"bridge_missing_url_with_token","provider":"bridge","publish_url":"","files":["value"]},
+    {"name":"bridge_without_token","provider":"bridge"},
+    {"name":"bridge_direct_skips_bad_file","provider":"bridge","direct":"synthetic-direct","files":["invalid_utf8"]},
+    {"name":"real_invalid_file","provider":"badgr_api","files":["invalid_utf8"]},
+    {"name":"real_invalid_scope_invalid_file","provider":"badgr_api","scope":"invalid","files":["invalid_utf8"]},
+    {"name":"real_missing_badge_with_token","provider":"badgr_api","badgeclass_id":"","files":["value"]},
+    {"name":"real_missing_issuer_reads_twice","provider":"badgr_api","scope":"issuers","issuer_id":"","files":["value","value"]},
+    {"name":"real_missing_issuer_rotates_empty","provider":"badgr_api","scope":"issuers","issuer_id":"","files":["value","empty"]},
+    {"name":"real_missing_issuer_rotates_invalid","provider":"badgr_api","scope":"issuers","issuer_id":"","files":["value","invalid_utf8"]},
+    {"name":"real_invalid_base_with_token","provider":"badgr_api","api_base_url":"http://provider.invalid","files":["value"]},
+    {"name":"real_invalid_scope_with_token","provider":"badgr_api","scope":"invalid","files":["value"]},
+    {"name":"real_without_token","provider":"badgr_api"},
+    {"name":"real_file_success","provider":"badgr_api","files":["value"]},
+    {"name":"real_tenant_skips_bad_file","provider":"badgr_api","files":["invalid_utf8"],"config":{"api_token_secret_id":"secret-review"}},
+    {"name":"tenant_wrong_owner_blocks_adapter","provider":"bridge","files":["invalid_utf8"],"config":{"api_token_secret_id":"secret-review"},"secret_organization":"org-other"},
+    {"name":"tenant_missing_reference_blocks_adapter","provider":"bridge","files":["invalid_utf8"],"config":{"provider":"bridge"}}
+  ]
+}

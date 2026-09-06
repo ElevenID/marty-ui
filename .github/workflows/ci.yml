@@ -725,6 +725,7 @@ jobs:
           "${executables[0]}" --list | grep -Fx 'status_provider_matches_frozen_protocol: test'
           "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'
           "${executables[0]}" --list | grep -Fx 'provider_configuration_matches_published_helpers: test'
+          "${executables[0]}" --list | grep -Fx 'validation_boundary_matches_published_http: test'
           "${executables[0]}" --list | grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'
           "${executables[0]}" --list | grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'
           "${executables[0]}" --nocapture --test-threads=1

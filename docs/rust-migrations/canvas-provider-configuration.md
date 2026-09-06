@@ -220,3 +220,15 @@ cases; failure-excerpt truncation versus full response completion; persistence,
 recovery and all-consumer cutover. The17-case socket baseline is not proof of all
 those behaviors. Reachable Python stays until its replacement gates pass; no
 runtime feature, other-worker change or deployment was removed.
+
+## Managed validation boundary continuation
+
+The [20-case published application replay](canvas-validation-boundary.md) now
+supersedes the earlier invalid-UTF-8 and unsupported-provider ordering findings
+for its frozen inputs. It also catches configuration-error field projection and
+the second lazy token read on validation-URL failure, including file rotation.
+The native HTTP router matches every captured status/content-type/body and
+file/lookup/outbound-HTTP observation. Typed internal errors preserve the plain500
+boundary without leaking secret material; tenant ownership policy is unchanged.
+The new mandatory published-image gate expands the schema suite to21 tests.
+Broader URL/template, encoding, transport and all-consumer gates remain open.

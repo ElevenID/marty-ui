@@ -110,6 +110,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'provider_configuration_matches_published_helpers: test'"
         in gate["run"]
     )
+    assert "grep -Fx 'validation_boundary_matches_published_http: test'" in gate["run"]
     assert (
         "grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'"
         in gate["run"]
