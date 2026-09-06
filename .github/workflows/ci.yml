@@ -688,49 +688,10 @@ jobs:
         env:
           FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
         run: target/debug/flow-postgres-contract --test-threads=1
-      - name: Test native Canvas against published issuance migrations
+      - name: Run isolated database contract suites concurrently
         working-directory: rust
         shell: bash
-        env:
-          MARTY_CANVAS_PUBLISHED_SCHEMA_TEST: "1"
-        run: |
-          set -euo pipefail
-          # Reuse the frozen oracle pins, not mutable release tags. The test
-          # owns a separate tmpfs database; it never receives a deployment URL.
-          mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' ../contracts/canvas-worker-consumer-range-oracle.json)
-          [[ ${#images[@]} == 2 ]]
-          for image in "${images[@]}"; do
-            [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]]
-            docker pull "$image"
-          done
-          mapfile -t executables < <(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.target.name == "canvas_published_schema_contract")
-            | select(.executable != null) | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
-          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
-          "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'operations_match_frozen_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'operations_reads_match_frozen_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'operations_inputs_match_frozen_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'operations_jobs_match_frozen_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'
-          "${executables[0]}" --list | grep -Fx 'enqueue_inputs_match_frozen_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'operations_resolution_matches_corrected_published_schema: test'
-          "${executables[0]}" --list | grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'
-          "${executables[0]}" --list | grep -Fx 'review_inputs_match_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'review_lifecycle_matches_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'status_provider_matches_published_python: test'
-          "${executables[0]}" --list | grep -Fx 'status_provider_matches_frozen_protocol: test'
-          "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'
-          "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_unicode_failures_and_recovery: test'
-          "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_charset_failures_and_recovery: test'
-          "${executables[0]}" --list | grep -Fx 'provider_configuration_matches_published_helpers: test'
-          "${executables[0]}" --list | grep -Fx 'validation_boundary_matches_published_http: test'
-          "${executables[0]}" --list | grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'
-          "${executables[0]}" --list | grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'
-          "${executables[0]}" --nocapture --test-threads=1
+        run: python3 ../scripts/ci/run-db-contract-groups.py
       - name: Test native Canvas operation timeout TLS parity
         working-directory: rust
         run: |
@@ -750,85 +711,6 @@ jobs:
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
-
-      - name: Test Rust database and runtime contracts
-        working-directory: rust
-        shell: bash
-        env:
-          MARTY_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_db_contracts_test
-          CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          ISSUANCE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          ORGANIZATION_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-          TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-        run: |
-          set -euo pipefail
-          mapfile -t contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'contracts-*' -perm -u+x)
-          if (( ${#contracts[@]} != 1 )); then
-            printf 'Expected one contracts executable, found %s.\n' "${#contracts[@]}" >&2
-            exit 1
-          fi
-          "${contracts[0]}" --ignored --test-threads=1
-          mapfile -t registry_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'registry_storage_contract-*' -perm -u+x)
-          if (( ${#registry_contracts[@]} != 1 )); then
-            printf 'Expected one signing registry contract executable, found %s.\n' "${#registry_contracts[@]}" >&2
-            exit 1
-          fi
-          "${registry_contracts[0]}" --ignored --test-threads=1
-          mapfile -t document_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'document_storage_contract-*' -perm -u+x)
-          if (( ${#document_contracts[@]} != 1 )); then
-            printf 'Expected one signing document contract executable, found %s.\n' "${#document_contracts[@]}" >&2
-            exit 1
-          fi
-          "${document_contracts[0]}" --ignored --test-threads=1
-          mapfile -t issuer_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuer_profile_storage_contract-*' -perm -u+x)
-          if (( ${#issuer_profile_contracts[@]} != 1 )); then
-            printf 'Expected one issuer profile contract executable, found %s.\n' "${#issuer_profile_contracts[@]}" >&2
-            exit 1
-          fi
-          "${issuer_profile_contracts[0]}" --ignored --test-threads=1
-          test -x target/debug/credential-template-postgres-contract
-          test -x target/debug/presentation-policy-postgres-contract
-          target/debug/credential-template-postgres-contract --test-threads=1
-          target/debug/presentation-policy-postgres-contract --test-threads=1
-          mapfile -t issuance_transaction_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuance_transaction_postgres_contract-*' -perm -u+x)
-          if (( ${#issuance_transaction_contracts[@]} != 1 )); then
-            printf 'Expected one Issuance transaction PostgreSQL contract executable, found %s.\n' "${#issuance_transaction_contracts[@]}" >&2
-            exit 1
-          fi
-          "${issuance_transaction_contracts[0]}" --test-threads=1
-          mapfile -t issuance_credential_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'credential_postgres_contract-*' -perm -u+x)
-          if (( ${#issuance_credential_contracts[@]} != 1 )); then
-            printf 'Expected one Issuance credential PostgreSQL contract executable, found %s.\n' "${#issuance_credential_contracts[@]}" >&2
-            exit 1
-          fi
-          "${issuance_credential_contracts[0]}" --test-threads=1
-          mapfile -t canvas_issuance_contracts < <(
-            find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-              \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
-              | sort
-          )
-          if (( ${#canvas_issuance_contracts[@]} != 10 )); then
-            printf 'Expected ten issuance PostgreSQL contract executables (nine Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
-            exit 1
-          fi
-          for contract in "${canvas_issuance_contracts[@]}"; do
-            "$contract" --test-threads=1
-          done
-          test -x target/debug/credential-template-migration-contract
-          target/debug/credential-template-migration-contract --test-threads=1
-          test -x target/debug/trust-profile-migration-contract
-          target/debug/trust-profile-migration-contract --test-threads=1
-          test -x target/debug/organization-migration-contract
-          test -x target/debug/organization-application-postgres-contract
-          test -x target/debug/organization-repository-postgres-contract
-          target/debug/organization-migration-contract --test-threads=1
-          target/debug/organization-application-postgres-contract --test-threads=1
-          target/debug/organization-repository-postgres-contract --test-threads=1
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes

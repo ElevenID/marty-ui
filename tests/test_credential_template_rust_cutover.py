@@ -43,8 +43,10 @@ def test_native_image_and_ci_target_preserve_both_service_ports() -> None:
 
 def test_native_migration_and_repository_contracts_run_against_postgresql_in_ci() -> None:
     workflow = text(".github/workflows/ci.yml")
-    assert "CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL:" in workflow
-    assert "target/debug/credential-template-migration-contract" in workflow
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
+    assert "export CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL=" in runtime
+    assert "target/debug/credential-template-migration-contract --test-threads=1" in runtime
     assert 'contains("marty-credential-template")' in workflow
 
 

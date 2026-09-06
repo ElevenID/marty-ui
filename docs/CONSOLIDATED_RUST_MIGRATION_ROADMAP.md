@@ -33,6 +33,23 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Protected main advanced through CI/cache repair PR #815 at
+`f5c4da685f5723a7614649c883bfaa540dd153f1`, conflicting with PR #814 in the
+workflow, workflow tests, worker lifecycle and process-signal diagnostics. GitHub
+reported the charset head `3c4995e8e` as unmergeable, with no check suites; this
+was an integration conflict, not a failed test or permission configuration.
+The reconciliation retains main's cache improvements and concurrent isolated
+database runner, moves all 20 newer Canvas assertions into the extracted script,
+and keeps the separate TLS gate. Both connection-release and worker-cancellation
+cleanup protections remain, with distinct responsibilities and existing tests.
+Local 70 workflow/image/ownership/cutover checks, 297 library, 5 worker, 28 managed
+HTTP, 22 behavior, strict Clippy and 68 TLS cases pass. The configured worker
+PostgreSQL suite passes all three tests (92.63 seconds), including all 60 renewal
+outcomes and lifecycle/disposal checks. All 23 configured published-image/schema
+tests also pass (140.67 seconds, none ignored or filtered). POSIX process signals still require
+hosted Linux evidence; the Windows gate explicitly does not claim to exercise them.
+This integration does not approve worker cutover or change any deployment.
+
 Charset-header qualification adds 177 independent observations covering ordinary,
 quoted and RFC2231 parameters, continuation ordering, label decoding, registered
 dotted aliases, malformed-group error identity, and JSON/empty-body bypasses.

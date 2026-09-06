@@ -1,6 +1,12 @@
 //! Initialized Canvas worker ownership, including awaited PostgreSQL disposal.
 
-use std::{convert::Infallible, future::Future, time::Duration};
+use std::{
+    convert::Infallible,
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use mmf_runtime::managed_task::{ManagedTask, TaskCompletion, TaskJoinError};
 use sqlx::{postgres::PgPoolOptions, Connection, PgPool};
@@ -17,6 +23,8 @@ pub enum WorkerShutdown {
 /// been dropped. SQLx otherwise pings it indefinitely on release; a cancelled
 /// lock-waiting query can then prevent pool.close() from acknowledging cleanup.
 /// This is not a statement deadline and never truncates an owned active query.
+/// It also covers a released child query while the worker remains active;
+/// closing admission on whole-worker cancellation does not cover that case.
 pub fn worker_pool_options() -> PgPoolOptions {
     PgPoolOptions::new().after_release(|connection, _| {
         Box::pin(async move {
@@ -29,6 +37,38 @@ pub fn worker_pool_options() -> PgPoolOptions {
             }
         })
     })
+}
+
+// Close the pool's admission gate before dropping the operation's SQL futures.
+// Otherwise SQLx can start a return-to-pool ping on a cancelled, blocked query
+// before the asynchronous cleanup task marks the pool closed. That ping waits
+// for the query, so cleanup can never finish while the database lock is held.
+struct ClosePoolBeforeOperationDrop<F> {
+    pool: PgPool,
+    operation: Pin<Box<F>>,
+    completed: bool,
+}
+
+impl<F: Future> Future for ClosePoolBeforeOperationDrop<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = self.operation.as_mut().poll(context);
+        self.completed = result.is_ready();
+        result
+    }
+}
+
+impl<F> Drop for ClosePoolBeforeOperationDrop<F> {
+    fn drop(&mut self) {
+        // SQLx 0.9 marks the pool closed synchronously. The managed cleanup
+        // below still awaits close() fully; this is not disposal acknowledgment.
+        // Normal completion and panic retain the existing cleanup sequence;
+        // only destruction of an unfinished operation needs this ordering.
+        if !self.completed && !std::thread::panicking() {
+            drop(self.pool.close());
+        }
+    }
 }
 
 /// Own the pool before invoking any fallible worker initialization. Cancellation
@@ -46,10 +86,17 @@ where
     W: Future<Output = Result<T, E>> + Send + 'static,
 {
     let cleanup_pool = pool.clone();
-    ManagedTask::spawn(async move { operation(pool).await }, move || async move {
-        cleanup_pool.close().await;
-        Ok(())
-    })
+    ManagedTask::spawn(
+        ClosePoolBeforeOperationDrop {
+            pool: pool.clone(),
+            operation: Box::pin(async move { operation(pool).await }),
+            completed: false,
+        },
+        move || async move {
+            cleanup_pool.close().await;
+            Ok(())
+        },
+    )
 }
 
 /// Await cleanup after either control event. Cancellation is acknowledged by

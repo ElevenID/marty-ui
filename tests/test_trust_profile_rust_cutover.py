@@ -35,8 +35,10 @@ def test_rust_owns_schema_history_and_postgresql_acceptance() -> None:
     assert (ROOT / str(behavior["migration_owner"])).is_file()
     assert '"name": "trust_profile"' not in migration_runner
     assert '"trust_profile_service"' not in migration_runner
-    assert "TEST_POSTGRES_URL:" in workflow
-    assert "target/debug/trust-profile-migration-contract" in workflow
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
+    assert "export TEST_POSTGRES_URL=" in runtime
+    assert "target/debug/trust-profile-migration-contract --test-threads=1" in runtime
 
 
 def test_native_service_has_shared_and_dedicated_image_paths() -> None:

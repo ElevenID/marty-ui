@@ -1,7 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# CI-only multi-target image build. Cargo Chef keeps the dependency layer
-# reusable when application source changes, while both binaries are still
-# compiled together in one shared production-equivalent layer.
+# CI-only multi-target image build. All service binaries retain release settings.
 FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS chef
 
 RUN apt-get update \
@@ -34,23 +32,43 @@ RUN --mount=type=secret,id=sccache_token \
     --mount=type=secret,id=sccache_url \
     --mount=type=secret,id=sccache_mode \
     if [ -s /run/secrets/sccache_token ]; then \
-      export SCCACHE_GHA_ENABLED=true \
+      export SCCACHE_GHA_ENABLED=true ACTIONS_CACHE_SERVICE_V2=true \
         ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
         ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
         SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
       sccache --start-server && sccache --stop-server; \
     fi
 
-FROM chef AS builder
+# This independent target is run by the trusted warmer. A per-run nonce must
+# never invalidate the actual dependency or service build layers.
+FROM compiler_cache AS cache_probe
+ARG CACHE_PROBE_NONCE
+COPY scripts/ci/verify-release-cache.sh /usr/local/bin/verify-release-cache.sh
+RUN --mount=type=secret,id=sccache_token,required=true \
+    --mount=type=secret,id=sccache_url,required=true \
+    --mount=type=secret,id=sccache_mode,required=true \
+    sh /usr/local/bin/verify-release-cache.sh "$CACHE_PROBE_NONCE"
+
+FROM compiler_cache AS builder
 
 COPY --from=planner /build/rust/recipe.json recipe.json
 COPY --from=planner /build/rust/third_party /build/rust/third_party
 COPY proto /build/proto
 RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
-    cargo chef cook --locked --release --workspace --recipe-path recipe.json
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    if [ -s /run/secrets/sccache_token ]; then \
+      export SCCACHE_GHA_ENABLED=true ACTIONS_CACHE_SERVICE_V2=true \
+        ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
+        ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
+        SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
+    fi; \
+    export RUSTC_WRAPPER=sccache; \
+    cargo chef cook --locked --release --workspace --recipe-path recipe.json \
+    && sccache --stop-server
 
-COPY --from=compiler_cache /usr/local/bin/sccache /usr/local/bin/sccache
 COPY contracts /build/contracts
 COPY rust /build/rust
 COPY proto /build/proto
@@ -60,7 +78,7 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     --mount=type=secret,id=sccache_url \
     --mount=type=secret,id=sccache_mode \
     if [ -s /run/secrets/sccache_token ]; then \
-      export SCCACHE_GHA_ENABLED=true \
+      export SCCACHE_GHA_ENABLED=true ACTIONS_CACHE_SERVICE_V2=true \
         ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
         ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
         SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
@@ -83,7 +101,7 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker \
     -p marty-deployment-profile --bin marty-deployment-profile \
     -p marty-compliance-profile --bin marty-compliance-profile \
-    && sccache --show-stats
+    && sccache --stop-server
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 

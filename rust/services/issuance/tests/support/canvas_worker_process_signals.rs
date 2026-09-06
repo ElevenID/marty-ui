@@ -147,7 +147,7 @@ pub async fn assert_process_signals(pool: &PgPool, database_url: &str) {
     }
     for (index, case) in cases.iter().enumerate() {
         eprintln!(
-            "actual worker signal case: phase={} signal={}",
+            "worker process signal case {index}: {} {} starting",
             case["phase"], case["signal"]
         );
         sqlx::query("TRUNCATE issuance_service.canvas_evidence_sync_jobs, issuance_service.canvas_evidence_sync_targets, issuance_service.canvas_worker_heartbeats")
@@ -195,6 +195,7 @@ pub async fn assert_process_signals(pool: &PgPool, database_url: &str) {
             jobs, 0,
             "signal oracle must not create work or contact providers"
         );
+        eprintln!("worker process signal case {index}: passed");
     }
     eprintln!("actual worker process signals: idle and blocked SQL SIGINT/SIGTERM passed");
 }

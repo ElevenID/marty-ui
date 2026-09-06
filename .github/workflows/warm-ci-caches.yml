@@ -11,6 +11,7 @@ on:
       - proto/**
       - contracts/**
       - scripts/load-secrets-env.sh
+      - scripts/ci/verify-release-cache.sh
   workflow_dispatch:
 
 permissions:
@@ -82,6 +83,21 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_WRITE');
+      - name: Verify release compiler cache storage across daemons
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: cache_probe
+          push: false
+          provenance: false
+          build-args: |
+            CACHE_PROBE_NONCE=${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Warm shared image layers
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:

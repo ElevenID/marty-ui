@@ -46,7 +46,9 @@ def test_native_database_contracts_run_against_postgresql_in_ci() -> None:
         "organization-repository-postgres-contract",
     ):
         assert f"target/debug/{executable}" in workflow
-    assert "ORGANIZATION_POSTGRES_TEST_URL:" in workflow
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
+    assert "export ORGANIZATION_POSTGRES_TEST_URL=" in runtime
 
 
 def test_beta_enables_fail_closed_native_service_authentication() -> None:

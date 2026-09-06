@@ -159,69 +159,64 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     gate = next(
         step
         for step in steps
-        if step.get("name")
-        == "Test native Canvas against published issuance migrations"
+        if step.get("name") == "Run isolated database contract suites concurrently"
     )
     assert "if" not in gate
     assert not gate.get("continue-on-error", False)
-    assert gate["env"] == {"MARTY_CANVAS_PUBLISHED_SCHEMA_TEST": "1"}
-    assert "canvas-worker-consumer-range-oracle.json" in gate["run"]
-    assert "canvas_published_schema_contract" in gate["run"]
-    assert '"${executables[0]}" --list' in gate["run"]
-    assert (
-        "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in gate["run"]
+    assert gate["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
+    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
     )
-    assert "grep -Fx 'operations_match_frozen_published_python: test'" in gate["run"]
+    assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
+    assert "canvas-worker-consumer-range-oracle.json" in published
+    assert "canvas_published_schema_contract" in published
+    assert '"${executables[0]}" --list' in published
+    assert "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in published
+    assert "grep -Fx 'operations_match_frozen_published_python: test'" in published
     assert (
-        "grep -Fx 'operations_reads_match_frozen_published_python: test'" in gate["run"]
-    )
-    assert (
-        "grep -Fx 'operations_inputs_match_frozen_published_python: test'"
-        in gate["run"]
+        "grep -Fx 'operations_reads_match_frozen_published_python: test'" in published
     )
     assert (
-        "grep -Fx 'operations_jobs_match_frozen_published_python: test'" in gate["run"]
+        "grep -Fx 'operations_inputs_match_frozen_published_python: test'" in published
     )
-    assert "grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'" in gate["run"]
-    assert (
-        "grep -Fx 'enqueue_inputs_match_frozen_published_python: test'" in gate["run"]
-    )
+    assert "grep -Fx 'operations_jobs_match_frozen_published_python: test'" in published
+    assert "grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'" in published
+    assert "grep -Fx 'enqueue_inputs_match_frozen_published_python: test'" in published
     assert (
         "grep -Fx 'operations_resolution_matches_corrected_published_schema: test'"
-        in gate["run"]
+        in published
     )
     assert (
         "grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'"
-        in gate["run"]
+        in published
     )
-    assert "grep -Fx 'review_inputs_match_published_python: test'" in gate["run"]
-    assert "grep -Fx 'review_lifecycle_matches_published_python: test'" in gate["run"]
-    assert "grep -Fx 'status_provider_matches_published_python: test'" in gate["run"]
-    assert "grep -Fx 'status_provider_matches_frozen_protocol: test'" in gate["run"]
+    assert "grep -Fx 'review_inputs_match_published_python: test'" in published
+    assert "grep -Fx 'review_lifecycle_matches_published_python: test'" in published
+    assert "grep -Fx 'status_provider_matches_published_python: test'" in published
+    assert "grep -Fx 'status_provider_matches_frozen_protocol: test'" in published
     for decoder in ("unicode", "charset"):
         assert (
             f"grep -Fx 'status_runtime_preserves_{decoder}_failures_and_recovery: test'"
-            in gate["run"]
+            in published
         )
     assert (
-        "grep -Fx 'provider_configuration_matches_published_helpers: test'"
-        in gate["run"]
+        "grep -Fx 'provider_configuration_matches_published_helpers: test'" in published
     )
-    assert "grep -Fx 'validation_boundary_matches_published_http: test'" in gate["run"]
+    assert "grep -Fx 'validation_boundary_matches_published_http: test'" in published
     assert (
         "grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'"
-        in gate["run"]
+        in published
     )
     assert (
         "grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'"
-        in gate["run"]
+        in published
     )
     assert (
         "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
-        in gate["run"]
+        in published
     )
-    assert '"${executables[0]}" --nocapture --test-threads=1' in gate["run"]
-    assert "[[ ${#executables[@]} == 1" in gate["run"]
+    assert '"${executables[0]}" --nocapture --test-threads=1' in published
+    assert "[[ ${#executables[@]} == 1" in published
 
 
 def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
@@ -271,7 +266,12 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     assert rust_job["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
     assert "Run safe Rust contract groups concurrently" in step_names
     assert "Run Flow database contract after workspace suite" in step_names
-    assert "Test Rust database and runtime contracts" in step_names
+    assert "Run isolated database contract suites concurrently" in step_names
+    orchestrator = (ROOT / "scripts/ci/run-db-contract-groups.py").read_text(
+        encoding="utf-8"
+    )
+    assert "run-published-canvas-contracts.sh" in orchestrator
+    assert "run-rust-db-contracts.sh" in orchestrator
     assert "test-rust-db-contracts" not in document["jobs"]
     assert "rust-db-test-bundle" not in source
     assert "actions/upload-artifact" not in "\n".join(
@@ -540,14 +540,65 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     assert "--mount=type=secret,id=sccache_token" in dockerfile
     assert "export RUSTC_WRAPPER=sccache" in dockerfile
     assert "cargo build --locked --release" in dockerfile
-    assert "sccache --show-stats" in dockerfile
+    assert "sccache --stop-server" in dockerfile
     assert "ENV SCCACHE_GHA_RUNTIME_TOKEN" not in dockerfile
     assert 'ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)"' in dockerfile
     assert 'ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)"' in dockerfile
     assert "sccache --start-server && sccache --stop-server" in dockerfile
-    assert dockerfile.index("cargo chef cook") < dockerfile.index(
-        "COPY --from=compiler_cache"
+    assert "FROM compiler_cache AS builder" in dockerfile
+    assert dockerfile.count("ACTIONS_CACHE_SERVICE_V2=true") == 3
+    assert dockerfile.index("FROM compiler_cache AS builder") < dockerfile.index(
+        "cargo chef cook"
     )
+
+
+def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
+    _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
+    job = warm["jobs"]["images"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    probe = next(
+        step
+        for step in job["steps"]
+        if step.get("with", {}).get("target") == "cache_probe"
+    )
+    assert "continue-on-error" not in probe
+    assert "github.run_id" in probe["with"]["build-args"]
+    assert "github.run_attempt" in probe["with"]["build-args"]
+    dockerfile = (ROOT / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
+    assert "FROM compiler_cache AS cache_probe" in dockerfile
+    builder = dockerfile.split("FROM compiler_cache AS builder", 1)[1]
+    assert "CACHE_PROBE_NONCE" not in builder
+    assert "--from=cache_probe" not in builder
+    script = (ROOT / "scripts/ci/verify-release-cache.sh").read_text(encoding="utf-8")
+    assert "ACTIONS_CACHE_SERVICE_V2=true" in script
+    assert script.index("SCCACHE_GHA_RW_MODE=READ_WRITE") < script.index(
+        "SCCACHE_GHA_RW_MODE=READ_ONLY"
+    )
+    assert script.count("sccache rustc") == 2
+    assert script.count("--emit=link,dep-info") == 2
+    assert script.count("sccache --stop-server") == 2
+    assert "exit !hit" in script
+
+
+def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> None:
+    ignore = (ROOT / "rust/services/Dockerfile.ci.dockerignore").read_text(
+        encoding="utf-8"
+    )
+    for item in (
+        "!rust/**",
+        "!proto/**",
+        "!contracts/**",
+        "!scripts/load-secrets-env.sh",
+        "!scripts/ci/verify-release-cache.sh",
+        "rust/services/*/tests",
+        "rust/crates/*/tests",
+        "rust/**/target",
+        "rust/**/.env*",
+    ):
+        assert item in ignore.splitlines()
+    # Never drop embedded production contracts or vendored build-script inputs.
+    assert "rust/third_party" not in ignore
+    assert "contracts/*-oracle.json" not in ignore
 
 
 def test_every_issuance_integration_test_remains_registered() -> None:

@@ -30,6 +30,51 @@ fn database_url() -> Option<String> {
 }
 
 #[tokio::test]
+async fn cancellation_closes_pool_before_dropping_operation_connections() {
+    use marty_issuance_service::canvas_sync_worker_lifecycle::spawn_with_postgres_cleanup;
+    use mmf_runtime::managed_task::{CleanupOutcome, TaskOutcome};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct ObserveDrop(sqlx::PgPool, Arc<AtomicBool>);
+    impl Drop for ObserveDrop {
+        fn drop(&mut self) {
+            self.1.store(self.0.is_closed(), Ordering::SeqCst);
+        }
+    }
+
+    // No connection is opened: this regression checks destruction ordering,
+    // while the mandatory process-signal vectors exercise real blocked SQL.
+    let pool = PgPoolOptions::new()
+        .min_connections(0)
+        .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/unused_test")
+        .unwrap();
+    let closed_before_drop = Arc::new(AtomicBool::new(false));
+    let observed = closed_before_drop.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let owner = spawn_with_postgres_cleanup(pool.clone(), move |operation_pool| async move {
+        let _observe_drop = ObserveDrop(operation_pool, observed);
+        started.send(()).unwrap();
+        std::future::pending::<Result<(), ()>>().await
+    });
+    ready.await.unwrap();
+    assert!(owner.cancel());
+    let completion = tokio::time::timeout(std::time::Duration::from_secs(5), owner.join())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completion.outcome, TaskOutcome::Cancelled);
+    assert_eq!(completion.cleanup, CleanupOutcome::Completed);
+    assert!(
+        closed_before_drop.load(Ordering::SeqCst),
+        "pool must be closed before cancelled query connections are dropped"
+    );
+    assert_eq!(pool.size(), 0);
+}
+
+#[tokio::test]
 async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors() {
     let Some(database_url) = database_url() else {
         eprintln!("skipping Canvas worker PostgreSQL contract without database URL");
