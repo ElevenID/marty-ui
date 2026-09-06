@@ -12,8 +12,8 @@ from run_canvas_worker_provider_signals_oracle import snapshot
 from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
 from run_canvas_worker_startup_oracle import (
     DATABASE,
-    finish_worker,
-    start_worker,
+    finish_workers,
+    start_blocked_workers,
     worker_source_sha256,
 )
 
@@ -45,24 +45,7 @@ def run():
                 assert (current, encrypted) == preserved
                 return state
 
-            # Only this fresh fixture database is locked. Release on success or
-            # exception; no application clock, query or job state is patched.
-            with engine.begin() as barrier:
-                barrier.exec_driver_sql(cases["barrier_sql"])
-                for worker_id in cases["worker_ids"]:
-                    workers[worker_id] = start_worker(
-                        worker_case(https.origin, https.cert), worker_id
-                    )
-
-                def both_blocked():
-                    all_alive()
-                    return scalar(engine, cases["blocked_schedulers_sql"]) == 2
-
-                wait_for(
-                    both_blocked,
-                    20,
-                    "both actual schedulers blocked at database barrier",
-                )
+            def before_release():
                 assert not https.received.is_set()
                 assert (
                     scalar(
@@ -71,6 +54,15 @@ def run():
                     )
                     == 0
                 )
+
+            workers = start_blocked_workers(
+                engine,
+                worker_case(https.origin, https.cert),
+                cases["worker_ids"],
+                cases["barrier_sql"],
+                text(cases["blocked_schedulers_sql"]),
+                before_release,
+            )
 
             wait_for(https.received.is_set, 15, "actual provider request")
 
@@ -141,6 +133,7 @@ def run():
                 "source_sha256": worker_source_sha256(),
             }
         finally:
-            for child in workers.values():
-                finish_worker(child)
-            engine.dispose()
+            try:
+                finish_workers(workers)
+            finally:
+                engine.dispose()

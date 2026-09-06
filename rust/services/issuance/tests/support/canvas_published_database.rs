@@ -262,6 +262,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_reclaimers() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_reclaimers",
+                "worker-reclaimers",
+                "worker_reclaimers",
+                "MARTY_CANVAS_WORKER_RECLAIMERS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_concurrent() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -507,6 +520,7 @@ impl PublishedDatabase {
                 | "worker_provider_recovery"
                 | "worker_provider_final"
                 | "worker_concurrent"
+                | "worker_reclaimers"
         );
         if worker_https {
             let index = arguments.len() - 2;
@@ -586,6 +600,7 @@ impl PublishedDatabase {
                 | "worker_provider_recovery"
                 | "worker_provider_final"
                 | "worker_concurrent"
+                | "worker_reclaimers"
         ) {
             consumer_helpers.extend(
                 [
@@ -603,7 +618,10 @@ impl PublishedDatabase {
         }
         if matches!(
             script,
-            "worker_provider_recovery" | "worker_provider_final" | "worker_concurrent"
+            "worker_provider_recovery"
+                | "worker_provider_final"
+                | "worker_concurrent"
+                | "worker_reclaimers"
         ) {
             let path = "scripts/run_canvas_worker_provider_signals_oracle.py";
             consumer_helpers.push(format!(
@@ -611,12 +629,26 @@ impl PublishedDatabase {
                 root.join(path).display()
             ));
         }
-        if matches!(script, "worker_provider_final" | "worker_concurrent") {
+        if matches!(
+            script,
+            "worker_provider_final" | "worker_concurrent" | "worker_reclaimers"
+        ) {
             let path = "scripts/run_canvas_worker_provider_recovery_oracle.py";
             consumer_helpers.push(format!(
                 "type=bind,source={},target=/verification/{path},readonly",
                 root.join(path).display()
             ));
+        }
+        if script == "worker_reclaimers" {
+            for path in [
+                "contracts/canvas-worker-provider-final-scenarios.json",
+                "contracts/canvas-worker-concurrent-scenarios.json",
+            ] {
+                consumer_helpers.push(format!(
+                    "type=bind,source={},target=/verification/{path},readonly",
+                    root.join(path).display()
+                ));
+            }
         }
         for mount in &consumer_helpers {
             let index = arguments.len() - 2;

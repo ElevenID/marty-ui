@@ -12,7 +12,13 @@ from sqlalchemy import create_engine, text
 from canvas_worker_https_fixture import WorkerHttpsFixture
 from run_canvas_worker_provider_signals_oracle import snapshot
 from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
-from run_canvas_worker_startup_oracle import DATABASE, finish_worker, start_worker
+from run_canvas_worker_startup_oracle import (
+    DATABASE,
+    finish_worker,
+    finish_workers,
+    start_blocked_workers,
+    start_worker,
+)
 
 
 def wait_for(predicate, timeout, description, child=None):
@@ -53,12 +59,15 @@ def generation(engine):
 def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
     contracts = Path("/verification/contracts")
     cases = json.loads((contracts / scenario).read_text())
+    if "extends" in cases:
+        cases = {**json.loads((contracts / cases["extends"]).read_text()), **cases}
     assert case_name in cases["cases"]
     spec = json.loads((contracts / cases["reference_scenario"]).read_text())
     shared = json.loads((contracts / spec["shared_seed"]).read_text())
     with WorkerHttpsFixture() as https:
         engine = create_engine(DATABASE, hide_parameters=True)
         child = None
+        reclaimers = {}
         try:
             preserved = seed_worker_database(engine, https.origin, spec, shared)
             if "initial_job_seed" in cases:
@@ -154,7 +163,28 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                     35,
                     "real lease expiry",
                 )
-                child, started = start()
+                if "reclaimer_ids" in cases:
+                    assert case_name == "final"
+                    assert cases["reclaimer_ids"] == ["worker-rest", "worker-contender"]
+                    started = scalar(engine, "SELECT clock_timestamp()")
+
+                    def before_release():
+                        # Do not query the jobs table through a second connection
+                        # while the fixture owns its exclusive barrier.
+                        assert len(https.requests) == 1
+
+                    reclaimers = start_blocked_workers(
+                        engine,
+                        worker_input,
+                        cases["reclaimer_ids"],
+                        cases["barrier_sql"],
+                        text(cases["blocked_reclaimers_sql"]),
+                        before_release,
+                    )
+                    child = reclaimers["worker-rest"]
+                    result["both_reclaimers_blocked"] = True
+                else:
+                    child, started = start()
             if case_name == "recovery":
                 restarted = started
                 result["reclaimed"] = wait_for(
@@ -196,6 +226,35 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                 "terminal actual worker outcome",
                 child,
             )
+            if reclaimers:
+                concurrency = json.loads(
+                    (contracts / cases["concurrency_scenario"]).read_text()
+                )
+
+                def both_idle():
+                    assert all(
+                        process.poll() is None for process in reclaimers.values()
+                    )
+                    fresh = scalar(
+                        engine,
+                        "SELECT count(*)=2 AND bool_and(last_heartbeat_at>=:since AND metadata->>'phase'='idle') FROM issuance_service.canvas_worker_heartbeats",
+                        {"since": started},
+                    )
+                    return (
+                        scalar(engine, concurrency["heartbeats_sql"]) if fresh else None
+                    )
+
+                result["reclaimer_heartbeats"] = wait_for(
+                    both_idle, 15, "both fresh idle reclaimers"
+                )
+                assert observe() == result["completed"]
+                result["both_reclaimers_alive_after_completion"] = True
+                contender = reclaimers["worker-contender"]
+                contender.send_signal(signal.SIGINT)
+                result["contender_exit_code_after_interrupt"] = contender.wait(
+                    timeout=10
+                )
+                assert result["contender_exit_code_after_interrupt"] == -2
             child.send_signal(signal.SIGINT)
             result["exit_code_after_interrupt"] = child.wait(timeout=10)
             final = generation(engine)
@@ -224,6 +283,11 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
             }
             return result
         finally:
-            if child is not None:
-                finish_worker(child)
-            engine.dispose()
+            try:
+                finish_workers(reclaimers)
+            finally:
+                try:
+                    if child is not None:
+                        finish_worker(child)
+                finally:
+                    engine.dispose()

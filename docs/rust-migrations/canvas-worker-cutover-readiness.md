@@ -81,6 +81,12 @@ qualification and crash-reclaimer/changed-target races remain open. This does
 not close all of gate 5.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
+The [two-reclaimer reference](canvas-worker-reclaimers.md) has two matching
+captures after actual final-attempt renewal, process loss and real lease expiry.
+Both actual job queries wait at an owned job-table barrier before release; both
+workers then reach fresh idle with one dead-letter and no further provider read.
+Native adoption and other ownership/final-completion races remain open.
+
 The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
 matching independent captures and a mandatory regeneration gate. It seeds
 historical attempts before worker startup, then observes actual attempt-eight

@@ -6,6 +6,7 @@ Child logs are discarded; observations never contain credentials or tracebacks.
 """
 
 import hashlib
+from contextlib import ExitStack
 import importlib.util
 import json
 import os
@@ -14,8 +15,6 @@ import signal
 import subprocess
 import sys
 import time
-
-from sqlalchemy import create_engine, text
 
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
 
@@ -55,7 +54,45 @@ def finish_worker(child):
     child.wait(timeout=10)
 
 
+def finish_workers(workers):
+    # Reap every owned child even if another child's cleanup raises.
+    with ExitStack() as cleanup:
+        for child in workers.values():
+            cleanup.callback(finish_worker, child)
+
+
+def start_blocked_workers(
+    engine, case, worker_ids, barrier_sql, blocked_query, before_release
+):
+    """Return owned children only after observing both at a fixture DB barrier."""
+    assert len(worker_ids) == len(set(worker_ids)) == 2
+    workers = {}
+    try:
+        with engine.begin() as barrier:
+            barrier.exec_driver_sql(barrier_sql)
+            for worker_id in worker_ids:
+                workers[worker_id] = start_worker(case, worker_id)
+            deadline = time.monotonic() + 20
+            while True:
+                assert all(child.poll() is None for child in workers.values())
+                with engine.connect() as connection:
+                    blocked = connection.execute(blocked_query).scalar_one()
+                if blocked == 2:
+                    break
+                assert time.monotonic() < deadline, (
+                    "Both owned workers must wait at the fixture barrier"
+                )
+                time.sleep(0.025)
+            before_release()
+        return workers
+    except BaseException:
+        finish_workers(workers)
+        raise
+
+
 def observe(engine, case):
+    from sqlalchemy import text
+
     worker_id = f"startup-{case['name']}"
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE issuance_service.canvas_worker_heartbeats"))
@@ -118,6 +155,8 @@ def worker_source_sha256():
 
 
 def run():
+    from sqlalchemy import create_engine
+
     scenarios = json.loads(
         Path("/verification/contracts/canvas-worker-startup-scenarios.json").read_text()
     )
