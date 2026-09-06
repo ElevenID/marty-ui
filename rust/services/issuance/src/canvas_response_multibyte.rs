@@ -90,7 +90,7 @@ struct Machine {
     finals: Vec<u32>,
 }
 
-fn decompress(encoded: &str, expected: usize) -> Vec<u8> {
+pub(super) fn decompress(encoded: &str, expected: usize) -> Vec<u8> {
     let bytes = STANDARD.decode(encoded).expect("embedded codec base64");
     let mut output = Vec::with_capacity(expected);
     flate2::read::ZlibDecoder::new(bytes.as_slice())
@@ -257,11 +257,11 @@ pub(super) fn lookup(name: &str) -> Option<&'static Codec> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
-    pub(super) fn record(digest: &mut Sha256, value: Option<String>) {
+    pub(crate) fn record(digest: &mut Sha256, value: Option<String>) {
         match value {
             None => digest.update([0]),
             Some(text) => {

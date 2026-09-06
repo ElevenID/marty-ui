@@ -548,6 +548,74 @@
       },
       "name": "text_euc_kr",
       "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "　�!@A"
+      },
+      "name": "text_iso2022_kr",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "�\u000e!!\u000f＼A"
+      },
+      "name": "text_iso2022_jp",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "�\u000e!!\u000f＼A"
+      },
+      "name": "text_iso2022_jp_1",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "\u000e!!\u000f＼A"
+      },
+      "name": "text_iso2022_jp_2",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "�\u000e!!\u000f＼A"
+      },
+      "name": "text_iso2022_jp_2004",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "�\u000e!!\u000f＼A"
+      },
+      "name": "text_iso2022_jp_3",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "�\u000e!!\u000f＼A"
+      },
+      "name": "text_iso2022_jp_ext",
+      "status": 403
+    },
+    {
+      "error_class": "RuntimeError",
+      "name": "text_iso2022_internal"
+    },
+    {
+      "error_class": "UnicodeError",
+      "name": "text_iso2022_pending"
+    },
+    {
+      "error_class": "RuntimeError",
+      "name": "text_iso2022_label"
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "text_iso2022_label_json",
+      "status": 403
     }
   ],
   "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",

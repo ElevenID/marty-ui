@@ -578,6 +578,17 @@ mod tests {
                 | "text_multibyte_hz"
                 | "text_gb18030"
                 | "text_euc_kr"
+                | "text_iso2022_kr"
+                | "text_iso2022_jp"
+                | "text_iso2022_jp_1"
+                | "text_iso2022_jp_2"
+                | "text_iso2022_jp_2004"
+                | "text_iso2022_jp_3"
+                | "text_iso2022_jp_ext"
+                | "text_iso2022_internal"
+                | "text_iso2022_pending"
+                | "text_iso2022_label"
+                | "text_iso2022_label_json"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),

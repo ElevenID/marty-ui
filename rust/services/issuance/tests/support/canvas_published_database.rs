@@ -330,6 +330,10 @@ impl PublishedDatabase {
             "type=bind,source={},target=/verification/scripts/canvas_euc_kr_codec_oracle.py,readonly",
             root.join("scripts/canvas_euc_kr_codec_oracle.py").display()
         );
+        let iso2022_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_iso2022_codec_oracle.py,readonly",
+            root.join("scripts/canvas_iso2022_codec_oracle.py").display()
+        );
         if script == "timeout_consumer" {
             // Only the TLS oracle needs ephemeral certificate storage. Preserve
             // the read-only image and all host mounts; nothing is persisted.
@@ -345,6 +349,8 @@ impl PublishedDatabase {
                     &gb18030_mount,
                     "--mount",
                     &euc_kr_mount,
+                    "--mount",
+                    &iso2022_mount,
                 ],
             );
         }

@@ -108,7 +108,14 @@ fn label_bytes(value: &str) -> Vec<u8> {
     bytes
 }
 
-fn decode_label(value: &str, encoding: &str) -> Option<String> {
+fn decode_label(value: &str, encoding: &str) -> Result<Option<String>, CanvasResponseTextError> {
+    if let Some(codec) = super::iso2022::lookup(&resolve_encoding(encoding)) {
+        return codec.decode(&label_bytes(value), true);
+    }
+    Ok(decode_basic_label(value, encoding))
+}
+
+fn decode_basic_label(value: &str, encoding: &str) -> Option<String> {
     let bytes = label_bytes(value);
     let name = resolve_encoding(encoding);
     if name == "utf_8" || name == "utf_8_sig" {
@@ -241,20 +248,23 @@ pub(super) fn charset_parameter(
     }
     // Decode every continuation group before selecting the first ordinary
     // charset; malformed unrelated groups can also raise in the published reader.
-    let value = normal
+    let ordinary = normal
         .into_iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("charset"))
-        .map(|(_, value)| value)
-        .or_else(|| {
-            extended
-                .into_iter()
-                .find(|(name, _, _)| name.eq_ignore_ascii_case("charset"))
-                .map(|(_, encoding, value)| {
-                    encoding
-                        .and_then(|encoding| decode_label(&value, &encoding))
-                        .unwrap_or(value)
-                })
-        });
+        .map(|(_, value)| value);
+    let value = if ordinary.is_some() {
+        ordinary
+    } else if let Some((_, encoding, value)) = extended
+        .into_iter()
+        .find(|(name, _, _)| name.eq_ignore_ascii_case("charset"))
+    {
+        Some(match encoding {
+            Some(encoding) => decode_label(&value, &encoding)?.unwrap_or(value),
+            None => value,
+        })
+    } else {
+        None
+    };
     Ok(value
         .filter(|s| s.is_ascii())
         .map(|s| s.to_ascii_lowercase()))

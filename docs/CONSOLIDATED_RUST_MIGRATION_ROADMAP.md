@@ -33,6 +33,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Seven ISO-2022 variants now share a native stateful decoder, retaining ordinary
+text, multi-character mappings and the distinct internal-codec/pending-buffer
+errors. Independent image captures cover 134 active-state witnesses, 8,816,262
+state inputs and 6,386,038 escape-boundary inputs per mode, and 1,167 responses
+across 23 labels. Validation grows 31 to 37, provider 82 to 86 and TLS 85 to 96
+without changing old observations. Native 305 library, 5 worker, 28 managed HTTP,
+22 behavior, 70 affected Python and 96 TLS checks plus strict Clippy pass.
+The new lifecycle persistence/recovery scenario is required by CI. All 24 configured
+published-image/schema tests pass (212.24 seconds, none ignored/filtered), including
+full artifact regeneration and lifecycle recovery. The prior `e06a90acc` CI and
+Rust analysis passed; this continuation still requires fresh hosted qualification.
+See [ISO-2022 evidence](../contracts/canvas-iso2022-codecs/README.md).
+
 EUC-KR now preserves both two-byte text and eight-byte Hangul composition through
 the shared Rust complete-input owner used by GB18030. Independently captured
 evidence covers all 16,777,216 component triples (11,172 valid), 65,792 short inputs,
@@ -71,7 +84,7 @@ observation unchanged. Local 299 library, 5 worker, 28 managed HTTP, 22 behavior
 70 workflow/image/ownership/cutover checks, strict Clippy and all 23 configured
 image/schema tests pass. No dependencies or runtime Python are added. The prior
 integration head `ded29ea7c` CI and Rust CodeQL passed; new source still requires
-its own hosted checks. ISO-2022, UTF-7/special/escape codecs,
+its own hosted checks. UTF-7 and remaining special/escape codecs,
 exceptional metadata/JSON/configuration/transport behavior and whole-worker/all-
 consumer adoption remain open. No deployment or reachable-Python deletion occurs.
 

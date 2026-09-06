@@ -422,7 +422,28 @@ class Handler(BaseHTTPRequestHandler):
                     + "a4d441a1a4bfa4d4"
                     + "a4d441",
                 ),
+                "/text_iso2022_internal": (
+                    "text/plain; charset=iso2022_jp_2",
+                    "1b2e4a1b4e21",
+                ),
+                "/text_iso2022_pending": (
+                    "text/plain; charset=iso2022_kr",
+                    "1b2821212121212121",
+                ),
+                "/text_iso2022_label": (
+                    "text/plain; charset*=iso2022_jp_2''%1B.J%1BN!",
+                    "626164",
+                ),
+                "/text_iso2022_label_json": (
+                    "text/plain; charset*=iso2022_jp_2''%1B.J%1BN!",
+                    "7b226163636570746564223a747275657d",
+                ),
             }
+            for name in codec_owner("canvas_iso2022_codec_oracle").NAMES:
+                text_cases[f"/text_{name}"] = (
+                    "text/plain; charset=" + name,
+                    "1b2429430e21210f1b244221401b284241",
+                )
             for name in multibyte_owner().NAMES:
                 text_cases[f"/text_multibyte_{name}"] = (
                     "text/plain; charset=" + name,
@@ -676,6 +697,8 @@ async def observe(source, response_source, cases, origin, trust):
                         result["body"] = None
             except httpx.HTTPError as failure:
                 result = {"error_class": type(failure).__name__}
+            except (UnicodeError, RuntimeError) as failure:
+                result = {"error_class": type(failure).__name__}
             except TimeoutError:
                 raise AssertionError("owned test watchdog expired") from None
         observations.append({"name": case["name"], **result})
@@ -725,6 +748,7 @@ def run(source=None, response_source=None):
         "multibyte_codecs": multibyte_owner().run(),
         "gb18030_codec": codec_owner("canvas_gb18030_codec_oracle").observe(),
         "euc_kr_codec": codec_owner("canvas_euc_kr_codec_oracle").observe(),
+        "iso2022_codecs": codec_owner("canvas_iso2022_codec_oracle").run(),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)

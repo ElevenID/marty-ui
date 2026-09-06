@@ -31,6 +31,12 @@
     {"name":"utf32_truncated_prefix_error_text","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe"},
     {"name":"charset_mixed_continuation_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"636166e9","expected_exception":"TypeError"},
     {"name":"charset_mixed_continuation_success_ignored","provider":"badgr_api","direct":"synthetic-direct","response_status":200,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"636166e9"},
-    {"name":"charset_mixed_continuation_json_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d"}
+    {"name":"charset_mixed_continuation_json_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d"},
+    {"name":"iso2022_internal_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=iso2022_jp_2","response_hex":"1b2e4a1b4e21","expected_exception":"RuntimeError"},
+    {"name":"iso2022_pending_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=iso2022_kr","response_hex":"1b2821212121212121","expected_exception":"UnicodeError"},
+    {"name":"iso2022_label_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset*=iso2022_jp_2''%1B.J%1BN!","response_hex":"626164","expected_exception":"RuntimeError"},
+    {"name":"iso2022_label_json_bypasses_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset*=iso2022_jp_2''%1B.J%1BN!","response_hex":"7b226163636570746564223a747275657d"},
+    {"name":"iso2022_internal_success_ignored","provider":"badgr_api","direct":"synthetic-direct","response_status":200,"response_content_type":"text/plain; charset=iso2022_jp_2","response_hex":"1b2e4a1b4e21"},
+    {"name":"iso2022_pending_success_ignored","provider":"badgr_api","direct":"synthetic-direct","response_status":200,"response_content_type":"text/plain; charset=iso2022_kr","response_hex":"1b2821212121212121"}
   ]
 }

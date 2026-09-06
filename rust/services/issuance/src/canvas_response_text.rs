@@ -6,6 +6,8 @@ use std::{collections::BTreeMap, sync::OnceLock};
 #[path = "canvas_response_charset.rs"]
 mod charset;
 use charset::charset_parameter;
+#[path = "canvas_response_iso2022.rs"]
+mod iso2022;
 #[path = "canvas_response_multibyte.rs"]
 mod multibyte;
 
@@ -19,12 +21,19 @@ pub enum CanvasResponseTextError {
     NumberedAfterBareContinuation,
     #[error("'<' not supported between instances of 'NoneType' and 'int'")]
     BareAfterNumberedContinuation,
+    #[error("internal codec error")]
+    InternalCodec,
+    #[error("pending buffer overflow")]
+    PendingBufferOverflow,
 }
 
 impl CanvasResponseTextError {
     pub const fn diagnostic_class(self) -> &'static str {
         match self {
-            Self::Utf16MissingBom | Self::Utf32MissingBom => "UnicodeError",
+            Self::InternalCodec => "RuntimeError",
+            Self::Utf16MissingBom | Self::Utf32MissingBom | Self::PendingBufferOverflow => {
+                "UnicodeError"
+            }
             Self::NumberedAfterBareContinuation | Self::BareAfterNumberedContinuation => {
                 "TypeError"
             }
@@ -140,6 +149,11 @@ pub(crate) fn response_text(
         return Ok(machine
             .decode(bytes, false)
             .expect("replacement decoding cannot fail"));
+    }
+    if let Some(codec) = iso2022::lookup(&normalized) {
+        return Ok(codec
+            .decode(bytes, false)?
+            .expect("replacement result or typed codec error"));
     }
     let bytes = match normalized.as_str() {
         "utf_8_sig" => bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes),
@@ -350,8 +364,12 @@ mod tests {
             for alias in frozen["aliases"].as_array().unwrap() {
                 let header = format!("text/plain; charset={}", alias.as_str().unwrap());
                 assert_eq!(
-                    response_text(&bytes, Some(&header)).unwrap(),
-                    case["text"].as_str().unwrap(),
+                    match response_text(&bytes, Some(&header)) {
+                        Ok(text) => serde_json::Value::String(text),
+                        Err(error) =>
+                            serde_json::json!({"error_class": error.diagnostic_class(), "error": error.to_string()}),
+                    },
+                    case["text"],
                     "published codec {alias}"
                 );
             }
@@ -365,6 +383,13 @@ mod tests {
         ))
         .unwrap();
         assert_published_codec_cases(&frozen);
+    }
+
+    #[test]
+    fn iso2022_response_cases_match_published_codecs() {
+        for (_, source) in iso2022::SOURCES {
+            assert_published_codec_cases(&serde_json::from_str(source).unwrap());
+        }
     }
 
     #[test]

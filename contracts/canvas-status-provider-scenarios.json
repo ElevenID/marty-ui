@@ -427,6 +427,10 @@
     {"name":"utf32_short_prefix","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe","expected_error_class":null},
     {"name":"charset_mixed_continuation_text_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"636166e9","expected_error_class":"TypeError"},
     {"name":"charset_mixed_continuation_json_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d","expected_error_class":null},
-    {"name":"charset_mixed_continuation_json_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d","expected_error_class":"TypeError"}
+    {"name":"charset_mixed_continuation_json_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d","expected_error_class":"TypeError"},
+    {"name":"iso2022_internal_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=iso2022_jp_2","response_hex":"1b2e4a1b4e21","expected_error_class":"RuntimeError"},
+    {"name":"iso2022_pending_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=iso2022_kr","response_hex":"1b2821212121212121","expected_error_class":"UnicodeError"},
+    {"name":"iso2022_label_json_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset*=iso2022_jp_2''%1B.J%1BN!","response_hex":"7b226163636570746564223a747275657d","expected_error_class":"RuntimeError"},
+    {"name":"iso2022_label_json_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset*=iso2022_jp_2''%1B.J%1BN!","response_hex":"7b226163636570746564223a747275657d","expected_error_class":null}
   ]
 }

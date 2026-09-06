@@ -101,8 +101,7 @@ and the existing 68 TLS observations pass. Fresh hosted checks remain required.
 
 ## Remaining gates
 
-Unqualified multibyte/stateful codecs (including ISO-2022),
-UTF-7 and special/escape codecs, including their encoded-parameter-label use,
+UTF-7 and remaining special/escape codecs, including their encoded-parameter-label use,
 exceptional header metadata such as Python's decimal-conversion limit for very
 long continuation ordinals, exceptional JSON values and other configuration or
 exception paths still need qualification. The header corpus below qualifies its
@@ -241,3 +240,29 @@ Python tests and strict Clippy. All 23 configured image/schema tests pass in
 197.45 seconds with none ignored/filtered, including complete EUC-KR regeneration
 and unchanged earlier codec artifacts. Fresh hosted qualification is required.
 No deployment or reachable-Python deletion occurs in this continuation.
+
+## ISO-2022 continuation
+
+[Seven independently captured variants](../../contracts/canvas-iso2022-codecs/README.md)
+now share a Rust stateful decoder. Two complete immutable-image captures agree
+for each variant before native implementation. Coverage includes 134 active-state
+witnesses, 8,816,262 state inputs and 6,386,038 escape/prefix/mutation inputs per
+mode, plus 1,167 full responses across 23 labels. The unchanged native fallback
+failed before repair. Exact hashes retain multi-character mappings, pass-through,
+shift/reset behavior and both normal replacement and exceptional outcomes.
+
+Typed response errors preserve the published internal-codec RuntimeError and
+incremental pending-buffer UnicodeError. Strict encoded labels share the owner,
+but do not incorrectly apply the incremental pending limit. Published JSON-first
+and successful-validation bypasses remain intact. The independent validation
+corpus grows 31 to 37, provider 82 to 86, and TLS 85 to 96, with prior observations
+unchanged. Native 17-case real-HTTP validation, managed router and 96-case TLS
+replays pass. A new shared runtime scenario verifies diagnostic persistence and
+recovery; the CI runner requires that test's presence.
+
+Local 305 library, 5 worker, 28 managed HTTP, 22 behavior and 70 affected Python
+tests pass, as does strict Clippy. All 24 configured published-image/schema tests
+pass in 212.24 seconds with none ignored/filtered, including full artifact
+regeneration and the new lifecycle recovery scenario. Fresh hosted qualification
+remains required. No dependency, runtime Python, reachable Python deletion or
+deployment change is introduced.

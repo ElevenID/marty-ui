@@ -164,6 +164,44 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         oracle["euc_kr_codec"], euc_kr,
         "published EUC-KR mappings and independent observations"
     );
+    let iso2022: serde_json::Map<String, serde_json::Value> = [
+        (
+            "iso2022_kr",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_kr.json"),
+        ),
+        (
+            "iso2022_jp",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp.json"),
+        ),
+        (
+            "iso2022_jp_1",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_1.json"),
+        ),
+        (
+            "iso2022_jp_2",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_2.json"),
+        ),
+        (
+            "iso2022_jp_2004",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_2004.json"),
+        ),
+        (
+            "iso2022_jp_3",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_3.json"),
+        ),
+        (
+            "iso2022_jp_ext",
+            include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_ext.json"),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, source)| (name.to_owned(), serde_json::from_str(source).unwrap()))
+    .collect();
+    assert_eq!(
+        oracle["iso2022_codecs"],
+        serde_json::Value::Object(iso2022),
+        "published ISO-2022 mappings and state/escape outcomes"
+    );
 }
 
 #[tokio::test]
@@ -254,6 +292,24 @@ async fn status_provider_matches_published_python() {
     owned.close().unwrap();
     assert_eq!(oracle, canvas_status_provider_replay::frozen());
     canvas_status_provider_replay::replay(&oracle).await;
+}
+
+#[tokio::test]
+async fn status_runtime_preserves_iso2022_failures_and_recovery() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run_iso2022(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
 }
 
 #[tokio::test]
