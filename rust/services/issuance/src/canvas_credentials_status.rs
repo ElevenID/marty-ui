@@ -402,7 +402,7 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
         }
         let mut metadata = object(
             json!({"status_sync_url":url,"status_sync_http_status":response.status,
-            "status_sync_response":response_excerpt(response.body.as_bytes(), false),
+            "status_sync_response":response_excerpt(response.body.as_bytes()),
             "status_sync_request_id":response.request_id,"status_synced_at":chrono::Utc::now().to_rfc3339()}),
         );
         if real_provider {

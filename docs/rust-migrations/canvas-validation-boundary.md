@@ -70,3 +70,12 @@ failure-excerpt completion, provider network-error projection, full backpressure
 write/TLS/early-response behavior, persistence/recovery and all-consumer cutover.
 The surrounding migration inventory, branches, demos, beta aggregate and soak
 remain active. No reachable Python, lifecycle default or deployment changed here.
+
+The subsequent [complete-body continuation](canvas-provider-configuration.md)
+repairs early failure-excerpt termination separately: the shared TLS corpus now
+has21 cases, preserving the earlier17, and a real validation transport regression
+covers valid JSON at/above the old64KiB cutoff plus stalled/truncated bodies.
+Complete bodies precede JSON/text projection; this does not yet qualify all
+response charset/compression or provider network-error behavior. The20-case
+managed app corpus above remains unchanged and still passes through the native
+router after this repair.

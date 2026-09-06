@@ -27,7 +27,6 @@ use crate::canvas_credentials_protocol::MAX_EXCERPT_CHARS;
 use crate::canvas_credentials_protocol::{
     https_origin, provider_alias, response_excerpt as failure_excerpt, DEFAULT_API_BASE_URL,
 };
-const MAX_FAILURE_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct CanvasCredentialsValidationConfig {
@@ -507,10 +506,10 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
             .client
             .send(http::Method::GET, target, headers, Vec::new())
             .await
-            .map_err(|_| ())?
-            .response;
-        let status_code = response.status().as_u16();
+            .map_err(|_| ())?;
+        let status_code = response.response.status().as_u16();
         let request_id = response
+            .response
             .headers()
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
@@ -519,10 +518,12 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
             // Published HTTPX get() consumes the body before returning. Drain
             // without retaining it: headers alone cannot attest success when a
             // later read stalls or the peer truncates the response.
-            while response.chunk().await.map_err(|_| ())?.is_some() {}
+            while response.response.chunk().await.map_err(|_| ())?.is_some() {}
             None
         } else {
-            Some(read_failure_excerpt(&mut response).await?)
+            // HTTPX consumes the entire response before JSON/excerpt projection.
+            // The excerpt limit is not a response-read cutoff or a JSON limit.
+            Some(failure_excerpt(&response.bytes().await.map_err(|_| ())?))
         };
         Ok(CanvasCredentialsProviderResponse {
             status_code,
@@ -530,27 +531,6 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
             response_excerpt,
         })
     }
-}
-
-async fn read_failure_excerpt(response: &mut reqwest::Response) -> Result<Map<String, Value>, ()> {
-    let mut bytes = Vec::new();
-    let mut truncated = response
-        .content_length()
-        .is_some_and(|length| length > MAX_FAILURE_BODY_BYTES as u64);
-    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
-        let remaining = MAX_FAILURE_BODY_BYTES.saturating_sub(bytes.len());
-        if chunk.len() > remaining {
-            bytes.extend_from_slice(&chunk[..remaining]);
-            truncated = true;
-            break;
-        }
-        bytes.extend_from_slice(&chunk);
-        if bytes.len() == MAX_FAILURE_BODY_BYTES {
-            truncated = true;
-            break;
-        }
-    }
-    Ok(failure_excerpt(&bytes, truncated))
 }
 
 fn map_text<'value>(value: &'value Map<String, Value>, key: &str) -> Option<&'value str> {
@@ -576,6 +556,90 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn failure_body_completion_and_json_are_not_limited_by_excerpt_buffer() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for mode in [
+            "json_exact",
+            "json_large",
+            "text_large",
+            "stalled",
+            "truncated",
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                let payload = br#"{"late":true}"#;
+                let body = if mode == "text_large" {
+                    vec![b'x'; 65537]
+                } else {
+                    let count = if mode == "json_exact" {
+                        65536 - payload.len()
+                    } else {
+                        65537
+                    };
+                    let mut body = vec![b' '; count];
+                    body.extend_from_slice(payload);
+                    body
+                };
+                socket.write_all(format!("HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                if matches!(mode, "stalled" | "truncated") {
+                    socket.write_all(&body[..65537]).await.unwrap();
+                    if mode == "stalled" {
+                        assert_eq!(socket.read(&mut byte).await.unwrap(), 0);
+                    }
+                } else {
+                    socket.write_all(&body).await.unwrap();
+                }
+            });
+            let transport = HttpCanvasCredentialsValidationTransport::with_operation_timeout(
+                CanvasOriginPolicy {
+                    allow_http_localhost: true,
+                    ..Default::default()
+                },
+                CanvasNetworkTimeout::from_seconds(0.2),
+            );
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                transport.get(&origin, &origin, "synthetic-token"),
+            )
+            .await
+            .unwrap();
+            if matches!(mode, "stalled" | "truncated") {
+                assert!(
+                    result.is_err(),
+                    "{mode} body must fail even after the old excerpt limit"
+                );
+            } else {
+                let response = result.unwrap();
+                assert_eq!(response.status_code, 403);
+                let expected = if mode == "text_large" {
+                    json!({"body_excerpt":format!("{}…", "x".repeat(1000))})
+                } else {
+                    json!({"late":true})
+                };
+                assert_eq!(
+                    response.response_excerpt.as_ref(),
+                    expected.as_object(),
+                    "{mode}"
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn successful_status_requires_complete_body_with_progress_deadlines() {
@@ -892,17 +956,17 @@ mod tests {
     #[test]
     fn failure_excerpts_preserve_objects_wrap_arrays_and_bound_text() {
         assert_eq!(
-            failure_excerpt(br#"{"error":"denied"}"#, false),
+            failure_excerpt(br#"{"error":"denied"}"#),
             json!({"error": "denied"}).as_object().unwrap().clone()
         );
         assert_eq!(
-            failure_excerpt(br#"["one","two"]"#, false),
+            failure_excerpt(br#"["one","two"]"#),
             json!({"payload": ["one", "two"]})
                 .as_object()
                 .unwrap()
                 .clone()
         );
-        let excerpt = failure_excerpt(&vec![b'x'; MAX_EXCERPT_CHARS + 50], true);
+        let excerpt = failure_excerpt(&vec![b'x'; MAX_EXCERPT_CHARS + 50]);
         let body = excerpt["body_excerpt"].as_str().unwrap();
         assert_eq!(body.chars().count(), MAX_EXCERPT_CHARS + 1);
         assert!(body.ends_with('…'));

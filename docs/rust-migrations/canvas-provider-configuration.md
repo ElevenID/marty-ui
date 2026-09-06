@@ -232,3 +232,44 @@ file/lookup/outbound-HTTP observation. Typed internal errors preserve the plain5
 boundary without leaking secret material; tenant ownership policy is unchanged.
 The new mandatory published-image gate expands the schema suite to21 tests.
 Broader URL/template, encoding, transport and all-consumer gates remain open.
+
+## Complete failed-response bodies before projection
+
+The actual published `_response_json_or_excerpt` first parses the complete body
+as JSON, preserving objects and wrapping other JSON values. Only non-JSON text
+is truncated. Native validation instead stopped at64KiB and marked even an exact
+64KiB response truncated, turning valid JSON into a text excerpt and hiding read
+failures occurring later in a response.
+
+The existing TLS oracle now captures the exact adapter response helper bodies
+with an additional verified source hash. Four appended cases cover valid JSON
+at64KiB, JSON after a larger whitespace prefix, long non-JSON text, and a stall
+after the old cutoff. Two independent captures agree; all original17 observations
+are unchanged. The native TLS child uses actual startup config, the operation
+HTTP owner, its complete-byte reader and the same projection used by validation.
+All21 native observations pass. The mandatory published-image test also compares
+the new response-helper hash rather than treating a helper name as provenance.
+
+A separate actual HttpCanvasCredentialsValidationTransport socket regression
+failed before repair: exactly64KiB valid JSON produced a whitespace excerpt rather
+than the late JSON field. It now passes exact/over-limit JSON, bounded text, a
+stalled body and a truncated body. Validation consumes the entire failed response
+using the shared transport byte reader before projection. The unused truncation
+flag and duplicate excerpt truncation logic are removed; status synchronization
+uses the same JSON/text helper and its existing protocol suite remains required.
+
+This intentionally preserves the published complete-JSON response capability;
+the former buffer size was not an approved external response limit. It does not
+remove management request limits, alter origin/trust policy or add a new global
+timeout. Failed bodies are retained until parsing, like the published owner;
+an explicit future resource policy must not silently masquerade as parity.
+
+Local286 library tests (7.79s),5 worker,28 management HTTP (0.03s),22 behavior
+(0.01s),40 workflow/image/ownership tests (2.13s), strict all-target Clippy (11.11s)
+and native21 TLS replay pass. The full configured published-image suite also
+passes all21 tests (131.65s; none ignored), including the expanded TLS corpus and
+unchanged status/validation comparisons. Fresh hosted checks remain required for
+this continuation. Charset/BOM handling,
+compression, network-error projection, backpressured writes/TLS/early replies,
+URL/template behavior and all-consumer adoption remain open. No deployment or
+reachable Python feature was removed.

@@ -45,7 +45,12 @@ async fn timeout_consumer_matches_published_socket_behavior() {
     // Capture installed published versions; local versions are provenance, not
     // an invented constraint on the immutable published image's dependencies.
     eprintln!("Published timeout consumer runtime: {}", oracle["runtime"]);
-    for key in ["source_sha256", "boundary", "cases"] {
+    for key in [
+        "source_sha256",
+        "response_source_sha256",
+        "boundary",
+        "cases",
+    ] {
         assert_eq!(oracle[key], expected[key], "published timeout {key}");
     }
 }

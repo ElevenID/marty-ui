@@ -45,21 +45,17 @@ pub(crate) fn https_origin(value: &str) -> Option<String> {
     })
 }
 
-pub(crate) fn response_excerpt(bytes: &[u8], truncated: bool) -> Map<String, Value> {
-    if !truncated {
-        if let Ok(payload) = serde_json::from_slice::<Value>(bytes) {
-            return match payload {
-                Value::Object(object) => object,
-                payload => Map::from_iter([("payload".into(), payload)]),
-            };
-        }
+/// Projection follows complete body consumption. Only text excerpts are bounded;
+/// valid JSON objects/scalars must not silently lose fields at an I/O buffer size.
+pub(crate) fn response_excerpt(bytes: &[u8]) -> Map<String, Value> {
+    if let Ok(payload) = serde_json::from_slice::<Value>(bytes) {
+        return match payload {
+            Value::Object(object) => object,
+            payload => Map::from_iter([("payload".into(), payload)]),
+        };
     }
     let text = String::from_utf8_lossy(bytes);
-    let mut body = text.chars().take(MAX_EXCERPT_CHARS).collect::<String>();
-    if truncated || text.chars().count() > MAX_EXCERPT_CHARS {
-        body.push('…');
-    }
-    Map::from_iter([("body_excerpt".into(), Value::String(body))])
+    Map::from_iter([("body_excerpt".into(), Value::String(truncate_text(&text)))])
 }
 
 pub(crate) fn truncate_text(text: &str) -> String {

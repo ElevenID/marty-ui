@@ -17,6 +17,10 @@
     {"name":"nan_delayed_body","seconds":"nan","response":"body"},
     {"name":"infinity_delayed_headers","seconds":"inf","response":"headers"},
     {"name":"huge_delayed_body","seconds":"1e30","response":"body"},
-    {"name":"untrusted_certificate","seconds":"2","response":"immediate","trusted":false}
+    {"name":"untrusted_certificate","seconds":"2","response":"immediate","trusted":false},
+    {"name":"failure_json_at_old_limit","seconds":"2","response":"failure_json_exact","projection":"excerpt"},
+    {"name":"failure_json_above_old_limit","seconds":"2","response":"failure_json_large","projection":"excerpt"},
+    {"name":"failure_text_above_old_limit","seconds":"2","response":"failure_text_large","projection":"excerpt"},
+    {"name":"failure_stall_after_old_limit","seconds":"0.2","response":"failure_stall","projection":"excerpt"}
   ]
 }

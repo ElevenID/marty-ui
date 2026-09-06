@@ -33,6 +33,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Response-body qualification now extends the real TLS corpus from17 to21 cases,
+retaining every prior observation. Two independent published-source captures
+confirm valid JSON at/above the former64KiB validation buffer, bounded text
+excerpts, and a read timeout after that prefix. Native21 TLS replay passes. A
+real validation-transport regression reproduced lost JSON fields at exactly64KiB;
+the repair consumes failed responses completely before shared JSON/text projection
+and rejects later stalls/truncation. Only non-JSON text excerpts are limited to
+1000 characters plus ellipsis; request-body limits and origin policy are unchanged.
+Local286 library,5 worker,28 management HTTP,22 behavior,40 workflow/image/ownership
+tests and strict Clippy pass. The full configured published-image suite passes
+all21 tests (none ignored). Charset/compression and wider transport gates remain.
+
 The [managed validation boundary](rust-migrations/canvas-validation-boundary.md)
 now freezes20 responses and lookup/file/HTTP effects from the actual published
 application middleware, route and adapter; two independent captures agree. The

@@ -195,6 +195,12 @@ pub(crate) struct CanvasOperationResponse {
     phase: Arc<AtomicU8>,
 }
 impl CanvasOperationResponse {
+    pub async fn bytes(self) -> Result<Bytes, CanvasOperationHttpError> {
+        self.response
+            .bytes()
+            .await
+            .map_err(|_| failed(&self.phase, CanvasOperationHttpError::Response))
+    }
     pub async fn text(self) -> Result<String, CanvasOperationHttpError> {
         self.response
             .text()
@@ -439,7 +445,14 @@ mod tests {
         let path = case["response"].as_str().unwrap();
         assert!(matches!(
             path,
-            "immediate" | "headers" | "body" | "progress"
+            "immediate"
+                | "headers"
+                | "body"
+                | "progress"
+                | "failure_json_exact"
+                | "failure_json_large"
+                | "failure_text_large"
+                | "failure_stall"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),
@@ -483,7 +496,13 @@ mod tests {
                 )
                 .await?;
             let status = response.response.status().as_u16();
-            let body = response.text().await?;
+            let body = if case["projection"] == "excerpt" {
+                json!(crate::canvas_credentials_protocol::response_excerpt(
+                    &response.bytes().await?
+                ))
+            } else {
+                json!(response.text().await?)
+            };
             Ok::<_, CanvasOperationHttpError>(json!({"status":status, "body":body}))
         }
         .await;

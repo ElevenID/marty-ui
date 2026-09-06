@@ -35,6 +35,10 @@ from cryptography.x509.oid import NameOID
 
 SOURCE_REF = "51f0a758a076777cb18a30b1db3f89c74ac23e01:services/issuance/application/canvas_lti_services.py"
 SOURCE_SHA256 = "ab5b5a6de0e1c3ed45838e6ca0c1df1c84f3eb311de41060a60754769d7ac6b3"
+RESPONSE_SOURCE_REF = "51f0a758a076777cb18a30b1db3f89c74ac23e01:services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
+RESPONSE_SOURCE_SHA256 = (
+    "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679"
+)
 NAMES = {
     "CanvasLtiServiceError",
     "normalize_canvas_https_origin",
@@ -71,6 +75,26 @@ def client_owner(source, origin):
     return namespace["canvas_http_client"]
 
 
+def response_owner(source):
+    assert hashlib.sha256(source.encode()).hexdigest() == RESPONSE_SOURCE_SHA256
+    names = {"_response_json_or_excerpt", "_truncate_text"}
+    nodes = [
+        node for node in ast.parse(source).body if getattr(node, "name", None) in names
+    ]
+    assert {node.name for node in nodes} == names
+    future = ast.ImportFrom(
+        module="__future__", names=[ast.alias(name="annotations")], level=0
+    )
+    code = compile(
+        ast.fix_missing_locations(ast.Module(body=[future, *nodes], type_ignores=[])),
+        "published-canvas-response-owner",
+        "exec",
+    )
+    namespace = {}
+    exec(code, namespace)
+    return namespace["_response_json_or_excerpt"]
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -79,6 +103,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            if self.path in {
+                "/failure_json_exact",
+                "/failure_json_large",
+                "/failure_text_large",
+                "/failure_stall",
+            }:
+                payload = b'{"late":true}'
+                if self.path == "/failure_text_large":
+                    body = b"x" * 65537
+                else:
+                    padding = (
+                        65536 - len(payload)
+                        if self.path == "/failure_json_exact"
+                        else 65537
+                    )
+                    body = b" " * padding + payload
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                if self.path == "/failure_stall":
+                    self.wfile.write(body[:65537])
+                    self.wfile.flush()
+                    time.sleep(0.6)
+                    self.wfile.write(body[65537:])
+                else:
+                    self.wfile.write(body)
+                self.wfile.flush()
+                return
             if self.path not in {"/immediate", "/headers", "/body", "/progress"}:
                 self.server.failures.append("unexpected path")
                 return
@@ -159,8 +212,9 @@ def loopback_tls():
             assert not server.failures
 
 
-async def observe(source, cases, origin, trust):
+async def observe(source, response_source, cases, origin, trust):
     factory = client_owner(source, origin)
+    excerpt = response_owner(response_source)
     observations = []
     for case in cases:
         client = factory(timeout=float(case["seconds"]))
@@ -174,7 +228,12 @@ async def observe(source, cases, origin, trust):
             try:
                 async with asyncio.timeout(5):
                     response = await client.get(origin + "/" + case["response"])
-                    result = {"status": response.status_code, "body": response.text}
+                    result = {
+                        "status": response.status_code,
+                        "body": excerpt(response)
+                        if case.get("projection") == "excerpt"
+                        else response.text,
+                    }
             except httpx.HTTPError as failure:
                 result = {"error_class": type(failure).__name__}
             except TimeoutError:
@@ -183,10 +242,15 @@ async def observe(source, cases, origin, trust):
     return observations
 
 
-def run(source=None):
+def run(source=None, response_source=None):
     if source is None:
         spec = importlib.util.find_spec("issuance.application.canvas_lti_services")
         source = Path(spec.origin).read_text(encoding="utf-8")
+    if response_source is None:
+        spec = importlib.util.find_spec(
+            "issuance.infrastructure.adapters.canvas_credentials_adapter"
+        )
+        response_source = Path(spec.origin).read_text(encoding="utf-8")
     cases = json.loads(
         (
             Path(__file__).resolve().parents[1]
@@ -194,9 +258,12 @@ def run(source=None):
         ).read_text(encoding="utf-8")
     )["cases"]
     with loopback_tls() as (origin, trust, _):
-        observations = asyncio.run(observe(source, cases, origin, trust))
+        observations = asyncio.run(
+            observe(source, response_source, cases, origin, trust)
+        )
     return {
         "source_sha256": SOURCE_SHA256,
+        "response_source_sha256": RESPONSE_SOURCE_SHA256,
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)
@@ -272,4 +339,14 @@ if __name__ == "__main__":
         .stdout.decode("utf-8")
         .replace("\r\n", "\n")
     )
-    print(json.dumps(run(source), sort_keys=True))
+    response_source = (
+        subprocess.run(
+            ["git", "show", RESPONSE_SOURCE_REF],
+            cwd=arguments.source_repository,
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode("utf-8")
+        .replace("\r\n", "\n")
+    )
+    print(json.dumps(run(source, response_source), sort_keys=True))
