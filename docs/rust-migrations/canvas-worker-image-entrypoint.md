@@ -1,7 +1,7 @@
 # Canvas worker image launch contract
 
-Status: launch selection and executable CI smoke gate implemented; fresh packaged
-Linux execution remains pending. Existing deployment consumers remain on Python.
+Status: all eight packaged preflight cases passed at `e424761f5`, image job
+101523616820 in CI34046951418. Existing deployment consumers remain on Python.
 This does not qualify database startup, active work, all secret sources or cutover.
 
 The public shared image already builds and copies `marty-canvas-sync-worker`.
@@ -51,4 +51,8 @@ seconds, with one opt-in verifier containerd/Buildx contract skipped. The run us
 CI's `PYTHONPATH=packages` plus an isolated copy of the hash-verified released
 `marty-common` 0.2.16 dependency. Ruff, shell syntax, diff checks and Docker's
 issuance build-definition check pass; Docker reports no warnings. These results
-do not replace the pending eight-case real-image smoke or native worker gates.
+do not replace native worker gates. The subsequent image job verified all eight
+real-image cases and retained the API health smoke; Rust CodeQL34046951414 passed.
+At that observation, the same head's configured runtime suite was still running.
+The newer [24-case database-startup extension](canvas-worker-image-startup.md)
+and its shared-helper extraction still require their own fresh image execution.
