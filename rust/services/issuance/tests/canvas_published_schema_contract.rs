@@ -77,6 +77,77 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         oracle["charset_headers"], headers,
         "published charset header behavior and registry aliases"
     );
+    let multibyte_sources = [
+        (
+            "big5",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/big5.json"),
+        ),
+        (
+            "big5hkscs",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/big5hkscs.json"),
+        ),
+        (
+            "cp932",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/cp932.json"),
+        ),
+        (
+            "cp949",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/cp949.json"),
+        ),
+        (
+            "cp950",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/cp950.json"),
+        ),
+        (
+            "gb2312",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/gb2312.json"),
+        ),
+        (
+            "gbk",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/gbk.json"),
+        ),
+        (
+            "johab",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/johab.json"),
+        ),
+        (
+            "shift_jis",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/shift_jis.json"),
+        ),
+        (
+            "shift_jis_2004",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/shift_jis_2004.json"),
+        ),
+        (
+            "shift_jisx0213",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/shift_jisx0213.json"),
+        ),
+        (
+            "euc_jp",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/euc_jp.json"),
+        ),
+        (
+            "euc_jis_2004",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/euc_jis_2004.json"),
+        ),
+        (
+            "euc_jisx0213",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/euc_jisx0213.json"),
+        ),
+        (
+            "hz",
+            include_str!("../../../../contracts/canvas-multibyte-codecs/hz.json"),
+        ),
+    ];
+    let multibyte: serde_json::Map<String, serde_json::Value> = multibyte_sources
+        .into_iter()
+        .map(|(name, source)| (name.to_owned(), serde_json::from_str(source).unwrap()))
+        .collect();
+    assert_eq!(
+        oracle["multibyte_codecs"],
+        serde_json::Value::Object(multibyte),
+        "published multibyte machines and independent decoder observations"
+    );
 }
 
 #[tokio::test]

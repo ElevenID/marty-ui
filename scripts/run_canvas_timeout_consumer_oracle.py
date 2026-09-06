@@ -11,6 +11,7 @@ import asyncio
 import codecs
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from functools import cache
 import hashlib
 import encodings
 import encodings.aliases
@@ -410,6 +411,13 @@ class Handler(BaseHTTPRequestHandler):
                 ),
                 "/text_long_latin1": ("text/plain; charset=latin1", "e9" * 1001),
             }
+            for name in multibyte_owner().NAMES:
+                text_cases[f"/text_multibyte_{name}"] = (
+                    "text/plain; charset=" + name,
+                    (
+                        b"~{VP~}" + bytes(range(256)) + b"\x81\x40\x88\x62\x8f\xa2\xaf"
+                    ).hex(),
+                )
             if self.path in text_cases:
                 content_type, hexadecimal = text_cases[self.path]
                 body = bytes.fromhex(hexadecimal)
@@ -662,6 +670,17 @@ async def observe(source, response_source, cases, origin, trust):
     return observations
 
 
+@cache
+def multibyte_owner():
+    spec = importlib.util.spec_from_file_location(
+        "canvas_multibyte_codec_oracle",
+        Path(__file__).with_name("canvas_multibyte_codec_oracle.py"),
+    )
+    multibyte = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(multibyte)
+    return multibyte
+
+
 def run(source=None, response_source=None):
     if source is None:
         spec = importlib.util.find_spec("issuance.application.canvas_lti_services")
@@ -687,6 +706,7 @@ def run(source=None, response_source=None):
         "single_byte_codecs": single_byte_codecs(response_source),
         "unicode_text_codecs": unicode_text_codecs(response_source),
         "charset_headers": charset_headers(response_source),
+        "multibyte_codecs": multibyte_owner().run(),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)

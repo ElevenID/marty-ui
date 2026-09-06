@@ -101,7 +101,8 @@ and the existing 68 TLS observations pass. Fresh hosted checks remain required.
 
 ## Remaining gates
 
-Other multibyte/stateful codecs (also when used to encode parameter labels),
+Unqualified multibyte/stateful codecs (including GB18030, EUC-KR and ISO-2022),
+UTF-7 and special/escape codecs, including their encoded-parameter-label use,
 exceptional header metadata such as Python's decimal-conversion limit for very
 long continuation ordinals, exceptional JSON values and other configuration or
 exception paths still need qualification. The header corpus below qualifies its
@@ -158,3 +159,35 @@ Gates: 297 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image
 ownership, strict Clippy, 68 native TLS and all 23 configured image/schema tests
 pass. CI explicitly requires both decoder-recovery tests to exist before running
 the complete suite. Fresh hosted checks must qualify the committed source.
+
+## Shared East Asian multibyte machines
+
+The [machine artifacts](../../contracts/canvas-multibyte-codecs/README.md) add 15
+published codecs through one Rust decoder: Big5/Big5-HKSCS, CP932/949/950,
+GB2312/GBK, Johab, three Shift-JIS variants, three EUC-JP variants and HZ.
+They retain single-byte exceptions, invalid/truncated input, state transitions,
+multi-character mappings, finalization and strict decoding for parameter labels.
+All 64 recorded canonical/alias labels are exercised against full HTTPX responses.
+No WHATWG-to-Python equivalence assumption or runtime Python codec shim is used.
+
+Two independent immutable-image captures agree for each complete machine before
+the native implementation. The old UTF-8 fallback failed the new Big5 response
+corpus. There are 2,415 reachable states, 618,240 transitions and 620,655 complete
+witness-prefix observations for each of replacement and strict decoding. Expected
+digests come from fresh HTTPX decoders and Python strict decode, not table replay.
+Rust independently replays those inputs and 165 full-response examples. Generated
+tables use compressed language-neutral data; bounds and indices are checked once
+on lazy initialization, and all machines reuse one decoding loop.
+
+The actual published HTTP/response-helper TLS corpus grows 68 -> 83, retaining all
+earlier observations and adding every machine. Two independent captures agree;
+native TLS matches all 83. The exact new fixture paths were added to the existing
+test-only allowlist after its first replay correctly rejected unknown paths.
+No production origin or transport policy was relaxed.
+
+All 23 configured published-image/schema tests pass (145.31 seconds), including
+complete machine regeneration/comparison and the expanded TLS corpus. Local 299
+library, 5 worker, 28 managed HTTP, 22 behavior, 70 workflow/image/ownership/cutover
+tests and strict Clippy pass. Dependencies, lockfile, reachable Python and
+deployments are unchanged. Other codec families and broader adoption gates above
+remain open; this is not whole-worker cutover approval.

@@ -120,6 +120,9 @@ fn decode_label(value: &str, encoding: &str) -> Option<String> {
         return std::str::from_utf8(data).ok().map(str::to_owned);
     }
     let registry = response_codecs();
+    if let Some(machine) = super::multibyte::lookup(&name) {
+        return machine.decode(&bytes, true);
+    }
     if let Some(table) = registry.aliases.get(&name).map(|key| &registry.tables[key]) {
         return bytes
             .iter()

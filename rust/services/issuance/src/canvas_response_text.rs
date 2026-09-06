@@ -6,6 +6,8 @@ use std::{collections::BTreeMap, sync::OnceLock};
 #[path = "canvas_response_charset.rs"]
 mod charset;
 use charset::charset_parameter;
+#[path = "canvas_response_multibyte.rs"]
+mod multibyte;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CanvasResponseTextError {
@@ -133,6 +135,11 @@ pub(crate) fn response_text(
     }
     if let Some(encoding) = registry.unicode_aliases.get(&normalized) {
         return unicode_text(bytes, *encoding);
+    }
+    if let Some(machine) = multibyte::lookup(&normalized) {
+        return Ok(machine
+            .decode(bytes, false)
+            .expect("replacement decoding cannot fail"));
     }
     let bytes = match normalized.as_str() {
         "utf_8_sig" => bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes),
@@ -314,6 +321,25 @@ mod tests {
                         case["excerpt"],
                         "excerpt {label} {}",
                         case["name"]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multibyte_response_cases_match_published_codecs() {
+        for (_, source) in multibyte::SOURCES {
+            let frozen: serde_json::Value = serde_json::from_str(source).unwrap();
+            for case in frozen["cases"].as_array().unwrap() {
+                let bytes = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
+                for alias in frozen["aliases"].as_array().unwrap() {
+                    let header = format!("text/plain; charset={}", alias.as_str().unwrap());
+                    assert_eq!(
+                        response_text(&bytes, Some(&header)).unwrap(),
+                        case["text"].as_str().unwrap(),
+                        "published codec {}",
+                        frozen["name"]
                     );
                 }
             }

@@ -33,6 +33,21 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Multibyte response qualification adds 15 East Asian codecs through a shared native
+state-machine decoder, also reused for strict encoded charset labels. Independently
+captured immutable-image tables cover 64 labels, 2,415 reachable states and 618,240
+byte transitions. Independent HTTPX/strict decoding hashes qualify 620,655 witness
+inputs per mode, and 165 response examples retain multi-character mappings and
+malformed-input replacement. The old native UTF-8 fallback failed before repair.
+The published-helper/native TLS corpus expands from 68 to 83 cases with every old
+observation unchanged. Local 299 library, 5 worker, 28 managed HTTP, 22 behavior,
+70 workflow/image/ownership/cutover checks, strict Clippy and all 23 configured
+image/schema tests pass. No dependencies or runtime Python are added. The prior
+integration head `ded29ea7c` CI and Rust CodeQL passed; new source still requires
+its own hosted checks. GB18030, EUC-KR, ISO-2022, UTF-7/special/escape codecs,
+exceptional metadata/JSON/configuration/transport behavior and whole-worker/all-
+consumer adoption remain open. No deployment or reachable-Python deletion occurs.
+
 Protected main advanced through CI/cache repair PR #815 at
 `f5c4da685f5723a7614649c883bfaa540dd153f1`, conflicting with PR #814 in the
 workflow, workflow tests, worker lifecycle and process-signal diagnostics. GitHub

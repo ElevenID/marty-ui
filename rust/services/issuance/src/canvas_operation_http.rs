@@ -561,6 +561,21 @@ mod tests {
                 | "text_cp037"
                 | "text_koi8_r"
                 | "text_mac_roman"
+                | "text_multibyte_big5"
+                | "text_multibyte_big5hkscs"
+                | "text_multibyte_cp932"
+                | "text_multibyte_cp949"
+                | "text_multibyte_cp950"
+                | "text_multibyte_gb2312"
+                | "text_multibyte_gbk"
+                | "text_multibyte_johab"
+                | "text_multibyte_shift_jis"
+                | "text_multibyte_shift_jis_2004"
+                | "text_multibyte_shift_jisx0213"
+                | "text_multibyte_euc_jp"
+                | "text_multibyte_euc_jis_2004"
+                | "text_multibyte_euc_jisx0213"
+                | "text_multibyte_hz"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),

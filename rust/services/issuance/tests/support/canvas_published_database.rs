@@ -318,13 +318,22 @@ impl PublishedDatabase {
             "/verification/scripts/prepare_canvas_published_schema.py",
         ];
         let (script, scenario, report_key, flag) = oracle.unwrap_or_default();
+        let multibyte_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_multibyte_codec_oracle.py,readonly",
+            root.join("scripts/canvas_multibyte_codec_oracle.py").display()
+        );
         if script == "timeout_consumer" {
             // Only the TLS oracle needs ephemeral certificate storage. Preserve
             // the read-only image and all host mounts; nothing is persisted.
             let index = arguments.len() - 2;
             arguments.splice(
                 index..index,
-                ["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777"],
+                [
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777",
+                    "--mount",
+                    &multibyte_mount,
+                ],
             );
         }
         let script_path = format!("scripts/run_canvas_{script}_oracle.py");
