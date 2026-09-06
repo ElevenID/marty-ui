@@ -46,8 +46,8 @@ The [active-provider signal reference](rust-migrations/canvas-worker-provider-si
 now records SIGINT, SIGTERM and SIGKILL against actual published worker processes
 while a real HTTPS response is held. Each pair of independent captures agrees;
 the job remains leased and issuance/token ciphertext are preserved. Native replay
-is implemented and awaits mandatory Linux execution, including Rust's intentional
-SIGTERM graceful drain and unchanged original REST/facts/retry regression gates.
+includes Rust's intentional SIGTERM graceful drain and retains the original
+REST/facts/retry regression gates.
 The correction is now qualified at `499298659`: CI34038852781 and Rust
 CodeQL34038852821 passed; the configured log explicitly records SIGINT, SIGTERM,
 SIGKILL and all 49 tests passing in 580.28 seconds. The newer native recovery
