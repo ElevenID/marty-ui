@@ -1,8 +1,8 @@
 # Actual competing final-attempt reclaimers
 
 Status: two independent published-process captures agree; mandatory reference
-regeneration passes locally. Native two-reclaimer replay is implemented and
-awaits Linux qualification. This is
+regeneration passes locally. Native two-reclaimer replay passed Linux at
+`54692c4e4` (CI34043971766, Rust34043971750). This is
 not whole-worker cutover or Python deletion/deployment qualification.
 
 The existing final-attempt reference supplies historical queued attempt 7 before
@@ -65,8 +65,11 @@ their 90-second parent deadline. No individual behavior assertion was relaxed.
 
 Local native compilation, three strict comparison tests and all 68 affected
 Python tests pass (3.34 seconds for Python), together with strict lint/format
-and CI syntax checks. Actual native two-reclaimer runtime remains unqualified
-until the new mandatory Linux parent/child executes successfully.
+and CI syntax checks. Configured Linux execution subsequently passed at
+`54692c4e4`: all 62 entries passed in 1038.42 seconds, including the actual
+two-reclaimer one-request case and both fresh idle heartbeat assertions. The
+separate 0.32-second unconfigured run is not runtime qualification. All earlier
+concurrent/final/renewal/recovery/signal cases also passed in that configured run.
 
 Changed-target/owner-fence loss, final-completion races, disposal and nonfinal
 competing-reclaimer outcomes remain separate requirements in the

@@ -37,14 +37,16 @@ The [retryable competing-reclaimer reference](rust-migrations/canvas-worker-recl
 has two matching independent captures and a passing local regeneration gate.
 Both replacement workers reach fresh idle at the durable retry
 boundary without an early provider read; after real retry eligibility, the same
-job succeeds on attempt two and its target stays enabled. Native replay remains
-open; this does not qualify a worker cutover or a deployment.
+job succeeds on attempt two and its target stays enabled. Native replay is
+implemented and awaits Linux qualification; this does not qualify a worker
+cutover or a deployment.
 
 The [competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers.md)
 has two matching independent captures and a mandatory regeneration gate. After
 real final-attempt crash/expiry, two actual processes are observed blocked at the
 job-table barrier, then reach fresh idle with one dead-letter and no additional
-provider request. Native replay is implemented and awaits Linux qualification;
+provider request. Native replay passed at `54692c4e4` (CI34043971766,
+Rust34043971750), with all 62 configured tests passing in 1038.42 seconds;
 remaining ownership, nonfinal-reclaimer and completion races are still open.
 
 The [local branch cleanup checkpoint](rust-migrations/branch-cleanup-checkpoint.md)
@@ -58,7 +60,8 @@ are observed waiting on a fixture-owned database barrier before simultaneous
 release; exactly one job/provider request succeeds and both workers remain alive.
 Native replay passed at `a329b980e` (CI34042598584, Rust34042598554), including the
 actual one-request concurrent case and all 59 configured tests in 948.70 seconds.
-Crash-reclaimer concurrency and changed-target races remain open.
+Final-attempt reclaimer concurrency is qualified above; retryable-reclaimer
+qualification and changed-target races remain open.
 
 The [final-attempt crash reference](rust-migrations/canvas-worker-provider-final.md)
 has two identical independent captures and a mandatory regeneration gate. After
@@ -67,7 +70,8 @@ to dead-letter/target-disable with no second provider request. Earlier attempts
 are explicitly seeded history, not executed evidence. Native final-attempt
 replay passed with strict generation checks at `e959e113d` (CI34041341592,
 Rust34041341506), including one actual HTTPS request and all 56 configured tests
-in 841.38 seconds. Concurrent reclaimers and changed-generation races remain open.
+in 841.38 seconds. The newer two-final-reclaimer qualification is recorded above;
+changed-generation races remain open.
 
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease

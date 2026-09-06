@@ -1,7 +1,7 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `a329b980ec9cce04bf5cea55dd0edcab64525dd2`,
-with newer native two-reclaimer replay awaiting qualification. PR #814 draft and
+Status: latest qualified composed checkpoint `54692c4e4aeda5644ff721a5bc21e354a6933eb1`,
+with newer native retryable two-reclaimer replay awaiting qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -78,20 +78,22 @@ matching captures. PostgreSQL observes two actual worker scheduler queries
 blocked at the owned fixture barrier; after release, one job/request succeeds
 while both processes remain alive. Native replay passed at `a329b980e`
 (CI34042598584, Rust34042598554; 59 configured tests in 948.70 seconds).
-Crash-reclaimer/changed-target races remain separate; this does not close all of gate 5.
+Other reclaimer/changed-target races remain separate; this does not close all of gate 5.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 The [retryable two-reclaimer reference](canvas-worker-reclaimers-retry.md) has two
 matching captures: both workers reach fresh idle with one durable retry and no
 early read, then real eligibility permits same-job attempt-two success with the
-target enabled. Reference regeneration passes locally; native adoption
-and the remaining race requirements are still open.
+target enabled. Reference regeneration passes locally; native replay is
+implemented but awaits Linux qualification. Remaining race requirements stay open.
 
 The [two-reclaimer reference](canvas-worker-reclaimers.md) has two matching
 captures after actual final-attempt renewal, process loss and real lease expiry.
 Both actual job queries wait at an owned job-table barrier before release; both
 workers then reach fresh idle with one dead-letter and no further provider read.
-Native adoption is implemented and awaits Linux qualification; other ownership,
+Native adoption passed at `54692c4e4` (CI34043971766, Rust34043971750), including
+all 62 configured tests in 1038.42 seconds and the actual one-request reclaimer
+case with both fresh idle heartbeat assertions. Other ownership,
 nonfinal-reclaimer and final-completion races remain open.
 
 The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
@@ -100,7 +102,8 @@ historical attempts before worker startup, then observes actual attempt-eight
 renewal, crash, real expiry and dead-letter/target-disable without another read.
 Native final-attempt replay passed with exact generation-fence checks at
 `e959e113d` (CI34041341592, Rust34041341506; 56 configured tests in 841.38 seconds).
-Concurrent reclaimers and changed-generation races remain open.
+Final-attempt concurrent reclaimers are qualified above; retryable-reclaimer
+qualification and changed-generation races remain open.
 
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 
@@ -162,7 +165,8 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
    do not repeat the repaired LTI-identity requirement as an open runtime bug.
 2. Retain the qualified REST/facts/retry/signal/renewal and nonfinal recovery
    sequences on the pinned migrations with real native provider/OAuth adapters.
-   Retain final-attempt and concurrent scheduler qualification, qualify the newer two-reclaimer replay, then extend
+   Retain final-attempt, concurrent scheduler and two-final-reclaimer qualification;
+   qualify the newer retryable two-reclaimer replay, then extend
    the same harness across the remaining crash-reclaimer, mutation, OAuth,
    failure and cleanup requirements above. Do not repeat completed boundaries
    as though their native adoption were still missing.

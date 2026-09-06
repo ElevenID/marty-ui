@@ -24,7 +24,14 @@ def wait_for(child, predicate, description, timeout=30):
 
 def run(executable, scenario="signals"):
     assert sys.platform == "linux", "Actual POSIX worker signals require Linux"
-    assert scenario in {"signals", "recovery", "final", "concurrent", "reclaimers"}
+    assert scenario in {
+        "signals",
+        "recovery",
+        "final",
+        "concurrent",
+        "reclaimers",
+        "reclaimers_retry",
+    }
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / "contracts/canvas-worker-rest-scenarios.json").read_text()
@@ -34,6 +41,8 @@ def run(executable, scenario="signals"):
         if scenario in {"concurrent", "reclaimers"}
         else f"canvas-worker-provider-{scenario}-oracle.json"
     )
+    if scenario == "reclaimers_retry":
+        reference_name = "canvas-worker-reclaimers-retry-oracle.json"
     reference = json.loads((root / "contracts" / reference_name).read_text())
     cases = {
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
@@ -41,9 +50,12 @@ def run(executable, scenario="signals"):
         "final": ["final"],
         "concurrent": ["concurrent"],
         "reclaimers": ["reclaimers"],
+        "reclaimers_retry": ["reclaimers_retry"],
     }[scenario]
-    if scenario in {"final", "reclaimers"}:
-        assert reference["case"] == "final"
+    if scenario in {"final", "reclaimers", "reclaimers_retry"}:
+        assert reference["case"] == (
+            "recovery" if scenario == "reclaimers_retry" else "final"
+        )
         reference = {scenario: reference}
     elif scenario == "concurrent":
         assert reference["schema"] == "marty.canvas-worker-concurrent-oracle/v1"
@@ -83,7 +95,14 @@ def run(executable, scenario="signals"):
                 # Synchronize the test harness only, never the worker or DB.
                 (control / "request-received").touch(exist_ok=False)
                 release_response = (
-                    scenario in {"recovery", "final", "concurrent", "reclaimers"}
+                    scenario
+                    in {
+                        "recovery",
+                        "final",
+                        "concurrent",
+                        "reclaimers",
+                        "reclaimers_retry",
+                    }
                     or signal_name == "SIGTERM"
                 )
                 if release_response:
@@ -93,12 +112,16 @@ def run(executable, scenario="signals"):
                         "verified pending-I/O state",
                     )
                     https.release.set()
-                if scenario == "recovery" and signal_name == "recovery":
+                if (
+                    scenario == "recovery" and signal_name == "recovery"
+                ) or scenario == "reclaimers_retry":
                     wait_for(
                         child,
                         (control / "reclaimer-idle").is_file,
                         "recovery retry",
-                        timeout=45,
+                        # Dual recovery also observes the bounded barrier,
+                        # second fresh heartbeat and contender exit before ack.
+                        timeout=110 if scenario == "reclaimers_retry" else 45,
                     )
                     assert len(https.requests) == 1, (
                         "Recovery bypassed retry eligibility"
@@ -108,7 +131,9 @@ def run(executable, scenario="signals"):
                 # barrier, 15-second second-heartbeat wait and two process exits.
                 # Let its bounded waits/RAII finish before parent-level timeout.
                 stdout, stderr = child.communicate(
-                    timeout=150 if scenario == "reclaimers" else 90
+                    timeout=150
+                    if scenario in {"reclaimers", "reclaimers_retry"}
+                    else 90
                 )
                 assert child.returncode == 0, (
                     f"Native {signal_name} failed: {stdout} {stderr}"
@@ -133,6 +158,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final|concurrent|reclaimers]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|concurrent|reclaimers|reclaimers_retry]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

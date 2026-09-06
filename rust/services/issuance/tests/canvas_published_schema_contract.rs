@@ -17,6 +17,11 @@ fn worker_provider_signals_match_frozen_published_process() {
 }
 
 #[test]
+fn worker_provider_reclaimers_retry_matches_frozen_published_process() {
+    assert_worker_provider_https("reclaimers_retry");
+}
+
+#[test]
 fn worker_provider_reclaimers_matches_frozen_published_process() {
     assert_worker_provider_https("reclaimers");
 }
@@ -69,6 +74,11 @@ async fn worker_provider_signals_native_child() {
 }
 
 #[tokio::test]
+async fn worker_provider_reclaimers_retry_native_child() {
+    worker_provider_child("reclaimers_retry").await;
+}
+
+#[tokio::test]
 async fn worker_provider_reclaimers_native_child() {
     worker_provider_child("reclaimers").await;
 }
@@ -114,7 +124,7 @@ async fn worker_provider_child(scenario: &str) {
         "signals" => {
             canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await
         }
-        "recovery" | "final" | "reclaimers" => {
+        "recovery" | "final" | "reclaimers" | "reclaimers_retry" => {
             canvas_worker_provider_recovery_replay::replay(&pool, &owned.url, &origin, &signal)
                 .await
         }

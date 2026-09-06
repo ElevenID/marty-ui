@@ -2,7 +2,8 @@
 
 Status: two independent published-process captures agree. The mandatory reference
 regeneration gate and all selected worker regressions pass locally.
-Native adoption remains open. This is not whole-worker or deployment acceptance.
+Native replay is implemented and awaits Linux qualification. This is not
+whole-worker or deployment acceptance.
 
 The actual published worker schedules and leases attempt one, begins authenticated
 HTTPS I/O, and renews its lease and both heartbeats. After forced process loss,
@@ -39,7 +40,7 @@ terminal boundary in the final-attempt case. Existing frozen artifacts stay
 unchanged and require regeneration after this extraction. Process cleanup and
 barrier rollback retain their existing owners and failure tests.
 
-Changed-target/owner-fence loss, final-completion races, disposal, native replay
+Changed-target/owner-fence loss, final-completion races, disposal, native qualification
 and every other open [cutover requirement](canvas-worker-cutover-readiness.md)
 remain separate. No production or persistent self-host changes are made.
 
@@ -49,3 +50,29 @@ comparison units, and fourteen native Linux parent/helper entries. The latter
 are not Windows runtime qualification. All 68 affected Python tests pass in
 3.36 seconds; strict Clippy, Rustfmt, Ruff, Bash syntax and diff checks pass.
 The earlier frozen worker artifacts remain unchanged and regenerate successfully.
+
+## Native replay
+
+The mandatory native parent/child extends the shared recovery replay. Only
+contention settings are reused from the final-reclaimer scenario; its historical
+seed is explicitly excluded. Both fresh idle heartbeats and the full retry
+projection are checked before the contender is interrupted. Taking ownership
+out of its optional slot ensures the later successor-completion check cannot
+mistake the already-reaped contender for a live replacement worker.
+
+The HTTPS parent observes exactly one request at the retry boundary before
+acknowledging successor restart. Actual persisted backoff must expire, then the
+same job must succeed on attempt two with exactly two requests and an enabled
+target. Internal generation one is checked exactly for leased/retry state;
+successful terminal results and all other state remain strict comparisons.
+
+The new parent's pre-restart acknowledgment deadline is 110 seconds, covering
+the child's existing bounded real-expiry, barrier, idle, second-heartbeat and
+contender-exit checks. Its final communicate bound is 150 seconds, as for the
+dual-final reclaimer. Existing cases and individual assertions are unchanged.
+Process RAII, barrier rollback and all fixture cleanup owners remain intact.
+
+Local native compilation and all three strict comparison tests pass (62 other
+entries filtered); 68 affected Python tests pass in 3.59 seconds. Strict Clippy,
+Rustfmt, Ruff, Bash syntax and diff checks pass. The next configured Linux suite
+contains 65 entries; that new exact-head runtime result remains pending.
