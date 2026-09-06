@@ -1,0 +1,1007 @@
+{
+  "observations": [
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": null,
+            "requirement_completed_count": 2,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "8e52e7491f37dcc30481d90cf4e325aa2340871b4c6620d4e82f3a713652bff5",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "completed",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "4ad9ffeb2569dfe252398de57039282e937caed324ad0a47e4023630f14e1f15",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "b230bc65efe84151104027a7666bb9fabc5be30c1286bd2dfd36b3c518dd64ea",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        }
+      ],
+      "name": "initial_all_permit",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/modules/3?student_id=7"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/users/7/progress"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": true,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 4
+        },
+        "facts": 4,
+        "head_scores": [
+          90.0,
+          90.0,
+          null,
+          null
+        ],
+        "reviews": []
+      }
+    },
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "428a900b13f277f4cccd35b7d7d1c0c3e0eb0413c47a6dfbc7dfa9d170e749fb",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": null,
+            "requirement_completed_count": 2,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "8e52e7491f37dcc30481d90cf4e325aa2340871b4c6620d4e82f3a713652bff5",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": false,
+            "provider_state": null,
+            "requirement_completed_count": 0,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "e8163b3bff419a4223ee85136da188e20f8a271905e82666817a88120b840f43",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "completed",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "4ad9ffeb2569dfe252398de57039282e937caed324ad0a47e4023630f14e1f15",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": false,
+            "provider_state": "started",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "0ec165f2aedb42aa8c67e87612148e6beb30b995534ff2b4f9eff2425e3fd599",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "b230bc65efe84151104027a7666bb9fabc5be30c1286bd2dfd36b3c518dd64ea",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "d2e3325d98e8822a84055b7a75895ec25e59f5fec5fb85276c233940a1fa0ca3",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": false,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        }
+      ],
+      "name": "all_deny",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/modules/3?student_id=7"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/users/7/progress"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": false,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 8,
+          "evidence_policy_review_created": 1
+        },
+        "facts": 8,
+        "head_scores": [
+          10.0,
+          10.0,
+          null,
+          null
+        ],
+        "reviews": [
+          {
+            "action": null,
+            "claim_action": null,
+            "claim_token": null,
+            "current_allowed": false,
+            "prior_allowed": true,
+            "recovery_pending": false,
+            "resolved_at_present": false,
+            "resolved_by": null,
+            "status": "open",
+            "triggering_score": null
+          }
+        ]
+      }
+    },
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "428a900b13f277f4cccd35b7d7d1c0c3e0eb0413c47a6dfbc7dfa9d170e749fb",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": null,
+            "requirement_completed_count": 2,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "8e52e7491f37dcc30481d90cf4e325aa2340871b4c6620d4e82f3a713652bff5",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": false,
+            "provider_state": null,
+            "requirement_completed_count": 0,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "e8163b3bff419a4223ee85136da188e20f8a271905e82666817a88120b840f43",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "completed",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "4ad9ffeb2569dfe252398de57039282e937caed324ad0a47e4023630f14e1f15",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": false,
+            "provider_state": "started",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "0ec165f2aedb42aa8c67e87612148e6beb30b995534ff2b4f9eff2425e3fd599",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "b230bc65efe84151104027a7666bb9fabc5be30c1286bd2dfd36b3c518dd64ea",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "d2e3325d98e8822a84055b7a75895ec25e59f5fec5fb85276c233940a1fa0ca3",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": false,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 0,
+            "facts_reused": 4,
+            "policy_allowed": false,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        }
+      ],
+      "name": "duplicate_all_deny",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/modules/3?student_id=7"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/users/7/progress"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": false,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 8,
+          "evidence_policy_review_created": 1
+        },
+        "facts": 8,
+        "head_scores": [
+          10.0,
+          10.0,
+          null,
+          null
+        ],
+        "reviews": [
+          {
+            "action": null,
+            "claim_action": null,
+            "claim_token": null,
+            "current_allowed": false,
+            "prior_allowed": true,
+            "recovery_pending": false,
+            "resolved_at_present": false,
+            "resolved_by": null,
+            "status": "open",
+            "triggering_score": null
+          }
+        ]
+      }
+    },
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "428a900b13f277f4cccd35b7d7d1c0c3e0eb0413c47a6dfbc7dfa9d170e749fb",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": null,
+            "requirement_completed_count": 2,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "8e52e7491f37dcc30481d90cf4e325aa2340871b4c6620d4e82f3a713652bff5",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": false,
+            "provider_state": null,
+            "requirement_completed_count": 0,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "e8163b3bff419a4223ee85136da188e20f8a271905e82666817a88120b840f43",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": null,
+            "requirement_completed_count": 2,
+            "requirement_count": 2,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:03:00+00:00",
+          "fact_type": "canvas.course_completion",
+          "payload_hash": "9503992012a239c5bda6289712fdbf16de3a85083548e72c23b973eb2a9678ce",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "completed",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "4ad9ffeb2569dfe252398de57039282e937caed324ad0a47e4023630f14e1f15",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": false,
+            "provider_state": "started",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "0ec165f2aedb42aa8c67e87612148e6beb30b995534ff2b4f9eff2425e3fd599",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "completed",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": null,
+            "score_maximum": null,
+            "score_percent": null
+          },
+          "effective_at": "2026-09-01T00:03:00+00:00",
+          "fact_type": "canvas.module_completion",
+          "payload_hash": "f8f8e15a9fe04bdee91939a55d55799afecb6fa9364920753ecfb485074e9916",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "b230bc65efe84151104027a7666bb9fabc5be30c1286bd2dfd36b3c518dd64ea",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "d2e3325d98e8822a84055b7a75895ec25e59f5fec5fb85276c233940a1fa0ca3",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:03:00+00:00",
+          "fact_type": "canvas.quiz_score",
+          "payload_hash": "cee46607f20bea53c4a36ef87c31bee5a3414175b3ca20cfdadf8d4988babc40",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 4,
+            "facts_reused": 0,
+            "policy_allowed": false,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 0,
+            "facts_reused": 4,
+            "policy_allowed": false,
+            "requirements_checked": 4
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": false,
+          "last_error_code": "canvas_rate_limited",
+          "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {},
+          "retry_delay_matches_37_seconds": true,
+          "retry_scheduled": true,
+          "started": true,
+          "status": "retry"
+        }
+      ],
+      "name": "partial_rate_limit",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/modules/3?student_id=7"
+        },
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/users/7/progress"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": false,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 11,
+          "evidence_policy_review_created": 1
+        },
+        "facts": 11,
+        "head_scores": [
+          10.0,
+          90.0,
+          null,
+          null
+        ],
+        "reviews": [
+          {
+            "action": null,
+            "claim_action": null,
+            "claim_token": null,
+            "current_allowed": false,
+            "prior_allowed": true,
+            "recovery_pending": false,
+            "resolved_at_present": false,
+            "resolved_by": null,
+            "status": "open",
+            "triggering_score": null
+          }
+        ]
+      }
+    }
+  ],
+  "schema": "marty.canvas-worker-facts-oracle/v1",
+  "source_sha256": {
+    "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+    "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+  }
+}

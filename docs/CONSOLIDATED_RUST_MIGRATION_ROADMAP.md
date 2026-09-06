@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [all-four-fact worker reference](rust-migrations/canvas-worker-facts-reference.md)
+captures actual published assignment, quiz, module and course reads through the
+shared worker/HTTPS/OAuth/schema harness. Two captures match byte-for-byte. Its
+partial-rate-limit stage preserves three successful fact writes while the job
+retries and the negative assignment keeps policy denied. Native adoption is
+pending; the original assignment-only reference is retained.
+
 The [composed worker REST reference](rust-migrations/canvas-worker-rest-reference.md)
 now freezes four actual published worker processes using real HTTPS and encrypted
 OAuth persistence on the official schema: positive evidence, later negative

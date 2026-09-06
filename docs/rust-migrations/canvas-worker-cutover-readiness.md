@@ -42,6 +42,12 @@ implemented using the real binary and native persistence; its mandatory Linux
 execution result remains pending. The reference gate alone does not close that
 side of the boundary.
 
+The [all-four-fact reference](canvas-worker-facts-reference.md) extends the same
+actual published-process harness across assignment, quiz, module and course
+reads, including partial rate limiting. Two independent captures agree; native
+adoption is pending. This is additional reference evidence for gate 12, not a
+claim that its native or broader whole-worker requirements are closed.
+
 ## Normative legacy-gap reconciliation
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.

@@ -60,10 +60,13 @@ async def seed_oauth(origin, token):
         await engine.dispose()
 
 
-def run():
-    spec = json.loads(
-        Path("/verification/contracts/canvas-worker-rest-scenarios.json").read_text()
-    )
+def run(scenario="canvas-worker-rest-scenarios.json"):
+    spec = json.loads((Path("/verification/contracts") / scenario).read_text())
+    if "extends" in spec:
+        base = json.loads(
+            (Path("/verification/contracts") / spec["extends"]).read_text()
+        )
+        spec = {**base, **spec}
     shared = json.loads(
         (Path("/verification/contracts") / spec["shared_seed"]).read_text()
     )
@@ -83,11 +86,12 @@ def run():
                     "accept": self.headers.get("Accept"),
                 }
             )
-            body = json.dumps(stage["body"], separators=(",", ":")).encode()
-            self.send_response(stage["status"])
+            response = stage["responses"][self.path] if "responses" in stage else stage
+            body = json.dumps(response["body"], separators=(",", ":")).encode()
+            self.send_response(response["status"])
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            for key, value in stage.get("headers", {}).items():
+            for key, value in response.get("headers", {}).items():
                 self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
@@ -110,6 +114,13 @@ def run():
         with engine.begin() as connection:
             for statement in shared["seed"]:
                 connection.exec_driver_sql(statement)
+            if "requirements" in spec:
+                connection.execute(
+                    text(
+                        "UPDATE issuance_service.canvas_program_bindings SET evidence_requirements=CAST(:requirements AS json) WHERE id='binding-review'"
+                    ),
+                    {"requirements": json.dumps(spec["requirements"])},
+                )
             connection.execute(
                 text(
                     "UPDATE issuance_service.canvas_platforms SET canvas_base_url=:origin"
@@ -211,7 +222,7 @@ def run():
             finally:
                 finish_worker(child)
         return {
-            "schema": "marty.canvas-worker-rest-oracle/v1",
+            "schema": spec.get("oracle_schema", "marty.canvas-worker-rest-oracle/v1"),
             "source_sha256": {
                 name: hashlib.sha256(
                     Path(importlib.util.find_spec(name).origin)

@@ -27,9 +27,10 @@ async fn main() -> Result<(), String> {
         "json-depth" => PublishedDatabase::start_with_json_depth().await?,
         "worker-startup" => PublishedDatabase::start_with_worker_startup().await?,
         "worker-rest" => PublishedDatabase::start_with_worker_rest().await?,
+        "worker-facts" => PublishedDatabase::start_with_worker_facts().await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup or worker-rest"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest or worker-facts"
                     .into(),
             )
         }

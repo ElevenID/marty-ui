@@ -215,6 +215,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_facts() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_facts",
+                "worker-facts",
+                "worker_facts",
+                "MARTY_CANVAS_WORKER_FACTS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -412,7 +425,7 @@ impl PublishedDatabase {
             root.join("contracts/fixtures/canvas_worker_test_trust.py")
                 .display()
         );
-        if script == "worker_rest" {
+        if matches!(script, "worker_rest" | "worker_facts") {
             let index = arguments.len() - 2;
             arguments.splice(
                 index..index,
@@ -448,7 +461,7 @@ impl PublishedDatabase {
                 ],
             );
         }
-        let consumer_helpers: Vec<String> =
+        let mut consumer_helpers: Vec<String> =
             if matches!(script, "utf7_consumer" | "json_consumer" | "json_depth") {
                 [
                     "run_canvas_validation_boundary_oracle.py",
@@ -465,7 +478,7 @@ impl PublishedDatabase {
                     )
                 })
                 .collect()
-            } else if script == "worker_rest" {
+            } else if matches!(script, "worker_rest" | "worker_facts") {
                 [
                     "run_canvas_worker_startup_oracle.py",
                     "test_canvas_lti_https.py",
@@ -481,6 +494,21 @@ impl PublishedDatabase {
             } else {
                 Vec::new()
             };
+        if script == "worker_facts" {
+            consumer_helpers.extend(
+                [
+                    "scripts/run_canvas_worker_rest_oracle.py",
+                    "contracts/canvas-worker-rest-scenarios.json",
+                ]
+                .into_iter()
+                .map(|path| {
+                    format!(
+                        "type=bind,source={},target=/verification/{path},readonly",
+                        root.join(path).display()
+                    )
+                }),
+            );
+        }
         for mount in &consumer_helpers {
             let index = arguments.len() - 2;
             arguments.splice(index..index, ["--mount", mount]);
