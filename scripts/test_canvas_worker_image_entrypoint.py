@@ -1,6 +1,7 @@
 """Actual packaged worker selection/preflight; no database or deployment access."""
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import subprocess
@@ -101,12 +102,26 @@ def docker(*arguments, timeout=30):
     ).strip()
 
 
-def exercise_case(image, case, directory):
+@contextmanager
+def owned_container(*arguments):
     # Exact owned ID, never a deployment name or a broad label cleanup.
     container = docker(
         "create",
         "--label",
         "com.elevenid.test.canvas-worker-entrypoint=true",
+        *arguments,
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", container), (
+        "Docker must return an exact container ID"
+    )
+    try:
+        yield container
+    finally:
+        docker("rm", "--force", container)
+
+
+def exercise_case(image, case, directory):
+    with owned_container(
         "--network",
         "none",
         "--read-only",
@@ -121,11 +136,7 @@ def exercise_case(image, case, directory):
         "--mount",
         f"type=bind,source={directory},target=/synthetic-secrets,readonly",
         image,
-    )
-    assert re.fullmatch(r"[0-9a-f]{64}", container), (
-        "Docker must return an exact container ID"
-    )
-    try:
+    ) as container:
         docker("start", container)
         status = int(docker("wait", container, timeout=15))
         logs = docker("logs", container)
@@ -141,8 +152,6 @@ def exercise_case(image, case, directory):
         if case.starts_worker:
             assert f"{STARTED} {case.service}" in logs
         print(f"Packaged worker entrypoint {case.name} passed")
-    finally:
-        docker("rm", "--force", container)
 
 
 def run(image):

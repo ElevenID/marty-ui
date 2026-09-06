@@ -81,6 +81,29 @@ def test_docker_logs_include_stderr_diagnostics(entrypoint, monkeypatch):
     assert entrypoint.docker("create", "synthetic-image") == "launch"
 
 
+def test_outer_container_cleanup_survives_inner_cleanup_failure(
+    entrypoint, monkeypatch
+):
+    identities = iter(["a" * 64, "b" * 64])
+    removed = []
+
+    def docker(*arguments, **options):
+        if arguments[0] == "create":
+            return next(identities)
+        assert arguments[:2] == ("rm", "--force")
+        removed.append(arguments[2])
+        if arguments[2] == "b" * 64:
+            raise subprocess.CalledProcessError(1, ["docker", "rm"])
+        return ""
+
+    monkeypatch.setattr(entrypoint, "docker", docker)
+    with pytest.raises(subprocess.CalledProcessError):
+        with entrypoint.owned_container("synthetic-postgres"):
+            with entrypoint.owned_container("synthetic-worker"):
+                pass
+    assert removed == ["b" * 64, "a" * 64]
+
+
 def test_ci_executes_packaged_worker_and_preserves_api_default():
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")

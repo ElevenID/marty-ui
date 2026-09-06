@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [packaged startup/configuration gate](rust-migrations/canvas-worker-image-startup.md)
+is implemented for all eight frozen startup cases under three key/database
+configuration modes (24 starts). It reuses the official migration probe and
+exact startup observations; positive execution on the new native image remains
+pending. A known pre-worker image was correctly rejected and its isolated
+fixture resources were cleaned up. This is not a consumer cutover.
+
 The [worker image launch contract](rust-migrations/canvas-worker-image-entrypoint.md)
 adds explicit worker selection through the existing shared Rust entrypoint and
 an eight-case packaged preflight gate. The dedicated CI image preserves its API
