@@ -2,6 +2,39 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[allow(dead_code)]
+#[path = "support/canvas_worker_process_signals.rs"]
+mod canvas_worker_process_signals;
+#[path = "support/canvas_worker_startup_replay.rs"]
+mod canvas_worker_startup_replay;
+
+#[tokio::test]
+async fn worker_startup_matches_published_process_and_idle_heartbeat() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_worker_startup()
+        .await
+        .unwrap();
+    let oracle = owned.oracle.clone().unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-startup-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        oracle, expected,
+        "published startup reference must regenerate unchanged"
+    );
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_startup_replay::replay(&pool, &owned.url, &oracle).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[path = "support/canvas_json_depth_replay.rs"]
 mod canvas_json_depth_replay;
 #[path = "support/canvas_observation_values.rs"]

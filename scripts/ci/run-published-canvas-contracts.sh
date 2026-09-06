@@ -17,6 +17,7 @@ mapfile -t executables < <(jq -r '
 ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
 [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
 "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'
+"${executables[0]}" --list | grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'
 "${executables[0]}" --list | grep -Fx 'operations_match_frozen_published_python: test'
 "${executables[0]}" --list | grep -Fx 'operations_reads_match_frozen_published_python: test'
 "${executables[0]}" --list | grep -Fx 'operations_inputs_match_frozen_published_python: test'

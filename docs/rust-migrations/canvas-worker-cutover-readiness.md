@@ -72,7 +72,7 @@ changing reference source; preserve the other worker's unrelated work.
 | Kubernetes | `k8s/oracle/07-microservices.yaml`: Python command/args; `01-configmap.yaml`: loader selection | Native image provenance/command, ConfigMap cleanup, all secret inputs, migration job ordering and termination policy in rendered artifacts. Do not apply to production. |
 | Shared Rust image | `services/Dockerfile.ci` contains the worker binary; `services/entrypoint.sh` has no worker service dispatch | Choose and test one explicit worker launch contract; copying a binary does not prove the consumer starts it. |
 
-An actual local debug-binary diagnostic now confirms a startup obstacle: with
+The initial local debug-binary diagnostic confirmed a startup obstacle: with
 rollout disabled, synthetic keys, no LTI identity and an unavailable loopback
 database, the process exits 1 with
 `CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID is required`. Both `postgresql://` and
@@ -81,18 +81,20 @@ must not be reported as a reproduced URL-parser rejection. These owned children
 had cleared environments and no deployment credentials; both exited normally
 before the five-second diagnostic deadline. No database cycle was established.
 
-The existing process-signal harness always supplies both LTI identity fields,
-so it cannot detect this empty-default startup case. Independently capture the
-published worker's corresponding startup policy before changing initialization.
-Reuse existing configuration/signing owners and test disabled, REST-only and
-LTI-enabled modes; do not require unused capabilities or silently disable
-supported ones. Full deployed-URL connection behavior remains a database gate.
+The subsequent [actual-process startup gate](canvas-worker-startup.md) captures
+eight independent published observations twice and reproduces the native early
+exit before correction. The canonical signer now retains its deferred validation,
+and all eight native processes reach matching idle heartbeats on the published
+schema, including both deployed URL forms. The shared test-child helper preserves
+Windows's standard OS path without inheriting application credentials. Linux CI
+also checks SIGINT; Windows is not POSIX evidence. Actual provider/signing and
+complete deployed entrypoint/secret-source behavior remain separate gates.
 
 ## Next implementation order
 
-1. Qualify actual binary startup against the deployed configuration shapes and
-   the independently observed Python startup policy. Repair demonstrated gaps
-   with shared Rust owners and regression tests.
+1. Retain the qualified eight-case startup/idle boundary and finish fresh hosted
+   checks. Broader secret-source/entrypoint configurations remain consumer gates;
+   do not repeat the repaired LTI-identity requirement as an open runtime bug.
 2. Add a composed worker-cycle gate on the pinned published migrations using
    real native provider/OAuth adapters and bounded synthetic provider servers.
    Begin with a real REST job through scheduling, leasing, fact/policy effects,

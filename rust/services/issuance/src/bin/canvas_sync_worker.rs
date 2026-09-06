@@ -139,8 +139,10 @@ async fn run_initialized_worker(
     let signing_key =
         required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
     let signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
-        required_env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID")?,
-        required_env("CANVAS_LTI_TOOL_ISSUER_DID")?,
+        // Published startup does not require an LTI identity. The shared signer
+        // validates it before resolving or signing, without blocking idle work.
+        env::var("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID").unwrap_or_default(),
+        env::var("CANVAS_LTI_TOOL_ISSUER_DID").unwrap_or_default(),
         true,
         Arc::new(HttpCanvasLtiToolIdentityResolver::new(
             signing_url.clone(),
@@ -183,14 +185,6 @@ async fn run_initialized_worker(
     info!(worker = ?worker, "starting standalone Rust Canvas sync worker candidate");
     worker.run_loop(stop).await?;
     Ok(())
-}
-
-fn required_env(name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{name} is required").into())
 }
 
 fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {

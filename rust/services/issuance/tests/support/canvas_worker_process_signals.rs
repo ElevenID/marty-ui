@@ -2,6 +2,7 @@
 //! unowned PID. Uses only the parent contract's guarded synthetic database.
 
 use std::{
+    collections::BTreeMap,
     process::{Child, Command, ExitStatus, Stdio},
     time::Duration,
 };
@@ -9,7 +10,7 @@ use std::{
 use serde_json::Value;
 use sqlx::PgPool;
 
-struct OwnedWorker(Child);
+pub(super) struct OwnedWorker(pub(super) Child);
 
 impl Drop for OwnedWorker {
     fn drop(&mut self) {
@@ -22,36 +23,61 @@ impl Drop for OwnedWorker {
 
 impl OwnedWorker {
     fn start(database_url: &str, worker_id: &str) -> Self {
+        Self::start_with_environment(
+            database_url,
+            worker_id,
+            &[
+                ("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "signal-org"),
+                ("CANVAS_LTI_TOOL_ISSUER_DID", "did:web:signal.invalid"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+        )
+    }
+
+    pub(super) fn start_with_environment(
+        database_url: &str,
+        worker_id: &str,
+        environment: &BTreeMap<String, String>,
+    ) -> Self {
         let mut database_url = url::Url::parse(database_url).unwrap();
         assert!(database_url.path().ends_with("_test"));
         database_url
             .query_pairs_mut()
             .append_pair("application_name", worker_id);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_marty-canvas-sync-worker"));
+        command
+            .env_clear()
+            .env("DATABASE_URL", database_url.as_str())
+            .env("CANVAS_SYNC_WORKER_ID", worker_id)
+            .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
+            .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false")
+            .env(
+                "INTEGRATION_SECRET_MASTER_KEY",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .env("ISSUANCE_API_KEY", "synthetic-process-signal-key")
+            .env("SIGNING_KEYS_INTERNAL_URL", "https://signing.invalid")
+            .env("RUST_LOG", "error")
+            .envs(environment)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // Windows socket providers need the OS installation path even when
+        // application configuration/credentials are intentionally cleared.
+        #[cfg(windows)]
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", system_root);
+        }
         Self(
-            Command::new(env!("CARGO_BIN_EXE_marty-canvas-sync-worker"))
-                .env_clear()
-                .env("DATABASE_URL", database_url.as_str())
-                .env("CANVAS_SYNC_WORKER_ID", worker_id)
-                .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
-                .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false")
-                .env(
-                    "INTEGRATION_SECRET_MASTER_KEY",
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-                )
-                .env("ISSUANCE_API_KEY", "synthetic-process-signal-key")
-                .env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "signal-org")
-                .env("CANVAS_LTI_TOOL_ISSUER_DID", "did:web:signal.invalid")
-                .env("SIGNING_KEYS_INTERNAL_URL", "https://signing.invalid")
-                .env("RUST_LOG", "error")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+            command
                 .spawn()
                 .expect("actual Canvas worker binary must be packaged"),
         )
     }
 
-    fn signal(&mut self, signal: &str) {
+    pub(super) fn signal(&mut self, signal: &str) {
         assert!(matches!(signal, "SIGINT" | "SIGTERM"));
         assert!(
             self.0.try_wait().unwrap().is_none(),
@@ -67,7 +93,7 @@ impl OwnedWorker {
         assert!(status.success(), "signal delivery to owned child failed");
     }
 
-    async fn wait(&mut self) -> ExitStatus {
+    pub(super) async fn wait(&mut self) -> ExitStatus {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(status) = self.0.try_wait().unwrap() {

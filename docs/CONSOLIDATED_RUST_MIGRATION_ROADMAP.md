@@ -33,16 +33,30 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [actual worker startup gate](rust-migrations/canvas-worker-startup.md) now
+freezes eight published process/idle-heartbeat observations from two identical
+captures. It reproduced the eager LTI identity failure, then verifies the Rust
+repair through actual child processes and the published PostgreSQL migrations.
+Missing, partial and invalid identity no longer blocks empty-queue startup;
+the shared signer still rejects it before resolution or signing. Both deployed
+PostgreSQL URL forms pass this boundary. Windows child isolation retains only
+the required OS path; POSIX signal assertions remain Linux CI evidence.
+The broader composed worker/provider and all-consumer gates remain open.
+All 37 configured image/schema tests pass (322.87 seconds, none ignored or
+filtered), plus 325 library, 5 binary, 22 behavior and 53 affected Python tests.
+Strict Clippy, formatting and CI Bash syntax pass; owned fixture inventory is
+empty. This startup implementation still requires fresh exact-head hosted checks.
+
 The tested native depth implementation is committed and pushed at `185af81d5`;
-its fresh CI and Rust analysis were observed running. The owned worktree was
+its fresh CI and Rust analysis are now successful. The owned worktree was
 clean after that push. The [whole-worker cutover inventory](rust-migrations/canvas-worker-cutover-readiness.md)
 now maps all 14 normative legacy gaps to actual test boundaries and lists base,
 beta-overlay, self-host and Kubernetes consumer wiring. It identifies the missing
 composed worker/provider/published-schema gate and boot-configuration checks as
 the next implementation targets. A cleared-environment local binary diagnostic
 now exits 1 when rollout is disabled and the deployment-default LTI identity is
-empty; the existing process-signal harness always supplies that identity. Capture
-the published startup policy before repairing this initialization boundary.
+empty; the original process-signal harness always supplied that identity. The
+startup checkpoint above now repairs and qualifies that recorded boundary.
 Existing codec evidence remains retained; it
 must not substitute for worker composition. The issuance plan's stale 32-route/
 12-unported-gRPC snapshot is corrected to the coverage contract's 63 native HTTP,

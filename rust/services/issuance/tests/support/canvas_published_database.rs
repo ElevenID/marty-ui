@@ -192,6 +192,16 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_startup() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "worker_startup",
+            "worker-startup",
+            "worker_startup",
+            "MARTY_CANVAS_WORKER_STARTUP_ORACLE=1",
+        )))
+        .await
+    }
+
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
