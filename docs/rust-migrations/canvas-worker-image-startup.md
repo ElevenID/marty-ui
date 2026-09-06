@@ -1,7 +1,7 @@
 # Packaged worker startup and configuration sources
 
-Status: implemented; positive execution against the fresh native image remains
-pending. This extends the [image preflight](canvas-worker-image-entrypoint.md)
+Status: all 24 cases passed against a fresh locally built Linux native image;
+hosted exact-head qualification remains pending. This extends the [image preflight](canvas-worker-image-entrypoint.md)
 and [frozen startup reference](canvas-worker-startup.md), not whole-worker
 acceptance or permission to switch deployed consumers.
 
@@ -48,7 +48,7 @@ produce the required worker heartbeat and the harness rejected it at its bounded
 deadline. All labelled fixture containers were gone afterward. This validates
 the failure path, not any positive native-image startup claim.
 
-Positive 24-case image execution, provider/signing/OAuth effects, all deployment
+Hosted 24-case image execution, provider/signing/OAuth effects, all deployment
 consumer definitions, migration ordering, headless health semantics and beta
 acceptance remain separate requirements in the
 [cutover inventory](canvas-worker-cutover-readiness.md). Production and persistent
@@ -57,5 +57,14 @@ self-host remain unchanged.
 Local validation: all 867 executed repository Python contracts pass in 36.35
 seconds, with the existing opt-in verifier containerd/Buildx case skipped.
 Ruff formatting/lint and diff checks pass. The configuration/comparison/cleanup
-tests and negative image control do not replace the pending positive 24-case
-packaged startup run or the other runtime cutover gates.
+tests and negative image control do not replace positive runtime qualification.
+
+The subsequent actual local Linux image run passed all eight preflight cases and
+all 24 packaged startup cases from clean source `2e282db33`. The test-only image
+`marty-canvas-worker-startup:local-2e282db` has image ID
+`sha256:e58b71863e9a9592eb32f2695f363c93d4126412dc9907b839babf977d41cb3d`.
+It was built from the pinned CI issuance Dockerfile; release compilation passed.
+All exact heartbeat/liveness/empty-queue/SIGINT and synthetic-secret-log checks
+passed, and no labelled fixture containers remained after completion. No
+deployment image was replaced or published. Fresh hosted image and full runtime
+regression gates remain required before landing this extension.
