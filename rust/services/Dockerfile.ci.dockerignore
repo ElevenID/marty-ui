@@ -1,0 +1,19 @@
+# CI image inputs only. Other Dockerfiles retain the root ignore policy.
+**
+!rust/
+!rust/**
+!proto/
+!proto/**
+!contracts/
+!contracts/**
+!scripts/
+!scripts/load-secrets-env.sh
+!scripts/ci/
+!scripts/ci/verify-release-cache.sh
+# Integration tests are checked from the full checkout, not built into images.
+rust/services/*/tests
+rust/crates/*/tests
+rust/**/target
+rust/**/.git
+rust/**/*.log
+rust/**/.env*

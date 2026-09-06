@@ -31,6 +31,20 @@ outputs without changing production optimization or smoke-test coverage.
 
 Compare cold and warm runs separately. sccache hit rates exclude non-cacheable
 calls, so also inspect test executable compilation/linking and wall-clock time.
+
+The pinned sccache backend needs `ACTIONS_CACHE_SERVICE_V2=true` inside BuildKit;
+passing only the token and results URL selects the retired legacy protocol.
+Both dependency cooking and final release compilation now use this backend.
+The trusted-main warmer first checks storage with a fresh tiny Rust library,
+then reads it through a new read-only daemon. The probe's run-specific nonce is
+in an independent Docker target and cannot invalidate production build layers.
+PR and queue builds remain read-only; the probe never runs there.
+
+The CI Dockerfile has its own allowlisted context. First-party integration tests
+and generated targets are excluded from images, but the full checkout still
+runs all tests. Manifests, build scripts, vendored sources, proto definitions and
+contracts remain available. Dependency feature changes still invalidate the
+Cargo Chef recipe correctly; compiler caching can reuse unaffected crates.
 Six independent issuance behavior test modules now share `issuance-behavior`;
 their assertions and fixtures are unchanged. Filter by module to run one group:
 
@@ -47,3 +61,10 @@ The configured contract database must remain a dedicated `*_test` database and
 its PostgreSQL role must have `CREATEDB`. Each group closes connections and drops
 only the database it created, including when an assertion fails. Other database
 and process-signal contracts remain serialized and unchanged.
+
+After the workspace and Flow checks, the published-schema suite and remaining
+database/runtime suite run concurrently. Published-schema tests own UUID-scoped
+Docker databases; the runtime suite uses the dedicated `marty_db_contracts_test`
+service database. Each suite retains `--test-threads=1`, all executable inventory
+checks, and its original assertions. The runner waits for both suites even on
+failure and emits separate logs before returning a failing status.
