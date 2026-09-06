@@ -253,8 +253,14 @@ Clippy, and 907 Python tests in 39.30 seconds with the same existing opt-in skip
 The full configured local worker subset passed all 34 entries in 515.83 seconds
 (36 unrelated entries filtered out), regenerating every earlier worker reference
 and all twenty validation/failure cases. Linux-only parent/helper returns on
-Windows are not native process execution. Fresh exact-head Linux process/image
-qualification remains required; these tests do not authorize consumer cutover.
+Windows are not native process execution. The subsequent checkpoint
+`f195ad484ff47cab0fcbde3649c4e9b52dc17da1` passed CI34056846912 and
+Rust CodeQL34056846952. Runtime job101550215184 passed all 70 configured entries
+in 1280.90 seconds at 20:32:35 UTC, with twenty explicit actual native
+validation/failure markers, each with zero requests. This includes both invalid
+roster bounds and non-roster continuation. Image job101550215189 passed eight
+preflight and 24 packaged startup cases with the issuance API health gate
+retained. This qualifies the recorded boundary, not whole-consumer cutover.
 
 Broader processor failures,
 missing-target races, signing effects and privacy remain in the

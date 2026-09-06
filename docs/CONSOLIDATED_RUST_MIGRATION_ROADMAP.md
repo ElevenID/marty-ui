@@ -60,8 +60,11 @@ errors to roster jobs and shares lossless MMF integer parsing instead of abortin
 startup through a separate `i64` parser. The public constructor and valid debug
 fields are preserved. Current local checks pass 414 Rust tests (including five
 worker-binary tests), strict Clippy, 907 Python tests and all 34 configured local
-worker entries in 515.83 seconds. Reference regeneration passed; fresh
-Linux/image qualification remains required.
+worker entries in 515.83 seconds. Subsequent checkpoint `f195ad484` passed
+CI34056846912 and Rust CodeQL34056846952: 70 configured runtime entries in
+1280.90 seconds, all twenty actual native validation/failure cases, eight image
+preflight and 24 packaged startup cases with API health retained. The roster
+correction is now qualified at that boundary; whole-worker cutover remains open.
 
 The existing PostgreSQL worker suite additionally covers the typed-processor
 no-signing guard: four forbidden result keys across seven JSON value shapes,
@@ -73,6 +76,27 @@ and renewal regressions; strict Clippy passed and the disposable fixture was
 removed. This is native worker-cycle coverage, not a new published-Python oracle
 or whole-worker acceptance. No production implementation was deleted or changed
 for this guard regression.
+
+The same `f195ad484` checkpoint also passed all three configured Linux
+PostgreSQL worker-contract entries in 94.99 seconds, retaining the guard and
+existing lifecycle/renewal cases.
+
+The two reference privacy prerequisites now have reviewed
+[Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269):
+shared bounded diagnostics and allowlisted worker error events without changing
+job behavior. Exact-head CI34058252789 passed, including 1673 tests and 200
+subtests on each Python version (3.11/3.12), plus Rust, PostgreSQL, binding,
+security and WASM checks. The PR is in the protected merge queue; landing and
+hardened language-neutral capture remain required before closing gates 13/14.
+Existing frozen observations, reachable features and other-worker code remain
+untouched.
+
+[Credentials issue270](https://github.com/ElevenID/marty-credentials/issues/270)
+tracks an aggregate release gate: both exact published Windows Core 0.1.60 and
+0.1.61 wheels retain three compatibility failures against the unchanged issuance
+suite (141 passes), unlike the current source-built CI dependency. Qualification
+used isolated checksum-verified packages, not replacement global installations.
+A reviewed canonical Rust release and artifact/pin reconciliation remain needed.
 
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,

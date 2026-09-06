@@ -1,12 +1,13 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `a7e8ff3206dc4798e9ca6d890e16ec695bc21b89`,
+Status: latest qualified composed checkpoint `f195ad484ff47cab0fcbde3649c4e9b52dc17da1`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 70 configured runtime tests in 1520.47 seconds (CI34054910209 and
-Rust CodeQL34054910162). All seventeen native validation/failure cases passed,
-including three reference-removal barriers and four processor failures, retaining
-the earlier Retry-After/worker gates. The newer deferred roster configuration
-and typed-processor signing-guard regression await fresh qualification. PR #814 draft and
+and 70 configured runtime tests in 1280.90 seconds (CI34056846912 and
+Rust CodeQL34056846952). All twenty native validation/failure cases passed,
+including deferred roster configuration and all three reference-removal barriers.
+The configured PostgreSQL worker contract, including the typed-processor
+signing guard, passed all three entries in 94.99 seconds. Earlier worker gates
+are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -70,9 +71,9 @@ template removal after application read. Three roster-setting cases additionally
 freeze job-local configuration errors and non-roster continuation; the native
 binary's eager integer parsing has been replaced by deferred, lossless bounded
 configuration in the shared processor. The twelve processor outcomes outside
-this corpus are tracked separately. The first seventeen cases passed actual
-native Linux replay at `a7e8ff320`; the three roster cases still require their
-own exact-head qualification. Broader processor failures remain pending;
+this corpus are tracked separately. All twenty cases passed actual native Linux
+replay at `f195ad484`, each with zero requests, including the three roster cases.
+Broader processor failures remain pending;
 gate 9 is open.
 
 The existing PostgreSQL worker contract now also exercises the normative
@@ -85,6 +86,8 @@ dead-letter, empty persisted result, lease release, disabled target, no success
 timestamp, successful sibling sanitization and no next-cycle retry. All three
 configured PostgreSQL contract tests passed locally in 92.93 seconds; strict
 all-target Clippy passed. The loopback-only tmpfs database was removed afterward.
+The configured Linux PostgreSQL worker group subsequently passed all three
+entries in 94.99 seconds at `f195ad484` (runtime job101550215184).
 This is native boundary regression coverage, not published-process parity or
 proof of signing-service effects/log privacy. No runtime or contract change was
 needed for this guard; whole-worker gate 9 remains open.
@@ -170,14 +173,29 @@ changed-generation races remain open.
 | 10. OAuth revocation failure and owner fences | OAuth behavior and PostgreSQL tests cover refresh/revocation, due selection and tenant-atomic cleanup | Whole-worker remote revocation rate-limit/timeout, Retry-After, patch failure and owner-fence-loss matrix; explicitly retain Rust's stronger atomic cleanup. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
-| 13. Bounded signing error detail | Normative contract requires reference-side hardening; current local Credentials `signing_context.py` bounds text only | Reconcile and land bounded JSON string/object detail plus reference tests before sharing the privacy fixture as parity evidence. |
-| 14. Allowlisted worker logs | Normative contract requires reference-side hardening; current local Credentials worker still contains `logger.exception` | Reconcile and land allowlisted logging plus synthetic redaction evidence before declaring this gate closed. |
+| 13. Bounded signing error detail | Credentials PR269 implements one shared 500-character bound for JSON string/object and text diagnostics, with 51 detail tests; exact-head CI is green | Complete protected landing, capture the hardened language-neutral observations with revised provenance, and compare Rust before sharing them as parity evidence. |
+| 14. Allowlisted worker logs | Credentials PR269 uses one safe event owner and twelve worker error-branch executions, retaining retries, cleanup, sibling completion and loop recovery; exact-head CI is green | Complete protected landing and frozen cross-language log/state projections; source unit coverage alone is not aggregate acceptance. |
 
 Reference-side observations above were read from the clean local
 `marty-credentials` checkout at `28b53d433031fe46b3f0c0c589d91f2c85d22c6e`.
 That is a local source observation, not a new claim about protected main or the
 immutable reference image. Check remote branch ownership and provenance before
 changing reference source; preserve the other worker's unrelated work.
+
+The scoped repair is now [Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269),
+reviewed at `9c03b57e5826b7dce430a05eef91ee68e334d825` from protected main
+`2dfbd6a0a82bb302ecb2c29b9df0ce1c2056ef6f`. CI34058252789 passed, including
+1673 tests and 200 subtests on each of Python 3.11 and 3.12, PostgreSQL, Rust,
+bindings, security and WASM gates. The normal merge request entered the protected
+queue; landing is not yet claimed here. No immutable earlier oracle was changed.
+
+[Credentials issue270](https://github.com/ElevenID/marty-credentials/issues/270)
+retains a separate release-qualification discrepancy. Exact checksum-verified
+published Windows Core 0.1.60 and 0.1.61 wheels each pass 141 issuance tests but
+fail the same three binding-boundary assertions that pass with the CI-built
+Core revision. A simple release-pin bump is not sufficient. Require reviewed
+canonical Rust release/artifact qualification before aggregate adoption;
+neither the global installed package nor another worker's crypto branch changed.
 
 ## Deployment consumer inventory
 
