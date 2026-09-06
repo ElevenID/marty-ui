@@ -48,12 +48,17 @@ while a real HTTPS response is held. Each pair of independent captures agrees;
 the job remains leased and issuance/token ciphertext are preserved. Native replay
 is implemented and awaits mandatory Linux execution, including Rust's intentional
 SIGTERM graceful drain and unchanged original REST/facts/retry regression gates.
+The correction is now qualified at `499298659`: CI34038852781 and Rust
+CodeQL34038852821 passed; the configured log explicitly records SIGINT, SIGTERM,
+SIGKILL and all 49 tests passing in 580.28 seconds. The newer native recovery
+implementation requires its own fresh Linux qualification.
 This is not crash/restart or cleanup-finally evidence.
 The first Linux run failed before signal delivery because native leased jobs
 retain an internal target-generation fence absent from Python's result. The
 comparison now asserts that exact field explicitly and retains full state checks;
 public job results exclude it. No runtime fence or frozen observation was changed.
-Fresh Linux qualification remains required; the preceding Rust analysis passed.
+This correction's Linux qualification is recorded above; fresh checks remain
+required for later changes.
 
 The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)
 now records real database eligibility and unchanged job identity across retry

@@ -1,8 +1,11 @@
 # Actual provider-I/O signal reference
 
-Status: independent published reference frozen at `e46f42f26`; native replay
-implemented; first Linux execution exposed an internal-fence comparison gap.
-The explicit comparison correction is awaiting fresh Linux execution.
+Status: independent published reference frozen at `e46f42f26`; native SIGINT,
+graceful SIGTERM and SIGKILL qualified at `49929865981e2110952da158d8c2560602d9be7b`.
+CI34038852781 and Rust CodeQL34038852821 passed. The configured Linux job
+101501824256 explicitly records all three actual provider signal cases and
+all 49 tests passing in 580.28 seconds. Its earlier unconfigured 0.20-second
+run is not runtime proof. Later changes require fresh exact-head checks.
 No worker cutover, deployment or reachable Python deletion follows from this gate.
 
 The actual pinned Python worker starts on a fresh official PostgreSQL schema for
@@ -94,6 +97,7 @@ data and no database field is changed. Successful TERM completion still must
 match the original positive result exactly, with no internal generation field.
 Public-result regression assertions explicitly verify exclusion of the field.
 
-Both focused Rust checks, strict Clippy and 57 affected Python tests pass locally.
-All frozen reference artifacts remain unchanged. The three actual native signal
-cases still require the fresh configured Linux run before qualification.
+Both focused Rust checks, strict Clippy and 57 affected Python tests passed locally.
+All frozen reference artifacts remain unchanged. The subsequent configured Linux
+run above qualified all three actual native cases with the correction and retained
+the original REST4, all-fact16 and retry5 actual request replays.

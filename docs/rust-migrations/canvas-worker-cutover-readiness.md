@@ -1,7 +1,8 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: candidate runtime at `017c7e42361182ed6baf4c030632abbc4d3d7cad`,
-PR #814 draft and unrouted. This is a source/test/consumer inventory, not a
+Status: latest qualified composed checkpoint `49929865981e2110952da158d8c2560602d9be7b`,
+with newer native recovery replay awaiting qualification. PR #814 draft and
+unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
 [`issuance-canvas-sync-worker.json`](../../contracts/issuance-canvas-sync-worker.json).
@@ -60,8 +61,9 @@ all error/header variants and race/privacy requirements remain separate gates.
 
 The [active-provider signal reference](canvas-worker-provider-signals.md) now
 independently captures SIGINT/SIGTERM/SIGKILL with the real HTTPS response held.
-Native adoption and graceful drain, crash/restart, renewal and disposal remain
-open; raw process exit must not be substituted for those qualifications.
+Native SIGINT, graceful SIGTERM and SIGKILL passed configured Linux CI at
+`499298659` (CI34038852781, Rust34038852821). Native crash/restart, renewal and
+disposal remain open; raw process exit must not substitute for those qualifications.
 
 The [provider renewal/recovery reference](canvas-worker-provider-recovery.md)
 independently records actual lease/heartbeat renewal, then success or forced
