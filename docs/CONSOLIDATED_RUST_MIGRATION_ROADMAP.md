@@ -33,6 +33,24 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Status-provider qualification expands the published corpus from 63 to 79 cases,
+preserving all earlier observations. Two independent immutable-image captures
+freeze success/error response decoding for bridge synchronization and real-provider
+revocation. The old native boundary lost Unicode error identity; one typed
+`synchronize_provider` owner now preserves it. The existing lifecycle port delegates
+to that owner and stores diagnostic text, matching the published route's explicit
+`str(exc)` persistence behavior. No message-based error-class inference is used.
+The new real HTTP/PostgreSQL runtime scenario proves two decoder failures preserve
+committed canonical status, attempt counters and diagnostics; subsequent JSON
+success clears the error. It reuses the baseline runtime fixture and retains its
+tenant-vault, event-ordering and late-persistence-failure checks.
+Local 296 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
+ownership tests, strict Clippy and all 68 existing TLS observations pass. The full
+configured 22-test image suite passes (136.27 seconds, none ignored/filtered);
+fresh hosted checks must qualify this continuation. Prior
+`81236f778b9a5403a6ad3bc5c9667e509a318361` CI is queued and Rust CodeQL running.
+The full goal stays active, PR #814 draft/unrouted, and deployments unchanged.
+
 The Unicode-text continuation adds shared UTF-16/32 decoding for both byte orders
 and all 16 published aliases. A new 372-case language-neutral corpus separately
 freezes text and JSON/excerpt outcomes, including BOM requirements, invalid
@@ -47,13 +65,13 @@ Local 296 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
 ownership tests, strict Clippy and the existing 68 TLS cases pass. All 21 configured
 published-image tests pass (137.06 seconds, none ignored/filtered); fresh hosted
 checks must qualify this continuation. The previous pushed
-`ef24ba1a128d2db91b242da99496f9de51dafb80` has successful Rust CodeQL; its CI
-is still running. PR #814 stays draft and unrouted.
+`ef24ba1a128d2db91b242da99496f9de51dafb80` has successful CI and Rust CodeQL.
+PR #814 stays draft and unrouted.
 
 Other multibyte/stateful codecs, extended headers/label normalization, exceptional
-JSON behavior and the broader status-service decoder-exception boundary remain
-open. The validation UTF-16/32 boundary is now qualified; it is not a claim about
-every consumer's exception handling. Whole-consumer cutover, Python deletion,
+JSON behavior remain open. The validation and status UTF-16/32 response boundaries
+are now qualified for their frozen inputs; other exception/configuration paths
+still need whole-consumer evidence. Whole-consumer cutover, Python deletion,
 branch reconciliation, demos/device/wallet/CSCA follow-up and aggregate beta/soak
 remain required. The checkpoints below retain prior evidence chronologically.
 

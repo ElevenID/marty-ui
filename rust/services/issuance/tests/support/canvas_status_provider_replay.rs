@@ -3,11 +3,11 @@
 use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_credentials_status::{
-        CanvasCredentialsStatusService, CanvasStatusRequest, CanvasStatusResponse,
-        CanvasStatusTransport,
+        CanvasCredentialsStatusError, CanvasCredentialsStatusService, CanvasStatusRequest,
+        CanvasStatusResponse, CanvasStatusTransport,
     },
     canvas_credentials_validation::CanvasCredentialsSecretResolver,
-    canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
+    canvas_lifecycle_delivery::CanvasLifecycleCredential,
     credential_management::{CredentialLifecycleAction, ManagedCredential},
 };
 use serde_json::{json, Value};
@@ -56,18 +56,24 @@ impl CanvasStatusTransport for Ports {
                 .try_into()
                 .unwrap(),
             request_id: Some("synthetic-provider-request".into()),
-            content_type: None,
-            body: self.case["response_text"]
+            content_type: self.case["response_content_type"]
                 .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| {
-                    self.case
-                        .get("response_json")
-                        .cloned()
-                        .unwrap_or(json!({"accepted":true}))
-                        .to_string()
-                })
-                .into_bytes(),
+                .map(str::to_owned),
+            body: if let Some(encoded) = self.case["response_hex"].as_str() {
+                hex::decode(encoded).unwrap()
+            } else {
+                self.case["response_text"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        self.case
+                            .get("response_json")
+                            .cloned()
+                            .unwrap_or(json!({"accepted":true}))
+                            .to_string()
+                    })
+                    .into_bytes()
+            },
         })
     }
 }
@@ -223,7 +229,7 @@ pub async fn replay(expected: &Value) {
             .map(|value| value.as_str())
             .unwrap_or(Some("synthetic reason"));
         let outcome = service
-            .synchronize(
+            .synchronize_provider(
                 CanvasLifecycleCredential {
                     credential: &credential,
                     transaction_id: "transaction-review",
@@ -236,7 +242,10 @@ pub async fn replay(expected: &Value) {
             .await;
         let mut actual = match outcome {
             Ok(metadata) => json!({"metadata":metadata}),
-            Err(error) => json!({"error_class":"RuntimeError","error":error.0}),
+            Err(error) => json!({"error_class":match &error {
+                CanvasCredentialsStatusError::Runtime(_) => "RuntimeError",
+                CanvasCredentialsStatusError::ResponseText(_) => "UnicodeError",
+            },"error":error.to_string()}),
         };
         timestamps(&mut actual);
         actual["name"] = case["name"].clone();

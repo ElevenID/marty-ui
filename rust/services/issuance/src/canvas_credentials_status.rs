@@ -22,7 +22,7 @@ use crate::{
         resolve_canvas_operator_token, CanvasOperatorSecretReader, FileCanvasOperatorSecretReader,
     },
     canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy},
-    canvas_response_text::response_text,
+    canvas_response_text::{response_text, CanvasResponseTextError},
     credential_management::{CredentialLifecycleAction, CredentialManagementPortError},
     python_value::{python_string, python_truthy, strip},
 };
@@ -93,6 +93,14 @@ pub struct CanvasCredentialsStatusService {
     transport: Arc<dyn CanvasStatusTransport>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CanvasCredentialsStatusError {
+    #[error("{0}")]
+    Runtime(String),
+    #[error(transparent)]
+    ResponseText(#[from] CanvasResponseTextError),
+}
+
 impl CanvasCredentialsStatusService {
     /// Shared runtime assembly, also exercised by the database + HTTP contract.
     /// Live consumer adoption remains a separate cutover gate.
@@ -131,7 +139,7 @@ impl CanvasCredentialsStatusService {
         &self,
         organization: &str,
         sources: &[&Map<String, Value>],
-    ) -> Result<Option<String>, CredentialManagementPortError> {
+    ) -> Result<Option<String>, CanvasCredentialsStatusError> {
         for source in sources {
             let reference = [
                 "api_token_secret_id",
@@ -212,7 +220,7 @@ impl CanvasCredentialsStatusService {
     fn base_url(
         &self,
         sources: &[&Map<String, Value>],
-    ) -> Result<String, CredentialManagementPortError> {
+    ) -> Result<String, CanvasCredentialsStatusError> {
         let configured = config_value(
             sources,
             &[
@@ -270,6 +278,25 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<Map<String, Value>, CredentialManagementPortError> {
+        // Published lifecycle persistence records str(failure), not its class.
+        // Retain the typed provider outcome until that deliberate port boundary.
+        self.synchronize_provider(context, platform, delivery, action, reason)
+            .await
+            .map_err(|failure| CredentialManagementPortError(failure.to_string()))
+    }
+}
+
+impl CanvasCredentialsStatusService {
+    /// The one provider implementation; lifecycle callers delegate here and
+    /// project safe diagnostic text only at their persistence boundary.
+    pub async fn synchronize_provider(
+        &self,
+        context: CanvasLifecycleCredential<'_>,
+        platform: &Value,
+        delivery: &Value,
+        action: CredentialLifecycleAction,
+        reason: Option<&str>,
+    ) -> Result<Map<String, Value>, CanvasCredentialsStatusError> {
         let credential = context.credential;
         let organization = delivery["organization_id"].as_str().unwrap_or_default();
         if !self.config.portable_enabled
@@ -397,8 +424,7 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
                 ))
             })?;
         if !(200..300).contains(&response.status) {
-            let text = response_text(&response.body, response.content_type.as_deref())
-                .map_err(|failure| error(failure.to_string()))?;
+            let text = response_text(&response.body, response.content_type.as_deref())?;
             return Err(error(format!(
                 "Canvas Credentials {operation} failed (HTTP {}): {}",
                 response.status,
@@ -407,7 +433,7 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
         }
         let mut metadata = object(
             json!({"status_sync_url":url,"status_sync_http_status":response.status,
-            "status_sync_response":response_excerpt(&response.body, response.content_type.as_deref()).map_err(|failure| error(failure.to_string()))?,
+            "status_sync_response":response_excerpt(&response.body, response.content_type.as_deref())?,
             "status_sync_request_id":response.request_id,"status_synced_at":chrono::Utc::now().to_rfc3339()}),
         );
         if real_provider {
@@ -453,8 +479,8 @@ fn object(value: Value) -> Map<String, Value> {
     value.as_object().expect("static object projection").clone()
 }
 
-fn error(detail: impl Into<String>) -> CredentialManagementPortError {
-    CredentialManagementPortError(detail.into())
+fn error(detail: impl Into<String>) -> CanvasCredentialsStatusError {
+    CanvasCredentialsStatusError::Runtime(detail.into())
 }
 
 #[derive(Clone, Debug)]
@@ -636,7 +662,7 @@ mod tests {
                 Ok(value) => json!({"value":value.unwrap_or_default()}),
                 Err(failure) => {
                     assert_eq!(
-                        failure.0,
+                        failure.to_string(),
                         "Canvas Credentials operator token file is not valid UTF-8"
                     );
                     json!({"error_class":"UnicodeDecodeError"})

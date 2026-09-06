@@ -77,11 +77,32 @@ The Unicode continuation passes 296 library, 5 worker, 28 management HTTP,
 68 TLS observations, and all 21 configured published-image tests (137.06 seconds,
 none ignored/filtered). Fresh hosted qualification is still required.
 
+## Status-provider boundary
+
+The status-provider continuation expands its independent immutable-image corpus
+from 63 to 79 observations with raw response bytes and Content-Type. Both bridge
+synchronization and real-provider revocation retain Unicode failure identity,
+JSON-before-text success behavior, decoded HTTP failure text and short-prefix
+replacement. The previous native generic error type failed the new corpus.
+`CanvasCredentialsStatusError` now preserves runtime versus response-text errors
+inside the single `synchronize_provider` implementation. The existing lifecycle
+trait delegates to it and intentionally projects only diagnostic text, matching
+the published lifecycle route's `str(exc)` persistence (credentials source
+`51f0a758a076777cb18a30b1db3f89c74ac23e01`, `routes.py` catch/save boundary).
+The native real HTTP/PostgreSQL runtime fixture also checks Unicode failure
+persistence and later recovery, canonical status, attempt counters, unrelated
+metadata, tenant-secret usage, publication/event ordering and late save failure.
+This is composed provider/persistence evidence, not a separately captured full
+published lifecycle HTTP trace. The complete configured image suite passes all
+22 tests (136.27 seconds, none ignored/filtered). Local 296 library, 5 worker,
+28 management HTTP, 22 behavior, 42 workflow/image/ownership tests, strict Clippy
+and the existing 68 TLS observations pass. Fresh hosted checks remain required.
+
 ## Remaining gates
 
 Other multibyte/stateful codecs, extended/RFC2231 charset headers, less common
-codec label normalization, exceptional JSON values and the broader status-service
-decoder-exception boundary still need qualification. Existing unsupported-codec
+codec label normalization, exceptional JSON values and other configuration or
+exception paths still need qualification. Existing unsupported-codec
 fallback is an adoption gap, not an approved reduction of supported functionality.
 
 Complete provider configuration/network behavior and whole-worker/all-consumer

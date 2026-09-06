@@ -159,13 +159,20 @@ async def observe():
                         "Synthetic transport unavailable", request=request
                     )
                 arguments = (
-                    {"text": case["response_text"]}
-                    if "response_text" in case
-                    else {"json": case.get("response_json", {"accepted": True})}
+                    {"content": bytes.fromhex(case["response_hex"])}
+                    if "response_hex" in case
+                    else (
+                        {"text": case["response_text"]}
+                        if "response_text" in case
+                        else {"json": case.get("response_json", {"accepted": True})}
+                    )
                 )
+                headers = {"x-request-id": "synthetic-provider-request"}
+                if "response_content_type" in case:
+                    headers["content-type"] = case["response_content_type"]
                 return httpx.Response(
                     case.get("response_status", 200),
-                    headers={"x-request-id": "synthetic-provider-request"},
+                    headers=headers,
                     **arguments,
                 )
 
@@ -212,6 +219,12 @@ async def observe():
                         "error_class": type(failure).__name__,
                         "error": str(failure),
                     }
+            if "response_hex" in case:
+                assert outcome.get("error_class") == case["expected_error_class"], (
+                    case["name"],
+                    "unexpected published provider exception",
+                    outcome,
+                )
             observations.append(
                 {
                     "name": case["name"],

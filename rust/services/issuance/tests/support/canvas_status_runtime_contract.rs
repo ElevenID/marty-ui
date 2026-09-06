@@ -33,6 +33,16 @@ struct RuntimeState {
     calls: Mutex<Vec<Value>>,
     events: Mutex<Vec<String>>,
     remove_delivery_before_response: AtomicBool,
+    unicode_responses: bool,
+}
+
+fn unicode_case(action: &str) -> &'static str {
+    match action {
+        "suspend" => "utf-16_missing_bom_200",
+        "reinstate" => "utf-32_missing_bom_403",
+        "revoke" => "utf16_json_first_200",
+        _ => panic!("unexpected synthetic lifecycle action"),
+    }
 }
 
 #[async_trait]
@@ -76,7 +86,35 @@ async fn mirror(
         sqlx::query("DELETE FROM issuance_service.credential_delivery_records WHERE id='delivery-provider' AND organization_id='org-review'")
             .execute(&state.pool).await.unwrap();
     }
-    let mut response = if body["lifecycle_action"] == "reinstate" {
+    let mut response = if state.unicode_responses {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-status-provider-scenarios.json"
+        ))
+        .unwrap();
+        let name = unicode_case(body["lifecycle_action"].as_str().unwrap());
+        let case = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        (
+            StatusCode::from_u16(
+                case["response_status"]
+                    .as_u64()
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            )
+            .unwrap(),
+            [(
+                "content-type",
+                case["response_content_type"].as_str().unwrap(),
+            )],
+            hex::decode(case["response_hex"].as_str().unwrap()).unwrap(),
+        )
+            .into_response()
+    } else if body["lifecycle_action"] == "reinstate" {
         (StatusCode::SERVICE_UNAVAILABLE, "Synthetic runtime refusal").into_response()
     } else {
         Json(json!({"accepted":true})).into_response()
@@ -95,6 +133,14 @@ impl Drop for AbortServer {
 }
 
 pub async fn run(pool: &PgPool) {
+    run_scenario(pool, false).await;
+}
+
+pub async fn run_unicode(pool: &PgPool) {
+    run_scenario(pool, true).await;
+}
+
+async fn run_scenario(pool: &PgPool, unicode_responses: bool) {
     let vault = Arc::new(PostgresIntegrationSecretVault::new(
         pool.clone(),
         IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -121,6 +167,7 @@ pub async fn run(pool: &PgPool) {
         calls: Mutex::new(Vec::new()),
         events: Mutex::new(Vec::new()),
         remove_delivery_before_response: AtomicBool::new(false),
+        unicode_responses,
     });
     let application = Router::new()
         .route("/status", post(mirror))
@@ -245,10 +292,42 @@ pub async fn run(pool: &PgPool) {
             status
         );
     }
-    assert!(deliveries[0]["last_error"].is_null());
-    let failure = "Canvas Credentials status sync failed (HTTP 503): Synthetic runtime refusal";
-    assert_eq!(deliveries[1]["last_error"], failure);
-    assert_eq!(deliveries[1]["metadata"]["last_status_sync_error"], failure);
+    if unicode_responses {
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-status-provider-oracle.json"
+        ))
+        .unwrap();
+        for (index, action) in ["suspend", "reinstate"].into_iter().enumerate() {
+            let name = unicode_case(action);
+            let expected = oracle["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            assert_eq!(expected["error_class"], "UnicodeError");
+            assert_eq!(deliveries[index]["last_error"], expected["error"]);
+            assert_eq!(
+                deliveries[index]["metadata"]["last_status_sync_error"],
+                expected["error"]
+            );
+            chrono::DateTime::parse_from_rfc3339(
+                deliveries[index]["metadata"]["last_status_sync_error_at"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            deliveries[2]["metadata"]["status_sync_response"],
+            json!({"accepted":true})
+        );
+    } else {
+        assert!(deliveries[0]["last_error"].is_null());
+        let failure = "Canvas Credentials status sync failed (HTTP 503): Synthetic runtime refusal";
+        assert_eq!(deliveries[1]["last_error"], failure);
+        assert_eq!(deliveries[1]["metadata"]["last_status_sync_error"], failure);
+    }
     assert!(deliveries[2]["last_error"].is_null());
     assert!(deliveries[2]["metadata"]["last_status_sync_error"].is_null());
     assert_eq!(

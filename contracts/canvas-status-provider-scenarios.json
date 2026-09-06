@@ -408,6 +408,22 @@
       "action": "suspend",
       "provider": "bridge",
       "delivery_transaction": "another-transaction"
-    }
+    },
+    {"name":"utf-16_missing_bom_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-16","response_hex":"630061006600e900","expected_error_class":"UnicodeError"},
+    {"name":"utf-16_bom_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-16","response_hex":"fffe630061006600e900","expected_error_class":null},
+    {"name":"utf-16_missing_bom_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"630061006600e900","expected_error_class":"UnicodeError"},
+    {"name":"utf-16_bom_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"fffe630061006600e900","expected_error_class":"RuntimeError"},
+    {"name":"utf-32_missing_bom_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"6300000061000000","expected_error_class":"UnicodeError"},
+    {"name":"utf-32_bom_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"0000feff000000630000006100000066000000e9","expected_error_class":null},
+    {"name":"utf-32_missing_bom_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=utf-32","response_hex":"6300000061000000","expected_error_class":"UnicodeError"},
+    {"name":"utf-32_bom_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=utf-32","response_hex":"0000feff000000630000006100000066000000e9","expected_error_class":"RuntimeError"},
+    {"name":"utf16_json_first_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-16","response_hex":"7b226163636570746564223a747275657d","expected_error_class":null},
+    {"name":"utf16_json_first_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"7b226163636570746564223a747275657d","expected_error_class":"UnicodeError"},
+    {"name":"real_utf16_missing_bom_403","action":"revoke","provider":"badgr_api","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"63006100","expected_error_class":"UnicodeError"},
+    {"name":"real_utf32_bom_200","action":"revoke","provider":"badgr_api","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe000063000000","expected_error_class":null},
+    {"name":"latin1_error_text","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=latin1","response_hex":"636166e9","expected_error_class":"RuntimeError"},
+    {"name":"cp1252_success_text","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=windows-1252","response_hex":"8020636166e9","expected_error_class":null},
+    {"name":"utf16_short_prefix","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-16","response_hex":"ff","expected_error_class":null},
+    {"name":"utf32_short_prefix","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe","expected_error_class":null}
   ]
 }
