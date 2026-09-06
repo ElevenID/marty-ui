@@ -2,7 +2,7 @@
 
 Status: two independent published-process captures agree. The mandatory reference
 regeneration gate and all selected worker regressions pass locally.
-Native replay is implemented and awaits Linux qualification. This is not
+Native replay passed Linux at `507b0def6` (CI34045421238, Rust34045421228). This is not
 whole-worker or deployment acceptance.
 
 The actual published worker schedules and leases attempt one, begins authenticated
@@ -40,7 +40,7 @@ terminal boundary in the final-attempt case. Existing frozen artifacts stay
 unchanged and require regeneration after this extraction. Process cleanup and
 barrier rollback retain their existing owners and failure tests.
 
-Changed-target/owner-fence loss, final-completion races, disposal, native qualification
+Changed-target/owner-fence loss, final-completion races, disposal
 and every other open [cutover requirement](canvas-worker-cutover-readiness.md)
 remain separate. No production or persistent self-host changes are made.
 
@@ -74,5 +74,9 @@ Process RAII, barrier rollback and all fixture cleanup owners remain intact.
 
 Local native compilation and all three strict comparison tests pass (62 other
 entries filtered); 68 affected Python tests pass in 3.59 seconds. Strict Clippy,
-Rustfmt, Ruff, Bash syntax and diff checks pass. The next configured Linux suite
-contains 65 entries; that new exact-head runtime result remains pending.
+Rustfmt, Ruff, Bash syntax and diff checks pass. The configured Linux suite then
+passed at `507b0def6`: all 65 entries in 1182.10 seconds, including the actual
+retry-reclaimer two-request case, both fresh retry heartbeats and all older
+concurrency/final/renewal/recovery/signal cases. The separate 0.36-second
+unconfigured run is not runtime qualification. This does not close other
+ownership/completion races or the whole-worker/all-consumer cutover gates.

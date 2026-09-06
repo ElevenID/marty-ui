@@ -1,7 +1,7 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `54692c4e4aeda5644ff721a5bc21e354a6933eb1`,
-with newer native retryable two-reclaimer replay awaiting qualification. PR #814 draft and
+Status: latest qualified composed checkpoint `507b0def6b8ec1a061e82768f82e9ba28f8b3456`,
+with newer image-entrypoint packaging awaiting qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -84,8 +84,9 @@ Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 The [retryable two-reclaimer reference](canvas-worker-reclaimers-retry.md) has two
 matching captures: both workers reach fresh idle with one durable retry and no
 early read, then real eligibility permits same-job attempt-two success with the
-target enabled. Reference regeneration passes locally; native replay is
-implemented but awaits Linux qualification. Remaining race requirements stay open.
+target enabled. Native replay passed at `507b0def6` (CI34045421238,
+Rust34045421228): 65 configured tests in 1182.10 seconds, with two actual provider
+requests for this case. Remaining race requirements stay open.
 
 The [two-reclaimer reference](canvas-worker-reclaimers.md) has two matching
 captures after actual final-attempt renewal, process loss and real lease expiry.
@@ -102,8 +103,8 @@ historical attempts before worker startup, then observes actual attempt-eight
 renewal, crash, real expiry and dead-letter/target-disable without another read.
 Native final-attempt replay passed with exact generation-fence checks at
 `e959e113d` (CI34041341592, Rust34041341506; 56 configured tests in 841.38 seconds).
-Final-attempt concurrent reclaimers are qualified above; retryable-reclaimer
-qualification and changed-generation races remain open.
+Final-attempt and retryable concurrent reclaimers are qualified above;
+changed-generation races remain open.
 
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 
@@ -165,8 +166,8 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
    do not repeat the repaired LTI-identity requirement as an open runtime bug.
 2. Retain the qualified REST/facts/retry/signal/renewal and nonfinal recovery
    sequences on the pinned migrations with real native provider/OAuth adapters.
-   Retain final-attempt, concurrent scheduler and two-final-reclaimer qualification;
-   qualify the newer retryable two-reclaimer replay, then extend
+   Retain final-attempt, concurrent scheduler, two-final-reclaimer and retryable
+   two-reclaimer qualification, then extend
    the same harness across the remaining crash-reclaimer, mutation, OAuth,
    failure and cleanup requirements above. Do not repeat completed boundaries
    as though their native adoption were still missing.
