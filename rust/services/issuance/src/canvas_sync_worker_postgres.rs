@@ -33,6 +33,38 @@ impl PostgresCanvasSyncWorkerRepository {
     }
 }
 
+fn incomplete_target_summary(fields: [&str; 4]) -> Option<&'static str> {
+    // Field order matches the published sorted names. Preserve the existing
+    // static-message API: supplied values can never enter a persisted summary.
+    macro_rules! missing {
+        ($names:literal) => {
+            Some(concat!("Canvas sync target is missing ", $names))
+        };
+    }
+    const SUMMARIES: [Option<&str>; 16] = [
+        None,
+        missing!("binding_id"),
+        missing!("logical_key"),
+        missing!("binding_id, logical_key"),
+        missing!("organization_id"),
+        missing!("binding_id, organization_id"),
+        missing!("logical_key, organization_id"),
+        missing!("binding_id, logical_key, organization_id"),
+        missing!("platform_id"),
+        missing!("binding_id, platform_id"),
+        missing!("logical_key, platform_id"),
+        missing!("binding_id, logical_key, platform_id"),
+        missing!("organization_id, platform_id"),
+        missing!("binding_id, organization_id, platform_id"),
+        missing!("logical_key, organization_id, platform_id"),
+        missing!("binding_id, logical_key, organization_id, platform_id"),
+    ];
+    let index = fields.iter().enumerate().fold(0, |index, (bit, value)| {
+        index | (usize::from(value.trim().is_empty()) << bit)
+    });
+    SUMMARIES[index]
+}
+
 #[async_trait]
 impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
     async fn upsert_heartbeat(
@@ -232,24 +264,21 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
     ) -> Result<(), crate::canvas_sync_worker::CanvasSyncProcessingError> {
         use crate::canvas_sync_worker::CanvasSyncProcessingError;
 
-        if [
-            target.organization_id.as_str(),
-            target.platform_id.as_str(),
+        if let Some(summary) = incomplete_target_summary([
             target.binding_id.as_str(),
             target.logical_key.as_str(),
-        ]
-        .iter()
-        .any(|value| value.trim().is_empty())
-        {
+            target.organization_id.as_str(),
+            target.platform_id.as_str(),
+        ]) {
             return Err(CanvasSyncProcessingError::terminal(
                 "canvas_sync_target_incomplete",
-                "Canvas synchronization target is incomplete",
+                summary,
             ));
         }
         if metadata_contains_secret(&Value::Object(target.metadata.clone())) {
             return Err(CanvasSyncProcessingError::terminal(
                 "canvas_sync_target_contains_secret",
-                "Canvas synchronization target contains authentication material",
+                "Canvas sync target metadata contains prohibited authentication material",
             ));
         }
         let scope = sqlx::query(
@@ -275,7 +304,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         let Some(scope) = scope else {
             return Err(CanvasSyncProcessingError::terminal(
                 "canvas_sync_target_scope_invalid",
-                "Canvas synchronization target scope is invalid",
+                "Canvas sync target platform or binding is unavailable",
             ));
         };
         let platform_enabled: bool = scope.try_get("platform_enabled").map_err(|_| {
@@ -320,14 +349,14 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
             disable_target(&self.pool, target).await;
             return Err(CanvasSyncProcessingError::terminal(
                 "canvas_sync_target_inactive",
-                "Canvas synchronization target is inactive",
+                "Canvas sync target, platform, or binding is inactive",
             ));
         }
         if target.config_version != binding_config_version {
             disable_target(&self.pool, target).await;
             return Err(CanvasSyncProcessingError::terminal(
                 "canvas_sync_target_config_stale",
-                "Canvas synchronization target configuration is stale",
+                "Canvas sync target does not match the active binding configuration",
             ));
         }
         match target.target_type {
@@ -335,7 +364,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                 let Some(application_id) = target.application_id.as_deref() else {
                     return Err(CanvasSyncProcessingError::terminal(
                         "canvas_sync_target_application_missing",
-                        "Canvas synchronization application is missing",
+                        "Canvas learner synchronization target has no application",
                     ));
                 };
                 let exists: bool = sqlx::query_scalar(
@@ -365,7 +394,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                 let Some(candidate_id) = target.candidate_id.as_deref() else {
                     return Err(CanvasSyncProcessingError::terminal(
                         "canvas_sync_target_candidate_missing",
-                        "Canvas synchronization candidate is missing",
+                        "Canvas award-candidate synchronization target has no candidate",
                     ));
                 };
                 let exists: bool = sqlx::query_scalar(
@@ -766,6 +795,42 @@ struct UuidString;
 impl UuidString {
     fn generate() -> String {
         uuid::Uuid::new_v4().to_string()
+    }
+}
+
+#[cfg(test)]
+mod validation_summary_tests {
+    #[test]
+    fn every_missing_field_combination_is_sorted_and_never_echoes_values() {
+        let names = [
+            "binding_id",
+            "logical_key",
+            "organization_id",
+            "platform_id",
+        ];
+        for whitespace in ["", "\t", " \u{a0}"] {
+            for mask in 0..16 {
+                let fields = std::array::from_fn(|bit| {
+                    if mask & (1 << bit) != 0 {
+                        whitespace
+                    } else {
+                        "SYNTHETIC_VALUE_NOT_FOR_ERRORS"
+                    }
+                });
+                let missing = names
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(bit, name)| (mask & (1 << bit) != 0).then_some(*name))
+                    .collect::<Vec<_>>();
+                let expected = (!missing.is_empty())
+                    .then(|| format!("Canvas sync target is missing {}", missing.join(", ")));
+                let actual = super::incomplete_target_summary(fields);
+                assert_eq!(actual, expected.as_deref());
+                assert!(!actual
+                    .unwrap_or_default()
+                    .contains("SYNTHETIC_VALUE_NOT_FOR_ERRORS"));
+            }
+        }
     }
 }
 

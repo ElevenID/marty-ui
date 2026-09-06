@@ -17,7 +17,7 @@ from canvas_worker_https_fixture import response_headers
 
 
 def run(executable, scenario="rest"):
-    assert scenario in {"rest", "facts", "retry", "retry-after"}
+    assert scenario in {"rest", "facts", "retry", "retry-after", "validation"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-scenarios.json").read_text()
@@ -28,12 +28,18 @@ def run(executable, scenario="rest"):
     reference = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-oracle.json").read_text()
     )
-    if scenario == "retry-after":
+    if scenario in {"retry-after", "validation"}:
         names = [case["name"] for case in spec["cases"]]
         assert len(set(names)) == len(names)
         assert set(names) == set(reference)
         for case in spec["cases"]:
-            stage = {**case, "status": 429, "body": {"error": "synthetic-rate-limit"}}
+            stage = {
+                **case,
+                "status": 429 if scenario == "retry-after" else 500,
+                "body": {"error": "synthetic-rate-limit"}
+                if scenario == "retry-after"
+                else {},
+            }
             run_scenario(
                 executable, scenario, {"stages": [stage]}, reference[case["name"]], case
             )
@@ -69,7 +75,7 @@ def assert_retry_timing(output, case, dates, expected):
     )
 
 
-def run_scenario(executable, scenario, spec, reference, retry_case=None):
+def run_scenario(executable, scenario, spec, reference, matrix_case=None):
     responses = [
         response
         for stage in spec["stages"]
@@ -132,8 +138,12 @@ def run_scenario(executable, scenario, spec, reference, retry_case=None):
                 SSL_CERT_FILE=str(cert),
                 SSL_CERT_DIR=str(empty_ca_directory),
             )
-            if retry_case is not None:
-                environment["MARTY_CANVAS_WORKER_RETRY_AFTER_CASE"] = retry_case["name"]
+            if matrix_case is not None:
+                flag = {
+                    "retry-after": "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
+                    "validation": "MARTY_CANVAS_WORKER_VALIDATION_CASE",
+                }[scenario]
+                environment[flag] = matrix_case["name"]
             child = subprocess.run(
                 [executable, "worker_rest_native_child", "--exact", "--nocapture"],
                 env=environment,
@@ -150,12 +160,13 @@ def run_scenario(executable, scenario, spec, reference, retry_case=None):
                 for request in observation["requests"]
             ]
             assert requests == expected, "Actual worker HTTPS requests differ"
-            if retry_case is not None:
+            if scenario == "retry-after":
+                assert matrix_case is not None
                 assert_retry_timing(
-                    child.stdout, retry_case, dates, reference["retry_timing"]
+                    child.stdout, matrix_case, dates, reference["retry_timing"]
                 )
             label = (
-                scenario if retry_case is None else f"{scenario}/{retry_case['name']}"
+                scenario if matrix_case is None else f"{scenario}/{matrix_case['name']}"
             )
             print(
                 f"Native worker {label} replay passed all {len(spec['stages'])} frozen HTTPS stages ({len(requests)} requests)"
@@ -171,6 +182,6 @@ def run_scenario(executable, scenario, spec, reference, retry_case=None):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [rest|facts|retry|retry-after]"
+            "Expected the exact compiled published-schema executable [rest|facts|retry|retry-after|validation]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "rest")

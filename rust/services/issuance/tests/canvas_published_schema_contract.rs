@@ -145,6 +145,11 @@ fn worker_facts_match_frozen_published_process() {
 }
 
 #[test]
+fn worker_validation_matches_frozen_published_process() {
+    assert_worker_https("validation");
+}
+
+#[test]
 fn worker_retry_after_matches_frozen_published_process() {
     assert_worker_https("retry-after");
 }
@@ -201,7 +206,7 @@ async fn worker_rest_native_child() {
     let scenario = std::env::var("MARTY_CANVAS_WORKER_REST_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),
-        "rest" | "facts" | "retry" | "retry-after"
+        "rest" | "facts" | "retry" | "retry-after" | "validation"
     ));
     canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, &scenario).await;
     pool.close().await;
@@ -351,6 +356,61 @@ async fn worker_provider_signals_reference_matches_published_process() {
 #[tokio::test]
 async fn worker_retry_after_reference_matches_published_process() {
     assert_worker_matrix_reference("retry-after").await;
+}
+
+#[tokio::test]
+async fn worker_validation_repository_matches_frozen_errors() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    use marty_issuance_service::{
+        canvas_sync_worker::CanvasSyncWorkerRepository,
+        canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
+    };
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-validation-oracle.json"
+    ))
+    .unwrap();
+    for case in canvas_worker_rest_replay::validation_scenarios()["cases"]
+        .as_array()
+        .unwrap()
+    {
+        let name = case["name"].as_str().unwrap();
+        let owned = canvas_published_database::PublishedDatabase::start()
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&owned.url)
+            .await
+            .unwrap();
+        let fixture =
+            canvas_worker_rest_replay::prepare(&pool, "https://127.0.0.1:1", "rest").await;
+        canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
+        let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
+        let target = repository
+            .target("org-review", "target-review")
+            .await
+            .unwrap()
+            .unwrap();
+        let error = repository.validate_target(&target).await.unwrap_err();
+        let expected = &reference[name]["observations"][0]["jobs"][0];
+        assert_eq!(
+            error.code,
+            expected["last_error_code"].as_str().unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            error.summary,
+            expected["last_error_summary"].as_str().unwrap(),
+            "{name}"
+        );
+        assert!(!error.retryable);
+        assert_eq!(error.retry_after_seconds, None);
+        fixture.assert_preserved(&pool).await;
+        pool.close().await;
+        owned.close().unwrap();
+    }
 }
 
 #[tokio::test]

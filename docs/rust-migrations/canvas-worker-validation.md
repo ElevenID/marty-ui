@@ -1,7 +1,8 @@
 # Actual worker target-validation reference
 
 Status: eleven published-worker cases captured independently twice and frozen;
-native replay remains pending. This is selected gate-9 evidence, not a completed
+native replay is implemented and awaits Linux qualification. This is selected
+gate-9 evidence, not a completed
 worker/consumer cutover. All nine normative validation errors remain accounted
 for, including the two explicitly uncovered error paths below.
 
@@ -62,10 +63,40 @@ must be reconciled separately, without manufacturing invalid rows by removing
 foreign keys. The coverage test requires covered and remaining codes to be
 disjoint and their union to equal the complete normative error list.
 
-Native adoption must preserve these actual terminal summaries and target state,
-not merely copy the codes. Current Rust repository messages differ from this
-reference; review and correct them through the shared repository validation path
-while retaining its stronger generation fences. Broader processor failures,
+## Native adoption and regression evidence
+
+A focused test against the actual published schema first demonstrated the
+repository mismatch: the incomplete-key case returned `Canvas synchronization
+target is incomplete` instead of the frozen `Canvas sync target is missing
+logical_key`. The shared Rust repository now preserves all seven covered codes'
+exact summaries. The missing-field summary uses a bounded static lookup, retaining
+the public static-message API and excluding supplied values. One unit test checks
+all 16 field combinations under three whitespace forms. Generation fences,
+tenant-scoped queries and atomic cleanup remain unchanged.
+
+All eleven focused repository cases subsequently passed in 35.67 seconds,
+including exact code/summary, terminal classification and full issued-row/token
+ciphertext preservation. This is repository evidence, not native-process proof.
+The native replay reuses the existing REST process/HTTPS/database fixture and
+one shared validation seeder; each case runs in a separate child/database. It
+compares every frozen observation, preserves the exact seeded job ID, checks
+the final target enabled/version state and requires zero Canvas requests.
+Native SIGINT remains exit 130 rather than the published raw -2 convention.
+
+CI requires the published reference, focused repository and native-process
+validation tests by exact name; the complete configured suite now has 70 entries.
+The native parent returning on Windows must not be counted as Linux execution.
+Current local regressions: 330 library, 34 managed HTTP, 20 OAuth/provider and
+23 issuance/worker behavior tests passed, as did strict all-target Clippy.
+All 901 Python tests passed in 41.17 seconds with the same existing opt-in
+verifier containerd/Buildx skip. Ruff checks and formatting passed.
+The configured local validation subset passed all three entries in 92.58 seconds
+(67 filtered out), regenerating all eleven published cases and rerunning the
+eleven actual-schema repository comparisons. Its Linux-only parent returned on
+Windows; native process qualification is still pending. Bash syntax, Rustfmt
+and diff checks passed, and no labelled fixture containers remained afterward.
+
+Broader processor failures,
 missing-target races, signing effects and privacy remain in the
 [worker cutover inventory](canvas-worker-cutover-readiness.md).
 

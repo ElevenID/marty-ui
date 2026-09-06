@@ -52,6 +52,39 @@ pub(super) fn worker_environment(origin: &str) -> BTreeMap<String, String> {
     ])
 }
 
+pub(super) fn validation_scenarios() -> &'static Value {
+    static SCENARIOS: OnceLock<Value> = OnceLock::new();
+    SCENARIOS.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-validation-scenarios.json"
+        ))
+        .unwrap()
+    })
+}
+
+pub(super) async fn seed_validation_case(pool: &PgPool, name: &str) -> &'static Value {
+    let matrix = validation_scenarios();
+    let cases = matrix["cases"].as_array().unwrap();
+    let matching = cases
+        .iter()
+        .filter(|case| case["name"] == name)
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1, "unknown or duplicate validation case");
+    let case = matching[0];
+    for statement in case["seed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .chain(std::iter::once(
+            matrix["initial_job_seed"].as_str().unwrap(),
+        ))
+    {
+        sqlx::raw_sql(statement).execute(pool).await.unwrap();
+    }
+    case
+}
+
 pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> WorkerFixture {
     let origin_url = url::Url::parse(origin).unwrap();
     assert_eq!(origin_url.scheme(), "https");
@@ -170,7 +203,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
     let fixture = prepare(
         pool,
         origin,
-        if scenario == "retry-after" {
+        if matches!(scenario, "retry-after" | "validation") {
             "rest"
         } else {
             scenario
@@ -178,7 +211,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
     )
     .await;
     let (spec, shared) = (fixture.spec, fixture.shared);
-    let mut retry_stages = Value::Null;
+    let mut matrix_stages = Value::Null;
     let mut reference: Value = serde_json::from_str(match scenario {
         "rest" => include_str!("../../../../../contracts/canvas-worker-rest-oracle.json"),
         "facts" => include_str!("../../../../../contracts/canvas-worker-facts-oracle.json"),
@@ -186,26 +219,39 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         "retry-after" => {
             include_str!("../../../../../contracts/canvas-worker-retry-after-oracle.json")
         }
+        "validation" => {
+            include_str!("../../../../../contracts/canvas-worker-validation-oracle.json")
+        }
         _ => unreachable!(),
     })
     .unwrap();
-    if scenario == "retry-after" {
-        let name = std::env::var("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE").unwrap();
-        let matrix: Value = serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
-        ))
-        .unwrap();
-        let cases = matrix["cases"].as_array().unwrap();
-        let matches = cases
-            .iter()
-            .filter(|case| case["name"] == name)
-            .collect::<Vec<_>>();
-        assert_eq!(matches.len(), 1, "unknown or duplicate Retry-After case");
-        retry_stages = json!([matches[0]]);
+    if matches!(scenario, "retry-after" | "validation") {
+        let flag = if scenario == "validation" {
+            "MARTY_CANVAS_WORKER_VALIDATION_CASE"
+        } else {
+            "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE"
+        };
+        let name = std::env::var(flag).unwrap();
+        let stage = if scenario == "validation" {
+            seed_validation_case(pool, &name).await.clone()
+        } else {
+            let matrix: Value = serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
+            ))
+            .unwrap();
+            let cases = matrix["cases"].as_array().unwrap();
+            let matching = cases
+                .iter()
+                .filter(|case| case["name"] == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "unknown or duplicate Retry-After case");
+            matching[0].clone()
+        };
+        matrix_stages = json!([stage]);
         reference = reference[&name].clone();
     }
-    let stages = if scenario == "retry-after" {
-        &retry_stages
+    let stages = if matches!(scenario, "retry-after" | "validation") {
+        &matrix_stages
     } else {
         &spec["stages"]
     }
@@ -216,7 +262,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         stages.len(),
         match scenario {
             "retry" => 5,
-            "retry-after" => 1,
+            "retry-after" | "validation" => 1,
             _ => 4,
         }
     );
@@ -280,7 +326,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         let status = worker.wait().await;
         assert_eq!(expected["exit_code_after_interrupt"], -2);
         assert_eq!(status.code(), Some(130));
-        if retry_existing {
+        if retry_existing || scenario == "validation" {
             let current_job_ids: Vec<String> = sqlx::query_scalar(
                 "SELECT id FROM issuance_service.canvas_evidence_sync_jobs ORDER BY created_at,id",
             )
@@ -289,8 +335,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             .unwrap();
             assert_eq!(
                 current_job_ids, prior_job_ids,
-                "retry replaced an existing job"
+                "worker replaced an existing job"
             );
+        }
+        if retry_existing {
             assert_eq!(expected["same_job_ids"], true);
         } else {
             assert!(expected.get("same_job_ids").is_none());
@@ -310,6 +358,12 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             assert_eq!(observed, expected[key], "{key} in {}", stage["name"]);
         }
         fixture.assert_preserved(pool).await;
+        if scenario == "validation" {
+            assert_eq!(prior_job_ids, ["worker-validation-job"]);
+            let target: Value = sqlx::query_scalar("SELECT jsonb_build_object('enabled',enabled,'config_version',config_version) FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'")
+                .fetch_one(pool).await.unwrap();
+            assert_eq!(target, reference["target"], "validation target state");
+        }
         if scenario == "retry-after" {
             let (available_at, updated_at): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
                 sqlx::query_as("SELECT available_at,updated_at FROM issuance_service.canvas_evidence_sync_jobs")
