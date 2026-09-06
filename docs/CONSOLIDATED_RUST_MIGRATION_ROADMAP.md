@@ -38,15 +38,16 @@ has two identical independent captures and a mandatory regeneration gate. After
 actual attempt-eight renewal and forced process loss, real lease expiry leads
 to dead-letter/target-disable with no second provider request. Earlier attempts
 are explicitly seeded history, not executed evidence. Native final-attempt
-replay, concurrency and changed-generation races remain open.
+replay is implemented using the shared recovery owner and strict generation
+checks; its Linux qualification, concurrency and changed-generation races remain open.
 
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease
 and both heartbeat renewal without generation change. After forced process loss,
 real lease expiry and retry eligibility lead to the same job succeeding on attempt
 two with issuance/token ciphertext preserved. Reference regeneration passes
-locally; native replay now implements both cases using the shared signal/HTTPS
-and Rust persistence owners, with Linux qualification pending. Final-attempt,
+locally; native replay passed at `d96a45ebe` (CI34039828427 and Rust34039828424),
+including actual renewal/recovery HTTPS and all 52 configured tests in 839.16 seconds. Final-attempt,
 concurrency and ownership-fence cases remain open.
 
 The [active-provider signal reference](rust-migrations/canvas-worker-provider-signals.md)
@@ -58,7 +59,7 @@ REST/facts/retry regression gates.
 The correction is now qualified at `499298659`: CI34038852781 and Rust
 CodeQL34038852821 passed; the configured log explicitly records SIGINT, SIGTERM,
 SIGKILL and all 49 tests passing in 580.28 seconds. The newer native recovery
-implementation requires its own fresh Linux qualification.
+qualification is recorded above; subsequent extensions require fresh checks.
 This is not crash/restart or cleanup-finally evidence.
 The first Linux run failed before signal delivery because native leased jobs
 retain an internal target-generation fence absent from Python's result. The

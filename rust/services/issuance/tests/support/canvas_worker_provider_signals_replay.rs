@@ -28,11 +28,73 @@ pub(super) fn assert_generation_fenced_state(
             job["status"] == "leased"
                 || (job["status"] == "retry"
                     && job["last_error_code"] == "canvas_worker_lease_expired")
+                || (job["status"] == "dead_letter"
+                    && job["last_error_code"] == "canvas_worker_lease_expired"
+                    && job["attempt_count"].as_i64().unwrap()
+                        >= job["max_attempts"].as_i64().unwrap()
+                    && job["completed"] == true
+                    && job["lease_owner_present"] == false
+                    && job["lease_expires_present"] == false)
         );
         assert_eq!(job["result"], serde_json::json!({}));
         job["result"] = serde_json::json!({"target_config_version": target_generation});
     }
     assert_eq!(observed, expected);
+}
+
+#[test]
+fn expired_final_requires_exact_generation_and_exhausted_terminal_state() {
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-provider-final-oracle.json"
+    ))
+    .unwrap();
+    let published = &reference["completed"];
+    let mut native = published.clone();
+    native["jobs"][0]["result"] = serde_json::json!({"target_config_version": 1});
+    assert_generation_fenced_state(native.clone(), published, 1);
+    for result in [
+        serde_json::json!({}),
+        serde_json::json!({"target_config_version": 2}),
+        serde_json::json!({"target_config_version": "1"}),
+        serde_json::json!({"target_config_version": 1, "unexpected": true}),
+    ] {
+        let mut invalid = native.clone();
+        invalid["jobs"][0]["result"] = result;
+        assert!(
+            std::panic::catch_unwind(|| assert_generation_fenced_state(invalid, published, 1))
+                .is_err()
+        );
+    }
+    for (field, value) in [
+        ("status", serde_json::json!("succeeded")),
+        (
+            "last_error_code",
+            serde_json::json!("canvas_provider_failure"),
+        ),
+        ("attempt_count", serde_json::json!(7)),
+        ("completed", serde_json::json!(false)),
+        ("lease_owner_present", serde_json::json!(true)),
+        ("lease_expires_present", serde_json::json!(true)),
+    ] {
+        // Even if both projections agree, this exception cannot accept an
+        // unrelated failure or a nonfinal/incomplete recovery outcome.
+        let mut invalid_reference = published.clone();
+        let mut invalid_native = native.clone();
+        invalid_reference["jobs"][0][field] = value.clone();
+        invalid_native["jobs"][0][field] = value;
+        assert!(std::panic::catch_unwind(|| assert_generation_fenced_state(
+            invalid_native,
+            &invalid_reference,
+            1
+        ))
+        .is_err());
+    }
+    let mut invalid = native.clone();
+    invalid["oauth"]["secret_enabled"] = serde_json::json!(false);
+    assert!(
+        std::panic::catch_unwind(|| assert_generation_fenced_state(invalid, published, 1)).is_err()
+    );
+    assert!(std::panic::catch_unwind(|| assert_leased_state(native, published, 1)).is_err());
 }
 
 #[test]

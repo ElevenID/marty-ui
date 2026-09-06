@@ -1,7 +1,7 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `49929865981e2110952da158d8c2560602d9be7b`,
-with newer native recovery replay awaiting qualification. PR #814 draft and
+Status: latest qualified composed checkpoint `d96a45ebe1f19e9c7bbda65604e639160627330c`,
+with newer native final-attempt replay awaiting qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -62,14 +62,15 @@ all error/header variants and race/privacy requirements remain separate gates.
 The [active-provider signal reference](canvas-worker-provider-signals.md) now
 independently captures SIGINT/SIGTERM/SIGKILL with the real HTTPS response held.
 Native SIGINT, graceful SIGTERM and SIGKILL passed configured Linux CI at
-`499298659` (CI34038852781, Rust34038852821). Native crash/restart, renewal and
-disposal remain open; raw process exit must not substitute for those qualifications.
+`499298659` (CI34038852781, Rust34038852821). Renewal and nonfinal crash/restart
+qualification are recorded below; disposal remains open and cannot be inferred
+from raw process exit.
 
 The [provider renewal/recovery reference](canvas-worker-provider-recovery.md)
 independently records actual lease/heartbeat renewal, then success or forced
 process loss followed by real expiry/retry and same-job completion. Two capture
-pairs agree and regeneration passes locally. Native replay is implemented, with
-Linux qualification pending; final-attempt recovery,
+pairs agree and regeneration passes locally. Native replay passed at `d96a45ebe`
+(CI34039828427, Rust34039828424; 52 configured tests in 839.16 seconds). Final-attempt recovery,
 concurrent scheduler/reclaimer and ownership/generation fences remain separate.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
@@ -77,7 +78,8 @@ The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
 matching independent captures and a mandatory regeneration gate. It seeds
 historical attempts before worker startup, then observes actual attempt-eight
 renewal, crash, real expiry and dead-letter/target-disable without another read.
-Native final-attempt replay and concurrent/changed-generation races remain open.
+Native final-attempt replay is implemented with exact generation-fence checks;
+Linux qualification and concurrent/changed-generation races remain open.
 
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 

@@ -24,7 +24,7 @@ def wait_for(child, predicate, description, timeout=30):
 
 def run(executable, scenario="signals"):
     assert sys.platform == "linux", "Actual POSIX worker signals require Linux"
-    assert scenario in {"signals", "recovery"}
+    assert scenario in {"signals", "recovery", "final"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / "contracts/canvas-worker-rest-scenarios.json").read_text()
@@ -32,11 +32,14 @@ def run(executable, scenario="signals"):
     reference = json.loads(
         (root / f"contracts/canvas-worker-provider-{scenario}-oracle.json").read_text()
     )
-    cases = (
-        ["SIGINT", "SIGTERM", "SIGKILL"]
-        if scenario == "signals"
-        else ["renewal", "recovery"]
-    )
+    cases = {
+        "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
+        "recovery": ["renewal", "recovery"],
+        "final": ["final"],
+    }[scenario]
+    if scenario == "final":
+        assert reference["case"] == "final"
+        reference = {"final": reference}
     assert set(reference) == set(cases)
     for signal_name in cases:
         with WorkerHttpsFixture() as https:
@@ -71,7 +74,9 @@ def run(executable, scenario="signals"):
                 wait_for(child, https.received.is_set, "actual HTTPS request")
                 # Synchronize the test harness only, never the worker or DB.
                 (control / "request-received").touch(exist_ok=False)
-                release_response = scenario == "recovery" or signal_name == "SIGTERM"
+                release_response = (
+                    scenario in {"recovery", "final"} or signal_name == "SIGTERM"
+                )
                 if release_response:
                     wait_for(
                         child,
@@ -114,6 +119,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

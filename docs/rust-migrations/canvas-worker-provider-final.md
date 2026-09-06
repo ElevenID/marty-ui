@@ -1,7 +1,8 @@
 # Final-attempt provider crash reference
 
 Status: two independent published-process captures agree and the mandatory
-regeneration gate passes locally; native final-attempt replay remains open.
+regeneration gate passes locally; native final-attempt replay is implemented
+and awaiting Linux qualification.
 This is not a cutover, Python deletion or deployment qualification.
 
 The existing renewal/recovery process owner, real HTTPS fixture, official schema
@@ -37,8 +38,30 @@ entries are not Windows runtime proof. All 60 affected Python tests pass in
 
 The shared reference helper retains the original renewal and nonfinal recovery
 cases; their frozen artifacts must not change to accommodate this extension.
-Native replay must retain and explicitly test Rust's internal target-generation
-fence, not remove it to match Python's empty stored result.
+Native replay retains and explicitly tests Rust's internal target-generation
+fence, rather than removing it to match Python's empty stored result.
+
+## Native replay
+
+The mandatory `worker_provider_final_matches_frozen_published_process` parent
+uses the existing real HTTPS owner and a separate native child on the official
+schema. The child seeds the same historical queue before startup, observes
+actual renewal, kills its owned process, waits for real expiry and starts the
+reclaimer. It requires fresh idle dead-letter state at attempt eight, disabled
+target, preserved original job/start, no facts and unchanged issued rows and
+ciphertext. The parent checks the single exact authenticated provider request.
+
+The shared state comparison permits only the known native integer generation
+in addition to the full published projection. For a dead-letter exception it
+requires lease-expiry classification, exhausted attempts, completed state and
+both lease fields cleared. Negative tests reject missing, wrong, string or
+extra generation data, unrelated status/errors, unexhausted attempts, active
+leases, incomplete results and unrelated OAuth changes. Successful terminal
+results and the existing changed-target repository fence remain strict.
+
+Local native validation: three exact-comparison tests and all 60 affected Python
+tests pass; the native executable compiles and strict Clippy passes. This does
+not replace mandatory Linux execution of the actual process and HTTPS scenario.
 
 Concurrent reclaimers/schedulers, changed-target generation, owner-fence loss,
 completion races and full consumer deployment remain separate requirements in

@@ -1,8 +1,9 @@
 # Actual provider renewal and process-loss recovery
 
-Status: independent published-process reference captured twice and regeneration
-gate passed locally; native replay implemented and awaiting Linux qualification. No cutover, reachable Python
-deletion or deployment follows from this work.
+Status: independent published-process reference captured twice; native renewal
+and nonfinal crash/recovery qualified at `d96a45ebe` (CI34039828427 and Rust
+CodeQL34039828424). No cutover, reachable Python deletion or deployment follows
+from this work.
 
 The existing owned HTTPS, published-schema, worker process and encrypted OAuth
 fixtures are reused. Both cases configure the supported minimum 30-second lease
@@ -42,8 +43,8 @@ All 12 selected configured worker entries passed in 175.25 seconds, with 36
 unrelated entries filtered: six reference/startup gates execute here; six native
 Linux parent/helper entries are not Windows runtime proof. All 57 affected Python
 tests pass, as do strict Clippy, formatting and CI Bash syntax. Hosted exact-head
-qualification remains required, including correction of the preceding signal
-gate's separately identified native generation-metadata comparison.
+qualification is recorded below; the preceding signal generation-metadata
+correction had already passed at `499298659`.
 
 This qualifies only the captured cases once their mandatory gates pass. It is
 not evidence of final-attempt crash handling, concurrent reclaimers/schedulers,
@@ -70,12 +71,15 @@ processes are reaped. The shared pending-response fixture is unchanged.
 Expired-lease recovery retains Rust's existing internal target-generation field
 in the retry result. As with leased state, the comparison explicitly requires the
 known integer generation 1 plus every other published field. This allowance is
-restricted to leased jobs or retries classified `canvas_worker_lease_expired`;
+restricted to leased jobs, retries classified `canvas_worker_lease_expired`, and
+the separately tested exhausted final-attempt lease-expiry dead-letter state;
 ordinary retry/terminal results are not relaxed. Successful completion must match
 the unchanged published result exactly. Negative tests cover wrong classifications
 and forbid applying the internal-field comparison to successful terminal state.
 
 Local validation: native test executable compiles, strict Clippy passes, both
-exact-fence comparison tests pass and 60 affected Python tests pass. Fresh Linux
-execution of both new cases and all prior signal/REST/facts/retry gates remains
-required. Local compilation is not native runtime qualification.
+exact-fence comparison tests pass and 60 affected Python tests pass. Linux job
+101504468689 at `d96a45ebe` records renewal (one actual HTTPS request), nonfinal
+recovery (two requests), all three signals and all 52 configured tests passing
+in 839.16 seconds. The separate 0.38-second unconfigured run is not runtime
+proof. Later extensions require their own exact-head Linux qualification.

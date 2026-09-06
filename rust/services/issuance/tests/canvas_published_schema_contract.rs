@@ -15,6 +15,11 @@ fn worker_provider_signals_match_frozen_published_process() {
 }
 
 #[test]
+fn worker_provider_final_matches_frozen_published_process() {
+    assert_worker_provider_https("final");
+}
+
+#[test]
 fn worker_provider_recovery_matches_frozen_published_process() {
     assert_worker_provider_https("recovery");
 }
@@ -52,6 +57,11 @@ async fn worker_provider_signals_native_child() {
 }
 
 #[tokio::test]
+async fn worker_provider_final_native_child() {
+    worker_provider_child("final").await;
+}
+
+#[tokio::test]
 async fn worker_provider_recovery_native_child() {
     worker_provider_child("recovery").await;
 }
@@ -78,7 +88,7 @@ async fn worker_provider_child(scenario: &str) {
         "signals" => {
             canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await
         }
-        "recovery" => {
+        "recovery" | "final" => {
             canvas_worker_provider_recovery_replay::replay(&pool, &owned.url, &origin, &signal)
                 .await
         }

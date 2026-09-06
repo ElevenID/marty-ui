@@ -217,6 +217,11 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert "grep -Fx 'worker_provider_recovery_native_child: test'" in published
+    assert "grep -Fx 'worker_provider_final_native_child: test'" in published
+    assert (
+        "grep -Fx 'worker_provider_final_matches_frozen_published_process: test'"
+        in published
+    )
     assert (
         "grep -Fx 'worker_provider_final_reference_matches_published_process: test'"
         in published
