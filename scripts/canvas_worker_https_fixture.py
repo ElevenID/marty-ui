@@ -81,6 +81,10 @@ class WorkerHttpsFixture:
                     if not stage.get("hold_response"):
                         raise
 
+            # Revocation uses DELETE; retain the same observation, response and
+            # owned-handler lifecycle as GET without duplicating transport logic.
+            do_DELETE = do_GET
+
         try:
             self.certificates = tempfile.TemporaryDirectory(
                 prefix="canvas-worker-rest-"

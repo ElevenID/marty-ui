@@ -64,13 +64,14 @@ def test_static_headers_remain_unchanged(fixture_module):
     assert fixture_module.response_headers({}) == {}
 
 
-def test_actual_https_emits_recorded_retry_after_date(fixture_module, monkeypatch):
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_actual_https_emits_recorded_retry_after_date(fixture_module, monkeypatch, method):
     monkeypatch.setattr(fixture_module.time, "time", lambda: 1700000000)
     with fixture_module.WorkerHttpsFixture() as fixture:
         fixture.stage = {"status": 429, "body": {}, "retry_after_offset_seconds": 60}
         client = client_for(fixture)
         try:
-            client.request("GET", "/synthetic-rate-limit")
+            client.request(method, "/synthetic-rate-limit")
             response = client.getresponse()
             assert response.status == 429
             assert response.read() == b"{}"
@@ -81,20 +82,28 @@ def test_actual_https_emits_recorded_retry_after_date(fixture_module, monkeypatc
             client.close()
 
 
-def test_real_https_response_and_owned_cleanup(fixture_module):
+@pytest.mark.parametrize(
+    "method,path,authorization",
+    [("GET", "/synthetic", None),
+     ("DELETE", "/login/oauth2/token", "Bearer synthetic-fixture-token")],
+)
+def test_real_https_response_and_owned_cleanup(fixture_module, method, path, authorization):
     with fixture_module.WorkerHttpsFixture() as fixture:
         fixture.stage = {"status": 200, "body": {"score": 90.0}}
         client = client_for(fixture)
         try:
-            client.request("GET", "/synthetic", headers={"Accept": "application/json"})
+            headers = {"Accept": "application/json"}
+            if authorization is not None:
+                headers["Authorization"] = authorization
+            client.request(method, path, headers=headers)
             response = client.getresponse()
             assert response.status == 200
             assert json.loads(response.read()) == {"score": 90.0}
             assert fixture.requests == [
                 {
-                    "method": "GET",
-                    "path": "/synthetic",
-                    "authorization": None,
+                    "method": method,
+                    "path": path,
+                    "authorization": authorization,
                     "accept": "application/json",
                 }
             ]
@@ -107,7 +116,8 @@ def test_real_https_response_and_owned_cleanup(fixture_module):
     fixture.close()  # Repeated ownership cleanup is harmless.
 
 
-def test_exit_releases_and_joins_pending_response(fixture_module):
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_exit_releases_and_joins_pending_response(fixture_module, method):
     with ThreadPoolExecutor(max_workers=1) as executor:
         with fixture_module.WorkerHttpsFixture() as fixture:
             fixture.stage = {"status": 200, "body": {}, "hold_response": True}
@@ -115,7 +125,7 @@ def test_exit_releases_and_joins_pending_response(fixture_module):
             def request():
                 client = client_for(fixture)
                 try:
-                    client.request("GET", "/held")
+                    client.request(method, "/held")
                     return client.getresponse().read()
                 finally:
                     client.close()
@@ -128,13 +138,14 @@ def test_exit_releases_and_joins_pending_response(fixture_module):
     assert not fixture.thread.is_alive()
 
 
-def test_handler_failure_is_reported_to_owner(fixture_module):
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_handler_failure_is_reported_to_owner(fixture_module, method):
     with pytest.raises(AssertionError, match="request handler failed"):
         with fixture_module.WorkerHttpsFixture() as fixture:
             fixture.stage = {}  # Invalid fixture input must not silently pass.
             client = client_for(fixture)
             try:
-                client.request("GET", "/invalid")
+                client.request(method, "/invalid")
                 with pytest.raises(RemoteDisconnected):
                     client.getresponse()
             finally:
