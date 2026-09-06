@@ -102,6 +102,85 @@
     {
       "error_class": "ReadTimeout",
       "name": "failure_stall_after_old_limit"
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf8_bom",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf16_le",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf16_be",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf16_le_bom",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf16_be_bom",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf32_le",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf32_be",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf32_le_bom",
+      "status": 403
+    },
+    {
+      "body": {
+        "accepted": true,
+        "message": "café 🙂"
+      },
+      "name": "json_utf32_be_bom",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "﻿not JSON"
+      },
+      "name": "text_utf8_bom",
+      "status": 403
     }
   ],
   "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",

@@ -33,6 +33,16 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Unicode JSON qualification extends the shared TLS corpus to31 cases, preserving
+the previous21 observations. The exact published helper accepts UTF-8 BOM and
+UTF-16/32 JSON in either byte order, with/without BOM, independently of the text
+charset. Two independent captures agree; the unchanged native decoder failed,
+and the shared Rust byte decoder now passes all31 native TLS cases. Status
+synchronization retains bytes instead of applying lossy text decoding first.
+Local288 library,5 worker,28 management HTTP,22 behavior,40 workflow/image/ownership
+tests and strict Clippy pass; full configured21 published-image tests pass.
+General text charsets, compression and wider adoption gates remain open.
+
 Response-body qualification now extends the real TLS corpus from17 to21 cases,
 retaining every prior observation. Two independent published-source captures
 confirm valid JSON at/above the former64KiB validation buffer, bounded text

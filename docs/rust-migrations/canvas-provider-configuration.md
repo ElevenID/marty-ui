@@ -273,3 +273,46 @@ this continuation. Charset/BOM handling,
 compression, network-error projection, backpressured writes/TLS/early replies,
 URL/template behavior and all-consumer adoption remain open. No deployment or
 reachable Python feature was removed.
+
+## Preserve JSON byte encodings through both consumers
+
+The following continuation closes valid Unicode JSON encoding loss, not the
+entire text/content-decoding gate. HTTPX0.26.0 calls Python JSON on response bytes:
+UTF-8 BOM, UTF-16 and UTF-32 (both byte orders, with/without BOM) are recognized
+independently of the declared text charset. Previously native validation parsed
+only UTF-8, and status synchronization irreversibly converted bytes into text
+before its JSON projection.
+
+Ten appended TLS observations freeze nine JSON encodings carrying accented and
+supplementary characters and a non-JSON UTF-8 BOM that remains in the text
+excerpt. JSON responses deliberately declare ASCII to establish the independent
+byte-decoding behavior; the non-JSON fixture declares UTF-8 to isolate BOM text
+behavior, not general charset support. Two independent final captures agree,
+all previous21 observations are unchanged, and the immutable published-image
+gate confirms the expanded31-case corpus. No expected native behavior was used
+to manufacture the golden results.
+
+The unchanged native decoder failed those Unicode JSON observations. One shared
+Rust JSON byte decoder now detects BOMs/leading zero patterns and decodes UTF-16
+and UTF-32 before serde_json parsing. Only JSON parsing performs that detection:
+failed JSON text projection still sees the original bytes. The status transport
+port now carries Vec<u8>, and its existing socket test additionally proves a
+UTF-16 DELETE response survives intact and reaches shared JSON projection.
+The existing status protocol replay converts its fixture strings to bytes;
+its frozen expected responses and persistence effects are unchanged.
+
+Additional unit tests cover short scalars, arrays, objects, supplementary
+characters, both byte orders and incomplete/invalid code units. No new dependency
+or duplicate status/validation decoder was added. The unused text convenience
+method is test-only; actual response consumers retain bytes. Existing UTF-8
+error-text behavior is retained (the configured reqwest build had no charset
+feature and used the same lossy UTF-8 conversion).
+
+Verification: native31 TLS PASS;288 library,5 worker,28 management HTTP,22 behavior,
+40 workflow/image/ownership tests PASS; strict all-target Clippy PASS (8.12s);
+full configured21 published-image tests PASS (126.77s, none ignored/filtered).
+Fresh hosted checks are still required. Non-default text charsets, content
+decompression, exceptional non-scalar Unicode/JSON boundary behavior and the
+remaining transport/configuration/all-consumer gates are not qualified here.
+The draft stays open; no production/beta deployment or reachable Python deletion
+occurred in this continuation.

@@ -72,7 +72,8 @@ pub struct CanvasStatusRequest {
 pub struct CanvasStatusResponse {
     pub status: u16,
     pub request_id: Option<String>,
-    pub body: String,
+    /// Original response bytes: JSON encoding detection must precede text loss.
+    pub body: Vec<u8>,
 }
 
 #[async_trait]
@@ -397,12 +398,12 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
             return Err(error(format!(
                 "Canvas Credentials {operation} failed (HTTP {}): {}",
                 response.status,
-                truncate_text(&response.body)
+                truncate_text(&String::from_utf8_lossy(&response.body))
             )));
         }
         let mut metadata = object(
             json!({"status_sync_url":url,"status_sync_http_status":response.status,
-            "status_sync_response":response_excerpt(response.body.as_bytes()),
+            "status_sync_response":response_excerpt(&response.body),
             "status_sync_request_id":response.request_id,"status_synced_at":chrono::Utc::now().to_rfc3339()}),
         );
         if real_provider {
@@ -516,13 +517,13 @@ impl CanvasStatusTransport for HttpCanvasStatusTransport {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let body = response
-            .text()
+            .bytes()
             .await
             .map_err(|_| "Provider response unavailable")?;
         Ok(CanvasStatusResponse {
             status,
             request_id,
-            body,
+            body: body.to_vec(),
         })
     }
 }
@@ -667,6 +668,17 @@ mod tests {
                     "body":serde_json::from_slice::<Value>(&body).unwrap()}));
                 let mut response = if path == "/redirect" {
                     (StatusCode::FOUND, "Synthetic redirect").into_response()
+                } else if method == "DELETE" {
+                    let bytes = "{\"accepted\":true}"
+                        .encode_utf16()
+                        .flat_map(u16::to_le_bytes)
+                        .collect::<Vec<_>>();
+                    let mut response = bytes.into_response();
+                    response.headers_mut().insert(
+                        "content-type",
+                        "application/json; charset=ascii".parse().unwrap(),
+                    );
+                    response
                 } else {
                     Json(json!({"accepted":true})).into_response()
                 };
@@ -754,8 +766,19 @@ mod tests {
                 Some("synthetic-wire-request")
             );
         }
-        assert_eq!(results[0].body, "{\"accepted\":true}");
-        assert_eq!(results[3].body, "Synthetic redirect");
+        assert_eq!(results[0].body, b"{\"accepted\":true}");
+        assert_eq!(results[3].body, b"Synthetic redirect");
+        assert_eq!(
+            results[1].body,
+            "{\"accepted\":true}"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            response_excerpt(&results[1].body),
+            json!({"accepted":true}).as_object().unwrap().clone()
+        );
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 4);
         for (index, call) in calls.iter().enumerate() {

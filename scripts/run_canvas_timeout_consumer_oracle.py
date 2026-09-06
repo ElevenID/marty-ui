@@ -103,6 +103,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            unicode_cases = {
+                "/json_utf8_bom": ("utf-8-sig", b""),
+                "/json_utf16_le": ("utf-16-le", b""),
+                "/json_utf16_be": ("utf-16-be", b""),
+                "/json_utf16_le_bom": ("utf-16-le", b"\xff\xfe"),
+                "/json_utf16_be_bom": ("utf-16-be", b"\xfe\xff"),
+                "/json_utf32_le": ("utf-32-le", b""),
+                "/json_utf32_be": ("utf-32-be", b""),
+                "/json_utf32_le_bom": ("utf-32-le", b"\xff\xfe\x00\x00"),
+                "/json_utf32_be_bom": ("utf-32-be", b"\x00\x00\xfe\xff"),
+                "/text_utf8_bom": ("utf-8-sig", b""),
+            }
+            if self.path in unicode_cases:
+                encoding, prefix = unicode_cases[self.path]
+                value = (
+                    "not JSON"
+                    if self.path == "/text_utf8_bom"
+                    else '{"message":"caf\u00e9 \U0001f642","accepted":true}'
+                )
+                body = prefix + value.encode(encoding)
+                self.send_response(403)
+                # JSON decoding uses bytes, independently of text charset.
+                self.send_header(
+                    "Content-Type",
+                    "text/plain; charset=utf-8"
+                    if self.path == "/text_utf8_bom"
+                    else "application/json; charset=ascii",
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+                return
             if self.path in {
                 "/failure_json_exact",
                 "/failure_json_large",

@@ -65,7 +65,8 @@ impl CanvasStatusTransport for Ports {
                         .cloned()
                         .unwrap_or(json!({"accepted":true}))
                         .to_string()
-                }),
+                })
+                .into_bytes(),
         })
     }
 }

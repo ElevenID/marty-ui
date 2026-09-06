@@ -48,7 +48,7 @@ pub(crate) fn https_origin(value: &str) -> Option<String> {
 /// Projection follows complete body consumption. Only text excerpts are bounded;
 /// valid JSON objects/scalars must not silently lose fields at an I/O buffer size.
 pub(crate) fn response_excerpt(bytes: &[u8]) -> Map<String, Value> {
-    if let Ok(payload) = serde_json::from_slice::<Value>(bytes) {
+    if let Some(payload) = response_json(bytes) {
         return match payload {
             Value::Object(object) => object,
             payload => Map::from_iter([("payload".into(), payload)]),
@@ -56,6 +56,66 @@ pub(crate) fn response_excerpt(bytes: &[u8]) -> Map<String, Value> {
     }
     let text = String::from_utf8_lossy(bytes);
     Map::from_iter([("body_excerpt".into(), Value::String(truncate_text(&text)))])
+}
+
+/// Python's JSON byte reader detects UTF-8/16/32 independently of the response
+/// text charset. Keep this separate from lossy text projection: stripping a BOM
+/// or replacing invalid code units before JSON parsing can change its meaning.
+fn response_json(bytes: &[u8]) -> Option<Value> {
+    let (width, little, skip) = if bytes.starts_with(&[0xff, 0xfe, 0, 0]) {
+        (4, true, 4)
+    } else if bytes.starts_with(&[0, 0, 0xfe, 0xff]) {
+        (4, false, 4)
+    } else if bytes.starts_with(&[0xff, 0xfe]) {
+        (2, true, 2)
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        (2, false, 2)
+    } else if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        (1, false, 3)
+    } else if bytes.len() >= 4 && bytes[0] == 0 {
+        (if bytes[1] == 0 { 4 } else { 2 }, false, 0)
+    } else if bytes.len() >= 4 && bytes[1] == 0 {
+        (if bytes[2] == 0 && bytes[3] == 0 { 4 } else { 2 }, true, 0)
+    } else if bytes.len() == 2 && bytes[0] == 0 {
+        (2, false, 0)
+    } else if bytes.len() == 2 && bytes[1] == 0 {
+        (2, true, 0)
+    } else {
+        (1, false, 0)
+    };
+    let bytes = &bytes[skip..];
+    if width == 1 {
+        return serde_json::from_slice(bytes).ok();
+    }
+    if !bytes.len().is_multiple_of(width) {
+        return None;
+    }
+    let decoded = if width == 2 {
+        let units = bytes.chunks_exact(2).map(|part| {
+            let pair = [part[0], part[1]];
+            if little {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        });
+        char::decode_utf16(units)
+            .collect::<Result<String, _>>()
+            .ok()?
+    } else {
+        bytes
+            .chunks_exact(4)
+            .map(|part| {
+                let word = [part[0], part[1], part[2], part[3]];
+                char::from_u32(if little {
+                    u32::from_le_bytes(word)
+                } else {
+                    u32::from_be_bytes(word)
+                })
+            })
+            .collect::<Option<String>>()?
+    };
+    serde_json::from_str(&decoded).ok()
 }
 
 pub(crate) fn truncate_text(text: &str) -> String {
@@ -81,6 +141,79 @@ pub(crate) fn quote_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_byte_encodings_preserve_scalars_arrays_and_supplementary_characters() {
+        for source in ["0", "[]", "true", "{\"message\":\"café 🙂\"}"] {
+            let expected: Value = serde_json::from_str(source).unwrap();
+            for little in [true, false] {
+                let utf16 = source
+                    .encode_utf16()
+                    .flat_map(|unit| {
+                        if little {
+                            unit.to_le_bytes()
+                        } else {
+                            unit.to_be_bytes()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let utf32 = source
+                    .chars()
+                    .flat_map(|value| {
+                        if little {
+                            (value as u32).to_le_bytes()
+                        } else {
+                            (value as u32).to_be_bytes()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for (bytes, bom) in [
+                    (
+                        utf16,
+                        if little {
+                            vec![0xff, 0xfe]
+                        } else {
+                            vec![0xfe, 0xff]
+                        },
+                    ),
+                    (
+                        utf32,
+                        if little {
+                            vec![0xff, 0xfe, 0, 0]
+                        } else {
+                            vec![0, 0, 0xfe, 0xff]
+                        },
+                    ),
+                ] {
+                    assert_eq!(response_json(&bytes), Some(expected.clone()));
+                    let with_bom = [bom, bytes].concat();
+                    assert_eq!(response_json(&with_bom), Some(expected.clone()));
+                }
+            }
+            let utf8_bom = [vec![0xef, 0xbb, 0xbf], source.as_bytes().to_vec()].concat();
+            assert_eq!(response_json(&utf8_bom), Some(expected));
+        }
+    }
+
+    #[test]
+    fn json_detection_does_not_lossily_repair_invalid_units_or_change_text_bom() {
+        for bytes in [
+            vec![0xff, 0xfe, b'0'],                      // Incomplete UTF16 unit.
+            vec![0xff, 0xfe, 0, 0, b'0'],                // Incomplete UTF32 unit.
+            vec![0xff, 0xfe, b'"', 0, 0, 0xd8, b'"', 0], // Unpaired surrogate.
+            vec![0xff, 0xfe, 0, 0, 0, 0, 0x11, 0],       // Outside Unicode scalar range.
+        ] {
+            assert!(response_json(&bytes).is_none());
+        }
+        let text = b"\xef\xbb\xbfnot JSON";
+        assert_eq!(
+            response_excerpt(text),
+            serde_json::json!({"body_excerpt":"\u{feff}not JSON"})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+    }
 
     fn hexadecimal(value: f64) -> String {
         if value.is_nan() {

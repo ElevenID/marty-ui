@@ -21,6 +21,16 @@
     {"name":"failure_json_at_old_limit","seconds":"2","response":"failure_json_exact","projection":"excerpt"},
     {"name":"failure_json_above_old_limit","seconds":"2","response":"failure_json_large","projection":"excerpt"},
     {"name":"failure_text_above_old_limit","seconds":"2","response":"failure_text_large","projection":"excerpt"},
-    {"name":"failure_stall_after_old_limit","seconds":"0.2","response":"failure_stall","projection":"excerpt"}
+    {"name":"failure_stall_after_old_limit","seconds":"0.2","response":"failure_stall","projection":"excerpt"},
+    {"name":"json_utf8_bom","seconds":"2","response":"json_utf8_bom","projection":"excerpt"},
+    {"name":"json_utf16_le","seconds":"2","response":"json_utf16_le","projection":"excerpt"},
+    {"name":"json_utf16_be","seconds":"2","response":"json_utf16_be","projection":"excerpt"},
+    {"name":"json_utf16_le_bom","seconds":"2","response":"json_utf16_le_bom","projection":"excerpt"},
+    {"name":"json_utf16_be_bom","seconds":"2","response":"json_utf16_be_bom","projection":"excerpt"},
+    {"name":"json_utf32_le","seconds":"2","response":"json_utf32_le","projection":"excerpt"},
+    {"name":"json_utf32_be","seconds":"2","response":"json_utf32_be","projection":"excerpt"},
+    {"name":"json_utf32_le_bom","seconds":"2","response":"json_utf32_le_bom","projection":"excerpt"},
+    {"name":"json_utf32_be_bom","seconds":"2","response":"json_utf32_be_bom","projection":"excerpt"},
+    {"name":"text_utf8_bom","seconds":"2","response":"text_utf8_bom","projection":"excerpt"}
   ]
 }

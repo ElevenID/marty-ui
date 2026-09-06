@@ -201,6 +201,7 @@ impl CanvasOperationResponse {
             .await
             .map_err(|_| failed(&self.phase, CanvasOperationHttpError::Response))
     }
+    #[cfg(test)]
     pub async fn text(self) -> Result<String, CanvasOperationHttpError> {
         self.response
             .text()
@@ -453,6 +454,16 @@ mod tests {
                 | "failure_json_large"
                 | "failure_text_large"
                 | "failure_stall"
+                | "json_utf8_bom"
+                | "json_utf16_le"
+                | "json_utf16_be"
+                | "json_utf16_le_bom"
+                | "json_utf16_be_bom"
+                | "json_utf32_le"
+                | "json_utf32_be"
+                | "json_utf32_le_bom"
+                | "json_utf32_be_bom"
+                | "text_utf8_bom"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),
