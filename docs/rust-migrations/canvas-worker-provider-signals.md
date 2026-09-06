@@ -1,7 +1,8 @@
 # Actual provider-I/O signal reference
 
 Status: independent published reference frozen at `e46f42f26`; native replay
-implemented and awaiting mandatory Linux execution.
+implemented; first Linux execution exposed an internal-fence comparison gap.
+The explicit comparison correction is awaiting fresh Linux execution.
 No worker cutover, deployment or reachable Python deletion follows from this gate.
 
 The actual pinned Python worker starts on a fresh official PostgreSQL schema for
@@ -69,3 +70,30 @@ Linux runtime behavior and all prior native replays require fresh hosted CI.
 These cases do not yet qualify lease renewal during long requests, owner-fence
 loss, host crash, reclaim/restart, or finally/disposal execution. Those remain
 separate requirements in the complete worker cutover inventory.
+
+## First Linux finding and correction
+
+At `a4b1dd465`, CI34037834308/job101499061972 passed 46 configured entries and
+failed the native signal parent before SIGINT delivery (426.66 seconds overall).
+Rust CodeQL34037834296 passed. The mismatch was `result.target_config_version=1`
+on the leased native job versus an empty published result. No native signal
+behavior was qualified by this failure; subsequent signals were not reached.
+
+This existing internal integer is captured by `lease_ready` and used by final
+attempt recovery to avoid disabling a reconfigured target. The PostgreSQL worker
+contract already tests that a target moved from generation 3 to 4 remains enabled.
+The public operations job result uses an explicit allowlist that excludes this
+field. Removing the stored generation would lose the native stale-worker fence.
+
+The normative persistence inventory now records this internal extension. The
+signal replay builds an explicit native expectation from the unchanged published
+observation, adding exactly the fixture's known integer generation 1 to leased
+results. It compares the entire resulting state: missing/wrong/type-changed/extra
+metadata and unrelated OAuth changes fail. Nothing is stripped from observed
+data and no database field is changed. Successful TERM completion still must
+match the original positive result exactly, with no internal generation field.
+Public-result regression assertions explicitly verify exclusion of the field.
+
+Both focused Rust checks, strict Clippy and 57 affected Python tests pass locally.
+All frozen reference artifacts remain unchanged. The three actual native signal
+cases still require the fresh configured Linux run before qualification.

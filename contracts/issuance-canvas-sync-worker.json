@@ -533,6 +533,14 @@
       "tenant_target_foreign_key": true,
       "attempt_constraint": "0 <= attempt_count <= max_attempts and max_attempts >= 1",
       "lease_constraint": "leased iff owner and expiry are non-null",
+      "native_internal_generation_fence": {
+        "field": "result.target_config_version",
+        "value": "integer target configuration generation captured when leasing; 0 for missing target",
+        "purpose": "expired final-attempt recovery must not disable a newer target generation",
+        "visibility": "excluded by the public job result allowlist",
+        "comparison": "raw leased-state parity asserts this exact additional field separately; no other result or state differences are ignored",
+        "terminal_processing": "successful processing replaces result with the public worker counters; ordinary failure clears it"
+      },
       "active_unique_index": "one target_id where status in queued, leased, retry"
     },
     "heartbeats": {

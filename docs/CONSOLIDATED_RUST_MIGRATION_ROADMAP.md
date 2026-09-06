@@ -47,6 +47,11 @@ the job remains leased and issuance/token ciphertext are preserved. Native repla
 is implemented and awaits mandatory Linux execution, including Rust's intentional
 SIGTERM graceful drain and unchanged original REST/facts/retry regression gates.
 This is not crash/restart or cleanup-finally evidence.
+The first Linux run failed before signal delivery because native leased jobs
+retain an internal target-generation fence absent from Python's result. The
+comparison now asserts that exact field explicitly and retains full state checks;
+public job results exclude it. No runtime fence or frozen observation was changed.
+Fresh Linux qualification remains required; the preceding Rust analysis passed.
 
 The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)
 now records real database eligibility and unchanged job identity across retry

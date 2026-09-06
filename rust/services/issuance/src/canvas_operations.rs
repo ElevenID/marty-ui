@@ -917,10 +917,15 @@ mod tests {
                 "candidate_id": "candidate", "facts_changed": 1.5,
                 "sources_checked": ["private"], "policy_allowed": {"private":true},
                 "roster_remaining": 8, "access_token": "synthetic-private",
+                "target_config_version": 1,
             })),
             json!({"facts_observed":2,"no_change":true,"application_id":null,"candidate_id":"candidate"})
         );
         assert_eq!(public_job_result(&Value::Null), json!({}));
+        assert_eq!(
+            public_job_result(&json!({"target_config_version": 1})),
+            json!({})
+        );
     }
 
     #[test]

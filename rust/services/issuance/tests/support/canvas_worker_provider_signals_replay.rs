@@ -7,6 +7,45 @@ use serde_json::Value;
 use sqlx::PgPool;
 use std::{path::PathBuf, time::Duration};
 
+fn assert_leased_state(observed: Value, published: &Value, target_generation: i32) {
+    // The native repository retains this internal fence for safe final-attempt
+    // recovery. Public job views omit it. Assert its exact expected value and
+    // every other field; never strip arbitrary native result metadata to pass.
+    let mut expected = published.clone();
+    for job in expected["jobs"].as_array_mut().unwrap() {
+        assert_eq!(job["status"], "leased");
+        assert_eq!(job["result"], serde_json::json!({}));
+        job["result"] = serde_json::json!({"target_config_version": target_generation});
+    }
+    assert_eq!(observed, expected);
+}
+
+#[test]
+fn leased_state_requires_exact_native_generation_and_all_other_fields() {
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-provider-signals-oracle.json"
+    ))
+    .unwrap();
+    let published = &reference["SIGINT"]["before"];
+    let mut native = published.clone();
+    native["jobs"][0]["result"] = serde_json::json!({"target_config_version": 1});
+    assert_leased_state(native.clone(), published, 1);
+    for result in [
+        serde_json::json!({}),
+        serde_json::json!({"target_config_version": 2}),
+        serde_json::json!({"target_config_version": "1"}),
+        serde_json::json!({"target_config_version": 1, "unexpected": true}),
+    ] {
+        let mut invalid = native.clone();
+        invalid["jobs"][0]["result"] = result;
+        assert!(std::panic::catch_unwind(|| assert_leased_state(invalid, published, 1)).is_err());
+    }
+    let mut invalid = native;
+    invalid["oauth"]["secret_enabled"] = Value::Bool(false);
+    assert!(std::panic::catch_unwind(|| assert_leased_state(invalid, published, 1)).is_err());
+    assert_eq!(published["jobs"][0]["result"], serde_json::json!({}));
+}
+
 async fn snapshot(pool: &PgPool, fixture: &WorkerFixture) -> Value {
     let mut state = serde_json::Map::new();
     for (key, query) in [
@@ -58,7 +97,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &st
     })
     .await
     .expect("parent must observe actual provider I/O");
-    assert_eq!(snapshot(pool, &fixture).await, expected["before"]);
+    assert_leased_state(snapshot(pool, &fixture).await, &expected["before"], 1);
     worker.signal(signal);
     if signal == "SIGTERM" {
         // Deliberate native improvement: TERM requests a drain, not Python's
@@ -69,7 +108,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &st
             worker.0.try_wait().unwrap().is_none(),
             "TERM exited before provider drain"
         );
-        assert_eq!(snapshot(pool, &fixture).await, expected["before"]);
+        assert_leased_state(snapshot(pool, &fixture).await, &expected["before"], 1);
         std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -93,7 +132,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &st
         "SIGINT" => {
             assert_eq!(expected["exit_code"], -2);
             assert_eq!(status.code(), Some(130));
-            assert_eq!(snapshot(pool, &fixture).await, expected["after"]);
+            assert_leased_state(snapshot(pool, &fixture).await, &expected["after"], 1);
         }
         "SIGKILL" => {
             assert_eq!(expected["exit_code"], -9);
@@ -103,7 +142,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, signal: &st
                 assert_eq!(status.signal(), Some(9));
             }
             assert_eq!(status.code(), None);
-            assert_eq!(snapshot(pool, &fixture).await, expected["after"]);
+            assert_leased_state(snapshot(pool, &fixture).await, &expected["after"], 1);
         }
         _ => unreachable!(),
     }
