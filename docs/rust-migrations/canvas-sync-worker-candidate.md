@@ -2,6 +2,10 @@
 
 Status: implemented as an unrouted candidate; not eligible for cutover or Python deletion.
 
+For the current requirement-by-requirement evidence and exact consumer inventory,
+use [cutover readiness](canvas-worker-cutover-readiness.md). The historical
+checkpoints below qualify individual boundaries, not complete worker composition.
+
 The `marty-canvas-sync-worker` executable and the shared
 `canvas_sync_worker` modules implement the frozen headless worker boundary:
 configuration bounds, durable scheduler conflicts, concurrent leasing, lease

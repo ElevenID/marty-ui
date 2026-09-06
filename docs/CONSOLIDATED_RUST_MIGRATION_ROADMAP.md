@@ -33,6 +33,21 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The tested native depth implementation is committed and pushed at `185af81d5`;
+its fresh CI and Rust analysis were observed running. The owned worktree was
+clean after that push. The [whole-worker cutover inventory](rust-migrations/canvas-worker-cutover-readiness.md)
+now maps all 14 normative legacy gaps to actual test boundaries and lists base,
+beta-overlay, self-host and Kubernetes consumer wiring. It identifies the missing
+composed worker/provider/published-schema gate and boot-configuration checks as
+the next implementation targets. A cleared-environment local binary diagnostic
+now exits 1 when rollout is disabled and the deployment-default LTI identity is
+empty; the existing process-signal harness always supplies that identity. Capture
+the published startup policy before repairing this initialization boundary.
+Existing codec evidence remains retained; it
+must not substitute for worker composition. The issuance plan's stale 32-route/
+12-unported-gRPC snapshot is corrected to the coverage contract's 63 native HTTP,
+68 remaining HTTP and 12 native gRPC methods, with consumer adoption separate.
+
 Native depth adoption now matches all 64 provider, 64 managed validation and
 192 full credential-route observations. The 127-container guard is removed:
 one flat parsed arena and iterative writer preserve deep responses, while the
