@@ -200,6 +200,30 @@ pub async fn run_utf7_label(pool: &PgPool) {
 }
 
 pub async fn run_utf7_body(pool: &PgPool) {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-oracle.json"
+    ))
+    .unwrap();
+    run_body(pool, &scenarios, &oracle, 12).await;
+}
+
+pub async fn run_json_body(pool: &PgPool) {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-oracle.json"
+    ))
+    .unwrap();
+    run_body(pool, &scenarios, &oracle, 66).await;
+}
+
+async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cases: usize) {
     use axum::{
         body::{to_bytes, Body},
         http::Request,
@@ -230,17 +254,9 @@ pub async fn run_utf7_body(pool: &PgPool) {
         TransportPolicy::new(config.cors_allowed_origins),
         CredentialManagementHttpService::new(service, Some("synthetic-validation-key")),
     );
-    let scenarios: Value = serde_json::from_str(include_str!(
-        "../../../../../contracts/canvas-utf7-consumer-scenarios.json"
-    ))
-    .unwrap();
-    let oracle: Value = serde_json::from_str(include_str!(
-        "../../../../../contracts/canvas-utf7-consumer-oracle.json"
-    ))
-    .unwrap();
     let cases = scenarios["provider"].as_array().unwrap();
     let observations = oracle["provider"]["observations"].as_array().unwrap();
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), expected_cases);
     assert_eq!(cases.len(), observations.len());
     let preserved_sql = "SELECT jsonb_build_object('transactions',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t),'other_credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c WHERE id <> 'credential-review'))";
     let preserved: Value = sqlx::query_scalar(preserved_sql)
@@ -375,7 +391,7 @@ pub async fn run_utf7_body(pool: &PgPool) {
             count += 1;
         }
     }
-    assert_eq!(count, 36);
+    assert_eq!(count, expected_cases * 3);
     assert_eq!(
         sqlx::query_scalar::<_, Value>(preserved_sql)
             .fetch_one(pool)
@@ -408,7 +424,7 @@ fn normalized(mut value: Value, url: &str) -> Value {
     }
     substitute(&mut value, url);
     super::canvas_status_provider_replay::timestamps(&mut value);
-    value
+    super::canvas_observation_values::scalar(&value)
 }
 
 struct RuntimeFixture {

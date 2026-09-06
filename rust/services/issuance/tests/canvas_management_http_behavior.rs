@@ -56,6 +56,9 @@ use marty_oid4vci::{discovery::StaticDiscoveryDocuments, lti::CanvasLtiPlatformP
 use serde_json::{json, Map, Value};
 use tower::ServiceExt;
 
+#[path = "support/canvas_observation_values.rs"]
+mod canvas_observation_values;
+
 #[derive(Default)]
 struct MemoryRepository {
     platforms: Mutex<Vec<CanvasPlatformRecord>>,

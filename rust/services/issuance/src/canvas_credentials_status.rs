@@ -26,7 +26,7 @@ use crate::{
     canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy},
     canvas_response_text::{response_text, CanvasResponseTextError},
     credential_management::CredentialLifecycleAction,
-    lossless_json::{LosslessJson, LosslessObject},
+    lossless_json::LosslessObject,
     python_text::PythonText,
     python_value::{python_string, python_truthy, strip},
 };
@@ -461,10 +461,7 @@ impl CanvasCredentialsStatusService {
         ));
         metadata.insert(
             "status_sync_response".into(),
-            LosslessJson::Object(response_excerpt(
-                &response.body,
-                response.content_type.as_deref(),
-            )?),
+            response_excerpt(&response.body, response.content_type.as_deref())?,
         );
         if real_provider {
             metadata.insert("provider".into(), json!("badgr_api").into());
@@ -857,11 +854,11 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            crate::lossless_json::scalar_object(
-                &response_excerpt(&results[1].body, results[1].content_type.as_deref()).unwrap()
-            )
-            .unwrap(),
-            json!({"accepted":true}).as_object().unwrap().clone()
+            response_excerpt(&results[1].body, results[1].content_type.as_deref())
+                .unwrap()
+                .to_scalar()
+                .unwrap(),
+            json!({"accepted":true})
         );
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 4);

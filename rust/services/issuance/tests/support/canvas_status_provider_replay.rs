@@ -1,5 +1,6 @@
 //! Frozen provider protocol replay. HTTP and secret lookup are the same
 //! controlled boundaries as the independently captured published Python run.
+use super::canvas_observation_values::{lossless as observe_value, text as observe_text};
 use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_credentials_status::{
@@ -126,8 +127,24 @@ pub async fn replay_utf7() {
         "../../../../../contracts/canvas-utf7-consumer-oracle.json"
     ))
     .unwrap();
+    replay_consumer(&scenarios, &mut oracle, 12).await;
+}
+
+pub async fn replay_json() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let mut oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-oracle.json"
+    ))
+    .unwrap();
+    replay_consumer(&scenarios, &mut oracle, 66).await;
+}
+
+async fn replay_consumer(scenarios: &Value, oracle: &mut Value, count: usize) {
     let observations = oracle["provider"]["observations"].as_array_mut().unwrap();
-    assert_eq!(observations.len(), 12);
+    assert_eq!(observations.len(), count);
     for observation in observations.iter_mut() {
         let object = observation.as_object_mut().unwrap();
         assert!(object.remove("credential_routes").is_some());
@@ -141,28 +158,6 @@ pub async fn replay_utf7() {
         object.insert("requests".into(), json!([requests[0].clone()]));
     }
     replay_cases(scenarios["provider"].as_array().unwrap(), observations).await;
-}
-
-fn observe_text(text: &marty_issuance_service::python_text::PythonText) -> Value {
-    match text.as_scalar() {
-        Some(text) => json!(text),
-        None => json!({"python_codepoints":text.codepoints().collect::<Vec<_>>()}),
-    }
-}
-
-fn observe_value(value: &marty_issuance_service::lossless_json::LosslessJson) -> Value {
-    use marty_issuance_service::lossless_json::LosslessJson;
-    match value {
-        LosslessJson::Scalar(value) => value.clone(),
-        LosslessJson::Text(text) => observe_text(text),
-        LosslessJson::Object(value) => Value::Object(
-            value
-                .iter()
-                .map(|(key, value)| (key.clone(), observe_value(value)))
-                .collect(),
-        ),
-        LosslessJson::Array(values) => Value::Array(values.iter().map(observe_value).collect()),
-    }
 }
 
 async fn replay_cases(cases: &[Value], observations: &[Value]) {

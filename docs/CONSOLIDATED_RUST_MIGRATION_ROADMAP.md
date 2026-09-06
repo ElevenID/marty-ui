@@ -33,20 +33,29 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
-JSON consumer behavior is now frozen independently before native parser changes.
-Two final byte-identical captures cover 66 validation, 66 provider, 66 delivery-save
-and 198 full credential-route observations. They expose different validation and
-persistence policies for surrogate keys/values, non-finite numbers, NUL and integer
-limits; wire bodies preserve key-collision evidence. A shared collision-safe
-diagnostic encoder has 18 unit cases, and the new 29th configured image/schema
-gate regenerates the complete reference. Native JSON parsing/rendering/persistence
-adoption remains open; no runtime implementation is claimed by this capture.
-See [JSON consumer evidence](../contracts/canvas-json-consumers.md).
-All 29 configured image/schema gates pass (262.33 seconds, none ignored or
-filtered), including unchanged UTF-7 and prior consumer references. All 88 affected
-Python tests, strict Clippy, formatting and CI-runner syntax checks pass.
-The preceding `7f7fffb0a` head is hosted-green; this reference checkpoint still
-requires its own hosted checks and does not authorize routing or deletion.
+Native JSON response adoption now passes the independently frozen 66-provider,
+66-managed-validation and 198-full-credential-route matrix. One parser retains
+lossless text/keys, duplicate-key order, non-finite values, signed zero and large
+integers. Validation rendering and PostgreSQL representability remain separate:
+no early normalization, unchanged delivery rows after late failures, and newer
+Rust success events preserved. Shared replay/observation code also retains UTF-7
+coverage; wire checks reject duplicate rendered keys before map normalization.
+The CI runner requires direct JSON provider and full-route native gates.
+See [JSON consumer evidence and native scope](../contracts/canvas-json-consumers.md).
+
+The unchanged reference was captured twice byte-for-byte at `6b127aef0`, whose
+hosted CI and Rust CodeQL are now green. Local native gates pass 322 library,
+5 worker, 32 managed HTTP, 22 behavior, 88 affected Python and 104 TLS cases,
+plus strict Clippy and formatting. All 32 configured image/schema tests pass
+(278.86 seconds, none ignored or filtered), regenerating the unchanged reference
+artifacts and exercising native routes. The exact owned fixture inventory is
+empty after cleanup. This implementation still requires its own hosted checks.
+
+General JSON grammar/depth parity remains open: the native parser temporarily
+retains the previous candidate's 127-container guard, not a qualified Python
+interpreter-depth policy. Whole-worker/runtime/every-consumer adoption and other
+exceptional codec/transport gates remain open. PR #814 stays draft and unrouted;
+no reachable Python deletion or deployment change is authorized by this matrix.
 
 UTF-7 response bodies are now integrated through shared lossless native text,
 metadata and provider-error values. Validation renders retained-surrogate

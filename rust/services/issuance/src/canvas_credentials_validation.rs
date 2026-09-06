@@ -7,7 +7,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use crate::lossless_json::LosslessObject;
+use crate::lossless_json::LosslessJson;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::header::{ACCEPT, AUTHORIZATION};
@@ -86,7 +86,8 @@ pub struct CanvasCredentialsValidationResult {
     pub status_code: Option<u16>,
     pub request_id: Option<String>,
     pub error: Option<String>,
-    pub response_excerpt: Option<LosslessObject>,
+    #[serde(serialize_with = "crate::lossless_json::serialize_validation_excerpt")]
+    pub response_excerpt: Option<LosslessJson>,
     pub validated_at: String,
 }
 
@@ -114,7 +115,7 @@ impl CanvasCredentialsValidationResult {
 pub struct CanvasCredentialsProviderResponse {
     pub status_code: u16,
     pub request_id: Option<String>,
-    pub response_excerpt: Option<LosslessObject>,
+    pub response_excerpt: Option<LosslessJson>,
 }
 
 pub use crate::canvas_response_text::CanvasResponseTextError;
@@ -600,8 +601,12 @@ mod tests {
         content_type: Option<&str>,
     ) -> Result<Map<String, Value>, CanvasResponseTextError> {
         super::failure_excerpt(bytes, content_type).map(|value| {
-            crate::lossless_json::scalar_object(&value)
+            value
+                .to_scalar()
                 .expect("existing excerpt fixtures are scalar")
+                .as_object()
+                .unwrap()
+                .clone()
         })
     }
 
@@ -951,12 +956,12 @@ mod tests {
             Ok(CanvasCredentialsProviderResponse {
                 status_code: self.status,
                 request_id: Some("request-1".to_owned()),
-                response_excerpt: Some(crate::lossless_json::object(
+                response_excerpt: Some(LosslessJson::Object(crate::lossless_json::object(
                     json!({"error": "denied"})
                         .as_object()
                         .expect("object")
                         .clone(),
-                )),
+                ))),
             })
         }
     }

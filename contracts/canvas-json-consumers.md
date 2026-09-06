@@ -1,7 +1,8 @@
 # Published JSON consumer boundaries
 
-This is independent behavioral reference evidence, not native JSON parser
-qualification or worker-cutover authorization. No runtime parser changed here.
+The behavioral reference was captured independently before native JSON changes.
+The native adoption evidence below qualifies that finite matrix, not every JSON
+input or worker cutover.
 
 ## Source and scope
 
@@ -49,9 +50,9 @@ be deleted merely because the old implementation lacked them.
 
 These are observations of the actual published app. They do not establish a
 single universal JSON rendering policy: top-level typed dictionary keys, nested
-values, provider metadata and PostgreSQL storage visibly differ. The next Rust
-implementation must preserve those boundaries instead of normalizing values
-during parsing or globally rejecting every exceptional value.
+values, provider metadata and PostgreSQL storage visibly differ. The Rust
+implementation keeps these policies at their selected boundaries instead of
+normalizing values during parsing or globally rejecting every exceptional value.
 
 ## Lossless diagnostic encoding
 
@@ -84,8 +85,42 @@ The required configured image/schema gate is
 `json_consumer_diagnostic_matches_published_boundaries`, with
 `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`. An unset variable does not qualify the gate.
 
-Native response JSON parsing still uses scalar serde values. The next work is
-lossless parsing of values and keys, exact numeric acceptance/fallback, separate
-validation rendering and persistence policies, then native replay of this matrix.
+## Native adoption — 2026-09-06
+
+One native response JSON parser replaces the old scalar-only parser. It preserves
+surrogate codepoints and source object-key order, combines escaped surrogate pairs
+without folding raw UTF-8 surrogate codepoints, accepts the observed non-finite
+numbers, and preserves large integers and signed zero. Invalid JSON and the
+observed integer digit-limit failure use the existing bounded text fallback.
+JSON byte decoding remains independent of the response-text charset.
+
+The shared lossless value owner performs validation projection only at the typed
+HTTP excerpt boundary. Root surrogate keys get the observed replacement and
+last-value-wins collision behavior; nested surrogate keys/values still fail.
+Non-finite numbers become null only for validation rendering. PostgreSQL
+representability, including NUL rejection, is checked at delivery save after
+publication, canonical credential persistence and provider completion.
+
+Native replay passes all 66 direct provider observations, all 66 managed HTTP
+validation cases, and all 198 full credential routes using real PostgreSQL and
+local HTTP. Shared replay code also retains the prior UTF-7 cases. Comparisons
+check full rows, changed columns, publication/provider ordering, request data,
+plain HTTP failures, unchanged failed deliveries and newer Rust success events.
+The wire comparison preserves numeric value/type distinctions and rejects
+duplicate excerpt keys before map normalization. Python exception class names
+remain reference diagnostics, not fabricated native exceptions.
+
+The shared test-only observation encoder escapes literal marker-shaped objects,
+large integers, non-finite/signed-zero floats and non-scalar keys after execution.
+No production decoder recognizes those diagnostic markers.
+The CI runner now requires both
+`status_provider_matches_json_consumer_reference` and
+`status_runtime_matches_json_full_credential_routes`; the latter must run with
+`MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`.
+
 Recursion/depth, other exceptional codecs and whole-worker/every-consumer adoption
-remain open; this finite reference must not be presented as proof of those scopes.
+remain open. The parser temporarily retains the prior candidate's 127-container
+recursion guard, with a regression test against serde; this is explicitly NOT
+published interpreter-depth parity. Qualify the real depth/grammar consumer
+boundaries before cutover rather than treating this finite matrix as completion.
+PR #814 remains draft and unrouted; no reachable Python is deleted at this stage.

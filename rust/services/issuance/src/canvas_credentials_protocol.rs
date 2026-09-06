@@ -1,7 +1,8 @@
 //! Shared protocol primitives, without conflating validation and delivery policy.
 use crate::canvas_response_text::{response_text, CanvasResponseTextError};
 use crate::lossless_json::{LosslessJson, LosslessObject};
-use serde_json::{Map, Value};
+#[path = "canvas_response_json.rs"]
+mod response_json;
 use url::Url;
 
 pub(crate) const DEFAULT_API_BASE_URL: &str = "https://api.badgr.io";
@@ -52,54 +53,20 @@ pub(crate) fn https_origin(value: &str) -> Option<String> {
 pub(crate) fn response_excerpt(
     bytes: &[u8],
     content_type: Option<&str>,
-) -> Result<LosslessObject, CanvasResponseTextError> {
-    if let Some(payload) = response_json(bytes) {
-        return Ok(crate::lossless_json::object(match payload {
-            Value::Object(object) => object,
-            payload => Map::from_iter([("payload".into(), payload)]),
-        }));
+) -> Result<LosslessJson, CanvasResponseTextError> {
+    if let Some(payload) = response_json::parse(bytes) {
+        return Ok(match payload {
+            LosslessJson::PythonObject(_) => payload,
+            payload => {
+                LosslessJson::Object(LosslessObject::from_iter([("payload".into(), payload)]))
+            }
+        });
     }
     let text = response_text(bytes, content_type)?;
-    Ok(LosslessObject::from_iter([(
+    Ok(LosslessJson::Object(LosslessObject::from_iter([(
         "body_excerpt".into(),
         LosslessJson::Text(truncate_text(&text)),
-    )]))
-}
-
-/// Python's JSON byte reader detects UTF-8/16/32 independently of the response
-/// text charset. Keep this separate from lossy text projection: stripping a BOM
-/// or replacing invalid code units before JSON parsing can change its meaning.
-fn response_json(bytes: &[u8]) -> Option<Value> {
-    let (width, little, skip) = if bytes.starts_with(&[0xff, 0xfe, 0, 0]) {
-        (4, true, 4)
-    } else if bytes.starts_with(&[0, 0, 0xfe, 0xff]) {
-        (4, false, 4)
-    } else if bytes.starts_with(&[0xff, 0xfe]) {
-        (2, true, 2)
-    } else if bytes.starts_with(&[0xfe, 0xff]) {
-        (2, false, 2)
-    } else if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-        (1, false, 3)
-    } else if bytes.len() >= 4 && bytes[0] == 0 {
-        (if bytes[1] == 0 { 4 } else { 2 }, false, 0)
-    } else if bytes.len() >= 4 && bytes[1] == 0 {
-        (if bytes[2] == 0 && bytes[3] == 0 { 4 } else { 2 }, true, 0)
-    } else if bytes.len() == 2 && bytes[0] == 0 {
-        (2, false, 0)
-    } else if bytes.len() == 2 && bytes[1] == 0 {
-        (2, true, 0)
-    } else {
-        (1, false, 0)
-    };
-    let bytes = &bytes[skip..];
-    if width == 1 {
-        return serde_json::from_slice(bytes).ok();
-    }
-    if !bytes.len().is_multiple_of(width) {
-        return None;
-    }
-    let decoded = crate::canvas_response_text::unicode_units(bytes, width, little, true)?;
-    serde_json::from_str(&decoded).ok()
+    )])))
 }
 
 pub(crate) fn truncate_text(
@@ -123,6 +90,14 @@ pub(crate) fn quote_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
+    fn response_json(bytes: &[u8]) -> Option<Value> {
+        super::response_json::parse(bytes).map(|value| {
+            value
+                .to_scalar()
+                .expect("existing JSON fixtures are scalar")
+        })
+    }
 
     #[test]
     fn json_byte_encodings_preserve_scalars_arrays_and_supplementary_characters() {
@@ -180,16 +155,30 @@ mod tests {
     #[test]
     fn json_detection_does_not_lossily_repair_invalid_units_or_change_text_bom() {
         for bytes in [
-            vec![0xff, 0xfe, b'0'],                      // Incomplete UTF16 unit.
-            vec![0xff, 0xfe, 0, 0, b'0'],                // Incomplete UTF32 unit.
-            vec![0xff, 0xfe, b'"', 0, 0, 0xd8, b'"', 0], // Unpaired surrogate.
-            vec![0xff, 0xfe, 0, 0, 0, 0, 0x11, 0],       // Outside Unicode scalar range.
+            vec![0xff, 0xfe, b'0'],                // Incomplete UTF16 unit.
+            vec![0xff, 0xfe, 0, 0, b'0'],          // Incomplete UTF32 unit.
+            vec![0xff, 0xfe, 0, 0, 0, 0, 0x11, 0], // Outside Unicode scalar range.
         ] {
             assert!(response_json(&bytes).is_none());
         }
+        // Surrogatepass JSON accepts a lone surrogate without replacing it.
+        // It is the later selected renderer/persistence boundary that fails.
+        let surrogate =
+            super::response_json::parse(&[0xff, 0xfe, b'"', 0, 0, 0xd8, b'"', 0]).unwrap();
+        let LosslessJson::Text(text) = surrogate else {
+            panic!("expected lossless text")
+        };
+        assert_eq!(text.codepoints().collect::<Vec<_>>(), [0xd800]);
+        assert!(text.as_scalar().is_none());
         let text = b"\xef\xbb\xbfnot JSON";
         assert_eq!(
-            crate::lossless_json::scalar_object(&response_excerpt(text, None).unwrap()).unwrap(),
+            response_excerpt(text, None)
+                .unwrap()
+                .to_scalar()
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .clone(),
             serde_json::json!({"body_excerpt":"\u{feff}not JSON"})
                 .as_object()
                 .unwrap()

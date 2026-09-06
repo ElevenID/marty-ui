@@ -5,6 +5,17 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PythonText(Repr);
 
+impl std::hash::Hash for PythonText {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for point in self.codepoints() {
+            state.write_u32(point);
+        }
+        // Not a valid codepoint: terminate the sequence so this Hash remains
+        // prefix-free when composed with other hashed fields.
+        state.write_u32(0x110000);
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Repr {
     Scalar(String),

@@ -120,6 +120,73 @@ async fn native_validation_matches_utf7_body_rendering_and_success_bypass() {
     .await;
 }
 
+#[tokio::test]
+async fn native_validation_matches_json_rendering_and_success_bypass() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-oracle.json"
+    ))
+    .unwrap();
+    let cases = scenarios["validation"].as_array().unwrap();
+    assert_eq!(cases.len(), 66);
+    replay(
+        cases,
+        oracle["validation"]["observations"].as_array().unwrap(),
+    )
+    .await;
+}
+
+// Parsing only into Value would silently accept duplicate rendered keys. Check
+// the actual excerpt object entries as well as its language-neutral JSON value.
+struct UniqueExcerpt;
+
+impl<'de> serde::Deserialize<'de> for UniqueExcerpt {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueExcerpt;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an excerpt object with unique rendered keys")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut keys = BTreeSet::new();
+                while let Some((key, _)) = map.next_entry::<String, Value>()? {
+                    if !keys.insert(key) {
+                        return Err(serde::de::Error::custom("duplicate rendered excerpt key"));
+                    }
+                }
+                Ok(UniqueExcerpt)
+            }
+        }
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct WireExcerpt {
+    response_excerpt: Option<UniqueExcerpt>,
+}
+
+#[test]
+fn wire_excerpt_check_rejects_duplicate_keys_before_value_normalization() {
+    for source in [
+        r#"{"response_excerpt":{"key":1,"key":2}}"#,
+        r#"{"response_excerpt":{"key":1,"\u006bey":2}}"#,
+    ] {
+        assert!(serde_json::from_str::<WireExcerpt>(source).is_err());
+    }
+    assert!(serde_json::from_str::<WireExcerpt>(
+        r#"{"response_excerpt":{"key":1,"other":{"python_float":"nan"}}}"#
+    )
+    .is_ok());
+}
+
 async fn replay(cases: &[Value], expected: &[Value]) {
     assert_eq!(cases.len(), expected.len());
     for (case, expected) in cases.iter().zip(expected) {
@@ -217,8 +284,35 @@ async fn replay(cases: &[Value], expected: &[Value]) {
             json!(std::str::from_utf8(&bytes).unwrap())
         };
         let lookups = ports.lookups.lock().unwrap().clone();
-        let actual = json!({"name":case["name"], "status":status, "content_type":content_type, "body":body,
+        let mut actual = json!({"name":case["name"], "status":status, "content_type":content_type, "body":body,
             "files":*ports.files.lock().unwrap(), "lookups":lookups, "requests":*ports.requests.lock().unwrap()});
-        assert_eq!(&actual, expected, "native validation case {}", case["name"]);
+        let mut expected = expected.clone();
+        if let Some(wire) = expected.as_object_mut().unwrap().remove("body_text") {
+            let exceptions = expected
+                .as_object_mut()
+                .unwrap()
+                .remove("exceptions")
+                .unwrap();
+            if content_type.starts_with("application/json") {
+                assert_eq!(exceptions, json!([]));
+                let wire_value: Value = serde_json::from_str(wire.as_str().unwrap()).unwrap();
+                assert_eq!(
+                    actual["body"], wire_value,
+                    "wire values, including numeric types: {}",
+                    case["name"]
+                );
+                let excerpt: WireExcerpt = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    excerpt.response_excerpt.is_some(),
+                    !actual["body"]["response_excerpt"].is_null()
+                );
+                actual["body"] = super::canvas_observation_values::scalar(&actual["body"]);
+            } else {
+                assert_eq!(status, 500);
+                assert_eq!(exceptions, json!(["UnicodeEncodeError"]));
+                assert_eq!(actual["body"], wire);
+            }
+        }
+        assert_eq!(actual, expected, "native validation case {}", case["name"]);
     }
 }

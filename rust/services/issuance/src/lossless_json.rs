@@ -14,10 +14,14 @@ pub enum LosslessJson {
     Text(PythonText),
     Object(LosslessObject),
     Array(Vec<Self>),
+    /// JSON input order is needed when rendering changes two distinct keys
+    /// into the same key. These are typed keys, never diagnostic marker objects.
+    PythonObject(Vec<(PythonText, Self)>),
+    Float(f64),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("response contains text that cannot be encoded as UTF-8 JSON")]
+#[error("response cannot be represented at the selected JSON boundary")]
 pub struct NonScalarJson;
 
 impl From<Value> for LosslessJson {
@@ -54,7 +58,101 @@ impl LosslessJson {
                     .map(Self::to_scalar)
                     .collect::<Result<_, _>>()?,
             ),
+            Self::PythonObject(entries) => Value::Object(
+                entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            key.as_scalar().ok_or(NonScalarJson)?.to_owned(),
+                            value.to_scalar()?,
+                        ))
+                    })
+                    .collect::<Result<_, NonScalarJson>>()?,
+            ),
+            Self::Float(value) => {
+                Value::Number(serde_json::Number::from_f64(*value).ok_or(NonScalarJson)?)
+            }
         })
+    }
+
+    /// The published typed excerpt dictionary has a different key policy from
+    /// nested arbitrary JSON values. Only this explicit HTTP-rendering boundary
+    /// replaces top-level surrogate keys and projects non-finite floats to null.
+    pub fn validation_value(&self, excerpt_root: bool) -> Result<Value, NonScalarJson> {
+        Ok(match self {
+            Self::Float(value) => serde_json::Number::from_f64(*value)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+            Self::PythonObject(entries) => {
+                let mut output = Map::new();
+                for (key, value) in entries {
+                    let key = if excerpt_root {
+                        let mut rendered = String::new();
+                        for point in key.codepoints() {
+                            if let Some(character) = char::from_u32(point) {
+                                rendered.push(character);
+                            } else {
+                                rendered.push_str("\u{fffd}\u{fffd}\u{fffd}");
+                            }
+                        }
+                        rendered
+                    } else {
+                        key.as_scalar().ok_or(NonScalarJson)?.to_owned()
+                    };
+                    output.insert(key, value.validation_value(false)?);
+                }
+                Value::Object(output)
+            }
+            Self::Object(entries) => Value::Object(
+                entries
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), value.validation_value(false)?)))
+                    .collect::<Result<_, NonScalarJson>>()?,
+            ),
+            Self::Array(values) => Value::Array(
+                values
+                    .iter()
+                    .map(|value| value.validation_value(false))
+                    .collect::<Result<_, _>>()?,
+            ),
+            _ => self.to_scalar()?,
+        })
+    }
+}
+
+pub fn serialize_validation_excerpt<S: Serializer>(
+    value: &Option<LosslessJson>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value
+        .as_ref()
+        .map(|value| value.validation_value(true))
+        .transpose()
+        .map_err(S::Error::custom)?
+        .serialize(serializer)
+}
+
+/// PostgreSQL JSONB also rejects U+0000, which is valid scalar JSON text.
+/// Keep this check at persistence, not at parsing or validation rendering.
+pub fn postgres_object(value: &LosslessObject) -> Result<Map<String, Value>, NonScalarJson> {
+    fn representable(value: &Value) -> bool {
+        match value {
+            Value::String(text) => !text.contains('\0'),
+            Value::Object(values) => values
+                .iter()
+                .all(|(key, value)| !key.contains('\0') && representable(value)),
+            Value::Array(values) => values.iter().all(representable),
+            _ => true,
+        }
+    }
+    let scalar = scalar_object(value)?;
+    if scalar
+        .iter()
+        .all(|(key, value)| !key.contains('\0') && representable(value))
+    {
+        Ok(scalar)
+    } else {
+        Err(NonScalarJson)
     }
 }
 
@@ -70,6 +168,10 @@ impl Serialize for LosslessJson {
                 .serialize(serializer),
             Self::Object(value) => value.serialize(serializer),
             Self::Array(value) => value.serialize(serializer),
+            Self::PythonObject(_) | Self::Float(_) => self
+                .to_scalar()
+                .map_err(S::Error::custom)?
+                .serialize(serializer),
         }
     }
 }
@@ -77,6 +179,67 @@ impl Serialize for LosslessJson {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_key_projection_is_root_only_and_last_wins() {
+        let surrogate = PythonText::from_codepoints([0xd800]).unwrap();
+        let rendered: PythonText = "\u{fffd}\u{fffd}\u{fffd}".to_owned().into();
+        for keys in [
+            [surrogate.clone(), rendered.clone()],
+            [rendered.clone(), surrogate.clone()],
+        ] {
+            let object = LosslessJson::PythonObject(vec![
+                (keys[0].clone(), serde_json::json!("first").into()),
+                (keys[1].clone(), serde_json::json!("second").into()),
+            ]);
+            assert_eq!(
+                object.validation_value(true).unwrap(),
+                serde_json::json!({"���":"second"})
+            );
+            assert_eq!(object.validation_value(false), Err(NonScalarJson));
+            assert_eq!(object.to_scalar(), Err(NonScalarJson));
+        }
+        let value = LosslessJson::Text(surrogate);
+        assert_eq!(value.validation_value(true), Err(NonScalarJson));
+    }
+
+    #[test]
+    fn nonfinite_projection_is_validation_only_and_recursive() {
+        let value = LosslessJson::Array(vec![
+            LosslessJson::Float(f64::NAN),
+            LosslessJson::Float(f64::INFINITY),
+            LosslessJson::Float(f64::NEG_INFINITY),
+        ]);
+        assert_eq!(
+            value.validation_value(true).unwrap(),
+            serde_json::json!([null, null, null])
+        );
+        assert_eq!(value.to_scalar(), Err(NonScalarJson));
+        assert!(serde_json::to_vec(&value).is_err());
+    }
+
+    #[test]
+    fn nul_is_valid_for_rendering_but_not_postgres_persistence() {
+        for value in [
+            serde_json::json!({"nested":["a\0b"]}),
+            serde_json::json!({"nested":{"\0":true}}),
+        ] {
+            let value = object(value.as_object().unwrap().clone());
+            assert!(scalar_object(&value).is_ok());
+            assert!(serde_json::to_vec(&value).is_ok());
+            assert_eq!(postgres_object(&value), Err(NonScalarJson));
+        }
+        let value = object(
+            serde_json::json!({"nested":["a",0,false,null]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(
+            postgres_object(&value).unwrap(),
+            scalar_object(&value).unwrap()
+        );
+    }
 
     #[test]
     fn rendering_is_explicit_and_does_not_destroy_non_scalar_values() {

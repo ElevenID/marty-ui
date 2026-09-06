@@ -240,7 +240,7 @@ impl CanvasLifecycleDeliverySynchronizer {
     ) -> Result<(), CanvasLifecycleSyncError> {
         // Encoding is deliberately checked here, after publication, canonical
         // persistence and provider completion, not while decoding response text.
-        let metadata = crate::lossless_json::scalar_object(&metadata)
+        let metadata = crate::lossless_json::postgres_object(&metadata)
             .map_err(|_| CanvasLifecycleSyncError::TextEncoding)?;
         let last_error = last_error
             .map(|text| {
