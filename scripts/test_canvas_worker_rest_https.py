@@ -14,7 +14,7 @@ from test_canvas_lti_https import create_loopback_certificate
 
 
 def run(executable, scenario="rest"):
-    assert scenario in {"rest", "facts"}
+    assert scenario in {"rest", "facts", "retry"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-scenarios.json").read_text()
@@ -100,7 +100,7 @@ def run(executable, scenario="rest"):
             ]
             assert requests == expected, "Actual worker HTTPS requests differ"
             print(
-                f"Native worker {scenario} replay passed all four frozen HTTPS stages ({len(requests)} requests)"
+                f"Native worker {scenario} replay passed all {len(spec['stages'])} frozen HTTPS stages ({len(requests)} requests)"
             )
         finally:
             if thread is not None:
@@ -113,6 +113,6 @@ def run(executable, scenario="rest"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [rest|facts]"
+            "Expected the exact compiled published-schema executable [rest|facts|retry]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "rest")

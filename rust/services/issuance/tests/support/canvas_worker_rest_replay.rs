@@ -13,13 +13,14 @@ use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
 
 const CIPHERTEXT_SQL: &str = "SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets WHERE id='worker-rest-token'";
 
-pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: bool) {
+pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &str) {
     let origin_url = url::Url::parse(origin).unwrap();
     assert_eq!(origin_url.scheme(), "https");
     assert_eq!(origin_url.host_str(), Some("127.0.0.1"));
     assert!(origin_url.port().is_some());
     static SPEC: OnceLock<Value> = OnceLock::new();
     static FACTS_SPEC: OnceLock<Value> = OnceLock::new();
+    static RETRY_SPEC: OnceLock<Value> = OnceLock::new();
     static SHARED: OnceLock<Value> = OnceLock::new();
     let spec = SPEC.get_or_init(|| {
         serde_json::from_str(include_str!(
@@ -27,21 +28,28 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: 
         ))
         .unwrap()
     });
-    let spec = if all_facts {
-        FACTS_SPEC.get_or_init(|| {
-            let extension: Value = serde_json::from_str(include_str!(
+    let extend = |source: &str| {
+        let extension: Value = serde_json::from_str(source).unwrap();
+        let mut combined = spec.clone();
+        combined
+            .as_object_mut()
+            .unwrap()
+            .extend(extension.as_object().unwrap().clone());
+        combined
+    };
+    let spec = match scenario {
+        "rest" => spec,
+        "facts" => FACTS_SPEC.get_or_init(|| {
+            extend(include_str!(
                 "../../../../../contracts/canvas-worker-facts-scenarios.json"
             ))
-            .unwrap();
-            let mut combined = spec.clone();
-            combined
-                .as_object_mut()
-                .unwrap()
-                .extend(extension.as_object().unwrap().clone());
-            combined
-        })
-    } else {
-        spec
+        }),
+        "retry" => RETRY_SPEC.get_or_init(|| {
+            extend(include_str!(
+                "../../../../../contracts/canvas-worker-retry-scenarios.json"
+            ))
+        }),
+        _ => panic!("unknown static worker scenario"),
     };
     let shared = SHARED.get_or_init(|| {
         serde_json::from_str(include_str!(
@@ -49,10 +57,11 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: 
         ))
         .unwrap()
     });
-    let reference: Value = serde_json::from_str(if all_facts {
-        include_str!("../../../../../contracts/canvas-worker-facts-oracle.json")
-    } else {
-        include_str!("../../../../../contracts/canvas-worker-rest-oracle.json")
+    let reference: Value = serde_json::from_str(match scenario {
+        "rest" => include_str!("../../../../../contracts/canvas-worker-rest-oracle.json"),
+        "facts" => include_str!("../../../../../contracts/canvas-worker-facts-oracle.json"),
+        "retry" => include_str!("../../../../../contracts/canvas-worker-retry-oracle.json"),
+        _ => unreachable!(),
     })
     .unwrap();
     for statement in shared["seed"].as_array().unwrap() {
@@ -119,12 +128,39 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: 
     assert_ne!(ciphertext, spec["token"].as_str().unwrap());
     let stages = spec["stages"].as_array().unwrap();
     let observations = reference["observations"].as_array().unwrap();
-    assert_eq!(stages.len(), 4);
+    assert_eq!(stages.len(), if scenario == "retry" { 5 } else { 4 });
     assert_eq!(stages.len(), observations.len());
     for (index, (stage, expected)) in stages.iter().zip(observations).enumerate() {
         assert_eq!(stage["name"], expected["name"]);
-        sqlx::query("UPDATE issuance_service.canvas_evidence_sync_targets SET next_run_at=clock_timestamp() WHERE id='target-review'")
-            .execute(pool).await.unwrap();
+        let prior_job_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM issuance_service.canvas_evidence_sync_jobs ORDER BY created_at,id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let retry_existing = stage["retry_existing"].as_bool() == Some(true);
+        if retry_existing {
+            let job_id = prior_job_ids
+                .last()
+                .expect("retry must refer to an existing job");
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let due: bool = sqlx::query_scalar("SELECT status='retry' AND available_at<=clock_timestamp() FROM issuance_service.canvas_evidence_sync_jobs WHERE id=$1")
+                        .bind(job_id).fetch_one(pool).await.unwrap();
+                    if due { break; }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }).await.expect("actual persisted retry must become due without timestamp mutation");
+        } else {
+            sqlx::query("UPDATE issuance_service.canvas_evidence_sync_targets SET next_run_at=clock_timestamp() WHERE id='target-review'")
+                .execute(pool).await.unwrap();
+        }
+        let expected_jobs = stage["expected_jobs"]
+            .as_u64()
+            .map(|count| usize::try_from(count).unwrap())
+            .unwrap_or(index + 1);
+        let expected_attempts = stage["expected_attempts"].as_i64().unwrap_or(1);
+        assert!(expected_jobs > 0);
         sqlx::query("TRUNCATE issuance_service.canvas_worker_heartbeats")
             .execute(pool)
             .await
@@ -152,7 +188,8 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: 
                 let heartbeat: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('role',role,'metadata',metadata) FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest' AND metadata->>'phase'='idle'")
                     .fetch_optional(pool).await.unwrap();
                 let rows = jobs.as_array().unwrap();
-                if rows.len() == index + 1 && matches!(rows[index]["status"].as_str(), Some("succeeded" | "retry" | "dead_letter")) {
+                if rows.len() == expected_jobs && rows[expected_jobs - 1]["attempt_count"].as_i64() == Some(expected_attempts)
+                    && matches!(rows[expected_jobs - 1]["status"].as_str(), Some("succeeded" | "retry" | "dead_letter")) {
                     if let Some(heartbeat) = heartbeat {
                         break (jobs, heartbeat);
                     }
@@ -164,6 +201,21 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, all_facts: 
         let status = worker.wait().await;
         assert_eq!(expected["exit_code_after_interrupt"], -2);
         assert_eq!(status.code(), Some(130));
+        if retry_existing {
+            let current_job_ids: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM issuance_service.canvas_evidence_sync_jobs ORDER BY created_at,id",
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                current_job_ids, prior_job_ids,
+                "retry replaced an existing job"
+            );
+            assert_eq!(expected["same_job_ids"], true);
+        } else {
+            assert!(expected.get("same_job_ids").is_none());
+        }
         assert_eq!(jobs, expected["jobs"], "jobs in {}", stage["name"]);
         assert_eq!(
             heartbeat, expected["heartbeat"],

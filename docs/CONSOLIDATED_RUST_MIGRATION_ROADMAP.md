@@ -35,16 +35,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)
 now records real database eligibility and unchanged job identity across retry
-success,503failure and401token rejection. Two final captures agree; native
-adoption is pending. No clocks, retry timestamps or job outcomes are patched.
+success, 503 failure and 401 token rejection. Two final captures agree; native
+adoption is implemented and awaiting Linux execution. No clocks, retry timestamps
+or job outcomes are patched.
 
 The [all-four-fact worker reference](rust-migrations/canvas-worker-facts-reference.md)
 captures actual published assignment, quiz, module and course reads through the
 shared worker/HTTPS/OAuth/schema harness. Two captures match byte-for-byte. Its
 partial-rate-limit stage preserves three successful fact writes while the job
 retries and the negative assignment keeps policy denied. Native adoption is
-implemented, awaiting its mandatory Linux result; the original assignment-only
-reference is retained. The assignment-only actual native worker gate passed at
+qualified on Linux at `6977a70ba`: CI34034992317 and Rust CodeQL34034992376 passed;
+the configured log confirms 16 all-fact and 4 original requests. The original
+assignment-only reference is retained. Its actual native worker gate passed at
 `0982a4a2c` with exact-head CI34033818678 and Rust CodeQL34033818668 successful.
 
 The [composed worker REST reference](rust-migrations/canvas-worker-rest-reference.md)

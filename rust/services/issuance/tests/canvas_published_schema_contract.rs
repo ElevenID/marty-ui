@@ -15,6 +15,11 @@ fn worker_facts_match_frozen_published_process() {
     assert_worker_https("facts");
 }
 
+#[test]
+fn worker_retry_matches_frozen_published_process() {
+    assert_worker_https("retry");
+}
+
 fn assert_worker_https(scenario: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -60,8 +65,8 @@ async fn worker_rest_native_child() {
         .await
         .unwrap();
     let scenario = std::env::var("MARTY_CANVAS_WORKER_REST_SCENARIO").unwrap();
-    assert!(matches!(scenario.as_str(), "rest" | "facts"));
-    canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, scenario == "facts").await;
+    assert!(matches!(scenario.as_str(), "rest" | "facts" | "retry"));
+    canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, &scenario).await;
     pool.close().await;
     owned.close().unwrap();
 }

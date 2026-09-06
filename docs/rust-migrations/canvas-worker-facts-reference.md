@@ -1,7 +1,7 @@
 # Whole-worker reference for all four Canvas REST facts
 
-Status: independently frozen published reference; native adoption implemented,
-awaiting its required Linux execution result.
+Status: independently frozen reference and actual native replay qualified on
+Linux at `6977a70bad8feeb69ba3a456133f4ccd6e5f68ab`.
 This extends the [assignment-only reference](canvas-worker-rest-reference.md)
 without replacing its inputs or expected observations.
 
@@ -44,7 +44,7 @@ or all possible triggering-fact equivalence.
 in the mandatory configured suite. The original assignment reference must
 regenerate unchanged after the shared harness extension. Native adoption must
 retain both corpora and use the actual worker binary, HTTPS and encrypted OAuth
-persistence; that execution result is still pending.
+persistence. That configured execution passed at the recorded head.
 
 The native `worker_facts_match_frozen_published_process` gate now reuses the
 assignment replay's actual process/database/OAuth owners and checks this second
@@ -53,11 +53,17 @@ actual requests; Rust compares every stage's durable state and unchanged issued
 rows/ciphertext. Both assignment and all-fact parent gates remain mandatory.
 No production runtime or expected observations were modified for adoption.
 
+Exact-head CI `34034992317` and Rust CodeQL `34034992376` passed. The configured
+database job explicitly records the all-fact replay passing all 16 requests and
+the original replay passing all 4 requests; all 42 configured tests passed in
+450.86 seconds. Its earlier unconfigured 0.25-second run is not runtime evidence.
+See the [completed database job](https://github.com/ElevenID/marty-ui/actions/runs/34034992317/job/101491334491).
+
 Reference validation at `853e9f099`: the configured executable passed 41 tests in
 336.36 seconds, including both reference regenerations. Its Linux-native parent
 and fixture-child entries do not establish native HTTPS execution on Windows.
 Native adoption compiles; strict all-target Clippy, formatting, Bash syntax and
-53 affected Python contracts passed. Hosted exact-head qualification is required.
+53 affected Python contracts passed. Further extensions need fresh exact-head CI.
 
 This reference alone closes no deployment or whole-worker gate. Continue the
 full [14-gate and consumer inventory](canvas-worker-cutover-readiness.md), including

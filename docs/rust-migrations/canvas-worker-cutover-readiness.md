@@ -45,14 +45,15 @@ four assignment stages, not every worker/provider/consumer boundary.
 The [all-four-fact reference](canvas-worker-facts-reference.md) extends the same
 actual published-process harness across assignment, quiz, module and course
 reads, including partial rate limiting. Two independent captures agree; native
-adoption is implemented and awaiting Linux execution. This is evidence for gate 12, not a
-claim that its native or broader whole-worker requirements are closed.
+adoption passed on Linux at `6977a70ba` (CI 34034992317, Rust 34034992376).
+That qualifies these four fact projections for gate 12; broader worker/consumer
+requirements and fresh exact-head checks for later extensions remain required.
 
 ## Normative legacy-gap reconciliation
 
 The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual
 same-job retry eligibility, recovery and provider failure/OAuth rejection
-observations for gates6/8. Native adoption is pending; remote OAuth revocation,
+observations for gates 6/8. Native adoption awaits Linux execution; remote OAuth revocation,
 all error/header variants and race/privacy requirements remain separate gates.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
@@ -71,7 +72,7 @@ Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 | 9. Target validation and processor failures | Repository validation, native typed processor, issued-review/mixed-roster and job-authorization tests | Map every frozen validation code to composed-worker outcomes; cover processor failure/no-signing behavior without emulating Python imports. |
 | 10. OAuth revocation failure and owner fences | OAuth behavior and PostgreSQL tests cover refresh/revocation, due selection and tenant-atomic cleanup | Whole-worker remote revocation rate-limit/timeout, Retry-After, patch failure and owner-fence-loss matrix; explicitly retain Rust's stronger atomic cleanup. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
-| 12. All four fact projections | Published-schema processor replay plus real REST transport tests for assignment, quiz, module and course | Join actual worker, HTTP provider, OAuth storage, fact/policy transaction and durable job effects in one differential. |
+| 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
 | 13. Bounded signing error detail | Normative contract requires reference-side hardening; current local Credentials `signing_context.py` bounds text only | Reconcile and land bounded JSON string/object detail plus reference tests before sharing the privacy fixture as parity evidence. |
 | 14. Allowlisted worker logs | Normative contract requires reference-side hardening; current local Credentials worker still contains `logger.exception` | Reconcile and land allowlisted logging plus synthetic redaction evidence before declaring this gate closed. |
 
