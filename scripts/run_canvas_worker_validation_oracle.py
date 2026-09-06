@@ -23,7 +23,7 @@ def run(case_name):
     shared["seed"] = [*shared["seed"], *case["seed"], spec["initial_job_seed"]]
     prepared = {
         **base,
-        "stages": [{"name": case_name, "status": 500, "body": {}}],
+        "stages": [{**case, "status": 500, "body": {}}],
         "oracle_schema": "marty.canvas-worker-validation-oracle/v1",
     }
     with WorkerHttpsFixture() as https:

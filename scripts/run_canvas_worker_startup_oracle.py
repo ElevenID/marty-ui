@@ -62,10 +62,10 @@ def finish_workers(workers):
 
 
 def start_blocked_workers(
-    engine, case, worker_ids, barrier_sql, blocked_query, before_release
+    engine, case, worker_ids, barrier_sql, blocked_query, before_release, release_sql=()
 ):
-    """Return owned children only after observing both at a fixture DB barrier."""
-    assert len(worker_ids) == len(set(worker_ids)) == 2
+    """Return owned children only after observing each at a fixture DB barrier."""
+    assert len(worker_ids) == len(set(worker_ids)) and 1 <= len(worker_ids) <= 2
     workers = {}
     try:
         with engine.begin() as barrier:
@@ -77,13 +77,15 @@ def start_blocked_workers(
                 assert all(child.poll() is None for child in workers.values())
                 with engine.connect() as connection:
                     blocked = connection.execute(blocked_query).scalar_one()
-                if blocked == 2:
+                if blocked == len(worker_ids):
                     break
                 assert time.monotonic() < deadline, (
-                    "Both owned workers must wait at the fixture barrier"
+                    "All owned workers must wait at the fixture barrier"
                 )
                 time.sleep(0.025)
             before_release()
+            for statement in release_sql:
+                barrier.exec_driver_sql(statement)
         return workers
     except BaseException:
         finish_workers(workers)

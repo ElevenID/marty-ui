@@ -85,6 +85,15 @@ pub(super) async fn seed_validation_case(pool: &PgPool, name: &str) -> &'static 
     case
 }
 
+pub(super) fn validation_release_statements(race: &'static Value) -> Vec<&'static str> {
+    race["release_sql"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|statement| statement.as_str().unwrap())
+        .collect()
+}
+
 pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> WorkerFixture {
     let origin_url = url::Url::parse(origin).unwrap();
     assert_eq!(origin_url.scheme(), "https");
@@ -212,6 +221,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
     .await;
     let (spec, shared) = (fixture.spec, fixture.shared);
     let mut matrix_stages = Value::Null;
+    let mut validation_case = None;
     let mut reference: Value = serde_json::from_str(match scenario {
         "rest" => include_str!("../../../../../contracts/canvas-worker-rest-oracle.json"),
         "facts" => include_str!("../../../../../contracts/canvas-worker-facts-oracle.json"),
@@ -233,7 +243,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         };
         let name = std::env::var(flag).unwrap();
         let stage = if scenario == "validation" {
-            seed_validation_case(pool, &name).await.clone()
+            let case = seed_validation_case(pool, &name).await;
+            validation_case = Some(case);
+            case.clone()
         } else {
             let matrix: Value = serde_json::from_str(include_str!(
                 "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
@@ -303,8 +315,28 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             .await
             .unwrap();
         let environment = worker_environment(origin);
-        let mut worker =
-            OwnedWorker::start_with_environment(database_url, "worker-rest", &environment);
+        let race = validation_case.and_then(|case| case.get("reference_race"));
+        let mut worker = if let Some(race) = race {
+            use super::canvas_worker_concurrent_replay::{start_workers_at_barrier, WorkerBarrier};
+            start_workers_at_barrier(
+                pool,
+                database_url,
+                &environment,
+                WorkerBarrier {
+                    worker_ids: &["worker-rest"],
+                    barrier_sql: race["barrier_sql"].as_str().unwrap(),
+                    blocked_sql: race["blocked_sql"].as_str().unwrap(),
+                    expected_jobs: i64::try_from(expected_jobs).unwrap(),
+                    release_sql: &validation_release_statements(race),
+                },
+                || {},
+            )
+            .await
+            .pop()
+            .unwrap()
+        } else {
+            OwnedWorker::start_with_environment(database_url, "worker-rest", &environment)
+        };
         let (jobs, heartbeat) = tokio::time::timeout(Duration::from_secs(25), async {
             loop {
                 assert!(worker.0.try_wait().unwrap().is_none(), "worker exited in {}", stage["name"]);
@@ -358,6 +390,22 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             assert_eq!(observed, expected[key], "{key} in {}", stage["name"]);
         }
         fixture.assert_preserved(pool).await;
+        if let Some(race) = race {
+            let absent: bool = sqlx::query_scalar(race["absent_sql"].as_str().unwrap())
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert!(absent);
+            assert_eq!(
+                expected["reference_race"],
+                json!({
+                    "blocked_before_release": true,
+                    "referenced_row_absent": absent,
+                })
+            );
+        } else {
+            assert!(expected.get("reference_race").is_none());
+        }
         if scenario == "validation" {
             assert_eq!(prior_job_ids, ["worker-validation-job"]);
             let target: Value = sqlx::query_scalar("SELECT jsonb_build_object('enabled',enabled,'config_version',config_version) FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'")

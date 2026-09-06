@@ -12,7 +12,12 @@ import time
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from run_canvas_worker_startup_oracle import DATABASE, finish_worker, start_worker
+from run_canvas_worker_startup_oracle import (
+    DATABASE,
+    finish_worker,
+    start_blocked_workers,
+    start_worker,
+)
 from canvas_worker_https_fixture import WorkerHttpsFixture
 
 
@@ -162,7 +167,19 @@ def run_scenarios(spec, shared, https):
                 connection.execute(
                     text("TRUNCATE issuance_service.canvas_worker_heartbeats")
                 )
-            child = start_worker(worker_case(origin, cert), "worker-rest")
+            race = stage.get("reference_race")
+            if race is None:
+                child = start_worker(worker_case(origin, cert), "worker-rest")
+            else:
+                child = start_blocked_workers(
+                    engine,
+                    worker_case(origin, cert),
+                    ["worker-rest"],
+                    race["barrier_sql"],
+                    text(race["blocked_sql"]),
+                    lambda: None,
+                    race["release_sql"],
+                )["worker-rest"]
             try:
                 deadline = time.monotonic() + 25
                 while time.monotonic() < deadline:
@@ -234,6 +251,16 @@ def run_scenarios(spec, shared, https):
                 )
                 if stage.get("retry_existing"):
                     observations[-1]["same_job_ids"] = True
+                if race is not None:
+                    with engine.connect() as connection:
+                        absent = connection.execute(
+                            text(race["absent_sql"])
+                        ).scalar_one()
+                    assert absent is True
+                    observations[-1]["reference_race"] = {
+                        "blocked_before_release": True,
+                        "referenced_row_absent": absent,
+                    }
             finally:
                 finish_worker(child)
         return {

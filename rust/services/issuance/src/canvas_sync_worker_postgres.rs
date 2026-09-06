@@ -386,7 +386,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                 if !exists {
                     return Err(CanvasSyncProcessingError::terminal(
                         "canvas_sync_target_application_invalid",
-                        "Canvas synchronization application is invalid",
+                        "Canvas learner synchronization application is unavailable",
                     ));
                 }
             }
@@ -416,7 +416,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                 if !exists {
                     return Err(CanvasSyncProcessingError::terminal(
                         "canvas_sync_target_candidate_invalid",
-                        "Canvas synchronization candidate is invalid",
+                        "Canvas award candidate is unavailable",
                     ));
                 }
             }

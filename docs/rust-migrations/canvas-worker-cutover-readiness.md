@@ -55,13 +55,15 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 ## Normative legacy-gap reconciliation
 
-The [target-validation reference](canvas-worker-validation.md) captures eleven
+The [target-validation reference](canvas-worker-validation.md) captures thirteen
 actual published-worker cases with identical independent results. It covers
-seven terminal codes (including five inactive variants), no Canvas reads and
+nine terminal codes (including five inactive variants), no Canvas reads and
 preserved issued rows/token ciphertext. Native replay is implemented; focused
 published-schema tests demonstrated and verified the shared Rust error-summary
-correction for all eleven cases. Full Linux qualification and two explicitly
-uncovered application/candidate-invalid paths remain pending; gate 9 is open.
+correction. The two previously uncovered invalid-reference paths now have actual
+published-process removal races, with matching independent captures and native
+replay implemented through the shared database barrier. Full exact-head Linux
+qualification and broader processor failures remain pending; gate 9 is open.
 
 The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized

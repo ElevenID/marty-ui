@@ -386,13 +386,25 @@ async fn worker_validation_repository_matches_frozen_errors() {
             .unwrap();
         let fixture =
             canvas_worker_rest_replay::prepare(&pool, "https://127.0.0.1:1", "rest").await;
-        canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
+        let case = canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
         let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
         let target = repository
             .target("org-review", "target-review")
             .await
             .unwrap()
             .unwrap();
+        if let Some(race) = case.get("reference_race") {
+            // The repository receives the target already read before removal.
+            // This focused check is not the actual-process barrier replay.
+            let mut transaction = pool.begin().await.unwrap();
+            for statement in canvas_worker_rest_replay::validation_release_statements(race) {
+                sqlx::raw_sql(statement)
+                    .execute(&mut *transaction)
+                    .await
+                    .unwrap();
+            }
+            transaction.commit().await.unwrap();
+        }
         let error = repository.validate_target(&target).await.unwrap_err();
         let expected = &reference[name]["observations"][0]["jobs"][0];
         assert_eq!(

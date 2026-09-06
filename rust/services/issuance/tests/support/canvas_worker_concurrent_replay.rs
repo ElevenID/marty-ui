@@ -39,30 +39,67 @@ pub(super) async fn start_blocked_workers(
     expected_jobs: i64,
     before_release: impl FnOnce(),
 ) -> Vec<OwnedWorker> {
+    start_workers_at_barrier(
+        pool,
+        database_url,
+        environment,
+        WorkerBarrier {
+            worker_ids: &WORKER_IDS,
+            barrier_sql,
+            blocked_sql,
+            expected_jobs,
+            release_sql: &[],
+        },
+        before_release,
+    )
+    .await
+}
+
+pub(super) struct WorkerBarrier<'a> {
+    pub worker_ids: &'a [&'a str],
+    pub barrier_sql: &'static str,
+    pub blocked_sql: &'static str,
+    pub expected_jobs: i64,
+    pub release_sql: &'a [&'static str],
+}
+
+pub(super) async fn start_workers_at_barrier(
+    pool: &PgPool,
+    database_url: &str,
+    environment: &BTreeMap<String, String>,
+    config: WorkerBarrier<'_>,
+    before_release: impl FnOnce(),
+) -> Vec<OwnedWorker> {
+    let ids = config.worker_ids;
+    assert!((1..=2).contains(&ids.len()));
+    assert_eq!(
+        ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        ids.len()
+    );
     let mut barrier = pool.begin().await.unwrap();
-    sqlx::raw_sql(barrier_sql)
+    sqlx::raw_sql(config.barrier_sql)
         .execute(&mut *barrier)
         .await
         .unwrap();
-    let mut workers: Vec<_> = WORKER_IDS
+    let mut workers: Vec<_> = ids
         .iter()
         .map(|id| OwnedWorker::start_with_environment(database_url, id, environment))
         .collect();
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             assert_alive(&mut workers);
-            let blocked: i64 = sqlx::query_scalar(blocked_sql)
+            let blocked: i64 = sqlx::query_scalar(config.blocked_sql)
                 .fetch_one(pool)
                 .await
                 .unwrap();
-            if blocked == 2 {
+            if blocked == i64::try_from(ids.len()).unwrap() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
-    .expect("both actual workers must wait at the fixture barrier");
+    .expect("all actual workers must wait at the fixture barrier");
     // Use the lock-owning connection: a separate connection would deadlock
     // when the shared barrier protects the jobs table for crash reclaimers.
     let jobs: i64 =
@@ -70,14 +107,20 @@ pub(super) async fn start_blocked_workers(
             .fetch_one(&mut *barrier)
             .await
             .unwrap();
-    assert_eq!(jobs, expected_jobs);
+    assert_eq!(jobs, config.expected_jobs);
     before_release();
+    for statement in config.release_sql {
+        sqlx::raw_sql(*statement)
+            .execute(&mut *barrier)
+            .await
+            .unwrap();
+    }
     barrier.commit().await.unwrap();
     workers
 }
 
 fn assert_alive(workers: &mut [OwnedWorker]) {
-    assert_eq!(workers.len(), 2);
+    assert!((1..=2).contains(&workers.len()));
     for worker in workers {
         assert!(
             worker.0.try_wait().unwrap().is_none(),

@@ -1,8 +1,8 @@
 {
   "schema": "marty.canvas-worker-validation-scenarios/v1",
   "reference_scenario": "canvas-worker-rest-scenarios.json",
-  "remaining_validation_errors": ["canvas_sync_target_application_invalid", "canvas_sync_target_candidate_invalid"],
-  "scope": "Fresh official-schema database per case; fixture target configuration and one queued job are seeded before the actual worker starts. No application clock, running job, lease or outcome is edited. Observe terminal validation without Canvas reads or changes to issued rows. Missing/foreign application and candidate references constrained by the schema require separate constraint/race evidence, not disabled foreign keys.",
+  "remaining_validation_errors": [],
+  "scope": "Fresh official-schema database per case; fixture target configuration and one queued job are seeded before the actual worker starts. In the two reference-removal races, observe its real validation query blocked on the referenced table, detach only the synthetic reference and remove that exact synthetic row in the barrier-owning transaction, then release. No application clock, running job, lease or outcome is edited and no constraint is disabled. Observe terminal validation without Canvas reads or changes to issued rows.",
   "initial_job_seed": "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at) VALUES ('worker-validation-job','org-review','target-review','queued',0,8,'2026-09-01T00:00:00Z','{}','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')",
   "cases": [
     {"name": "incomplete_logical_key", "code": "canvas_sync_target_incomplete", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET logical_key=chr(9) WHERE id='target-review'"]},
@@ -15,6 +15,40 @@
     {"name": "binding_archived", "code": "canvas_sync_target_inactive", "seed": ["UPDATE issuance_service.canvas_program_bindings SET enabled=false,archived_at='2026-09-01T00:00:00Z' WHERE id='binding-review'"]},
     {"name": "stale_configuration", "code": "canvas_sync_target_config_stale", "seed": ["UPDATE issuance_service.canvas_program_bindings SET config_version=2,validated_config_version=2 WHERE id='binding-review'"]},
     {"name": "application_missing", "code": "canvas_sync_target_application_missing", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET application_id=NULL WHERE id='target-review'"]},
-    {"name": "candidate_missing", "code": "canvas_sync_target_candidate_missing", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='award_candidate',application_id=NULL,candidate_id=NULL WHERE id='target-review'"]}
+    {"name": "candidate_missing", "code": "canvas_sync_target_candidate_missing", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='award_candidate',application_id=NULL,candidate_id=NULL WHERE id='target-review'"]},
+    {
+      "name": "application_removed_after_target_read",
+      "code": "canvas_sync_target_application_invalid",
+      "seed": [
+        "INSERT INTO issuance_service.applications (id,organization_id,application_template_id,applicant_identifier,form_data,submitted_evidence,status,derived_claims,integration_context,created_at,updated_at) VALUES ('application-race','org-review','template-review','synthetic-race-subject','{}','[]','pending','{}','{}',now(),now())",
+        "UPDATE issuance_service.canvas_evidence_sync_targets SET application_id='application-race' WHERE id='target-review'"
+      ],
+      "reference_race": {
+        "barrier_sql": "LOCK TABLE issuance_service.applications IN ACCESS EXCLUSIVE MODE",
+        "blocked_sql": "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query ILIKE '%SELECT%FROM issuance_service.applications%'",
+        "release_sql": [
+          "UPDATE issuance_service.canvas_evidence_sync_targets SET application_id=NULL WHERE id='target-review'",
+          "DELETE FROM issuance_service.applications WHERE id='application-race' AND organization_id='org-review'"
+        ],
+        "absent_sql": "SELECT NOT EXISTS (SELECT 1 FROM issuance_service.applications WHERE id='application-race')"
+      }
+    },
+    {
+      "name": "candidate_removed_after_target_read",
+      "code": "canvas_sync_target_candidate_invalid",
+      "seed": [
+        "INSERT INTO issuance_service.canvas_award_candidates (id,organization_id,platform_id,binding_id,candidate_key,state) VALUES ('candidate-race','org-review','platform-review','binding-review','synthetic-race-candidate','observed')",
+        "UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='award_candidate',application_id=NULL,candidate_id='candidate-race' WHERE id='target-review'"
+      ],
+      "reference_race": {
+        "barrier_sql": "LOCK TABLE issuance_service.canvas_award_candidates IN ACCESS EXCLUSIVE MODE",
+        "blocked_sql": "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query ILIKE '%SELECT%FROM issuance_service.canvas_award_candidates%'",
+        "release_sql": [
+          "UPDATE issuance_service.canvas_evidence_sync_targets SET candidate_id=NULL WHERE id='target-review'",
+          "DELETE FROM issuance_service.canvas_award_candidates WHERE id='candidate-race' AND organization_id='org-review'"
+        ],
+        "absent_sql": "SELECT NOT EXISTS (SELECT 1 FROM issuance_service.canvas_award_candidates WHERE id='candidate-race')"
+      }
+    }
   ]
 }

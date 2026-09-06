@@ -42,12 +42,20 @@ class Engine:
         self.blocked = blocked
         self.locked = False
         self.released = False
+        self.statements = []
 
     @contextmanager
     def begin(self):
         self.locked = True
         try:
-            yield SimpleNamespace(exec_driver_sql=lambda sql: None)
+
+            def execute(sql):
+                assert self.locked
+                self.statements.append(sql)
+                if sql == "synthetic release failure":
+                    raise RuntimeError(sql)
+
+            yield SimpleNamespace(exec_driver_sql=execute)
         finally:
             self.locked = False
             self.released = True
@@ -132,13 +140,45 @@ def test_cleanup_error_does_not_skip_other_owned_children(fixture_module):
     assert first.killed and first.reaped and second.killed and second.reaped
 
 
-def test_duplicate_worker_identity_is_rejected_before_start(fixture_module):
+@pytest.mark.parametrize("identities", [[], ["same", "same"], ["a", "b", "c"]])
+def test_invalid_worker_identities_are_rejected_before_start(
+    fixture_module, identities
+):
     engine = Engine()
     with pytest.raises(AssertionError):
         fixture_module.start_blocked_workers(
-            engine, {}, ["same", "same"], "lock", "wait", lambda: None
+            engine, {}, identities, "lock", "wait", lambda: None
         )
     assert not engine.locked and not engine.released
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_single_worker_release_is_ordered_and_failure_reaps_child(
+    fixture_module, monkeypatch, fails
+):
+    engine, child = Engine(blocked=1), Child()
+    monkeypatch.setattr(fixture_module, "start_worker", lambda case, name: child)
+    statement = "synthetic release failure" if fails else "remove fixture reference"
+
+    def observed():
+        assert engine.locked and engine.statements == ["lock"]
+        engine.statements.append("observed")
+
+    def run():
+        return fixture_module.start_blocked_workers(
+            engine, {}, ["worker-a"], "lock", "wait", observed, [statement]
+        )
+
+    if fails:
+        with pytest.raises(RuntimeError, match=statement):
+            run()
+        assert child.killed and child.reaped
+    else:
+        assert run() == {"worker-a": child}
+        assert not child.killed and not child.reaped
+        fixture_module.finish_worker(child)
+    assert engine.released
+    assert engine.statements == ["lock", "observed", statement]
 
 
 def test_process_helpers_import_without_database_library(fixture_module, monkeypatch):
