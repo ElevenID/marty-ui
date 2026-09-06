@@ -254,7 +254,7 @@ impl CanvasOperationResponse {
         Ok(Bytes::from(bytes))
     }
     #[cfg(test)]
-    pub async fn text(self) -> Result<String, CanvasOperationHttpError> {
+    pub async fn text(self) -> Result<crate::python_text::PythonText, CanvasOperationHttpError> {
         let content_type = self.content_type();
         Ok(crate::canvas_response_text::response_text(
             &self.bytes().await?,
@@ -650,7 +650,11 @@ mod tests {
                     content_type.as_deref()
                 )?)
             } else {
-                json!(response.text().await?)
+                json!(response
+                    .text()
+                    .await?
+                    .into_scalar()
+                    .expect("existing TLS text fixtures are scalar"))
             };
             Ok::<_, CanvasOperationHttpError>(json!({"status":status, "body":body}))
         }

@@ -1,6 +1,7 @@
 //! Shared response-text projection, separate from JSON byte decoding.
 //! Stateless single-byte mappings come from the frozen published response owner.
 //! Other multibyte/stateful codecs remain an explicit adoption gate.
+use crate::python_text::PythonText;
 use std::{collections::BTreeMap, sync::OnceLock};
 
 #[path = "canvas_response_charset.rs"]
@@ -133,10 +134,10 @@ fn response_codecs() -> &'static ResponseCodecs {
 pub(crate) fn response_text(
     bytes: &[u8],
     content_type: Option<&str>,
-) -> Result<String, CanvasResponseTextError> {
+) -> Result<PythonText, CanvasResponseTextError> {
     // HTTPX does not select a text decoder for an empty response body.
     if bytes.is_empty() {
-        return Ok(String::new());
+        return Ok(PythonText::default());
     }
     let charset = content_type
         .map(charset_parameter)
@@ -145,22 +146,31 @@ pub(crate) fn response_text(
         .unwrap_or_default();
     let normalized = checked_encoding(&charset)?;
     let registry = response_codecs();
+    if normalized == "utf_7" {
+        return Ok(utf7::decode(bytes, false).expect("replacement UTF-7 decoding cannot fail"));
+    }
     if let Some(name) = registry.aliases.get(&normalized) {
         let table = &registry.tables[name];
-        return Ok(bytes.iter().map(|byte| table[usize::from(*byte)]).collect());
+        return Ok(bytes
+            .iter()
+            .map(|byte| table[usize::from(*byte)])
+            .collect::<String>()
+            .into());
     }
     if let Some(encoding) = registry.unicode_aliases.get(&normalized) {
-        return unicode_text(bytes, *encoding);
+        return unicode_text(bytes, *encoding).map(PythonText::from);
     }
     if let Some(machine) = multibyte::lookup(&normalized) {
         return Ok(machine
             .decode(bytes, false)
-            .expect("replacement decoding cannot fail"));
+            .expect("replacement decoding cannot fail")
+            .into());
     }
     if let Some(codec) = iso2022::lookup(&normalized) {
         return Ok(codec
             .decode(bytes, false)?
-            .expect("replacement result or typed codec error"));
+            .expect("replacement result or typed codec error")
+            .into());
     }
     let bytes = match normalized.as_str() {
         "utf_8_sig" => bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes),
@@ -168,7 +178,7 @@ pub(crate) fn response_text(
         // Other recognized Python codecs still require their own qualification.
         _ => bytes,
     };
-    Ok(String::from_utf8_lossy(bytes).into_owned())
+    Ok(String::from_utf8_lossy(bytes).into_owned().into())
 }
 
 fn unicode_text(
@@ -307,6 +317,16 @@ fn normalize_encoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Existing corpora here contain scalar text. Keep their strict scalar
+    // assertions; non-scalar consumers are covered by the separate full-route corpus.
+    fn response_text(
+        bytes: &[u8],
+        content_type: Option<&str>,
+    ) -> Result<String, CanvasResponseTextError> {
+        super::response_text(bytes, content_type)
+            .map(|text| text.into_scalar().expect("existing corpus text is scalar"))
+    }
 
     fn observation<T: serde::Serialize>(
         result: Result<T, CanvasResponseTextError>,

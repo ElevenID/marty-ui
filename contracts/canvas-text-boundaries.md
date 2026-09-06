@@ -101,8 +101,8 @@ The required image test regenerates this entire diagnostic artifact. Its initial
 delivery-helper observations did not call the full credential route; the extension
 below now does. Neither scope qualifies native response-body adoption.
 Backend exception text is diagnostic provenance,
-not a requirement to imitate SQLAlchemy SQL strings in Rust; externally visible
-failure behavior and unchanged persistence still need end-to-end native proof.
+not a requirement to imitate SQLAlchemy SQL strings in Rust. The native proof
+of externally visible failure behavior and unchanged persistence is below.
 
 `python_text.rs` provides the native lossless text foundation. Its private
 representation uses String for scalar text and codepoints only when necessary.
@@ -118,7 +118,7 @@ The complete-input native decoder and strict encoded labels are now implemented
 and exercised by a separate [codec corpus](canvas-utf7-codec.md). The 39-case
 fixture described here remains diagnostic source evidence, not a substitute for
 that decoder corpus. Lossless response-body/metadata/error integration and full
-credential-route behavior remain open; no native streaming interface is claimed.
+credential-route behavior are covered below; no native streaming interface is claimed.
 
 ### Full credential-route continuation
 
@@ -152,8 +152,43 @@ This resolves the published HTTP policy question: the existing native
 Native adoption must preserve the late save boundary and already-committed
 credential state, without replacing non-scalar text or rejecting it during
 decoding. Do not globally remap unrelated retry errors based on this evidence.
-Native lossless body/metadata/error plumbing and replay of all 36 routes remain
-required; this reference capture alone does not close the integration gate.
+The reference capture alone did not close the integration gate. Native
+lossless body/metadata/error plumbing and all 36 route replays now pass, as below.
+
+### Native response-body adoption
+
+`response_text` now returns `PythonText` and selects the already-qualified UTF-7
+decoder for body bytes. Shared truncation counts Python codepoints. A shared
+`LosslessJson` owner retains scalar serde values and lossless text/containers;
+it does not parse new JSON encodings or silently make non-scalar keys scalar.
+Conversion borrows the original value and serialization fails without replacement
+or loss of the original codepoints. PythonText still has no implicit serializer
+or Display implementation.
+
+Validation carries lossless excerpts until the HTTP renderer. The provider port
+carries lossless metadata and error text until the real lifecycle save method.
+That method checks encoding after canonical publication/persistence and provider
+completion, before sending an invalid UTF-8/JSON projection to PostgreSQL.
+`CanvasLifecycleSyncError::TextEncoding` reaches the HTTP route as a plain 500.
+Unrelated repository/retry errors retain their previous behavior; SQLAlchemy
+exception strings are not fabricated. Existing gRPC errors remain internal.
+
+The native provider replay compares all twelve metadata/error observations,
+using codepoint markers only in test observation serialization. The actual native
+managed router replays all twelve validation cases. The new required configured
+image/schema test replays all 36 credential routes using a real local HTTP
+provider, actual native router, and real PostgreSQL credential/delivery storage.
+It compares HTTP responses, complete normalized rows, raw changed credential
+columns, raw failed-delivery-row equality, exact provider bodies, publication
+and provider-call ordering, and preserved transactions/other credentials.
+Only the synthetic local provider URL and timestamps are normalized. Eighteen
+retained-surrogate failures preserve committed credential state and unchanged
+delivery rows without emitting a success event. Eighteen scalar/truncated cases
+retain the intentional newer Rust success events; they are not deleted merely
+because the older published routes did not emit them.
+
+General JSON/non-scalar parsing, remaining exceptional codecs and complete
+worker/profile adoption are still separate open gates.
 
 ## Reproduction
 

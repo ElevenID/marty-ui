@@ -1,5 +1,6 @@
 //! Shared protocol primitives, without conflating validation and delivery policy.
 use crate::canvas_response_text::{response_text, CanvasResponseTextError};
+use crate::lossless_json::{LosslessJson, LosslessObject};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -51,17 +52,17 @@ pub(crate) fn https_origin(value: &str) -> Option<String> {
 pub(crate) fn response_excerpt(
     bytes: &[u8],
     content_type: Option<&str>,
-) -> Result<Map<String, Value>, CanvasResponseTextError> {
+) -> Result<LosslessObject, CanvasResponseTextError> {
     if let Some(payload) = response_json(bytes) {
-        return Ok(match payload {
+        return Ok(crate::lossless_json::object(match payload {
             Value::Object(object) => object,
             payload => Map::from_iter([("payload".into(), payload)]),
-        });
+        }));
     }
     let text = response_text(bytes, content_type)?;
-    Ok(Map::from_iter([(
+    Ok(LosslessObject::from_iter([(
         "body_excerpt".into(),
-        Value::String(truncate_text(&text)),
+        LosslessJson::Text(truncate_text(&text)),
     )]))
 }
 
@@ -101,11 +102,11 @@ fn response_json(bytes: &[u8]) -> Option<Value> {
     serde_json::from_str(&decoded).ok()
 }
 
-pub(crate) fn truncate_text(text: &str) -> String {
-    crate::python_text::PythonText::excerpt(text.chars().map(u32::from), MAX_EXCERPT_CHARS)
-        .expect("Rust chars are valid Python codepoints")
-        .into_scalar()
-        .expect("a scalar prefix and scalar ellipsis remain scalar")
+pub(crate) fn truncate_text(
+    text: &crate::python_text::PythonText,
+) -> crate::python_text::PythonText {
+    crate::python_text::PythonText::excerpt(text.codepoints(), MAX_EXCERPT_CHARS)
+        .expect("decoded codepoints are valid")
 }
 
 pub(crate) fn quote_identifier(value: &str) -> String {
@@ -188,7 +189,7 @@ mod tests {
         }
         let text = b"\xef\xbb\xbfnot JSON";
         assert_eq!(
-            response_excerpt(text, None).unwrap(),
+            crate::lossless_json::scalar_object(&response_excerpt(text, None).unwrap()).unwrap(),
             serde_json::json!({"body_excerpt":"\u{feff}not JSON"})
                 .as_object()
                 .unwrap()

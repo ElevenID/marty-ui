@@ -8,8 +8,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod lossless_json;
 mod python_json_diagnostic;
-mod python_text;
+pub mod python_text;
 mod python_value;
 
 pub mod canvas_award_candidate;

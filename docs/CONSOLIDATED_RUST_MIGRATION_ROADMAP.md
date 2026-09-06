@@ -33,6 +33,26 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+UTF-7 response bodies are now integrated through shared lossless native text,
+metadata and provider-error values. Validation renders retained-surrogate
+failures as the published plain HTTP 500. Lifecycle persistence detects invalid
+encoding only after canonical publication/credential persistence and provider
+completion; typed encoding failures map to 500 without changing generic retry
+errors. Native replay passes twelve provider observations, twelve managed HTTP
+responses, and all 36 full credential routes with real PostgreSQL and local HTTP.
+Complete credential/delivery rows and failure ordering match the frozen reference;
+newer Rust success events remain intact, with none emitted after failed saves.
+The 28th configured image/schema gate is required by CI. This closes the UTF-7
+body integration scope, not JSON/non-scalar parsing, remaining exceptional codecs
+or whole-worker/all-consumer adoption. PR #814 remains draft and unrouted.
+All 28 configured image/schema tests pass (247.37 seconds, none ignored or
+filtered), along with 313 library, 5 worker, 29 managed HTTP, 22 behavior,
+70 affected Python and 104 native TLS cases, strict Clippy and formatting.
+The preceding `96f55bb6e` head is hosted-green; this implementation checkpoint
+requires its own hosted checks before landing.
+
+### Earlier transport checkpoints (historical)
+
 Full published credential-route evidence now covers 36 UTF-7 scenarios through
 actual authenticated suspend/reinstate/revoke routes and real PostgreSQL saves.
 Two independent captures agree: 18 retained-surrogate cases return HTTP 500

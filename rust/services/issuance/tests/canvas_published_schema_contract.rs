@@ -382,6 +382,25 @@ async fn status_runtime_preserves_utf7_label_failures_and_recovery() {
 }
 
 #[tokio::test]
+async fn status_runtime_matches_utf7_full_credential_routes() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    canvas_status_provider_replay::replay_utf7().await;
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run_utf7_body(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
 async fn cancelled_pool_release_does_not_wait_for_blocked_query() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

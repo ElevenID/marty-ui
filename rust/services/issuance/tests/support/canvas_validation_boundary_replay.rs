@@ -98,6 +98,29 @@ async fn native_validation_matches_all_published_http_and_lookup_observations() 
     let cases = scenarios["cases"].as_array().unwrap();
     let expected = oracle["observations"].as_array().unwrap();
     assert_eq!(cases.len(), 47);
+    replay(cases, expected).await;
+}
+
+#[tokio::test]
+async fn native_validation_matches_utf7_body_rendering_and_success_bypass() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-oracle.json"
+    ))
+    .unwrap();
+    let cases = scenarios["validation"].as_array().unwrap();
+    assert_eq!(cases.len(), 12);
+    replay(
+        cases,
+        oracle["validation"]["observations"].as_array().unwrap(),
+    )
+    .await;
+}
+
+async fn replay(cases: &[Value], expected: &[Value]) {
     assert_eq!(cases.len(), expected.len());
     for (case, expected) in cases.iter().zip(expected) {
         assert_eq!(case["name"], expected["name"]);

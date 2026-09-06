@@ -1435,16 +1435,18 @@ async fn validate_canvas_credentials_provider(
     State(state): State<IssuanceState>,
     headers: HeaderMap,
     request: Request,
-) -> Result<
-    Json<crate::canvas_credentials_validation::CanvasCredentialsValidationResult>,
-    CanvasManagementHttpError,
-> {
+) -> Result<Response, CanvasManagementHttpError> {
     let request: CanvasCredentialsValidationRequest =
         parse_canvas_credentials_validation_request(request).await?;
-    canvas_management(&state)?
+    let result = canvas_management(&state)?
         .validate_canvas_credentials_provider(&headers, request)
-        .await
-        .map(Json)
+        .await?;
+    // Rendering belongs after the provider has returned its lossless result.
+    // Match the published app's plain 500 without exposing serializer internals.
+    Ok(match serde_json::to_vec(&result) {
+        Ok(body) => ([("content-type", "application/json")], body).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+    })
 }
 
 async fn list_canvas_integration_secrets(
@@ -3464,6 +3466,10 @@ impl IntoResponse for CredentialManagementHttpError {
                     StatusCode::SERVICE_UNAVAILABLE,
                     "Canvas lifecycle retry could not be recorded",
                 ),
+                CredentialManagementError::CanvasTextEncoding => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                        .into_response()
+                }
             },
         };
         (status, Json(json!({"detail": detail}))).into_response()

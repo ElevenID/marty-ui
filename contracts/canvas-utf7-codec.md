@@ -78,12 +78,26 @@ metadata, secret use, publication ordering and late-save failure. Its required
 `status_runtime_preserves_utf7_label_failures_and_recovery`.
 The timeout image gate also regenerates and compares this entire codec artifact.
 
-Response-body adoption is still open. `response_text` and downstream metadata/
-error values have not yet been migrated to lossless text; the presence of this
-decoder does not qualify those consumers or a native streaming interface.
-The full credential-route result for non-scalar database-save failures remains
-to be captured, as described in [consumer boundary evidence](canvas-text-boundaries.md).
-Do not route the draft candidate or delete its Python owner on decoder tests alone.
+Response-body adoption now uses the same decoder and lossless text owner.
+Shared `LosslessJson` values carry excerpts through validation/provider metadata;
+provider errors carry the original codepoints to the delivery-save boundary.
+Explicit JSON rendering or persistence encoding fails there, without replacing
+text or changing already-committed credential state. A distinct typed encoding
+failure maps to the published plain HTTP 500; unrelated retry errors retain 503.
+
+Native replay matches twelve published provider observations (including exact
+non-scalar metadata/error codepoints), twelve actual managed HTTP responses, and
+all 36 full credential routes through a real local HTTP provider and PostgreSQL.
+The required 28th configured test is
+`status_runtime_matches_utf7_full_credential_routes`. It verifies complete rows,
+exact changed credential fields, requests, publication order and no success
+events after save failures. Newer Rust success events are deliberately preserved.
+See [consumer boundary evidence](canvas-text-boundaries.md).
+
+This qualifies complete-input UTF-7 body integration in the stated consumers,
+not a native streaming interface, general non-scalar JSON byte parsing, other
+exceptional codecs, or the whole-worker/all-consumer cutover. Those gates still
+prevent routing the draft candidate or deleting its reachable Python owner.
 
 ## Reproduction
 

@@ -5,6 +5,10 @@ use super::canvas_operations_read_replay::{
 };
 use async_trait::async_trait;
 use marty_issuance_service::{
+    canvas_lifecycle_delivery::CanvasLifecycleProviderError,
+    lossless_json::{object, LosslessObject},
+};
+use marty_issuance_service::{
     canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
     canvas_operations::{candidate_router, CanvasOperationsService},
     credential_management::{
@@ -14,7 +18,7 @@ use marty_issuance_service::{
     },
     credential_management_postgres::PostgresCredentialManagementRepository,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::{
     sync::{Arc, OnceLock},
@@ -79,7 +83,7 @@ impl CanvasLifecycleStatusProvider for Ports {
         delivery: &Value,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<Map<String, Value>, CredentialManagementPortError> {
+    ) -> Result<LosslessObject, CanvasLifecycleProviderError> {
         let credential = context.credential;
         assert_eq!(context.transaction_id, "transaction-review");
         assert_eq!(platform["id"], "platform-review");
@@ -88,12 +92,15 @@ impl CanvasLifecycleStatusProvider for Ports {
         if self.stage.lock().await["mirror_failure"] == true {
             Err(CredentialManagementPortError(
                 "Synthetic Canvas status provider unavailable".into(),
-            ))
+            )
+            .into())
         } else {
-            Ok(json!({"provider_status":credential.status.as_str()})
-                .as_object()
-                .unwrap()
-                .clone())
+            Ok(object(
+                json!({"provider_status":credential.status.as_str()})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ))
         }
     }
 }

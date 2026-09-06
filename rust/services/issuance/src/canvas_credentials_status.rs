@@ -15,7 +15,9 @@ use crate::{
     canvas_credentials_validation::{
         CanvasCredentialsSecretResolver, CanvasCredentialsValidationConfig,
     },
-    canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
+    canvas_lifecycle_delivery::{
+        CanvasLifecycleCredential, CanvasLifecycleProviderError, CanvasLifecycleStatusProvider,
+    },
     canvas_network_timeout::CanvasNetworkTimeout,
     canvas_operation_http::{CanvasOperationHttpClient, CanvasOperationHttpError},
     canvas_operator_secret::{
@@ -23,7 +25,9 @@ use crate::{
     },
     canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy},
     canvas_response_text::{response_text, CanvasResponseTextError},
-    credential_management::{CredentialLifecycleAction, CredentialManagementPortError},
+    credential_management::CredentialLifecycleAction,
+    lossless_json::{LosslessJson, LosslessObject},
+    python_text::PythonText,
     python_value::{python_string, python_truthy, strip},
 };
 
@@ -97,8 +101,20 @@ pub struct CanvasCredentialsStatusService {
 pub enum CanvasCredentialsStatusError {
     #[error("{0}")]
     Runtime(String),
+    #[error("Canvas provider error contains non-scalar response text")]
+    NonScalarRuntime(PythonText),
     #[error(transparent)]
     ResponseText(#[from] CanvasResponseTextError),
+}
+
+impl CanvasCredentialsStatusError {
+    pub fn message(&self) -> PythonText {
+        match self {
+            Self::Runtime(message) => message.clone().into(),
+            Self::NonScalarRuntime(message) => message.clone(),
+            Self::ResponseText(error) => error.to_string().into(),
+        }
+    }
 }
 
 impl CanvasCredentialsStatusService {
@@ -277,12 +293,12 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
         delivery: &Value,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<Map<String, Value>, CredentialManagementPortError> {
+    ) -> Result<LosslessObject, CanvasLifecycleProviderError> {
         // Published lifecycle persistence records str(failure), not its class.
         // Retain the typed provider outcome until that deliberate port boundary.
         self.synchronize_provider(context, platform, delivery, action, reason)
             .await
-            .map_err(|failure| CredentialManagementPortError(failure.to_string()))
+            .map_err(|failure| CanvasLifecycleProviderError(failure.message()))
     }
 }
 
@@ -296,7 +312,7 @@ impl CanvasCredentialsStatusService {
         delivery: &Value,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<Map<String, Value>, CanvasCredentialsStatusError> {
+    ) -> Result<LosslessObject, CanvasCredentialsStatusError> {
         let credential = context.credential;
         let organization = delivery["organization_id"].as_str().unwrap_or_default();
         if !self.config.portable_enabled
@@ -325,12 +341,12 @@ impl CanvasCredentialsStatusService {
             "badgr_api" | "canvas_credentials_api"
         );
         if real_provider && action != CredentialLifecycleAction::Revoke {
-            return Ok(object(
+            return Ok(crate::lossless_json::object(object(
                 json!({"provider":"badgr_api", "status_sync_mode":"canonical_provenance_only",
                 "status_sync_skipped":true, "status_sync_reason":"Canvas Credentials API does not expose suspend/reinstate operations; canonical ElevenID status and provenance remain authoritative.",
                 "status_synced_at":chrono::Utc::now().to_rfc3339(),
                 "canvas_credentials_lifecycle_mapping":{"requested_action":action.as_str(),"external_action":null,"canonical_status":credential.status.as_str()}}),
-            ));
+            )));
         }
         let (method, url, token, payload, operation) = if real_provider {
             let external_id = delivery["external_credential_id"]
@@ -425,19 +441,33 @@ impl CanvasCredentialsStatusService {
             })?;
         if !(200..300).contains(&response.status) {
             let text = response_text(&response.body, response.content_type.as_deref())?;
-            return Err(error(format!(
-                "Canvas Credentials {operation} failed (HTTP {}): {}",
-                response.status,
-                truncate_text(&text)
-            )));
+            let excerpt = truncate_text(&text);
+            let prefix = format!(
+                "Canvas Credentials {operation} failed (HTTP {}): ",
+                response.status
+            );
+            let message = PythonText::from_codepoints(
+                prefix.chars().map(u32::from).chain(excerpt.codepoints()),
+            )
+            .expect("prefix and decoded text contain valid codepoints");
+            return Err(match message.into_scalar() {
+                Ok(message) => error(message),
+                Err(message) => CanvasCredentialsStatusError::NonScalarRuntime(message),
+            });
         }
-        let mut metadata = object(
+        let mut metadata = crate::lossless_json::object(object(
             json!({"status_sync_url":url,"status_sync_http_status":response.status,
-            "status_sync_response":response_excerpt(&response.body, response.content_type.as_deref())?,
             "status_sync_request_id":response.request_id,"status_synced_at":chrono::Utc::now().to_rfc3339()}),
+        ));
+        metadata.insert(
+            "status_sync_response".into(),
+            LosslessJson::Object(response_excerpt(
+                &response.body,
+                response.content_type.as_deref(),
+            )?),
         );
         if real_provider {
-            metadata.insert("provider".into(), json!("badgr_api"));
+            metadata.insert("provider".into(), json!("badgr_api").into());
         }
         Ok(metadata)
     }
@@ -813,7 +843,10 @@ mod tests {
         assert_eq!(results[0].body, b"{\"accepted\":true}");
         assert_eq!(results[3].body, b"Synthetic redirect caf\xe9");
         assert_eq!(
-            response_text(&results[3].body, results[3].content_type.as_deref()).unwrap(),
+            response_text(&results[3].body, results[3].content_type.as_deref())
+                .unwrap()
+                .into_scalar()
+                .unwrap(),
             "Synthetic redirect café"
         );
         assert_eq!(
@@ -824,7 +857,10 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            response_excerpt(&results[1].body, results[1].content_type.as_deref()).unwrap(),
+            crate::lossless_json::scalar_object(
+                &response_excerpt(&results[1].body, results[1].content_type.as_deref()).unwrap()
+            )
+            .unwrap(),
             json!({"accepted":true}).as_object().unwrap().clone()
         );
         let calls = calls.lock().unwrap();

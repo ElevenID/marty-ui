@@ -194,6 +194,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "grep -Fx 'review_lifecycle_matches_published_python: test'" in published
     assert "grep -Fx 'status_provider_matches_published_python: test'" in published
     assert "grep -Fx 'status_provider_matches_frozen_protocol: test'" in published
+    assert (
+        "grep -Fx 'status_runtime_matches_utf7_full_credential_routes: test'"
+        in published
+    )
     for decoder in ("unicode", "charset", "iso2022", "ordinal", "utf7_label"):
         assert (
             f"grep -Fx 'status_runtime_preserves_{decoder}_failures_and_recovery: test'"

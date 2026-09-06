@@ -10,8 +10,11 @@ use std::sync::Arc;
 use crate::{
     canvas_binding_domain::CANVAS_FEATURE_FLAGS,
     credential_management::{
-        CredentialLifecycleAction, CredentialManagementPortError, ManagedCredential,
+        CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialManagementPortError,
+        ManagedCredential,
     },
+    lossless_json::{LosslessJson, LosslessObject},
+    python_text::PythonText,
     python_value::{python_string, python_truthy, strip},
 };
 
@@ -25,7 +28,16 @@ pub trait CanvasLifecycleStatusProvider: Send + Sync {
         delivery: &Value,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<Map<String, Value>, CredentialManagementPortError>;
+    ) -> Result<LosslessObject, CanvasLifecycleProviderError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct CanvasLifecycleProviderError(pub PythonText);
+
+impl From<CredentialManagementPortError> for CanvasLifecycleProviderError {
+    fn from(error: CredentialManagementPortError) -> Self {
+        Self(error.0.into())
+    }
 }
 
 /// Transaction identity comes from the credential row, never the delivery row.
@@ -51,7 +63,7 @@ impl CanvasLifecycleDeliverySynchronizer {
         credential: &ManagedCredential,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<(), CredentialManagementPortError> {
+    ) -> Result<(), CanvasLifecycleSyncError> {
         let context: Option<(String, Option<Value>)> = sqlx::query_as("SELECT c.transaction_id,to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
             .bind(&credential.id).bind(&credential.organization_id).fetch_optional(&self.pool).await.map_err(error)?;
         let (transaction_id, application) = context.unwrap_or_default();
@@ -107,7 +119,13 @@ impl CanvasLifecycleDeliverySynchronizer {
                 metadata.extend(json!({"canvas_feature_gate_blocked":true,
                     "canvas_feature_gate":"enable_canvas_mirror_ops","canvas_feature_gate_blocked_at":now,
                     "retryable":false,"last_status_sync_error":detail,"last_status_sync_error_at":now}).as_object().unwrap().clone());
-                self.save(&record, metadata, Some(detail), &now).await?;
+                self.save(
+                    &record,
+                    crate::lossless_json::object(metadata),
+                    Some(&detail.to_owned().into()),
+                    &now,
+                )
+                .await?;
                 continue;
             }
             let target = self.target(&mut record, &mut metadata).await?;
@@ -131,17 +149,23 @@ impl CanvasLifecycleDeliverySynchronizer {
                         )
                         .await
                 }
-                Err(detail) => Err(error(format!("Canvas lifecycle sync skipped: {detail}"))),
+                Err(detail) => {
+                    Err(error(format!("Canvas lifecycle sync skipped: {detail}")).into())
+                }
             };
+            let mut metadata = crate::lossless_json::object(metadata);
             match outcome {
                 Ok(result) => {
                     metadata.extend(result);
-                    metadata.insert("last_status_sync_error".into(), Value::Null);
+                    metadata.insert("last_status_sync_error".into(), Value::Null.into());
                     self.save(&record, metadata, None, &now).await?;
                 }
                 Err(failure) => {
-                    metadata.insert("last_status_sync_error".into(), json!(failure.0));
-                    metadata.insert("last_status_sync_error_at".into(), json!(now));
+                    metadata.insert(
+                        "last_status_sync_error".into(),
+                        LosslessJson::Text(failure.0.clone()),
+                    );
+                    metadata.insert("last_status_sync_error_at".into(), json!(now).into());
                     self.save(&record, metadata, Some(&failure.0), &now).await?;
                 }
             }
@@ -210,10 +234,20 @@ impl CanvasLifecycleDeliverySynchronizer {
     async fn save(
         &self,
         record: &Value,
-        metadata: Map<String, Value>,
-        last_error: Option<&str>,
+        metadata: LosslessObject,
+        last_error: Option<&PythonText>,
         now: &str,
-    ) -> Result<(), CredentialManagementPortError> {
+    ) -> Result<(), CanvasLifecycleSyncError> {
+        // Encoding is deliberately checked here, after publication, canonical
+        // persistence and provider completion, not while decoding response text.
+        let metadata = crate::lossless_json::scalar_object(&metadata)
+            .map_err(|_| CanvasLifecycleSyncError::TextEncoding)?;
+        let last_error = last_error
+            .map(|text| {
+                text.as_scalar()
+                    .ok_or(CanvasLifecycleSyncError::TextEncoding)
+            })
+            .transpose()?;
         let rows = sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$3,last_error=$4,canvas_account_id=$5,updated_at=$6 WHERE id=$1 AND organization_id=$2")
             .bind(record["id"].as_str()).bind(record["organization_id"].as_str()).bind(json!(metadata))
             .bind(last_error).bind(record["canvas_account_id"].as_str())
@@ -222,7 +256,8 @@ impl CanvasLifecycleDeliverySynchronizer {
         if rows != 1 {
             return Err(error(
                 "Canvas delivery record disappeared before synchronization could be persisted",
-            ));
+            )
+            .into());
         }
         Ok(())
     }

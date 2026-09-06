@@ -7,6 +7,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
+use crate::lossless_json::LosslessObject;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::header::{ACCEPT, AUTHORIZATION};
@@ -85,7 +86,7 @@ pub struct CanvasCredentialsValidationResult {
     pub status_code: Option<u16>,
     pub request_id: Option<String>,
     pub error: Option<String>,
-    pub response_excerpt: Option<Map<String, Value>>,
+    pub response_excerpt: Option<LosslessObject>,
     pub validated_at: String,
 }
 
@@ -113,7 +114,7 @@ impl CanvasCredentialsValidationResult {
 pub struct CanvasCredentialsProviderResponse {
     pub status_code: u16,
     pub request_id: Option<String>,
-    pub response_excerpt: Option<Map<String, Value>>,
+    pub response_excerpt: Option<LosslessObject>,
 }
 
 pub use crate::canvas_response_text::CanvasResponseTextError;
@@ -594,6 +595,16 @@ mod tests {
 
     use super::*;
 
+    fn failure_excerpt(
+        bytes: &[u8],
+        content_type: Option<&str>,
+    ) -> Result<Map<String, Value>, CanvasResponseTextError> {
+        super::failure_excerpt(bytes, content_type).map(|value| {
+            crate::lossless_json::scalar_object(&value)
+                .expect("existing excerpt fixtures are scalar")
+        })
+    }
+
     #[tokio::test]
     async fn response_decoder_errors_and_success_bypass_use_actual_http_transport() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -757,8 +768,8 @@ mod tests {
                     json!({"late":true})
                 };
                 assert_eq!(
-                    response.response_excerpt.as_ref(),
-                    expected.as_object(),
+                    serde_json::to_value(&response.response_excerpt).unwrap(),
+                    expected,
                     "{mode}"
                 );
             }
@@ -940,12 +951,12 @@ mod tests {
             Ok(CanvasCredentialsProviderResponse {
                 status_code: self.status,
                 request_id: Some("request-1".to_owned()),
-                response_excerpt: Some(
+                response_excerpt: Some(crate::lossless_json::object(
                     json!({"error": "denied"})
                         .as_object()
                         .expect("object")
                         .clone(),
-                ),
+                )),
             })
         }
     }
@@ -984,8 +995,8 @@ mod tests {
         assert_eq!(result.status_code, Some(403));
         assert_eq!(result.request_id.as_deref(), Some("request-1"));
         assert_eq!(
-            result.response_excerpt,
-            json!({"error": "denied"}).as_object().cloned()
+            serde_json::to_value(&result.response_excerpt).unwrap(),
+            json!({"error": "denied"})
         );
         let calls = transport.calls.lock().unwrap();
         assert_eq!(calls[0].0, "https://badgr.example");

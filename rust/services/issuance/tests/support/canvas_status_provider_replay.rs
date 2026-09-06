@@ -78,7 +78,7 @@ impl CanvasStatusTransport for Ports {
     }
 }
 
-fn timestamps(value: &mut Value) {
+pub(super) fn timestamps(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, value) in map {
@@ -114,6 +114,58 @@ pub async fn replay(expected: &Value) {
     .unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
     let observations = expected["observations"].as_array().unwrap();
+    replay_cases(cases, observations).await;
+}
+
+pub async fn replay_utf7() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let mut oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-oracle.json"
+    ))
+    .unwrap();
+    let observations = oracle["provider"]["observations"].as_array_mut().unwrap();
+    assert_eq!(observations.len(), 12);
+    for observation in observations.iter_mut() {
+        let object = observation.as_object_mut().unwrap();
+        assert!(object.remove("credential_routes").is_some());
+        assert!(object.remove("delivery_lifecycle").is_some());
+        let requests = object["requests"].as_array().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "published adapter and helper each made one request"
+        );
+        object.insert("requests".into(), json!([requests[0].clone()]));
+    }
+    replay_cases(scenarios["provider"].as_array().unwrap(), observations).await;
+}
+
+fn observe_text(text: &marty_issuance_service::python_text::PythonText) -> Value {
+    match text.as_scalar() {
+        Some(text) => json!(text),
+        None => json!({"python_codepoints":text.codepoints().collect::<Vec<_>>()}),
+    }
+}
+
+fn observe_value(value: &marty_issuance_service::lossless_json::LosslessJson) -> Value {
+    use marty_issuance_service::lossless_json::LosslessJson;
+    match value {
+        LosslessJson::Scalar(value) => value.clone(),
+        LosslessJson::Text(text) => observe_text(text),
+        LosslessJson::Object(value) => Value::Object(
+            value
+                .iter()
+                .map(|(key, value)| (key.clone(), observe_value(value)))
+                .collect(),
+        ),
+        LosslessJson::Array(values) => Value::Array(values.iter().map(observe_value).collect()),
+    }
+}
+
+async fn replay_cases(cases: &[Value], observations: &[Value]) {
     assert_eq!(cases.len(), observations.len());
     for (case, expected) in cases.iter().zip(observations) {
         assert_eq!(case["name"], expected["name"]);
@@ -241,11 +293,13 @@ pub async fn replay(expected: &Value) {
             )
             .await;
         let mut actual = match outcome {
-            Ok(metadata) => json!({"metadata":metadata}),
+            Ok(metadata) => {
+                json!({"metadata":observe_value(&marty_issuance_service::lossless_json::LosslessJson::Object(metadata))})
+            }
             Err(error) => json!({"error_class":match &error {
-                CanvasCredentialsStatusError::Runtime(_) => "RuntimeError",
+                CanvasCredentialsStatusError::Runtime(_) | CanvasCredentialsStatusError::NonScalarRuntime(_) => "RuntimeError",
                 CanvasCredentialsStatusError::ResponseText(error) => error.diagnostic_class(),
-            },"error":error.to_string()}),
+            },"error":observe_text(&error.message())}),
         };
         timestamps(&mut actual);
         actual["name"] = case["name"].clone();

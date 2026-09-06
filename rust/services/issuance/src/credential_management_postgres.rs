@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 
 use crate::credential_management::{
-    CredentialLifecycleAction, CredentialManagementPortError, CredentialManagementRepository,
-    ManagedCredential, ManagedCredentialStatus,
+    CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialManagementPortError,
+    CredentialManagementRepository, ManagedCredential, ManagedCredentialStatus,
 };
 
 #[derive(Clone)]
@@ -105,7 +105,7 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         credential: &ManagedCredential,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<(), CredentialManagementPortError> {
+    ) -> Result<(), CanvasLifecycleSyncError> {
         if let Some(lifecycle) = &self.canvas_lifecycle {
             return lifecycle.synchronize(credential, action, reason).await;
         }

@@ -34,6 +34,7 @@ struct RuntimeState {
     events: Mutex<Vec<String>>,
     remove_delivery_before_response: AtomicBool,
     responses: Responses,
+    response_override: Mutex<Option<Value>>,
 }
 
 #[derive(Clone, Copy)]
@@ -44,12 +45,13 @@ enum Responses {
     Iso2022,
     Ordinal,
     Utf7Label,
+    Utf7Body,
 }
 
 impl Responses {
     fn case(self, action: &str) -> Option<&'static str> {
         Some(match (self, action) {
-            (Self::Baseline, _) => return None,
+            (Self::Baseline | Self::Utf7Body, _) => return None,
             (Self::Unicode, "suspend") => "utf-16_missing_bom_200",
             (Self::Unicode, "reinstate") => "utf-32_missing_bom_403",
             (Self::Unicode, "revoke") => "utf16_json_first_200",
@@ -111,20 +113,27 @@ async fn mirror(
         sqlx::query("DELETE FROM issuance_service.credential_delivery_records WHERE id='delivery-provider' AND organization_id='org-review'")
             .execute(&state.pool).await.unwrap();
     }
-    let mut response = if let Some(name) = state
-        .responses
-        .case(body["lifecycle_action"].as_str().unwrap())
-    {
-        let scenarios: Value = serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-status-provider-scenarios.json"
-        ))
-        .unwrap();
-        let case = scenarios["cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap();
+    let response_override = state.response_override.lock().unwrap().clone();
+    let reference_response = response_override.is_some();
+    let case = response_override.or_else(|| {
+        state
+            .responses
+            .case(body["lifecycle_action"].as_str().unwrap())
+            .map(|name| {
+                let scenarios: Value = serde_json::from_str(include_str!(
+                    "../../../../../contracts/canvas-status-provider-scenarios.json"
+                ))
+                .unwrap();
+                scenarios["cases"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|case| case["name"] == name)
+                    .unwrap()
+                    .clone()
+            })
+    });
+    let mut response = if let Some(case) = case {
         (
             StatusCode::from_u16(
                 case["response_status"]
@@ -146,9 +155,16 @@ async fn mirror(
     } else {
         Json(json!({"accepted":true})).into_response()
     };
-    response
-        .headers_mut()
-        .insert("x-request-id", "synthetic-runtime-request".parse().unwrap());
+    response.headers_mut().insert(
+        "x-request-id",
+        if reference_response {
+            "synthetic-provider-request"
+        } else {
+            "synthetic-runtime-request"
+        }
+        .parse()
+        .unwrap(),
+    );
     response
 }
 
@@ -183,7 +199,229 @@ pub async fn run_utf7_label(pool: &PgPool) {
     run_scenario(pool, Responses::Utf7Label).await;
 }
 
-async fn run_scenario(pool: &PgPool, responses: Responses) {
+pub async fn run_utf7_body(pool: &PgPool) {
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use marty_issuance_service::{
+        credential_management_http::CredentialManagementHttpService,
+        http::router_with_credential_management, transport::TransportPolicy, IssuanceRuntime,
+    };
+    use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+    use tower::ServiceExt;
+
+    let RuntimeFixture {
+        state,
+        service,
+        config,
+        url,
+        stop,
+        server,
+        _cleanup,
+    } = start_runtime(pool, Responses::Utf7Body).await;
+    // The frozen full-route scenarios use the operator token, not a tenant
+    // override. Existing runtime scenarios continue testing real tenant-vault use.
+    sqlx::query("UPDATE issuance_service.canvas_program_bindings SET canvas_credentials='{}' WHERE id='binding-review'").execute(pool).await.unwrap();
+    let runtime = IssuanceRuntime::new(&config).unwrap();
+    let app = router_with_credential_management(
+        runtime.state(),
+        StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+        TransportPolicy::new(config.cors_allowed_origins),
+        CredentialManagementHttpService::new(service, Some("synthetic-validation-key")),
+    );
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-utf7-consumer-oracle.json"
+    ))
+    .unwrap();
+    let cases = scenarios["provider"].as_array().unwrap();
+    let observations = oracle["provider"]["observations"].as_array().unwrap();
+    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), observations.len());
+    let preserved_sql = "SELECT jsonb_build_object('transactions',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t),'other_credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c WHERE id <> 'credential-review'))";
+    let preserved: Value = sqlx::query_scalar(preserved_sql)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let mut count = 0;
+    for (case, observation) in cases.iter().zip(observations) {
+        assert_eq!(case["name"], observation["name"]);
+        *state.response_override.lock().unwrap() = Some(case.clone());
+        let routes = observation["credential_routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 3);
+        for expected in routes {
+            let action = expected["action"].as_str().unwrap();
+            sqlx::query("UPDATE issuance_service.issued_credentials SET status=$1,status_updated_at='2026-01-01T00:00:00Z',revoked=false,revoked_at=NULL,revocation_reason=NULL WHERE id='credential-review' AND organization_id='org-review'")
+                .bind(if action == "reinstate" { "suspended" } else { "active" }).execute(pool).await.unwrap();
+            let initial_delivery = &expected["delivery_before"];
+            sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,external_credential_id='external-assertion',canvas_account_id=$2,last_error=NULL,updated_at='2026-01-01T00:00:00Z' WHERE id='delivery-provider' AND organization_id='org-review'")
+                .bind(&initial_delivery["metadata"]).bind(initial_delivery["canvas_account_id"].as_str()).execute(pool).await.unwrap();
+            let credential_before = credential_row(pool).await;
+            let delivery_before = delivery_row(pool).await;
+            assert_eq!(
+                normalized(credential_before.clone(), &url),
+                expected["credential_before"],
+                "{} {action} credential input",
+                case["name"]
+            );
+            assert_eq!(
+                normalized(delivery_before.clone(), &url),
+                *initial_delivery,
+                "{} {action} delivery input",
+                case["name"]
+            );
+            state.calls.lock().unwrap().clear();
+            state.events.lock().unwrap().clear();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/v1/issuance/credentials/credential-review/{action}"
+                        ))
+                        .header("x-api-key", "synthetic-validation-key")
+                        .header("x-organization-id", "org-review")
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({"reason":"synthetic reason"}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                u64::from(response.status().as_u16()),
+                expected["http_status"].as_u64().unwrap(),
+                "{} {action}",
+                case["name"]
+            );
+            let content_type = response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(content_type, expected["content_type"].as_str().unwrap());
+            let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            let body = if content_type.starts_with("application/json") {
+                normalized(serde_json::from_slice(&bytes).unwrap(), &url)
+            } else {
+                json!(std::str::from_utf8(&bytes).unwrap())
+            };
+            assert_eq!(body, expected["body"], "{} {action} response", case["name"]);
+            let credential_after = credential_row(pool).await;
+            let delivery_after = delivery_row(pool).await;
+            let mut changed: Vec<_> = credential_before
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, value)| **value != credential_after[*key])
+                .map(|(key, _)| key.clone())
+                .collect();
+            changed.sort();
+            assert_eq!(json!(changed), expected["credential_changed_columns"]);
+            assert_eq!(
+                normalized(credential_after, &url),
+                expected["credential_after"]
+            );
+            assert_eq!(
+                json!(delivery_before == delivery_after),
+                expected["delivery_row_unchanged"]
+            );
+            assert_eq!(
+                normalized(delivery_after, &url),
+                expected["delivery_after"],
+                "{} {action} delivery",
+                case["name"]
+            );
+            let calls = state.calls.lock().unwrap().clone();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0]["port"], "publication");
+            assert_eq!(
+                calls[0]["status"],
+                expected["publication"][0]["persisted_status"]
+            );
+            assert_eq!(calls[1]["port"], "mirror");
+            assert_eq!(
+                calls[1]["persisted_status"],
+                expected["credential_after"]["status"]
+            );
+            assert_eq!(
+                normalized(calls[1]["body"].clone(), &url),
+                expected["requests"][0]["body"]
+            );
+            assert_eq!(
+                calls[1]["authorization"],
+                "Bearer synthetic-runtime-operator-token"
+            );
+            // Preserve the newer Rust success events; never emit them after a
+            // failed delivery save. Published routes did not add these events.
+            let events = state.events.lock().unwrap().clone();
+            if expected["http_status"] == 500 {
+                assert!(events.is_empty());
+            } else {
+                assert_eq!(
+                    events,
+                    vec![if action == "reinstate" {
+                        "reinstated"
+                    } else if action == "suspend" {
+                        "suspended"
+                    } else {
+                        "revoked"
+                    }]
+                );
+            }
+            count += 1;
+        }
+    }
+    assert_eq!(count, 36);
+    assert_eq!(
+        sqlx::query_scalar::<_, Value>(preserved_sql)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        preserved
+    );
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+async fn credential_row(pool: &PgPool) -> Value {
+    sqlx::query_scalar("SELECT to_jsonb(c) FROM issuance_service.issued_credentials c WHERE id='credential-review'").fetch_one(pool).await.unwrap()
+}
+
+async fn delivery_row(pool: &PgPool) -> Value {
+    sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE id='delivery-provider'").fetch_one(pool).await.unwrap()
+}
+
+fn normalized(mut value: Value, url: &str) -> Value {
+    fn substitute(value: &mut Value, url: &str) {
+        match value {
+            Value::String(text) if text == url => {
+                *text = "https://bridge.example.invalid/status".into()
+            }
+            Value::Object(values) => values.values_mut().for_each(|value| substitute(value, url)),
+            Value::Array(values) => values.iter_mut().for_each(|value| substitute(value, url)),
+            _ => (),
+        }
+    }
+    substitute(&mut value, url);
+    super::canvas_status_provider_replay::timestamps(&mut value);
+    value
+}
+
+struct RuntimeFixture {
+    state: Arc<RuntimeState>,
+    service: CredentialManagementService,
+    config: IssuanceServiceConfig,
+    url: String,
+    stop: tokio::sync::oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<std::io::Result<()>>,
+    _cleanup: AbortServer,
+}
+
+async fn start_runtime(pool: &PgPool, responses: Responses) -> RuntimeFixture {
     let vault = Arc::new(PostgresIntegrationSecretVault::new(
         pool.clone(),
         IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -211,6 +449,7 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
         events: Mutex::new(Vec::new()),
         remove_delivery_before_response: AtomicBool::new(false),
         responses,
+        response_override: Mutex::new(None),
     });
     let application = Router::new()
         .route("/status", post(mirror))
@@ -232,6 +471,14 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
             ("CANVAS_PILOT_ORGANIZATION_IDS", "org-review"),
             ("CANVAS_CREDENTIALS_PROVIDER", "bridge"),
             (
+                "CANVAS_CREDENTIALS_ISSUER_ID",
+                if matches!(responses, Responses::Utf7Body) {
+                    "configured-issuer"
+                } else {
+                    ""
+                },
+            ),
+            (
                 "CANVAS_CREDENTIALS_API_TOKEN",
                 "synthetic-runtime-operator-token",
             ),
@@ -248,6 +495,26 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
         PostgresCredentialManagementRepository::new(pool.clone()).with_canvas_lifecycle(provider);
     let service =
         CredentialManagementService::new(Arc::new(repository), state.clone(), state.clone());
+    RuntimeFixture {
+        state,
+        service,
+        config,
+        url,
+        stop,
+        server,
+        _cleanup,
+    }
+}
+
+async fn run_scenario(pool: &PgPool, responses: Responses) {
+    let RuntimeFixture {
+        state,
+        service,
+        stop,
+        server,
+        _cleanup,
+        ..
+    } = start_runtime(pool, responses).await;
     let mut outcomes = Vec::new();
     let mut deliveries = Vec::new();
     for action in [
@@ -358,7 +625,7 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
                     Responses::Utf7Label => "ValueError",
                     Responses::Iso2022 if index == 0 => "RuntimeError",
                     Responses::Iso2022 => "UnicodeError",
-                    Responses::Baseline => unreachable!(),
+                    Responses::Baseline | Responses::Utf7Body => unreachable!(),
                 }
             );
             assert_eq!(deliveries[index]["last_error"], expected["error"]);

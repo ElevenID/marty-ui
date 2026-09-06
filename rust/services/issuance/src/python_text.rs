@@ -2,17 +2,17 @@
 //! Serialization policy belongs to the consumer: no implicit replacement,
 //! surrogate-pair folding, escaping, or early rendering error occurs here.
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct PythonText(Repr);
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PythonText(Repr);
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Repr {
     Scalar(String),
     NonScalar(Vec<u32>),
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct InvalidCodepoint(pub u32);
+pub struct InvalidCodepoint(pub u32);
 
 impl Default for PythonText {
     fn default() -> Self {
@@ -81,8 +81,14 @@ impl PythonText {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn codepoints(&self) -> impl Iterator<Item = u32> + '_ {
+    pub fn as_scalar(&self) -> Option<&str> {
+        match &self.0 {
+            Repr::Scalar(text) => Some(text),
+            Repr::NonScalar(_) => None,
+        }
+    }
+
+    pub fn codepoints(&self) -> impl Iterator<Item = u32> + '_ {
         let (scalar, points): (&str, &[u32]) = match &self.0 {
             Repr::Scalar(text) => (text, &[]),
             Repr::NonScalar(points) => ("", points),
