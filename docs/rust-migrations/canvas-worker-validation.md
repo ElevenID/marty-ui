@@ -1,12 +1,12 @@
 # Actual worker validation and processor-failure reference
 
-Status: seventeen published-worker cases captured independently twice and frozen;
+Status: twenty published-worker cases captured independently twice and frozen;
 native replay is implemented. The initial eleven cases passed Linux at
 `56f4658e1`; newer races/processor failures await exact-head qualification. This is selected
 gate-9 evidence, not a completed
 worker/consumer cutover. All nine normative validation errors now have captured
 actual-process outcomes, including the two reference-removal races below.
-Four processor-failure outcomes are also captured; their remaining outcome
+Five distinct processor-failure outcomes are also captured; their remaining outcome
 inventory is tracked separately rather than treated as validation coverage.
 
 The reference reuses the existing actual REST process, HTTPS, official-schema,
@@ -177,12 +177,15 @@ All thirteen earlier observations are unchanged. New expectations retain their
 exact captured scalar tokens with whitespace-only formatting. No Rust outcome
 supplied expectations, and this extension changes no production implementation.
 
-The existing native parent dispatches all seventeen cases in separate children.
+The existing native parent dispatched all seventeen cases at this checkpoint;
+the roster-configuration extension below brings that to twenty separate children.
 The focused repository-only test explicitly selects the thirteen validation
 cases: processor errors cannot be inferred from a repository validator. The
 coverage guard separately accounts for all nine normative validation codes and
 all seventeen normative processor outcomes, rejects unknown boundaries, and
-tracks the thirteen processor codes outside this four-case corpus explicitly.
+tracked the thirteen processor codes outside this four-case corpus explicitly.
+The roster-configuration addition covers one further code, leaving twelve
+explicitly listed processor codes outside the current corpus.
 That remaining list is corpus-specific: earlier retry/provider evidence remains
 valid in its own named gates. Dynamic Python processor shapes must be reconciled
 with typed Rust dispatch, not reintroduced as a production Python loader.
@@ -199,6 +202,50 @@ Windows, not native process execution. Strict all-target Clippy, Ruff, Rustfmt
 and diff checks passed. The earlier 34-entry worker regression remains recorded
 above for the shared barrier implementation; this corpus extension adds no
 new process/barrier implementation.
+
+## Deferred roster-only configuration
+
+Source inspection identified another composition gap: the native binary used
+fallible `i64` parsing of both roster bounds during startup. A malformed value
+therefore aborted the whole worker, including non-roster work. The published
+processor reads those settings only when a background-roster job reaches the
+configuration check, after requirement validation.
+
+Three actual published-worker cases now freeze invalid batch size, invalid
+maximum size, and an application with both roster settings invalid but its own
+missing LTI subject. The first two produce `canvas_roster_configuration_invalid`
+with `Canvas roster bounds are invalid`; the third retains
+`canvas_lti_identity_missing`. Each keeps the worker alive to its idle heartbeat,
+records the exact terminal job/target state, makes zero Canvas requests, and
+preserves all issued rows, transactions, ciphertext and the original job ID.
+The fixture permits only the two named roster environment settings.
+
+Independent twenty-case captures A/B match byte-for-byte with SHA-256
+`fd00e704f48da9803f3d2f2e200123f7e2ac98205e207185c59ee7f1b41c1f5a`.
+All seventeen earlier observations are unchanged. New scalar tokens were copied
+exactly, with whitespace-only formatting; no Rust result supplied expectations.
+
+Rust now stores a typed `Result<CanvasRosterBounds, CanvasSyncProcessingError>`
+and consumes an error only inside roster processing. The existing public
+constructor remains available and delegates to the same configuration owner.
+The binary no longer has its own `i64` parser: bounds reuse pinned MMF
+`PythonConfigInteger`, clamp before machine conversion, and retain defaults
+500/5000, batch range 1..2000 and maximum range batch..10000. Valid configuration
+retains the existing debug fields; invalid configuration emits only the static
+error code, never the supplied text. No dependency pin, lease/generation fence,
+tenant query, processor loader or deployment consumer changes.
+
+Unit tests cover defaults, negatives, signed/underscored and Unicode decimal
+values, oversized integers, the 4300/4301-digit boundary, malformed values,
+continued learner/issued-drift processing, unsupported-candidate precedence and
+closed rollout. Local checks passed: 332 library, 5 worker-binary, 34 managed
+HTTP, 20 OAuth/provider and 23 issuance/worker tests (414 total), strict all-target
+Clippy, and 907 Python tests in 39.30 seconds with the same existing opt-in skip.
+The full configured local worker subset passed all 34 entries in 515.83 seconds
+(36 unrelated entries filtered out), regenerating every earlier worker reference
+and all twenty validation/failure cases. Linux-only parent/helper returns on
+Windows are not native process execution. Fresh exact-head Linux process/image
+qualification remains required; these tests do not authorize consumer cutover.
 
 Broader processor failures,
 missing-target races, signing effects and privacy remain in the

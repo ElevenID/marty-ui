@@ -9,7 +9,7 @@ use marty_issuance_service::{
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
     canvas_provider_http::CanvasHttpClientPolicy,
-    canvas_sync_processor::NativeCanvasSyncProcessor,
+    canvas_sync_processor::{CanvasRosterBounds, NativeCanvasSyncProcessor},
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
     canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
@@ -167,12 +167,18 @@ async fn run_initialized_worker(
         },
         self_managed_origins,
     ));
-    let processor = Arc::new(NativeCanvasSyncProcessor::new(
+    let processor = Arc::new(NativeCanvasSyncProcessor::new_with_roster_configuration(
         Arc::new(PostgresCanvasSyncProcessorRepository::new(pool.clone())),
         authoritative_provider,
         config.clone(),
-        bounded_usize("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE", 500, 1, 2_000)?,
-        bounded_usize("CANVAS_BACKGROUND_ROSTER_MAX_SIZE", 5_000, 1, 10_000)?,
+        CanvasRosterBounds::from_values(
+            env::var("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE")
+                .ok()
+                .as_deref(),
+            env::var("CANVAS_BACKGROUND_ROSTER_MAX_SIZE")
+                .ok()
+                .as_deref(),
+        ),
     ));
     let worker = CanvasSyncWorker::new(
         worker_repository,
@@ -224,22 +230,6 @@ fn first_present_or_else<T, E>(
         Some(value) => Ok(Some(value)),
         None => fallback(),
     }
-}
-
-fn bounded_usize(
-    name: &str,
-    default: usize,
-    minimum: usize,
-    maximum: usize,
-) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    let value = env::var(name)
-        .ok()
-        .map(|value| value.trim().parse::<i64>())
-        .transpose()?
-        .unwrap_or(i64::try_from(default)?);
-    Ok(usize::try_from(
-        value.clamp(i64::try_from(minimum)?, i64::try_from(maximum)?),
-    )?)
 }
 
 fn env_bool(name: &str) -> bool {

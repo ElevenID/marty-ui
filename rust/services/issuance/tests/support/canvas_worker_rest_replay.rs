@@ -314,7 +314,16 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             .execute(pool)
             .await
             .unwrap();
-        let environment = worker_environment(origin);
+        let mut environment = worker_environment(origin);
+        if let Some(extra) = stage.get("environment") {
+            for (name, value) in extra.as_object().unwrap() {
+                assert!(matches!(
+                    name.as_str(),
+                    "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE" | "CANVAS_BACKGROUND_ROSTER_MAX_SIZE"
+                ));
+                environment.insert(name.clone(), value.as_str().unwrap().to_owned());
+            }
+        }
         let race = validation_case.and_then(|case| case.get("reference_race"));
         let mut worker = if let Some(race) = race {
             use super::canvas_worker_concurrent_replay::{start_workers_at_barrier, WorkerBarrier};

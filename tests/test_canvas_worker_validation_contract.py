@@ -17,7 +17,7 @@ def test_native_validation_matrix_uses_separate_children_and_no_expected_reads(
     calls = []
     monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
     native.run("synthetic-native-executable", "validation")
-    assert len(calls) == len({call[4]["name"] for call in calls}) == 17
+    assert len(calls) == len({call[4]["name"] for call in calls}) == 20
     for executable, scenario, spec, reference, case in calls:
         assert executable == "synthetic-native-executable" and scenario == "validation"
         assert len(spec["stages"]) == len(reference["observations"]) == 1
@@ -31,6 +31,7 @@ def test_native_validation_matrix_uses_separate_children_and_no_expected_reads(
             reference["observations"][0]["jobs"][0]["last_error_code"] == case["code"]
         )
         assert reference["target"]["enabled"] is False
+        assert spec["stages"][0].get("environment", {}) == case.get("environment", {})
         if "reference_race" in case:
             assert spec["stages"][0]["reference_race"] == case["reference_race"]
             assert reference["observations"][0]["reference_race"] == {
@@ -64,8 +65,8 @@ def test_every_error_is_covered_or_explicitly_remaining(
     remaining = set(spec[remaining_key])
     assert not covered & remaining
     assert covered | remaining == required
-    assert len(spec["cases"]) == len({case["name"] for case in spec["cases"]}) == 17
-    assert len(remaining) == (0 if boundary == "target_validation" else 13)
+    assert len(spec["cases"]) == len({case["name"] for case in spec["cases"]}) == 20
+    assert len(remaining) == (0 if boundary == "target_validation" else 12)
     assert all(
         case.get("boundary", "target_validation")
         in {"target_validation", "processor_dispatch"}
@@ -76,6 +77,10 @@ def test_every_error_is_covered_or_explicitly_remaining(
         == 5
     )
     for case in spec["cases"]:
+        assert set(case.get("environment", {})) <= {
+            "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+            "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+        }
         assert case["seed"]
         for statement in case["seed"]:
             assert statement.startswith(

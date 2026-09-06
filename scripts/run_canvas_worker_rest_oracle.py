@@ -168,12 +168,18 @@ def run_scenarios(spec, shared, https):
                     text("TRUNCATE issuance_service.canvas_worker_heartbeats")
                 )
             race = stage.get("reference_race")
+            extra = stage.get("environment", {})
+            assert set(extra) <= {
+                "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+                "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+            }
+            case = worker_case(origin, cert, extra)
             if race is None:
-                child = start_worker(worker_case(origin, cert), "worker-rest")
+                child = start_worker(case, "worker-rest")
             else:
                 child = start_blocked_workers(
                     engine,
-                    worker_case(origin, cert),
+                    case,
                     ["worker-rest"],
                     race["barrier_sql"],
                     text(race["blocked_sql"]),

@@ -34,7 +34,7 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ### Current transport integration and merge gates
 
 The [target-validation reference](rust-migrations/canvas-worker-validation.md)
-freezes seventeen actual published-worker cases with matching independent captures:
+freezes twenty actual published-worker cases with matching independent captures:
 no Canvas reads, exact terminal errors, disabled targets and preserved issued
 rows/token ciphertext. Native replay is now implemented using the shared process
 fixture. Two actual reference-removal races now account for the previously
@@ -50,6 +50,15 @@ at `56f4658e1` (CI34053145533, Rust CodeQL34053145588): all 70 configured tests
 passed in 1399.33 seconds, with eight image-preflight and 24 packaged startup
 cases. Newer races/processor cases require fresh exact-head Linux qualification;
 broader processor failures remain open, so gate 9 is not closed.
+
+Three roster-configuration cases additionally freeze invalid batch/maximum
+settings and continued non-roster application processing. Rust now defers those
+errors to roster jobs and shares lossless MMF integer parsing instead of aborting
+startup through a separate `i64` parser. The public constructor and valid debug
+fields are preserved. Current local checks pass 414 Rust tests (including five
+worker-binary tests), strict Clippy, 907 Python tests and all 34 configured local
+worker entries in 515.83 seconds. Reference regeneration passed; fresh
+Linux/image qualification remains required.
 
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,

@@ -2,10 +2,31 @@
   "schema": "marty.canvas-worker-validation-scenarios/v1",
   "reference_scenario": "canvas-worker-rest-scenarios.json",
   "remaining_validation_errors": [],
-  "remaining_processor_errors": ["canvas_sync_processor_unavailable", "canvas_sync_processor_contract_invalid", "canvas_background_signing_forbidden", "canvas_platform_reconfigured", "canvas_application_unavailable", "canvas_rate_limited", "canvas_roster_configuration_invalid", "canvas_roster_oauth_unavailable", "canvas_nrps_roster_unavailable", "canvas_roster_collection_too_large", "canvas_sync_resources_unavailable", "canvas_authoritative_read_failed", "canvas_authoritative_reads_failed"],
+  "remaining_processor_errors": ["canvas_sync_processor_unavailable", "canvas_sync_processor_contract_invalid", "canvas_background_signing_forbidden", "canvas_platform_reconfigured", "canvas_application_unavailable", "canvas_rate_limited", "canvas_roster_oauth_unavailable", "canvas_nrps_roster_unavailable", "canvas_roster_collection_too_large", "canvas_sync_resources_unavailable", "canvas_authoritative_read_failed", "canvas_authoritative_reads_failed"],
   "scope": "Fresh official-schema database per case; fixture target configuration and one queued job are seeded before the actual worker starts. In reference-removal races, observe its real lookup blocked on the referenced table, detach or restore only the fixture reference and remove that exact synthetic row in the barrier-owning transaction, then release. No application clock, running job, lease or outcome is edited and no constraint is disabled. Observe terminal validation/processor failures without Canvas reads or changes to issued rows.",
   "initial_job_seed": "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at) VALUES ('worker-validation-job','org-review','target-review','queued',0,8,'2026-09-01T00:00:00Z','{}','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')",
   "cases": [
+    {
+      "name": "invalid_roster_batch",
+      "boundary": "processor_dispatch",
+      "code": "canvas_roster_configuration_invalid",
+      "environment": {"CANVAS_BACKGROUND_ROSTER_BATCH_SIZE": "synthetic-invalid-bound"},
+      "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='background_roster',application_id=NULL WHERE id='target-review'"]
+    },
+    {
+      "name": "invalid_roster_limit",
+      "boundary": "processor_dispatch",
+      "code": "canvas_roster_configuration_invalid",
+      "environment": {"CANVAS_BACKGROUND_ROSTER_MAX_SIZE": "synthetic-invalid-bound"},
+      "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='background_roster',application_id=NULL WHERE id='target-review'"]
+    },
+    {
+      "name": "invalid_roster_bounds_do_not_preempt_application",
+      "boundary": "processor_dispatch",
+      "code": "canvas_lti_identity_missing",
+      "environment": {"CANVAS_BACKGROUND_ROSTER_BATCH_SIZE": "synthetic-invalid-bound", "CANVAS_BACKGROUND_ROSTER_MAX_SIZE": "synthetic-invalid-bound"},
+      "seed": ["UPDATE issuance_service.applications SET integration_context='{\"canvas\":{}}' WHERE id='application-review'"]
+    },
     {
       "name": "invalid_evidence_requirements",
       "boundary": "processor_dispatch",

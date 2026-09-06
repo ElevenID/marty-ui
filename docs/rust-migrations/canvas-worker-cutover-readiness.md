@@ -56,7 +56,7 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 ## Normative legacy-gap reconciliation
 
-The [validation/failure reference](canvas-worker-validation.md) captures seventeen
+The [validation/failure reference](canvas-worker-validation.md) captures twenty
 actual published-worker cases with identical independent results. It covers
 nine terminal codes (including five inactive variants), no Canvas reads and
 preserved issued rows/token ciphertext. Native replay is implemented; focused
@@ -65,7 +65,10 @@ correction. The two previously uncovered invalid-reference paths now have actual
 published-process removal races, with matching independent captures and native
 replay implemented through the shared database barrier. Four further cases cover
 invalid requirements, missing LTI identity, unsupported candidate processing and
-template removal after application read. The thirteen processor outcomes outside
+template removal after application read. Three roster-setting cases additionally
+freeze job-local configuration errors and non-roster continuation; the native
+binary's eager integer parsing has been replaced by deferred, lossless bounded
+configuration in the shared processor. The twelve processor outcomes outside
 this corpus are tracked separately. Full exact-head Linux qualification and
 broader processor failures remain pending; gate 9 is open.
 
