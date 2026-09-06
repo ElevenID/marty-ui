@@ -1,8 +1,8 @@
 # Whole-worker OAuth revocation qualification
 
 Gate 10 remains open. Seven actual published-worker observations are now frozen,
-with two identical independent captures and native replay implemented but not
-yet qualified on Linux. Existing repository/provider tests and the native
+with two identical independent captures and native replay now qualified on
+Linux at `31355d24a1ef5d87d2da98a121f73863ca8bcf7e`. Existing repository/provider tests and the native
 disconnect-marker privacy replay are retained; neither proves the complete
 remote revocation failure and owner-fence matrix through the deployed worker.
 
@@ -43,7 +43,8 @@ The native replay shares the published-schema seed, encrypted vault and owned
 binary lifecycle. Complete HTTP observations are checked by the HTTPS owner;
 all durable observations are checked against the frozen artifact by Rust.
 Reference regeneration and native parent/child entries are registered in the
-mandatory hosted Linux test gate. Full native process qualification remains pending.
+mandatory hosted Linux test gate. That seven-case native boundary is now qualified;
+the later ownership and marker-failure extensions still require their own hosted run.
 
 An exploratory Windows native execution returned unavailable/retry outcomes even
 for positive HTTPS cases and is **not** accepted as application parity evidence.
@@ -186,3 +187,20 @@ Clippy and integration compilation pass locally. The full Python suite passed
 and failure/cleanup controls for the new parent path. Earlier transport and fence
 artifacts are unchanged; remaining Retry-After edges and other whole-worker
 requirements are still open.
+
+## Hosted seven-case transport qualification
+
+Exact head `31355d24a1ef5d87d2da98a121f73863ca8bcf7e` passed CI34066329798
+and Rust CodeQL34066329814, with all applicable PR checks green (scorecard
+skipped). Runtime job101575640066 includes all seven actual native OAuth
+revocation PASS markers, each with one request: 200, 204, 404, 429, 503, redirect
+and timeout. The configured 73-entry group passed in 1632.34 seconds; the
+separate configured four-entry worker PostgreSQL group passed in 96.54 seconds.
+The image job passed too. The earlier 0.37-second unconfigured group is not
+being counted as database/process parity evidence.
+
+This qualifies the frozen seven-case native transport/durable cleanup boundary
+and its scoped adapter correction. It does not qualify the subsequent ownership
+or marker-failure extensions, which require the fresh 77-entry Linux gate.
+Remaining Retry-After/fence and whole-worker consumer cutover requirements keep
+gate 10 and PR814 open; no live Python deletion or beta acceptance is claimed.

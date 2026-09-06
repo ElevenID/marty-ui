@@ -111,13 +111,14 @@ The [whole-worker OAuth revocation reference](rust-migrations/canvas-worker-oaut
 now freezes seven actual published-process HTTPS/SQL observations from matching
 independent captures. It covers remote success, rate limiting, rejection, redirect
 and timeout, both token secrets and unrelated-tenant retention. Native replay and
-mandatory Linux CI registration are implemented; native qualification and remaining
-owner-fence/patch/Retry-After extensions are still pending. No runtime mapping has
+mandatory Linux CI registration are implemented and the seven-case native boundary
+is now qualified; owner-fence/patch qualification and Retry-After extensions remain
+pending. No runtime mapping has
 been changed on the basis of the unqualified Windows transport diagnostic.
 The actual native loopback-HTTP adapter test separately reproduced two frozen
 classification differences; a revocation-only Rust correction preserves the
 worker's general timeout mapping, exchange/refresh semantics and atomic cleanup.
-The full native HTTPS/SQL replay still requires Linux qualification.
+The seven-case native HTTPS/SQL replay passed exact-head Linux qualification below.
 
 The separate two-case ownership-transfer extension now has actual published
 200/429 captures and unchanged regeneration. After receipt of a held DELETE,
@@ -139,14 +140,16 @@ atomic native cleanup; its Linux qualification is pending (77 top-level entries
 now registered). Transport and ownership artifacts remain unchanged. Retry-After
 edges and the remaining whole-worker gates are not declared complete.
 
-Latest qualified UI checkpoint `b02b77d13562db717d6e16cdf85ff430edbc2eeb` passed
-CI34064588338 and all applicable exact-head checks, including Rust CodeQL34064588330.
-Runtime job101571024242 passed 70 configured tests in 1449.26 seconds, retaining
+Latest qualified UI checkpoint `31355d24a1ef5d87d2da98a121f73863ca8bcf7e` passed
+CI34066329798 and all applicable exact-head checks, including Rust CodeQL34066329814.
+Runtime job101575640066 passed 73 configured tests in 1632.34 seconds, retaining
 the actual native validation/failure cases, and all four configured PostgreSQL
-worker-contract entries in 96.51 seconds. Its image job also passed. This qualifies
-the twelve-case privacy checkpoint and OAuth DELETE fixture preparation; the
-subsequent seven-case whole-worker revocation replay and scoped adapter correction
-require fresh hosted qualification.
+worker-contract entries in 96.54 seconds. Its image job also passed. All seven
+actual native OAuth revocation PASS markers were verified in the configured
+runtime log. This retains the twelve-case privacy checkpoint and qualifies the
+seven-case whole-worker revocation boundary and scoped adapter correction.
+The subsequent ownership and marker-failure extensions require fresh hosted
+qualification; no unconfigured early-return group is counted as parity evidence.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 
