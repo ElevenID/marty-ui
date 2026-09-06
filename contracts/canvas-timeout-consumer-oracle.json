@@ -282,6 +282,125 @@
     {
       "error_class": "ReadTimeout",
       "name": "gzip_stall"
+    },
+    {
+      "body": {
+        "body_excerpt": "caf� �"
+      },
+      "name": "text_ascii",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "caf� �"
+      },
+      "name": "text_ascii_alias",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café "
+      },
+      "name": "text_latin1",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café "
+      },
+      "name": "text_latin1_alias",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café "
+      },
+      "name": "text_latin1_spaces",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café "
+      },
+      "name": "text_quoted_charset",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café "
+      },
+      "name": "text_quoted_semicolon",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café "
+      },
+      "name": "text_first_charset",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café"
+      },
+      "name": "text_unknown_charset",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café"
+      },
+      "name": "text_empty_charset",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café"
+      },
+      "name": "text_without_charset",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café"
+      },
+      "name": "text_without_type",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café"
+      },
+      "name": "text_invalid_media_type",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "café"
+      },
+      "name": "text_utf8_sig",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "���caf��"
+      },
+      "name": "text_ascii_bom",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "{\"message\":\"café\"}"
+      },
+      "name": "text_json_latin1",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…"
+      },
+      "name": "text_long_latin1",
+      "status": 403
     }
   ],
   "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",

@@ -55,6 +55,7 @@ pub mod canvas_operator_secret;
 pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
+mod canvas_response_text;
 pub mod canvas_review_resolution;
 pub mod canvas_sync_lease;
 pub mod canvas_sync_processor;

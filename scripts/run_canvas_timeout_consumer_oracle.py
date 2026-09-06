@@ -104,6 +104,58 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            text_cases = {
+                "/text_ascii": ("text/plain; charset=ascii", "636166e92080"),
+                "/text_ascii_alias": (
+                    "text/plain; charset=ANSI_X3.4-1968",
+                    "636166e92080",
+                ),
+                "/text_latin1": ("text/plain; charset=iso-8859-1", "636166e92080"),
+                "/text_latin1_alias": ("text/plain; charset=cp819", "636166e92080"),
+                "/text_latin1_spaces": (
+                    "text/plain; charset=ISO 8859-1",
+                    "636166e92080",
+                ),
+                "/text_quoted_charset": (
+                    'text/plain; CHARSET="LATIN1"',
+                    "636166e92080",
+                ),
+                "/text_quoted_semicolon": (
+                    'text/plain; note="x; charset=ascii"; charset=latin1',
+                    "636166e92080",
+                ),
+                "/text_first_charset": (
+                    "text/plain; charset=latin1; charset=ascii",
+                    "636166e92080",
+                ),
+                "/text_unknown_charset": (
+                    "text/plain; charset=synthetic-unknown",
+                    "636166c3a9",
+                ),
+                "/text_empty_charset": ("text/plain; charset=", "636166c3a9"),
+                "/text_without_charset": ("text/plain", "636166c3a9"),
+                "/text_without_type": (None, "636166c3a9"),
+                "/text_invalid_media_type": ("synthetic; charset=latin1", "636166e9"),
+                "/text_utf8_sig": ("text/plain; charset=utf-8-sig", "efbbbf636166c3a9"),
+                "/text_ascii_bom": ("text/plain; charset=ascii", "efbbbf636166c3a9"),
+                "/text_json_latin1": (
+                    "application/json; charset=latin1",
+                    "7b226d657373616765223a22636166e9227d",
+                ),
+                "/text_long_latin1": ("text/plain; charset=latin1", "e9" * 1001),
+            }
+            if self.path in text_cases:
+                content_type, hexadecimal = text_cases[self.path]
+                body = bytes.fromhex(hexadecimal)
+                self.send_response(403)
+                if content_type is not None:
+                    self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+                return
             compressed_cases = {
                 "/gzip_json": "gzip",
                 "/deflate_json": "deflate",

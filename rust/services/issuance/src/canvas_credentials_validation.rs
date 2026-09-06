@@ -523,7 +523,11 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
         } else {
             // HTTPX consumes the entire response before JSON/excerpt projection.
             // The excerpt limit is not a response-read cutoff or a JSON limit.
-            Some(failure_excerpt(&response.bytes().await.map_err(|_| ())?))
+            let content_type = response.content_type();
+            Some(failure_excerpt(
+                &response.bytes().await.map_err(|_| ())?,
+                content_type.as_deref(),
+            ))
         };
         Ok(CanvasCredentialsProviderResponse {
             status_code,
@@ -565,6 +569,7 @@ mod tests {
             "json_exact",
             "json_large",
             "text_large",
+            "latin1",
             "stalled",
             "truncated",
         ] {
@@ -580,7 +585,9 @@ mod tests {
                     assert!(request.len() < 8192);
                 }
                 let payload = br#"{"late":true}"#;
-                let body = if mode == "text_large" {
+                let body = if mode == "latin1" {
+                    vec![0xe9; 1001]
+                } else if mode == "text_large" {
                     vec![b'x'; 65537]
                 } else {
                     let count = if mode == "json_exact" {
@@ -592,7 +599,12 @@ mod tests {
                     body.extend_from_slice(payload);
                     body
                 };
-                socket.write_all(format!("HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                let content_type = if mode == "latin1" {
+                    "text/plain; charset=latin1"
+                } else {
+                    "application/json"
+                };
+                socket.write_all(format!("HTTP/1.1 403 Forbidden\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
                 if matches!(mode, "stalled" | "truncated") {
                     socket.write_all(&body[..65537]).await.unwrap();
                     if mode == "stalled" {
@@ -625,6 +637,8 @@ mod tests {
                 assert_eq!(response.status_code, 403);
                 let expected = if mode == "text_large" {
                     json!({"body_excerpt":format!("{}…", "x".repeat(1000))})
+                } else if mode == "latin1" {
+                    json!({"body_excerpt":format!("{}…", "é".repeat(1000))})
                 } else {
                     json!({"late":true})
                 };
@@ -960,17 +974,17 @@ mod tests {
     #[test]
     fn failure_excerpts_preserve_objects_wrap_arrays_and_bound_text() {
         assert_eq!(
-            failure_excerpt(br#"{"error":"denied"}"#),
+            failure_excerpt(br#"{"error":"denied"}"#, None),
             json!({"error": "denied"}).as_object().unwrap().clone()
         );
         assert_eq!(
-            failure_excerpt(br#"["one","two"]"#),
+            failure_excerpt(br#"["one","two"]"#, None),
             json!({"payload": ["one", "two"]})
                 .as_object()
                 .unwrap()
                 .clone()
         );
-        let excerpt = failure_excerpt(&vec![b'x'; MAX_EXCERPT_CHARS + 50]);
+        let excerpt = failure_excerpt(&vec![b'x'; MAX_EXCERPT_CHARS + 50], None);
         let body = excerpt["body_excerpt"].as_str().unwrap();
         assert_eq!(body.chars().count(), MAX_EXCERPT_CHARS + 1);
         assert!(body.ends_with('…'));

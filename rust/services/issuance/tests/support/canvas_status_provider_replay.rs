@@ -56,6 +56,7 @@ impl CanvasStatusTransport for Ports {
                 .try_into()
                 .unwrap(),
             request_id: Some("synthetic-provider-request".into()),
+            content_type: None,
             body: self.case["response_text"]
                 .as_str()
                 .map(str::to_owned)

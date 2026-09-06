@@ -22,6 +22,7 @@ use crate::{
         resolve_canvas_operator_token, CanvasOperatorSecretReader, FileCanvasOperatorSecretReader,
     },
     canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy},
+    canvas_response_text::response_text,
     credential_management::{CredentialLifecycleAction, CredentialManagementPortError},
     python_value::{python_string, python_truthy, strip},
 };
@@ -74,6 +75,7 @@ pub struct CanvasStatusResponse {
     pub request_id: Option<String>,
     /// Original response bytes: JSON encoding detection must precede text loss.
     pub body: Vec<u8>,
+    pub content_type: Option<String>,
 }
 
 #[async_trait]
@@ -398,12 +400,15 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
             return Err(error(format!(
                 "Canvas Credentials {operation} failed (HTTP {}): {}",
                 response.status,
-                truncate_text(&String::from_utf8_lossy(&response.body))
+                truncate_text(&response_text(
+                    &response.body,
+                    response.content_type.as_deref()
+                ))
             )));
         }
         let mut metadata = object(
             json!({"status_sync_url":url,"status_sync_http_status":response.status,
-            "status_sync_response":response_excerpt(&response.body),
+            "status_sync_response":response_excerpt(&response.body, response.content_type.as_deref()),
             "status_sync_request_id":response.request_id,"status_synced_at":chrono::Utc::now().to_rfc3339()}),
         );
         if real_provider {
@@ -516,6 +521,7 @@ impl CanvasStatusTransport for HttpCanvasStatusTransport {
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
+        let content_type = response.content_type();
         let body = response
             .bytes()
             .await
@@ -524,6 +530,7 @@ impl CanvasStatusTransport for HttpCanvasStatusTransport {
             status,
             request_id,
             body: body.to_vec(),
+            content_type,
         })
     }
 }
@@ -667,7 +674,13 @@ mod tests {
                     "authorization":headers.get("authorization").and_then(|v| v.to_str().ok()),
                     "body":serde_json::from_slice::<Value>(&body).unwrap()}));
                 let mut response = if path == "/redirect" {
-                    (StatusCode::FOUND, "Synthetic redirect").into_response()
+                    let mut response =
+                        (StatusCode::FOUND, b"Synthetic redirect caf\xe9".to_vec()).into_response();
+                    response.headers_mut().insert(
+                        "content-type",
+                        "text/plain; charset=latin1".parse().unwrap(),
+                    );
+                    response
                 } else if method == "DELETE" {
                     let bytes = "{\"accepted\":true}"
                         .encode_utf16()
@@ -773,7 +786,11 @@ mod tests {
             );
         }
         assert_eq!(results[0].body, b"{\"accepted\":true}");
-        assert_eq!(results[3].body, b"Synthetic redirect");
+        assert_eq!(results[3].body, b"Synthetic redirect caf\xe9");
+        assert_eq!(
+            response_text(&results[3].body, results[3].content_type.as_deref()),
+            "Synthetic redirect café"
+        );
         assert_eq!(
             results[1].body,
             "{\"accepted\":true}"
@@ -782,7 +799,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            response_excerpt(&results[1].body),
+            response_excerpt(&results[1].body, results[1].content_type.as_deref()),
             json!({"accepted":true}).as_object().unwrap().clone()
         );
         let calls = calls.lock().unwrap();

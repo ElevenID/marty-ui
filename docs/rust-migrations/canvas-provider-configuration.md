@@ -370,3 +370,42 @@ comparisons. No deployment or reachable Python deletion occurred.
 The existing offline dependency bans/licenses/sources gate also passes without
 policy changes (duplicate-version warnings remain); hosted advisory checking is
 still required for the new head.
+
+## Preserve core text charsets independently of JSON
+
+The next continuation retains response Content-Type alongside decompressed bytes.
+Both validation excerpts and status error/success projections use one shared
+response_text owner. JSON is still parsed from bytes first; a Latin-1 encoded
+JSON-looking body that Python does not parse as JSON remains a decoded text
+excerpt, not a manufactured JSON object.
+
+Seventeen appended TLS observations (64 total, previous47 unchanged) freeze
+ASCII replacement, Latin-1 byte mappings and aliases, quoted/case-insensitive
+charset parameters, quoted semicolons, first-charset precedence, invalid media-type
+tokens, absent/empty/unknown declarations, UTF-8 signature removal only when
+declared, and long Latin-1 excerpts. Two independent exact-source captures agree
+before native integration. The native negative control failed on the declared
+charset/BOM projections; the repaired64-case native replay passes.
+
+The shared decoder explicitly distinguishes Python Latin-1 from WHATWG
+Windows-1252 and ASCII from both. Codec labels use the published ASCII alias
+normalization rules; no new dependency or duplicate consumer decoder was added.
+Header metadata is captured before the shared response reader consumes the body.
+The existing actual status transport fixture now proves Latin-1 redirect/error
+text survives with its declared charset, while its gzip/UTF-16 JSON case remains
+unchanged. The actual validation transport proves1001 Latin-1 characters become
+1000 characters plus ellipsis, not a byte-counted excerpt.
+
+Local293 library tests PASS (2.56s);5 worker,28 management HTTP (0.04s),22 behavior
+(0.01s),40 workflow/image/ownership (2.06s) PASS; strict all-target Clippy PASS
+(21.10s); native64 TLS replay PASS. Full configured21 published-image tests PASS
+(140.82s; none ignored/filtered), including64 TLS observations and unchanged
+status/persistence/managed-validation comparisons. Fresh hosted checks remain
+required for this continuation.
+
+This closes the qualified UTF-8/ASCII/Latin-1 behavior, not every Python codec.
+Other recognized encodings currently retain the prior native UTF-8 fallback and
+remain an explicit adoption gap; extended/RFC2231 charset parameters, additional
+header forms and exceptional text/JSON application boundaries also need evidence.
+Do not cut over all consumers or claim blanket response parity on this corpus.
+No deployment, reachable Python feature deletion or other-worker change occurred.

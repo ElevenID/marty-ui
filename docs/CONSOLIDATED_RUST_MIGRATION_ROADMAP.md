@@ -33,6 +33,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Core text-charset qualification extends the shared TLS corpus to64 observations,
+retaining the previous47. Two independent published-source captures freeze
+ASCII/Latin-1 mappings and aliases, UTF-8 signature handling, first/quoted charset
+parameters, fallback and character-counted excerpts. The unchanged native text
+projection failed; a shared Rust text owner now passes native64 replay. Both
+consumers retain Content-Type alongside decompressed bytes, while JSON decoding
+remains independent. Local293 library tests, supporting suites and strict Clippy
+pass. Additional Python codecs and extended charset headers still block blanket
+text parity and all-consumer cutover.
+The full configured21 published-image tests also pass (none ignored/filtered);
+fresh hosted qualification remains required for this continuation.
+
 Compressed-response qualification extends the shared TLS corpus to47 cases,
 preserving all31 prior observations. The immutable published image supports
 gzip/deflate/identity, not Brotli. Two independent captures freeze16 added

@@ -200,6 +200,26 @@ pub(crate) struct CanvasOperationResponse {
     finished: bool,
 }
 impl CanvasOperationResponse {
+    pub fn content_type(&self) -> Option<String> {
+        let values = self
+            .response
+            .headers()
+            .get_all(http::header::CONTENT_TYPE)
+            .iter()
+            .map(|value| {
+                value
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| char::from(*byte))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.join(", "))
+        }
+    }
     pub async fn chunk(&mut self) -> Result<Option<Bytes>, CanvasOperationHttpError> {
         if self.finished {
             return Ok(None);
@@ -232,7 +252,11 @@ impl CanvasOperationResponse {
     }
     #[cfg(test)]
     pub async fn text(self) -> Result<String, CanvasOperationHttpError> {
-        Ok(String::from_utf8_lossy(&self.bytes().await?).into_owned())
+        let content_type = self.content_type();
+        Ok(crate::canvas_response_text::response_text(
+            &self.bytes().await?,
+            content_type.as_deref(),
+        ))
     }
 }
 
@@ -513,6 +537,23 @@ mod tests {
                 | "stacked_headers"
                 | "gzip_progress"
                 | "gzip_stall"
+                | "text_ascii"
+                | "text_ascii_alias"
+                | "text_latin1"
+                | "text_latin1_alias"
+                | "text_latin1_spaces"
+                | "text_quoted_charset"
+                | "text_quoted_semicolon"
+                | "text_first_charset"
+                | "text_unknown_charset"
+                | "text_empty_charset"
+                | "text_without_charset"
+                | "text_without_type"
+                | "text_invalid_media_type"
+                | "text_utf8_sig"
+                | "text_ascii_bom"
+                | "text_json_latin1"
+                | "text_long_latin1"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),
@@ -560,8 +601,10 @@ mod tests {
                 while response.chunk().await?.is_some() {}
                 Value::Null
             } else if case["projection"] == "excerpt" {
+                let content_type = response.content_type();
                 json!(crate::canvas_credentials_protocol::response_excerpt(
-                    &response.bytes().await?
+                    &response.bytes().await?,
+                    content_type.as_deref()
                 ))
             } else {
                 json!(response.text().await?)

@@ -1,4 +1,5 @@
 //! Shared protocol primitives, without conflating validation and delivery policy.
+use crate::canvas_response_text::response_text;
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -47,14 +48,14 @@ pub(crate) fn https_origin(value: &str) -> Option<String> {
 
 /// Projection follows complete body consumption. Only text excerpts are bounded;
 /// valid JSON objects/scalars must not silently lose fields at an I/O buffer size.
-pub(crate) fn response_excerpt(bytes: &[u8]) -> Map<String, Value> {
+pub(crate) fn response_excerpt(bytes: &[u8], content_type: Option<&str>) -> Map<String, Value> {
     if let Some(payload) = response_json(bytes) {
         return match payload {
             Value::Object(object) => object,
             payload => Map::from_iter([("payload".into(), payload)]),
         };
     }
-    let text = String::from_utf8_lossy(bytes);
+    let text = response_text(bytes, content_type);
     Map::from_iter([("body_excerpt".into(), Value::String(truncate_text(&text)))])
 }
 
@@ -207,7 +208,7 @@ mod tests {
         }
         let text = b"\xef\xbb\xbfnot JSON";
         assert_eq!(
-            response_excerpt(text),
+            response_excerpt(text, None),
             serde_json::json!({"body_excerpt":"\u{feff}not JSON"})
                 .as_object()
                 .unwrap()
