@@ -33,6 +33,11 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [local branch cleanup checkpoint](rust-migrations/branch-cleanup-checkpoint.md)
+retires three already-merged CI branch names while retaining their exact commits
+and every worktree file. Migration, crypto and release-evidence work remain
+preserved; this is not an all-repository cleanup completion claim.
+
 The [concurrent scheduler reference](rust-migrations/canvas-worker-concurrent.md)
 has two matching captures and a mandatory regeneration gate. Two real schedulers
 are observed waiting on a fixture-owned database barrier before simultaneous

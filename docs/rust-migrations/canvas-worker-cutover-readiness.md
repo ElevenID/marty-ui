@@ -146,11 +146,12 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
 1. Retain the qualified eight-case startup/idle boundary; its exact-head hosted
    CI and security checks passed. Broader secret-source/entrypoint configurations remain consumer gates;
    do not repeat the repaired LTI-identity requirement as an open runtime bug.
-2. Replay the frozen composed REST worker sequence on the pinned published migrations using
-   real native provider/OAuth adapters and bounded synthetic provider servers.
-   Preserve actual scheduling, leasing, fact/policy effects,
-   result persistence and heartbeat; extend the same harness across the named
-   failure, mutation, OAuth and active-shutdown requirements above.
+2. Retain the qualified REST/facts/retry/signal/renewal and nonfinal recovery
+   sequences on the pinned migrations with real native provider/OAuth adapters.
+   Qualify the newer final-attempt and concurrent scheduler replays, then extend
+   the same harness across the remaining crash-reclaimer, mutation, OAuth,
+   failure and cleanup requirements above. Do not repeat completed boundaries
+   as though their native adoption were still missing.
 3. Close the two explicit reference privacy requirements without changing frozen
    expectations to conceal implementation differences. Keep improvements scoped
    and coordinate reference-source ownership before protected landing.
