@@ -65,7 +65,25 @@ def test_static_headers_remain_unchanged(fixture_module):
 
 
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
-def test_actual_https_emits_recorded_retry_after_date(fixture_module, monkeypatch, method):
+def test_no_content_response_has_no_body(fixture_module, method):
+    with fixture_module.WorkerHttpsFixture() as fixture:
+        fixture.stage = {"status": 204, "body": None}
+        client = client_for(fixture)
+        try:
+            client.request(method, "/login/oauth2/token")
+            response = client.getresponse()
+            assert response.status == 204
+            assert response.getheader("Content-Length") == "0"
+            assert response.read() == b""
+            assert fixture.requests[0]["method"] == method
+        finally:
+            client.close()
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_actual_https_emits_recorded_retry_after_date(
+    fixture_module, monkeypatch, method
+):
     monkeypatch.setattr(fixture_module.time, "time", lambda: 1700000000)
     with fixture_module.WorkerHttpsFixture() as fixture:
         fixture.stage = {"status": 429, "body": {}, "retry_after_offset_seconds": 60}
@@ -84,10 +102,14 @@ def test_actual_https_emits_recorded_retry_after_date(fixture_module, monkeypatc
 
 @pytest.mark.parametrize(
     "method,path,authorization",
-    [("GET", "/synthetic", None),
-     ("DELETE", "/login/oauth2/token", "Bearer synthetic-fixture-token")],
+    [
+        ("GET", "/synthetic", None),
+        ("DELETE", "/login/oauth2/token", "Bearer synthetic-fixture-token"),
+    ],
 )
-def test_real_https_response_and_owned_cleanup(fixture_module, method, path, authorization):
+def test_real_https_response_and_owned_cleanup(
+    fixture_module, method, path, authorization
+):
     with fixture_module.WorkerHttpsFixture() as fixture:
         fixture.stage = {"status": 200, "body": {"score": 90.0}}
         client = client_for(fixture)

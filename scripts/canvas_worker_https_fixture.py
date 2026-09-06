@@ -65,7 +65,11 @@ class WorkerHttpsFixture:
                 response = (
                     stage["responses"][self.path] if "responses" in stage else stage
                 )
-                body = json.dumps(response["body"], separators=(",", ":")).encode()
+                body = (
+                    b""
+                    if response["status"] == 204
+                    else json.dumps(response["body"], separators=(",", ":")).encode()
+                )
                 try:
                     self.send_response(response["status"])
                     self.send_header("Content-Type", "application/json")

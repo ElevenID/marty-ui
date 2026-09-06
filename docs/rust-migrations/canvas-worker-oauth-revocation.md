@@ -1,6 +1,8 @@
 # Whole-worker OAuth revocation qualification
 
-Gate 10 remains open. Existing repository/provider tests and the native
+Gate 10 remains open. Seven actual published-worker observations are now frozen,
+with two identical independent captures and native replay implemented but not
+yet qualified on Linux. Existing repository/provider tests and the native
 disconnect-marker privacy replay are retained; neither proves the complete
 remote revocation failure and owner-fence matrix through the deployed worker.
 
@@ -24,15 +26,60 @@ artifact, signing adapter, consumer or deployment is changed.
 
 ## Next reference and adoption sequence
 
-1. Reuse the existing published-schema worker seed, encrypted-secret persistence,
-   subprocess owner and HTTPS fixture. Add a revocation-pending connection with
-   both access and refresh secrets and an unrelated-tenant retention control.
-   Do not emulate the worker's scheduling or database transitions in the harness.
-2. Capture actual published-process outcomes twice for remote 200/204/404
-   success, 429 retry, rejection/redirect and transport timeout. Freeze method,
-   endpoint/header observations, durable retry code/count/deadline, owner state,
-   connection/token cleanup and platform projection. Include Retry-After edge
-   cases through the same response-time header helper.
+The first transport matrix is now captured in
+`contracts/canvas-worker-oauth-revocation-oracle.json`, canonical LF SHA256
+`43679e0883a269993c879958815992885dc9b4e9fac55d4223f1af35bcd21b39`.
+Two independent seven-case captures matched in 89.41 seconds. They execute the
+pinned published image and official migrations; worker, route and OAuth-provider
+source hashes are retained. Both real token secrets disappear after 200/204/404,
+while the unrelated tenant's encrypted secret remains unchanged. 429, 503,
+redirect and held-response timeout preserve all token ciphertexts, persist one
+retry and leave the platform connected. Redirect/timeout are classified as
+`canvas_oauth_revoke_rejected` by the actual published composition. Every case
+has exactly one observed DELETE with the synthetic Bearer and Accept headers,
+zero background jobs, unchanged issued rows and an actual idle heartbeat.
+
+The native replay shares the published-schema seed, encrypted vault and owned
+binary lifecycle. Complete HTTP observations are checked by the HTTPS owner;
+all durable observations are checked against the frozen artifact by Rust.
+Reference regeneration and native parent/child entries are registered in the
+mandatory hosted Linux test gate. Full native process qualification remains pending.
+
+An exploratory Windows native execution returned unavailable/retry outcomes even
+for positive HTTPS cases and is **not** accepted as application parity evidence.
+The process client uses platform certificate verification; this fixture's
+environment-scoped trust setup is qualified on Linux, not Windows. Native launch
+now explicitly requires Linux. Do not change the host trust store or weaken TLS
+verification to obtain a local pass. Fresh Linux execution must establish the
+actual composed outcomes before any claim of full native adoption.
+
+A separate focused test uses the existing explicitly allowed loopback HTTP
+policy to execute the actual native revocation adapter and worker classification
+against all seven frozen categories. It first failed exactly redirect and timeout
+(`unavailable`/`timeout` versus the reference's `rejected`), while all five other
+categories matched and every method/header observation was checked. This is
+adapter-category evidence, not HTTPS or durable whole-worker qualification.
+
+The canonical Rust HTTP revocation adapter now returns its known rejection
+category for those transport/redirect outcomes. Exchange/refresh transport
+classification is unchanged; explicit controls preserve the worker's raw timeout
+and unavailable categories for other provider implementations. No retry hint,
+schedule policy, lease fence, token transaction or TLS verification is changed.
+
+Capture setup corrected two new harness assumptions before freezing: SIGINT
+retains the already-qualified published process exit semantics, and the retry
+deadline retains the contract's inclusive 30–37-second first-attempt jitter.
+No old artifact, application clock or runtime was changed. The HTTPS fixture
+also sends an actually empty 204 response, with GET/DELETE regression coverage.
+
+Remaining sequence:
+
+1. Retain the shared published-schema seed, encrypted-secret persistence,
+   subprocess owner and HTTPS fixture with the two-token and unrelated-tenant
+   controls. Do not emulate worker scheduling or database transitions in the harness.
+2. Retain the captured seven-case transport matrix; extend Retry-After edge
+   cases through the same response-time header helper without rewriting existing
+   observations.
 3. Reuse the native published-schema/binary owner to compare those exact
    observations, with explicit storage/type mappings only where justified.
    Extend through held-request owner-fence loss and disconnect-patch failure;
@@ -41,12 +88,29 @@ artifact, signing adapter, consumer or deployment is changed.
 4. Correct demonstrated differences in the canonical shared Rust implementation,
    retain earlier worker corpora, and require fresh exact-head Linux qualification.
 
-Source inspection found classification differences worth testing first: the
-reference provider wraps redirects and HTTP transport failures in its known
-OAuth error, whereas native redirects currently use the unavailable category
-and native timeouts retain a timeout category. These are not yet reproduced
-whole-worker parity failures. Do not change mappings or expected artifacts on
-inspection alone; capture the actual composed reference first.
+The initial classification finding is now captured and demonstrated at the native
+adapter boundary as described above. Remaining origin, owner-fence and patch
+outcomes need their own captured evidence; do not rewrite expectations on
+inspection alone.
 
 This work is independent of signing/crypto adapter ownership. Gates 13 and 14,
 consumer cutover, Python deletion and aggregate beta acceptance remain separate.
+
+## Final local follow-up evidence
+
+- New seven-case frozen reference regenerated unchanged in 49.23 seconds.
+  The existing four-stage REST and four-fact captures also remained unchanged
+  (11.34 and 9.27 seconds), verifying the shared seed's default behavior.
+- Corrected native adapter-category test and all 334 library tests passed,
+  alongside five worker-binary and 23 behavior tests.
+- Configured PostgreSQL worker group: four passed in 94.11 seconds, retaining
+  all twelve privacy cases, known-error controls, signing guard, lifecycle/
+  disposal and 60 renewal combinations. The owned tmpfs fixture was removed.
+- Python: 919 passed, one existing opt-in skip, in 46.49 seconds; strict
+  all-target Clippy, focused Ruff, integration-test compilation and whitespace
+  checks passed. New fixture controls fail on child exit, timeout, missing/
+  duplicate reference cases and unexpected HTTP requests, with owned cleanup.
+
+These results do not qualify the seven complete native HTTPS/SQL cases on
+Windows. Their Linux parent, actual binary child and independent reference
+regeneration are mandatory in fresh exact-head hosted CI before adoption.

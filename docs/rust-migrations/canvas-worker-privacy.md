@@ -160,6 +160,14 @@ results do not attest Linux process-signal behavior.
 
 ## Still required
 
+The complete twelve-case follow-up subsequently qualified at
+`b02b77d13562db717d6e16cdf85ff430edbc2eeb`: CI34064588338 and all applicable
+exact-head checks passed, including Rust CodeQL34064588330. Runtime job101571024242
+passed the four-entry configured worker PostgreSQL group in 96.51 seconds and
+the separate 70-entry published-schema/runtime group in 1449.26 seconds. The
+image job passed as well. This qualifies these retained privacy boundaries;
+later revocation work and the remaining whole-worker gates are separate.
+
 All 51 signing helper/operation observations still need native adoption.
 Coordinate overlapping signing-adapter work with the crypto worker. Whole-worker
 driver/provider failures, remote OAuth, races, all consumers and aggregate

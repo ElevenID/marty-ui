@@ -16,23 +16,28 @@ const CIPHERTEXT_SQL: &str = "SELECT encrypted_secret_value FROM issuance_servic
 pub(super) struct WorkerFixture {
     pub(super) spec: &'static Value,
     pub(super) shared: &'static Value,
+    pub(super) vault: PostgresIntegrationSecretVault,
     preserved: Value,
     ciphertext: String,
 }
 
 impl WorkerFixture {
     pub(super) async fn assert_preserved(&self, pool: &PgPool) {
+        self.assert_issued_rows_preserved(pool).await;
+        let current_ciphertext: String = sqlx::query_scalar(CIPHERTEXT_SQL)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(current_ciphertext, self.ciphertext);
+    }
+
+    pub(super) async fn assert_issued_rows_preserved(&self, pool: &PgPool) {
         let current: Value =
             sqlx::query_scalar(self.shared["preserved_rows_sql"].as_str().unwrap())
                 .fetch_one(pool)
                 .await
                 .unwrap();
         assert_eq!(current, self.preserved, "issued rows changed");
-        let current_ciphertext: String = sqlx::query_scalar(CIPHERTEXT_SQL)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        assert_eq!(current_ciphertext, self.ciphertext);
     }
 }
 
@@ -203,6 +208,7 @@ pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> Work
     WorkerFixture {
         spec,
         shared,
+        vault,
         preserved,
         ciphertext,
     }

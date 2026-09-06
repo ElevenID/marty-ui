@@ -107,13 +107,25 @@ privacy observations, fresh exact-head qualification and whole-worker acceptance
 remain required before closing gates 13/14.
 Existing frozen observations, reachable features and other-worker code remain untouched.
 
-Latest qualified UI checkpoint `5bf3f77ee8841043ef84248d3a24d96b3b8142e4` passed
-CI34062785614 and all applicable exact-head checks, including Rust CodeQL34062785658.
-Runtime job101566211338 passed 70 configured tests in 1534.56 seconds, retaining
+The [whole-worker OAuth revocation reference](rust-migrations/canvas-worker-oauth-revocation.md)
+now freezes seven actual published-process HTTPS/SQL observations from matching
+independent captures. It covers remote success, rate limiting, rejection, redirect
+and timeout, both token secrets and unrelated-tenant retention. Native replay and
+mandatory Linux CI registration are implemented; native qualification and remaining
+owner-fence/patch/Retry-After extensions are still pending. No runtime mapping has
+been changed on the basis of the unqualified Windows transport diagnostic.
+The actual native loopback-HTTP adapter test separately reproduced two frozen
+classification differences; a revocation-only Rust correction preserves the
+worker's general timeout mapping, exchange/refresh semantics and atomic cleanup.
+The full native HTTPS/SQL replay still requires Linux qualification.
+
+Latest qualified UI checkpoint `b02b77d13562db717d6e16cdf85ff430edbc2eeb` passed
+CI34064588338 and all applicable exact-head checks, including Rust CodeQL34064588330.
+Runtime job101571024242 passed 70 configured tests in 1449.26 seconds, retaining
 the actual native validation/failure cases, and all four configured PostgreSQL
-worker-contract entries in 95.03 seconds. Its image job also passed. This qualifies
-the six-case privacy checkpoint; the subsequent twelve-case processing extension
-and [OAuth DELETE fixture preparation](rust-migrations/canvas-worker-oauth-revocation.md)
+worker-contract entries in 96.51 seconds. Its image job also passed. This qualifies
+the twelve-case privacy checkpoint and OAuth DELETE fixture preparation; the
+subsequent seven-case whole-worker revocation replay and scoped adapter correction
 require fresh hosted qualification.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.

@@ -219,9 +219,12 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(transport_error)?;
+            // The published revocation adapter wraps transport failures in its
+            // known OAuth rejection category. Exchange/refresh keep their own
+            // transport classification; never attach the raw request error.
+            .map_err(|_| CanvasOAuthProviderError::RevocationRejected)?;
         if response.status().is_redirection() {
-            return Err(provider_error(None));
+            return Err(CanvasOAuthProviderError::RevocationRejected);
         }
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             return Err(rate_limited_error(&response));

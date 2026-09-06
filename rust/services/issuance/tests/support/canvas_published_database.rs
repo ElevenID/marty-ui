@@ -256,6 +256,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_oauth_revocation(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
+            "worker_oauth_revocation",
+            "worker-oauth-revocation",
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_validation(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -574,6 +585,7 @@ impl PublishedDatabase {
             script,
             "worker_rest"
                 | "worker_facts"
+                | "worker_oauth_revocation"
                 | "worker_retry"
                 | "worker_retry_after"
                 | "worker_validation"
@@ -658,6 +670,7 @@ impl PublishedDatabase {
             script,
             "worker_facts"
                 | "worker_retry"
+                | "worker_oauth_revocation"
                 | "worker_retry_after"
                 | "worker_validation"
                 | "worker_provider_signals"

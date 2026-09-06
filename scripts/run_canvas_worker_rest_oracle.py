@@ -21,7 +21,7 @@ from run_canvas_worker_startup_oracle import (
 from canvas_worker_https_fixture import WorkerHttpsFixture
 
 
-async def seed_oauth(origin, token):
+async def seed_oauth(origin, token, additional_secrets=()):
     from issuance.domain.entities import (
         CanvasOAuthConnection,
         OrganizationIntegrationSecret,
@@ -46,6 +46,16 @@ async def seed_oauth(origin, token):
                 secret_value=token,
             )
         )
+        for secret_id, organization_id, value in additional_secrets:
+            await repo.save_integration_secret(
+                OrganizationIntegrationSecret(
+                    id=secret_id,
+                    organization_id=organization_id,
+                    name="Synthetic worker control",
+                    provider="canvas",
+                    secret_value=value,
+                )
+            )
         await repo.save_canvas_oauth_connection(
             CanvasOAuthConnection(
                 id="worker-rest-connection",
@@ -75,7 +85,7 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
         return run_scenarios(spec, shared, https)
 
 
-def seed_worker_database(engine, origin, spec, shared):
+def seed_worker_database(engine, origin, spec, shared, additional_secrets=()):
     os.environ["INTEGRATION_SECRET_MASTER_KEY"] = (
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     )
@@ -95,7 +105,7 @@ def seed_worker_database(engine, origin, spec, shared):
             ),
             {"origin": origin},
         )
-    asyncio.run(seed_oauth(origin, spec["token"]))
+    asyncio.run(seed_oauth(origin, spec["token"], additional_secrets))
     with engine.connect() as connection:
         preserved = connection.execute(text(shared["preserved_rows_sql"])).scalar_one()
         ciphertext = connection.execute(

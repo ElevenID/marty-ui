@@ -1278,6 +1278,115 @@ where
 mod processing_error_tests {
     use super::{CanvasSyncProcessingError, UnexpectedCanvasSyncFailure};
 
+    #[tokio::test]
+    async fn real_revocation_transport_keeps_frozen_worker_error_categories() {
+        use crate::{
+            canvas_oauth::CanvasOAuthProvider, canvas_oauth_http::HttpCanvasOAuthProvider,
+        };
+        use axum::{
+            http::{HeaderMap, Method},
+            response::Response,
+            routing::any,
+            Router,
+        };
+        use serde_json::{json, Map, Value};
+        use std::{
+            sync::{Arc, Mutex},
+            time::Duration,
+        };
+
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
+        ))
+        .unwrap();
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-oauth-revocation-oracle.json"
+        ))
+        .unwrap();
+        let mut actual_codes = Map::new();
+        let mut expected_codes = Map::new();
+        for case in matrix["cases"].as_array().unwrap() {
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let calls = observed.clone();
+            let response_case = case.clone();
+            let app = Router::new().route("/login/oauth2/token", any(move |method: Method, headers: HeaderMap| {
+                let calls = calls.clone();
+                let response_case = response_case.clone();
+                async move {
+                    calls.lock().unwrap().push(json!({
+                        "method": method.as_str(),
+                        "authorization": headers.get("authorization").and_then(|value| value.to_str().ok()),
+                        "accept": headers.get("accept").and_then(|value| value.to_str().ok()),
+                    }));
+                    if response_case["hold_response"] == true {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    let mut response = Response::builder().status(u16::try_from(response_case["status"].as_u64().unwrap()).unwrap());
+                    if let Some(headers) = response_case["headers"].as_object() {
+                        for (name, value) in headers { response = response.header(name.as_str(), value.as_str().unwrap()); }
+                    }
+                    response.body(axum::body::Body::empty()).unwrap()
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let (shutdown, stopping) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = stopping.await;
+                    })
+                    .await
+            });
+            // Explicit owned-loopback policy; no TLS or host trust settings change.
+            // The timeout is scaled only for this adapter-category test, not
+            // the separately frozen whole-worker deadline/state qualification.
+            let provider = HttpCanvasOAuthProvider::new_with_policy(
+                Duration::from_millis(200),
+                Vec::new(),
+                false,
+                true,
+            );
+            let outcome = provider
+                .revoke(&origin, "synthetic-worker-rest-token")
+                .await;
+            shutdown.send(()).unwrap();
+            server.await.unwrap().unwrap();
+            assert_eq!(
+                *observed.lock().unwrap(),
+                [json!({
+                    "method": "DELETE", "authorization": "Bearer synthetic-worker-rest-token", "accept": "application/json"
+                })]
+            );
+            let name = case["name"].as_str().unwrap();
+            assert!(actual_codes
+                .insert(
+                    name.into(),
+                    json!(outcome
+                        .err()
+                        .map(|error| super::oauth_revocation_error_code(&error)))
+                )
+                .is_none());
+            expected_codes.insert(
+                name.into(),
+                reference[name]["connection"]["error_code"].clone(),
+            );
+        }
+        // Do not repair HTTP-adapter composition by changing the worker's
+        // general classification for a provider that returns a raw timeout.
+        assert_eq!(
+            super::oauth_revocation_error_code(&super::CanvasOAuthProviderError::Timeout),
+            "canvas_oauth_revoke_timeout"
+        );
+        assert_eq!(
+            super::oauth_revocation_error_code(&super::CanvasOAuthProviderError::Failed {
+                retry_after_seconds: None
+            }),
+            "canvas_oauth_revoke_unavailable"
+        );
+        assert_eq!(actual_codes, expected_codes);
+    }
+
     #[test]
     fn unexpected_policy_rebuilds_diagnostics_and_preserves_retry_hints() {
         for (status, code, class) in [

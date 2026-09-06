@@ -1,0 +1,29 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-scenarios/v1",
+  "scope": "Actual published worker, remote DELETE, encrypted tokens, retry state and cleanup; owner-fence races and patch failure remain separate extensions",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "cases": [
+    {"name": "success_200", "status": 200, "body": {}},
+    {"name": "success_204", "status": 204, "body": null},
+    {"name": "already_revoked_404", "status": 404, "body": {}},
+    {"name": "rate_limited_429", "status": 429, "headers": {"Retry-After": "37"}, "body": {}, "delay_bounds": [37, 37]},
+    {"name": "rejected_503", "status": 503, "body": {}, "delay_bounds": [30, 37]},
+    {"name": "redirect_302", "status": 302, "headers": {"Location": "/must-not-follow"}, "body": {}, "delay_bounds": [30, 37]},
+    {"name": "transport_timeout", "status": 200, "body": {}, "hold_response": true, "delay_bounds": [30, 37]}
+  ],
+  "additional_secrets": [
+    ["worker-refresh-token", "org-review", "synthetic-worker-refresh-token"],
+    ["worker-unrelated-token", "org-other", "synthetic-unrelated-token"]
+  ],
+  "seed": [
+    "INSERT INTO organization_service.organizations (id,name,slug) VALUES ('org-other','Synthetic control','synthetic-control')",
+    "UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=false",
+    "UPDATE issuance_service.canvas_platforms SET connection_config=jsonb_build_object('oauth_status','connected','granted_scopes',jsonb_build_array('synthetic-scope'),'oauth_capabilities',jsonb_build_array('synthetic-capability'),'oauth_pending_authorization_id','synthetic-pending')",
+    "UPDATE issuance_service.canvas_oauth_connections SET status='revocation_pending',refresh_token_secret_ref='org_secret://org-review/worker-refresh-token',revoke_retry_count=0,revoke_retry_at=NULL"
+  ],
+  "connection_sql": "SELECT jsonb_build_object('status',status,'retry_count',revoke_retry_count,'error_code',revoke_last_error_code,'retry_at_present',revoke_retry_at IS NOT NULL,'lease_owner_present',refresh_lease_owner IS NOT NULL,'lease_expires_present',refresh_lease_expires_at IS NOT NULL) FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'",
+  "secret_sql": "SELECT COALESCE(jsonb_object_agg(id,encrypted_secret_value),'{}'::jsonb) FROM issuance_service.organization_integration_secrets",
+  "platform_sql": "SELECT connection_config FROM issuance_service.canvas_platforms WHERE id='platform-review'",
+  "heartbeat_sql": "SELECT jsonb_build_object('role',role,'metadata',metadata) FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-revocation'",
+  "retry_delay_sql": "SELECT extract(epoch FROM revoke_retry_at-updated_at)::float8 FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'"
+}

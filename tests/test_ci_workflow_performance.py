@@ -290,6 +290,12 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert "grep -Fx 'worker_facts_match_frozen_published_process: test'" in published
+    for name in [
+        "worker_oauth_revocation_reference_matches_published_process",
+        "worker_oauth_revocation_matches_frozen_published_process",
+        "worker_oauth_revocation_native_child",
+    ]:
+        assert f"grep -Fx '{name}: test'" in published
     assert (
         "grep -Fx 'worker_facts_reference_matches_published_process: test'" in published
     )

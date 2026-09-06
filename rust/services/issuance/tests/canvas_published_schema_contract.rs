@@ -2,6 +2,62 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_oauth_revocation_replay.rs"]
+mod canvas_worker_oauth_revocation_replay;
+
+#[test]
+fn worker_oauth_revocation_matches_frozen_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!("Mandatory hosted Linux gate runs native OAuth revocation replay");
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    let output = std::process::Command::new("python3")
+        .arg(root.join("scripts/test_canvas_worker_oauth_revocation_https.py"))
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Native OAuth revocation replay failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
+#[tokio::test]
+async fn worker_oauth_revocation_native_child() {
+    let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_REVOCATION_NATIVE_ORIGIN") else {
+        return;
+    };
+    if !cfg!(target_os = "linux") {
+        panic!("native HTTPS child requires the Linux platform-trust gate");
+    }
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let name = std::env::var("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE").unwrap();
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_oauth_revocation_replay::replay(&pool, &owned.url, &origin, &name).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[path = "support/canvas_worker_concurrent_replay.rs"]
 mod canvas_worker_concurrent_replay;
 #[path = "support/canvas_worker_provider_recovery_replay.rs"]
@@ -359,6 +415,11 @@ async fn worker_retry_after_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -437,6 +498,10 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation" => (
+            include_str!("../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
+            include_str!("../../../../contracts/canvas-worker-oauth-revocation-oracle.json"),
+        ),
         "retry-after" => (
             include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-retry-after-oracle.json"),
@@ -466,6 +531,12 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation(
+                    name,
+                )
+                .await
+            }
             "retry-after" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
                     .await
