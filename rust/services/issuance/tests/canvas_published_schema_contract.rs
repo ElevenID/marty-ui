@@ -15,6 +15,11 @@ fn worker_oauth_revocation_fence_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation-fence");
 }
 
+#[test]
+fn worker_oauth_revocation_patch_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-patch");
+}
+
 fn assert_native_oauth_revocation_matrix(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -436,6 +441,11 @@ async fn worker_oauth_revocation_fence_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_patch_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation-patch").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -514,6 +524,12 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-patch" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
+            ),
+            include_str!("../../../../contracts/canvas-worker-oauth-revocation-patch-oracle.json"),
+        ),
         "oauth-revocation-fence" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
@@ -553,6 +569,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-patch" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_patch(name).await
+            }
             "oauth-revocation-fence" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_fence(name).await
             }

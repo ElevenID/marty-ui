@@ -14,13 +14,18 @@ from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
 from run_canvas_worker_startup_oracle import (
     DATABASE,
     finish_worker,
+    start_blocked_workers,
     start_worker,
     worker_source_sha256,
 )
 
 
 def run(case_name, kind="oauth-revocation"):
-    assert kind in {"oauth-revocation", "oauth-revocation-fence"}
+    assert kind in {
+        "oauth-revocation",
+        "oauth-revocation-fence",
+        "oauth-revocation-patch",
+    }
     contracts = Path("/verification/contracts")
     matrix = json.loads(
         (contracts / f"canvas-worker-{kind}-scenarios.json").read_text()
@@ -53,6 +58,8 @@ def run(case_name, kind="oauth-revocation"):
                 before_secrets = connection.execute(
                     text(matrix["secret_sql"])
                 ).scalar_one()
+                for statement in matrix.get("before_start_sql", []):
+                    connection.exec_driver_sql(statement)
             assert set(before_secrets) == {
                 "worker-rest-token",
                 "worker-refresh-token",
@@ -62,8 +69,25 @@ def run(case_name, kind="oauth-revocation"):
                 assert before_secrets[secret_id] != plaintext
             assert before_secrets["worker-rest-token"] != spec["token"]
             https.stage = case
-            child = start_worker(
-                worker_case(https.origin, https.cert), "worker-revocation"
+            worker_input = worker_case(https.origin, https.cert)
+            patch_attempt_observed = False
+
+            def observe_patch_attempt():
+                nonlocal patch_attempt_observed
+                assert https.received.is_set() and len(https.requests) == 1
+                patch_attempt_observed = True
+
+            child = (
+                start_blocked_workers(
+                    engine,
+                    worker_input,
+                    ["worker-revocation"],
+                    matrix["barrier_sql"],
+                    text(matrix["blocked_sql"]),
+                    observe_patch_attempt,
+                )["worker-revocation"]
+                if kind == "oauth-revocation-patch"
+                else start_worker(worker_input, "worker-revocation")
             )
             try:
                 fence = None
@@ -190,6 +214,9 @@ def run(case_name, kind="oauth-revocation"):
                 }
                 if fence is not None:
                     observation["fence"] = fence
+                if kind == "oauth-revocation-patch":
+                    assert patch_attempt_observed
+                    observation["disconnect_marker_update_observed"] = True
                 return observation
             finally:
                 finish_worker(child)

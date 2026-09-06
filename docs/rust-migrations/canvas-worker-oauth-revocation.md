@@ -153,3 +153,36 @@ The complete Python suite passed 926 tests with one existing opt-in skip in
 This covers replacement-owner success/retry preservation only. Other fence
 dimensions, disconnect-patch failure, Retry-After edges and the remaining
 whole-worker cutover requirements are not declared complete by these captures.
+
+## Disconnect-marker write failure extension
+
+An additional actual published-worker capture is frozen separately in
+`contracts/canvas-worker-oauth-revocation-patch-oracle.json`, canonical LF SHA256
+`6ac1bb861acd23f3e7a3f71427177d8ff9de2cf6a571c25d03a33dd9a2006b1e`.
+Two independent captures matched exactly (5.83 and 5.51 seconds); frozen
+regeneration passed in 5.37 seconds. The ownership and original transport
+references also regenerated unchanged (12.05 and 47.33 seconds).
+
+The fresh, exact-owned test database installs a trigger that rejects only the
+synthetic platform's disconnected projection. The existing shared database-barrier
+owner holds a compatible table lock until the real worker's platform UPDATE is
+observed waiting. Releasing that barrier permits the trigger's fixed synthetic
+error. This proves an actual attempted update; merely omitting the update cannot
+pass. Neither production tables nor a running deployment receive the fixture.
+
+After successful remote DELETE and the failed marker update, the published worker
+deletes the connection and both access/refresh tokens, preserves the unrelated
+tenant's encrypted secret and issued rows, and reaches durable idle. The platform
+projection remains connected because its update failed; this does not mean tokens
+remain usable. Native replay checks these same final observations and shares the
+existing barrier, process, seed, encrypted-vault and HTTPS owners. It retains
+Rust's stronger atomic connection/token deletion, not the reference's intermediate
+transaction order. No runtime or feature is changed by this extension.
+
+The mandatory Linux gate now registers 77 top-level entries. Full native patch
+and ownership replay qualification remains pending. Strict all-target Rust
+Clippy and integration compilation pass locally. The full Python suite passed
+934 tests with one existing opt-in skip in 45.37 seconds, including closed-matrix
+and failure/cleanup controls for the new parent path. Earlier transport and fence
+artifacts are unchanged; remaining Retry-After edges and other whole-worker
+requirements are still open.

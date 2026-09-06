@@ -1,5 +1,6 @@
 //! Real native worker, published schema, remote DELETE and durable token cleanup.
 use super::{
+    canvas_worker_concurrent_replay::{start_workers_at_barrier, WorkerBarrier},
     canvas_worker_process_signals::OwnedWorker,
     canvas_worker_provider_signals_replay::{await_marker, control_directory, mark},
     canvas_worker_rest_replay,
@@ -14,22 +15,35 @@ use std::{sync::OnceLock, time::Duration};
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str, kind: &str) {
     assert!(matches!(
         kind,
-        "oauth-revocation" | "oauth-revocation-fence"
+        "oauth-revocation" | "oauth-revocation-fence" | "oauth-revocation-patch"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
+    static PATCH_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
         ))
         .unwrap()
     });
-    let matrix = if kind == "oauth-revocation-fence" {
-        FENCE_MATRIX.get_or_init(|| {
-            let extension: Value = serde_json::from_str(include_str!(
+    let extension = match kind {
+        "oauth-revocation-fence" => Some((
+            &FENCE_MATRIX,
+            include_str!(
                 "../../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
-            ))
-            .unwrap();
+            ),
+        )),
+        "oauth-revocation-patch" => Some((
+            &PATCH_MATRIX,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
+            ),
+        )),
+        _ => None,
+    };
+    let matrix = if let Some((storage, source)) = extension {
+        storage.get_or_init(|| {
+            let extension: Value = serde_json::from_str(source).unwrap();
             let mut merged = base.as_object().unwrap().clone();
             merged.extend(extension.as_object().unwrap().clone());
             Value::Object(merged)
@@ -37,10 +51,14 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     } else {
         base
     };
-    let reference: Value = serde_json::from_str(if kind == "oauth-revocation-fence" {
-        include_str!("../../../../../contracts/canvas-worker-oauth-revocation-fence-oracle.json")
-    } else {
-        include_str!("../../../../../contracts/canvas-worker-oauth-revocation-oracle.json")
+    let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-fence" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-fence-oracle.json"
+        ),
+        "oauth-revocation-patch" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-patch-oracle.json"
+        ),
+        _ => include_str!("../../../../../contracts/canvas-worker-oauth-revocation-oracle.json"),
     })
     .unwrap();
     let matching = matrix["cases"]
@@ -81,9 +99,38 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     for secret in matrix["additional_secrets"].as_array().unwrap() {
         assert_ne!(before[secret[0].as_str().unwrap()], secret[2]);
     }
+    if let Some(statements) = matrix.get("before_start_sql") {
+        for statement in statements.as_array().unwrap() {
+            sqlx::raw_sql(statement.as_str().unwrap())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
     let environment = canvas_worker_rest_replay::worker_environment(origin);
-    let mut worker =
-        OwnedWorker::start_with_environment(database_url, "worker-revocation", &environment);
+    let mut patch_attempt_observed = false;
+    let mut worker = if kind == "oauth-revocation-patch" {
+        start_workers_at_barrier(
+            pool,
+            database_url,
+            &environment,
+            WorkerBarrier {
+                worker_ids: &["worker-revocation"],
+                barrier_sql: matrix["barrier_sql"].as_str().unwrap(),
+                blocked_sql: matrix["blocked_sql"].as_str().unwrap(),
+                expected_jobs: 0,
+                release_sql: &[],
+            },
+            || {
+                patch_attempt_observed = true;
+            },
+        )
+        .await
+        .pop()
+        .unwrap()
+    } else {
+        OwnedWorker::start_with_environment(database_url, "worker-revocation", &environment)
+    };
     let fence = if kind == "oauth-revocation-fence" {
         let control = control_directory();
         await_marker(&control, "request-received", &mut worker).await;
@@ -209,6 +256,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         );
         observation["replacement_row_unchanged"] = json!(true);
         actual["fence"] = observation;
+    }
+    if kind == "oauth-revocation-patch" {
+        assert!(patch_attempt_observed);
+        actual["disconnect_marker_update_observed"] = json!(true);
     }
     let mut expected = reference[name].as_object().unwrap().clone();
     // HTTP observations are compared in full by the actual HTTPS owner.

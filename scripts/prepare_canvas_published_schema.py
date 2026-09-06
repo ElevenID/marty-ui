@@ -101,19 +101,27 @@ def prepare():
         revocation_fence_case = os.environ.get(
             "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_FENCE_CASE"
         )
-        if revocation_case is not None or revocation_fence_case is not None:
-            assert revocation_case is None or revocation_fence_case is None
+        revocation_patch_case = os.environ.get(
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_PATCH_CASE"
+        )
+        revocation_inputs = [
+            (name, kind)
+            for name, kind in [
+                (revocation_case, "oauth-revocation"),
+                (revocation_fence_case, "oauth-revocation-fence"),
+                (revocation_patch_case, "oauth-revocation-patch"),
+            ]
+            if name is not None
+        ]
+        assert len(revocation_inputs) <= 1
+        if revocation_inputs:
             from run_canvas_worker_oauth_revocation_oracle import run
 
             with (
                 contextlib.redirect_stdout(io.StringIO()),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
-                report["worker_oauth_revocation"] = (
-                    run(revocation_fence_case, "oauth-revocation-fence")
-                    if revocation_fence_case is not None
-                    else run(revocation_case)
-                )
+                report["worker_oauth_revocation"] = run(*revocation_inputs[0])
         if retry_after_case is not None:
             from run_canvas_worker_retry_after_oracle import run
 

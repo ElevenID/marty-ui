@@ -28,8 +28,11 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
 
 
 @pytest.mark.parametrize("names,reference", [(["a", "a"], {"a": {}}), (["a"], {})])
+@pytest.mark.parametrize(
+    "kind", ["oauth-revocation", "oauth-revocation-fence", "oauth-revocation-patch"]
+)
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
-    monkeypatch, names, reference
+    monkeypatch, names, reference, kind
 ):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
     native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
@@ -46,11 +49,14 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
         lambda: pytest.fail("invalid matrix must fail before fixture creation"),
     )
     with pytest.raises(AssertionError):
-        native.run("synthetic-not-executed")
+        native.run("synthetic-not-executed", kind)
 
 
 @pytest.mark.parametrize("failure", ["child_exit", "timeout", "wrong_requests"])
-def test_native_owner_fails_closed_and_closes_https(monkeypatch, tmp_path, failure):
+@pytest.mark.parametrize("kind", ["oauth-revocation", "oauth-revocation-patch"])
+def test_native_owner_fails_closed_and_closes_https(
+    monkeypatch, tmp_path, failure, kind
+):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
     native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
     inputs = iter(
@@ -85,7 +91,7 @@ def test_native_owner_fails_closed_and_closes_https(monkeypatch, tmp_path, failu
     monkeypatch.setattr(native, "WorkerHttpsFixture", Fixture)
     monkeypatch.setattr(native.subprocess, "run", child)
     with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
-        native.run("synthetic-not-executed")
+        native.run("synthetic-not-executed", kind)
     assert closed == [True]
 
 
@@ -111,6 +117,34 @@ def test_owner_fence_extension_retains_closed_cases_and_base_reference():
         assert observation["fence"]["replacement_row_unchanged"] is True
         assert observation["connection"]["retry_count"] == 7
         assert len(observation["retained_secret_ids"]) == 3
+
+
+def test_patch_failure_extension_observes_update_without_retaining_revoked_tokens():
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    matrix = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-patch-scenarios.json").read_text()
+    )
+    reference = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-patch-oracle.json").read_text()
+    )
+    assert matrix["base_scenario"] == "canvas-worker-oauth-revocation-scenarios.json"
+    assert len(matrix["cases"]) == len(reference) == 1
+    case = matrix["cases"][0]
+    assert case["name"] in reference and case["status"] == 200
+    assert len(matrix["before_start_sql"]) == 2
+    assert "OLD.id='platform-review'" in matrix["before_start_sql"][1]
+    assert (
+        "NEW.connection_config->>'oauth_status'='disconnected'"
+        in matrix["before_start_sql"][1]
+    )
+    assert "IN SHARE MODE" in matrix["barrier_sql"]
+    assert "wait_event_type='Lock'" in matrix["blocked_sql"]
+    observed = reference[case["name"]]
+    assert observed["disconnect_marker_update_observed"] is True
+    assert observed["connection"] is None and observed["retry_timing"] is None
+    assert observed["retained_secret_ids"] == ["worker-unrelated-token"]
+    assert observed["platform"]["oauth_status"] == "connected"
+    assert observed["heartbeat"]["metadata"]["phase"] == "idle"
 
 
 @pytest.mark.parametrize(

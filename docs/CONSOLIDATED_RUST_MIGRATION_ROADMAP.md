@@ -130,6 +130,15 @@ Local Python regressions pass 926 tests with one existing opt-in skip; strict
 Rust Clippy and integration compilation pass. No runtime or consumer is changed
 by this extension. Patch failure and Retry-After extensions remain separate.
 
+A separately frozen disconnect-marker write-failure capture now proves that the
+published worker attempts the platform UPDATE, handles its synthetic database
+failure, and still removes the connection and both token secrets while retaining
+the unrelated tenant's secret. Independent captures and regeneration match.
+Native replay reuses the existing database barrier and process owners, retaining
+atomic native cleanup; its Linux qualification is pending (77 top-level entries
+now registered). Transport and ownership artifacts remain unchanged. Retry-After
+edges and the remaining whole-worker gates are not declared complete.
+
 Latest qualified UI checkpoint `b02b77d13562db717d6e16cdf85ff430edbc2eeb` passed
 CI34064588338 and all applicable exact-head checks, including Rust CodeQL34064588330.
 Runtime job101571024242 passed 70 configured tests in 1449.26 seconds, retaining

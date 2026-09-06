@@ -51,7 +51,11 @@ def run_fenced_child(command, environment, https):
 
 
 def run(executable, kind="oauth-revocation"):
-    assert kind in {"oauth-revocation", "oauth-revocation-fence"}
+    assert kind in {
+        "oauth-revocation",
+        "oauth-revocation-fence",
+        "oauth-revocation-patch",
+    }
     root = Path(__file__).resolve().parents[1]
     matrix = json.loads(
         (root / f"contracts/canvas-worker-{kind}-scenarios.json").read_text()
