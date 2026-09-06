@@ -10,6 +10,8 @@ use charset::charset_parameter;
 mod iso2022;
 #[path = "canvas_response_multibyte.rs"]
 mod multibyte;
+#[path = "canvas_response_utf7.rs"]
+mod utf7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CanvasResponseTextError {
@@ -27,12 +29,14 @@ pub enum CanvasResponseTextError {
     PendingBufferOverflow,
     #[error("Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit")]
     ContinuationOrdinalLimit { digits: usize },
+    #[error("embedded null character")]
+    EmbeddedNullEncoding,
 }
 
 impl CanvasResponseTextError {
     pub const fn diagnostic_class(self) -> &'static str {
         match self {
-            Self::ContinuationOrdinalLimit { .. } => "ValueError",
+            Self::ContinuationOrdinalLimit { .. } | Self::EmbeddedNullEncoding => "ValueError",
             Self::InternalCodec => "RuntimeError",
             Self::Utf16MissingBom | Self::Utf32MissingBom | Self::PendingBufferOverflow => {
                 "UnicodeError"
@@ -139,7 +143,7 @@ pub(crate) fn response_text(
         .transpose()?
         .flatten()
         .unwrap_or_default();
-    let normalized = resolve_encoding(&charset);
+    let normalized = checked_encoding(&charset)?;
     let registry = response_codecs();
     if let Some(name) = registry.aliases.get(&normalized) {
         let table = &registry.tables[name];
@@ -264,6 +268,13 @@ pub(crate) fn unicode_units(
         index += width;
     }
     Some(text)
+}
+
+fn checked_encoding(value: &str) -> Result<String, CanvasResponseTextError> {
+    if value.contains('\0') {
+        return Err(CanvasResponseTextError::EmbeddedNullEncoding);
+    }
+    Ok(resolve_encoding(value))
 }
 
 fn resolve_encoding(value: &str) -> String {
@@ -435,6 +446,17 @@ mod tests {
             "excerpt {}",
             case["name"]
         );
+    }
+
+    #[test]
+    fn utf7_encoded_labels_match_published_parameter_and_consumer_behavior() {
+        let frozen: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../contracts/canvas-utf7-codec.json"))
+                .unwrap();
+        assert_eq!(frozen["headers"].as_array().unwrap().len(), 201);
+        for case in frozen["headers"].as_array().unwrap() {
+            assert_header_case(case, case["content_type"].as_str());
+        }
     }
 
     #[test]

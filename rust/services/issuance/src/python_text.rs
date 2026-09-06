@@ -14,8 +14,20 @@ enum Repr {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct InvalidCodepoint(pub u32);
 
+impl Default for PythonText {
+    fn default() -> Self {
+        Self(Repr::Scalar(String::new()))
+    }
+}
+
+impl From<String> for PythonText {
+    fn from(text: String) -> Self {
+        Self(Repr::Scalar(text))
+    }
+}
+
 impl PythonText {
-    fn push(&mut self, value: u32) -> Result<(), InvalidCodepoint> {
+    pub(crate) fn push(&mut self, value: u32) -> Result<(), InvalidCodepoint> {
         if value > 0x10ffff {
             return Err(InvalidCodepoint(value));
         }
@@ -37,7 +49,7 @@ impl PythonText {
     pub(crate) fn from_codepoints(
         values: impl IntoIterator<Item = u32>,
     ) -> Result<Self, InvalidCodepoint> {
-        let mut result = Self(Repr::Scalar(String::new()));
+        let mut result = Self::default();
         for value in values {
             result.push(value)?;
         }
@@ -68,6 +80,15 @@ impl PythonText {
             other => Err(other),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn codepoints(&self) -> impl Iterator<Item = u32> + '_ {
+        let (scalar, points): (&str, &[u32]) = match &self.0 {
+            Repr::Scalar(text) => (text, &[]),
+            Repr::NonScalar(points) => ("", points),
+        };
+        scalar.chars().map(u32::from).chain(points.iter().copied())
+    }
 }
 
 #[cfg(test)]
@@ -76,10 +97,7 @@ mod tests {
     use serde_json::Value;
 
     fn points(text: &PythonText) -> Vec<u32> {
-        match &text.0 {
-            Repr::Scalar(text) => text.chars().map(u32::from).collect(),
-            Repr::NonScalar(points) => points.clone(),
-        }
+        text.codepoints().collect()
     }
 
     #[test]

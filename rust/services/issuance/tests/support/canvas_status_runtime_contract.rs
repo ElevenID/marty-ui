@@ -43,6 +43,7 @@ enum Responses {
     Charset,
     Iso2022,
     Ordinal,
+    Utf7Label,
 }
 
 impl Responses {
@@ -61,6 +62,9 @@ impl Responses {
             (Self::Ordinal, "suspend") => "ordinal_text_200",
             (Self::Ordinal, "reinstate") => "ordinal_json_403",
             (Self::Ordinal, "revoke") => "ordinal_json_200",
+            (Self::Utf7Label, "suspend") => "utf7_label_latin1_403",
+            (Self::Utf7Label, "reinstate") => "utf7_label_null_200",
+            (Self::Utf7Label, "revoke") => "utf7_label_json_200",
             _ => panic!("unexpected synthetic lifecycle action"),
         })
     }
@@ -173,6 +177,10 @@ pub async fn run_iso2022(pool: &PgPool) {
 
 pub async fn run_ordinal(pool: &PgPool) {
     run_scenario(pool, Responses::Ordinal).await;
+}
+
+pub async fn run_utf7_label(pool: &PgPool) {
+    run_scenario(pool, Responses::Utf7Label).await;
 }
 
 async fn run_scenario(pool: &PgPool, responses: Responses) {
@@ -346,6 +354,8 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
                     Responses::Unicode => "UnicodeError",
                     Responses::Charset => "TypeError",
                     Responses::Ordinal => "ValueError",
+                    Responses::Utf7Label if index == 0 => "RuntimeError",
+                    Responses::Utf7Label => "ValueError",
                     Responses::Iso2022 if index == 0 => "RuntimeError",
                     Responses::Iso2022 => "UnicodeError",
                     Responses::Baseline => unreachable!(),

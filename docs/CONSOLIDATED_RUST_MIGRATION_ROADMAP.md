@@ -33,11 +33,31 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+UTF-7 now has one complete-input native decoder for strict and replacement modes,
+using lossless Python codepoints. Independent frozen digests cover 2,347,269
+inputs per mode, including every supplementary scalar and all single-unit
+padding combinations; 134 explicit cases and 39 earlier text boundaries pass.
+Strict encoded labels are adopted and match 201 observations across five aliases.
+The new tests exposed an embedded-NUL codec-name ValueError, now preserved before
+alias normalization at both lookup boundaries. Validation grows 41 to 47,
+provider 90 to 97 and TLS 99 to 104, with every old observation unchanged.
+The required 27th image test exercises label-error persistence and recovery;
+the timeout gate regenerates the full codec evidence. See
+[UTF-7 codec scope and evidence](../contracts/canvas-utf7-codec.md).
+Response-body/metadata/error adoption and full credential-route qualification
+remain open; decoder availability does not close those gates.
+All 27 configured image/schema tests pass (257.17 seconds, none ignored or
+filtered), together with 312 library, 5 worker, 28 managed HTTP, 22 behavior,
+70 affected Python and 104 native TLS cases, strict Clippy and formatting.
+Previous `20d7787f9` CI and Rust analysis are green; this checkpoint requires
+fresh hosted qualification and remains draft/unrouted.
+
 Lossless native text groundwork now preserves Python codepoints without implicit
 replacement, escaping or surrogate folding. Shared excerpt logic uses this owner;
 three tests replay the 39 frozen helper text boundaries and verify validation,
-supplementary/noncharacter handling and bounded prefix consumption. UTF-7 itself
-is not yet implemented or adopted.
+supplementary/noncharacter handling and bounded prefix consumption. The decoder
+and strict-label continuation above builds on this foundation; response-body
+adoption remains unfinished.
 
 Two independent image captures now cover twelve UTF-7 managed-app, twelve
 provider and twelve real delivery-helper/save observations. Retained surrogates

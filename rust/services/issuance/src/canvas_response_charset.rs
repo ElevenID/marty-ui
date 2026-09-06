@@ -1,7 +1,8 @@
 //! Published Content-Type parameter semantics, including RFC2231 continuations.
 use super::{
-    resolve_encoding, response_codecs, unicode_units, CanvasResponseTextError, UnicodeEncoding,
+    checked_encoding, response_codecs, unicode_units, CanvasResponseTextError, UnicodeEncoding,
 };
+use crate::python_text::PythonText;
 use crate::python_value::strip;
 
 struct Segment {
@@ -119,16 +120,24 @@ fn label_bytes(value: &str) -> Vec<u8> {
     bytes
 }
 
-fn decode_label(value: &str, encoding: &str) -> Result<Option<String>, CanvasResponseTextError> {
-    if let Some(codec) = super::iso2022::lookup(&resolve_encoding(encoding)) {
-        return codec.decode(&label_bytes(value), true);
+fn decode_label(
+    value: &str,
+    encoding: &str,
+) -> Result<Option<PythonText>, CanvasResponseTextError> {
+    let name = checked_encoding(encoding)?;
+    if name == "utf_7" {
+        return Ok(super::utf7::decode(&label_bytes(value), true).ok());
     }
-    Ok(decode_basic_label(value, encoding))
+    if let Some(codec) = super::iso2022::lookup(&name) {
+        return codec
+            .decode(&label_bytes(value), true)
+            .map(|value| value.map(PythonText::from));
+    }
+    Ok(decode_basic_label(value, name).map(PythonText::from))
 }
 
-fn decode_basic_label(value: &str, encoding: &str) -> Option<String> {
+fn decode_basic_label(value: &str, name: String) -> Option<String> {
     let bytes = label_bytes(value);
-    let name = resolve_encoding(encoding);
     if name == "utf_8" || name == "utf_8_sig" {
         let data = if name == "utf_8_sig" {
             bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes)
@@ -270,7 +279,16 @@ pub(super) fn charset_parameter(
         .find(|(name, _, _)| name.eq_ignore_ascii_case("charset"))
     {
         Some(match encoding {
-            Some(encoding) => decode_label(&value, &encoding)?.unwrap_or(value),
+            Some(encoding) => match decode_label(&value, &encoding)? {
+                Some(text) => match text.into_scalar() {
+                    Ok(text) => text,
+                    // A successfully decoded non-scalar label fails the same
+                    // final ASCII filter as non-ASCII scalar labels. It is not
+                    // a strict decode failure that falls back to the raw value.
+                    Err(_) => return Ok(None),
+                },
+                None => value,
+            },
             None => value,
         })
     } else {

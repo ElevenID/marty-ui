@@ -191,6 +191,12 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         oracle["charset_ordinals"], ordinals,
         "published continuation ordinal limits and consumer bypasses"
     );
+    let utf7: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../contracts/canvas-utf7-codec.json")).unwrap();
+    assert_eq!(
+        oracle["utf7_codec"], utf7,
+        "published UTF-7 codepoints, strict errors and labels"
+    );
     let iso2022: serde_json::Map<String, serde_json::Value> = [
         (
             "iso2022_kr",
@@ -353,6 +359,24 @@ async fn status_runtime_preserves_ordinal_failures_and_recovery() {
         .await
         .unwrap();
     canvas_status_runtime_contract::run_ordinal(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn status_runtime_preserves_utf7_label_failures_and_recovery() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run_utf7_label(&pool).await;
     pool.close().await;
     owned.close().unwrap();
 }

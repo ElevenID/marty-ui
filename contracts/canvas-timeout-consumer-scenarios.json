@@ -99,6 +99,11 @@
 {"name":"text_iso2022_label_json","seconds":"2","response":"text_iso2022_label_json","projection":"excerpt"},
 {"name":"text_ordinal_text","seconds":"2","response":"text_ordinal_text","projection":"excerpt"},
 {"name":"text_ordinal_json","seconds":"2","response":"text_ordinal_json","projection":"excerpt"},
-{"name":"text_ordinal_empty","seconds":"2","response":"text_ordinal_empty","projection":"excerpt"}
+{"name":"text_ordinal_empty","seconds":"2","response":"text_ordinal_empty","projection":"excerpt"},
+{"name":"text_utf7_label_latin1","seconds":"2","response":"text_utf7_label_latin1","projection":"excerpt"},
+{"name":"text_utf7_label_surrogate","seconds":"2","response":"text_utf7_label_surrogate","projection":"excerpt"},
+{"name":"text_utf7_label_null","seconds":"2","response":"text_utf7_label_null","projection":"excerpt"},
+{"name":"text_utf7_label_null_codec","seconds":"2","response":"text_utf7_label_null_codec","projection":"excerpt"},
+{"name":"text_utf7_label_null_codec_json","seconds":"2","response":"text_utf7_label_null_codec_json","projection":"excerpt"}
   ]
 }

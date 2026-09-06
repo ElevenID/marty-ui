@@ -672,7 +672,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
-        assert_eq!(count, 21);
+        assert_eq!(count, 27);
     }
 
     #[tokio::test]

@@ -466,6 +466,30 @@ class Handler(BaseHTTPRequestHandler):
                     "text/plain; charset=latin1; other*" + "0" * 4301 + "=latin1",
                     payload.hex(),
                 )
+            text_cases.update(
+                {
+                    "/text_utf7_label_latin1": (
+                        "text/plain; charset*=u7''%2BAGwAYQB0AGkAbgAx-",
+                        "636166e9",
+                    ),
+                    "/text_utf7_label_surrogate": (
+                        "text/plain; charset*=u7''%2B2AA-",
+                        "636166e9",
+                    ),
+                    "/text_utf7_label_null": (
+                        "text/plain; charset*=u7''%2BAAA-",
+                        "636166e9",
+                    ),
+                    "/text_utf7_label_null_codec": (
+                        "text/plain; charset*=%00''latin1",
+                        "636166e9",
+                    ),
+                    "/text_utf7_label_null_codec_json": (
+                        "text/plain; charset*=%00''latin1",
+                        "7b226163636570746564223a747275657d",
+                    ),
+                }
+            )
             if self.path in text_cases:
                 content_type, hexadecimal = text_cases[self.path]
                 body = bytes.fromhex(hexadecimal)
@@ -763,6 +787,7 @@ def run(source=None, response_source=None):
         "charset_ordinals": codec_owner("canvas_charset_ordinal_oracle").observe(
             response_source
         ),
+        "utf7_codec": codec_owner("canvas_utf7_codec_oracle").observe(response_source),
         "multibyte_codecs": multibyte_owner().run(),
         "gb18030_codec": codec_owner("canvas_gb18030_codec_oracle").observe(),
         "euc_kr_codec": codec_owner("canvas_euc_kr_codec_oracle").observe(),

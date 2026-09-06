@@ -592,6 +592,11 @@ mod tests {
                 | "text_ordinal_text"
                 | "text_ordinal_json"
                 | "text_ordinal_empty"
+                | "text_utf7_label_latin1"
+                | "text_utf7_label_surrogate"
+                | "text_utf7_label_null"
+                | "text_utf7_label_null_codec"
+                | "text_utf7_label_null_codec_json"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),
