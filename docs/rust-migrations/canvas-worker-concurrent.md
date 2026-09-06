@@ -1,7 +1,8 @@
 # Actual concurrent scheduler reference
 
 Status: two independent published-process captures agree; mandatory reference
-regeneration passes locally. Native concurrent replay remains open. No worker
+regeneration passes locally. Native concurrent replay is implemented and awaits
+Linux qualification. No worker
 cutover, Python deletion or deployment follows from this reference alone.
 
 Two distinct actual worker processes run on the official published schema with
@@ -39,6 +40,25 @@ seconds (36 unrelated entries filtered). These include eight reference/startup
 gates and three comparison units; ten native Linux parent/helper entries are
 not Windows runtime proof. All 60 affected Python tests pass in 3.45 seconds,
 with strict Clippy, Rustfmt, Ruff, Bash syntax and diff checks passing.
+
+## Native replay
+
+The mandatory native parent/child pair reuses the shared HTTPS coordinator and
+Rust process, seed, snapshot, generation-fence and preservation helpers. A real
+SQLx transaction holds the same fixture table barrier until PostgreSQL reports
+both actual scheduler queries waiting. The transaction is committed to release
+them; failure cleanup retains rollback and owned-process RAII.
+
+The child requires the two heartbeat phases, one leased job and an owned lease
+holder before requesting HTTPS release. Leased-state comparison retains Rust's
+exact internal target-generation value. Completed state must match the frozen
+reference without exceptions, with the original job/start and both processes
+alive. Both native workers must exit 130 after SIGINT, corresponding to the
+reference's raw -2 exits. The parent checks the single exact provider request.
+
+Local native compilation and three strict comparison tests pass, as do all 60
+affected Python tests (3.33 seconds). Mandatory Linux execution remains required;
+these local checks do not establish native concurrency runtime parity.
 
 This case is not evidence for simultaneous crash reclaimers, changed-target
 generation, owner-fence loss, final-completion races or application disposal.

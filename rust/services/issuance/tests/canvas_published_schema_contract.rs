@@ -2,6 +2,8 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_concurrent_replay.rs"]
+mod canvas_worker_concurrent_replay;
 #[path = "support/canvas_worker_provider_recovery_replay.rs"]
 mod canvas_worker_provider_recovery_replay;
 #[path = "support/canvas_worker_provider_signals_replay.rs"]
@@ -12,6 +14,11 @@ mod canvas_worker_rest_replay;
 #[test]
 fn worker_provider_signals_match_frozen_published_process() {
     assert_worker_provider_https("signals");
+}
+
+#[test]
+fn worker_provider_concurrent_matches_frozen_published_process() {
+    assert_worker_provider_https("concurrent");
 }
 
 #[test]
@@ -57,6 +64,11 @@ async fn worker_provider_signals_native_child() {
 }
 
 #[tokio::test]
+async fn worker_provider_concurrent_native_child() {
+    worker_provider_child("concurrent").await;
+}
+
+#[tokio::test]
 async fn worker_provider_final_native_child() {
     worker_provider_child("final").await;
 }
@@ -85,6 +97,10 @@ async fn worker_provider_child(scenario: &str) {
         .unwrap();
     let signal = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NAME").unwrap();
     match scenario {
+        "concurrent" => {
+            assert_eq!(signal, "concurrent");
+            canvas_worker_concurrent_replay::replay(&pool, &owned.url, &origin).await;
+        }
         "signals" => {
             canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await
         }

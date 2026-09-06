@@ -24,22 +24,29 @@ def wait_for(child, predicate, description, timeout=30):
 
 def run(executable, scenario="signals"):
     assert sys.platform == "linux", "Actual POSIX worker signals require Linux"
-    assert scenario in {"signals", "recovery", "final"}
+    assert scenario in {"signals", "recovery", "final", "concurrent"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / "contracts/canvas-worker-rest-scenarios.json").read_text()
     )
-    reference = json.loads(
-        (root / f"contracts/canvas-worker-provider-{scenario}-oracle.json").read_text()
+    reference_name = (
+        "canvas-worker-concurrent-oracle.json"
+        if scenario == "concurrent"
+        else f"canvas-worker-provider-{scenario}-oracle.json"
     )
+    reference = json.loads((root / "contracts" / reference_name).read_text())
     cases = {
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
         "recovery": ["renewal", "recovery"],
         "final": ["final"],
+        "concurrent": ["concurrent"],
     }[scenario]
     if scenario == "final":
         assert reference["case"] == "final"
         reference = {"final": reference}
+    elif scenario == "concurrent":
+        assert reference["schema"] == "marty.canvas-worker-concurrent-oracle/v1"
+        reference = {"concurrent": reference}
     assert set(reference) == set(cases)
     for signal_name in cases:
         with WorkerHttpsFixture() as https:
@@ -75,7 +82,8 @@ def run(executable, scenario="signals"):
                 # Synchronize the test harness only, never the worker or DB.
                 (control / "request-received").touch(exist_ok=False)
                 release_response = (
-                    scenario in {"recovery", "final"} or signal_name == "SIGTERM"
+                    scenario in {"recovery", "final", "concurrent"}
+                    or signal_name == "SIGTERM"
                 )
                 if release_response:
                     wait_for(
@@ -119,6 +127,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|concurrent]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")
