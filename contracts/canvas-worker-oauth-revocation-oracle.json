@@ -1,0 +1,343 @@
+{
+  "success_200": {
+    "connection": null,
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "success_200",
+    "platform": {
+      "granted_scopes": [],
+      "oauth_capabilities": [],
+      "oauth_status": "disconnected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-unrelated-token"
+    ],
+    "retry_timing": null,
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "success_204": {
+    "connection": null,
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "success_204",
+    "platform": {
+      "granted_scopes": [],
+      "oauth_capabilities": [],
+      "oauth_status": "disconnected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-unrelated-token"
+    ],
+    "retry_timing": null,
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "already_revoked_404": {
+    "connection": null,
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "already_revoked_404",
+    "platform": {
+      "granted_scopes": [],
+      "oauth_capabilities": [],
+      "oauth_status": "disconnected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-unrelated-token"
+    ],
+    "retry_timing": null,
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "rate_limited_429": {
+    "connection": {
+      "error_code": "canvas_oauth_revoke_rate_limited",
+      "lease_expires_present": false,
+      "lease_owner_present": false,
+      "retry_at_present": true,
+      "retry_count": 1,
+      "status": "revocation_pending"
+    },
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "rate_limited_429",
+    "platform": {
+      "granted_scopes": [
+        "synthetic-scope"
+      ],
+      "oauth_capabilities": [
+        "synthetic-capability"
+      ],
+      "oauth_pending_authorization_id": "synthetic-pending",
+      "oauth_status": "connected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-refresh-token",
+      "worker-rest-token",
+      "worker-unrelated-token"
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "rejected_503": {
+    "connection": {
+      "error_code": "canvas_oauth_revoke_rejected",
+      "lease_expires_present": false,
+      "lease_owner_present": false,
+      "retry_at_present": true,
+      "retry_count": 1,
+      "status": "revocation_pending"
+    },
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "rejected_503",
+    "platform": {
+      "granted_scopes": [
+        "synthetic-scope"
+      ],
+      "oauth_capabilities": [
+        "synthetic-capability"
+      ],
+      "oauth_pending_authorization_id": "synthetic-pending",
+      "oauth_status": "connected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-refresh-token",
+      "worker-rest-token",
+      "worker-unrelated-token"
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "redirect_302": {
+    "connection": {
+      "error_code": "canvas_oauth_revoke_rejected",
+      "lease_expires_present": false,
+      "lease_owner_present": false,
+      "retry_at_present": true,
+      "retry_count": 1,
+      "status": "revocation_pending"
+    },
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "redirect_302",
+    "platform": {
+      "granted_scopes": [
+        "synthetic-scope"
+      ],
+      "oauth_capabilities": [
+        "synthetic-capability"
+      ],
+      "oauth_pending_authorization_id": "synthetic-pending",
+      "oauth_status": "connected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-refresh-token",
+      "worker-rest-token",
+      "worker-unrelated-token"
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  },
+  "transport_timeout": {
+    "connection": {
+      "error_code": "canvas_oauth_revoke_rejected",
+      "lease_expires_present": false,
+      "lease_owner_present": false,
+      "retry_at_present": true,
+      "retry_count": 1,
+      "status": "revocation_pending"
+    },
+    "heartbeat": {
+      "metadata": {
+        "leased_jobs": 0,
+        "phase": "idle",
+        "process": "standalone",
+        "processor_configured": true
+      },
+      "role": "canvas_sync"
+    },
+    "issued_rows_unchanged": true,
+    "job_count": 0,
+    "name": "transport_timeout",
+    "platform": {
+      "granted_scopes": [
+        "synthetic-scope"
+      ],
+      "oauth_capabilities": [
+        "synthetic-capability"
+      ],
+      "oauth_pending_authorization_id": "synthetic-pending",
+      "oauth_status": "connected"
+    },
+    "requests": [
+      {
+        "accept": "application/json",
+        "authorization": "Bearer synthetic-worker-rest-token",
+        "method": "DELETE",
+        "path": "/login/oauth2/token"
+      }
+    ],
+    "retained_ciphertexts_unchanged": true,
+    "retained_secret_ids": [
+      "worker-refresh-token",
+      "worker-rest-token",
+      "worker-unrelated-token"
+    ],
+    "retry_timing": {
+      "kind": "bounds",
+      "matches": true
+    },
+    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+    "source_sha256": {
+      "issuance.application.canvas_oauth": "ac040197766d630d86523552a619bef081de6a1c20c7426cbf7f54e7db23e36f",
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    }
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "cases": [
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "disabled_missing_identity"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "disabled_empty_identity"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "disabled_organization_only"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "disabled_did_only"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "disabled_configured_identity"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "enabled_missing_identity"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "enabled_invalid_did"
+    },
+    {
+      "alive_after_idle": true,
+      "exit_code_after_interrupt": -2,
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "job_count": 0,
+      "name": "enabled_configured_identity"
+    }
+  ],
+  "python": "3.12.13",
+  "schema": "marty.canvas-worker-startup-oracle/v1",
+  "source_sha256": {
+    "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+    "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+  }
+}

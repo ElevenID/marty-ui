@@ -1,0 +1,563 @@
+{
+  "observations": [
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        }
+      ],
+      "name": "initial_permit",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": true,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 1
+        },
+        "facts": 1,
+        "head_scores": [
+          90.0
+        ],
+        "reviews": []
+      }
+    },
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "428a900b13f277f4cccd35b7d7d1c0c3e0eb0413c47a6dfbc7dfa9d170e749fb",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": false,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        }
+      ],
+      "name": "deny_after_issue",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": false,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 2,
+          "evidence_policy_review_created": 1
+        },
+        "facts": 2,
+        "head_scores": [
+          10.0
+        ],
+        "reviews": [
+          {
+            "action": null,
+            "claim_action": null,
+            "claim_token": null,
+            "current_allowed": false,
+            "prior_allowed": true,
+            "recovery_pending": false,
+            "resolved_at_present": false,
+            "resolved_by": null,
+            "status": "open",
+            "triggering_score": 10.0
+          }
+        ]
+      }
+    },
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "428a900b13f277f4cccd35b7d7d1c0c3e0eb0413c47a6dfbc7dfa9d170e749fb",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": false,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 0,
+            "facts_reused": 1,
+            "policy_allowed": false,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        }
+      ],
+      "name": "duplicate_deny",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": false,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 2,
+          "evidence_policy_review_created": 1
+        },
+        "facts": 2,
+        "head_scores": [
+          10.0
+        ],
+        "reviews": [
+          {
+            "action": null,
+            "claim_action": null,
+            "claim_token": null,
+            "current_allowed": false,
+            "prior_allowed": true,
+            "recovery_pending": false,
+            "resolved_at_present": false,
+            "resolved_by": null,
+            "status": "open",
+            "triggering_score": 10.0
+          }
+        ]
+      }
+    },
+    {
+      "exit_code_after_interrupt": -2,
+      "facts": [
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 90.0,
+            "score_maximum": 100.0,
+            "score_percent": 90.0
+          },
+          "effective_at": "2026-09-01T00:01:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "c91c4ef22cebf40e94dfe5eb7e4470a32f344d0f6d8c74475eba1aa89a615c24",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        },
+        {
+          "assertion": {
+            "completed": true,
+            "provider_state": "graded",
+            "requirement_completed_count": null,
+            "requirement_count": null,
+            "score": 10.0,
+            "score_maximum": 100.0,
+            "score_percent": 10.0
+          },
+          "effective_at": "2026-09-01T00:02:00+00:00",
+          "fact_type": "canvas.assignment_score",
+          "payload_hash": "428a900b13f277f4cccd35b7d7d1c0c3e0eb0413c47a6dfbc7dfa9d170e749fb",
+          "verification_method": "CANVAS_OAUTH_API_READ"
+        }
+      ],
+      "heartbeat": {
+        "metadata": {
+          "leased_jobs": 0,
+          "phase": "idle",
+          "process": "standalone",
+          "processor_configured": true
+        },
+        "role": "canvas_sync"
+      },
+      "jobs": [
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": true,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 1,
+            "facts_reused": 0,
+            "policy_allowed": false,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": true,
+          "last_error_code": null,
+          "last_error_summary": null,
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {
+            "application_id": "application-review",
+            "config_version": 1,
+            "facts_created": 0,
+            "facts_reused": 1,
+            "policy_allowed": false,
+            "requirements_checked": 1
+          },
+          "retry_delay_matches_37_seconds": null,
+          "retry_scheduled": null,
+          "started": true,
+          "status": "succeeded"
+        },
+        {
+          "attempt_count": 1,
+          "completed": false,
+          "last_error_code": "canvas_rate_limited",
+          "last_error_summary": "Canvas rate limited one or more authoritative evidence reads",
+          "lease_expires_present": false,
+          "lease_owner_present": false,
+          "max_attempts": 8,
+          "result": {},
+          "retry_delay_matches_37_seconds": true,
+          "retry_scheduled": true,
+          "started": true,
+          "status": "retry"
+        }
+      ],
+      "name": "rate_limit_preserves_evidence",
+      "oauth": {
+        "reauthorization_required": false,
+        "refresh_lease_owner_present": false,
+        "secret_enabled": true,
+        "secret_used": true,
+        "status": "connected"
+      },
+      "requests": [
+        {
+          "accept": "application/json",
+          "authorization": "Bearer synthetic-worker-rest-token",
+          "method": "GET",
+          "path": "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment"
+        }
+      ],
+      "snapshot": {
+        "application": {
+          "credential_id": "credential-review",
+          "policy_allowed": false,
+          "status": "approved"
+        },
+        "credential": {
+          "active": true,
+          "count": 1
+        },
+        "events": {
+          "evidence_fact_created": 2,
+          "evidence_policy_review_created": 1
+        },
+        "facts": 2,
+        "head_scores": [
+          10.0
+        ],
+        "reviews": [
+          {
+            "action": null,
+            "claim_action": null,
+            "claim_token": null,
+            "current_allowed": false,
+            "prior_allowed": true,
+            "recovery_pending": false,
+            "resolved_at_present": false,
+            "resolved_by": null,
+            "status": "open",
+            "triggering_score": 10.0
+          }
+        ]
+      }
+    }
+  ],
+  "schema": "marty.canvas-worker-rest-oracle/v1",
+  "source_sha256": {
+    "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+    "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+  }
+}

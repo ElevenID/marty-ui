@@ -1,0 +1,1307 @@
+{
+  "schema": "marty.canvas-charset-ordinals/v1",
+  "int_max_str_digits": 4300,
+  "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",
+  "cases": [
+    {
+      "name": "ordinal_0_text",
+      "spec": {
+        "digits": 4299,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_0_json",
+      "spec": {
+        "digits": 4299,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_0_empty",
+      "spec": {
+        "digits": 4299,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_1_text",
+      "spec": {
+        "digits": 4299,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_1_json",
+      "spec": {
+        "digits": 4299,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_1_empty",
+      "spec": {
+        "digits": 4299,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_2_text",
+      "spec": {
+        "digits": 4299,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_2_json",
+      "spec": {
+        "digits": 4299,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_2_empty",
+      "spec": {
+        "digits": 4299,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_3_text",
+      "spec": {
+        "digits": 4299,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_3_json",
+      "spec": {
+        "digits": 4299,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_3_empty",
+      "spec": {
+        "digits": 4299,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_4_text",
+      "spec": {
+        "digits": 4300,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_4_json",
+      "spec": {
+        "digits": 4300,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_4_empty",
+      "spec": {
+        "digits": 4300,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_5_text",
+      "spec": {
+        "digits": 4300,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_5_json",
+      "spec": {
+        "digits": 4300,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_5_empty",
+      "spec": {
+        "digits": 4300,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_6_text",
+      "spec": {
+        "digits": 4300,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_6_json",
+      "spec": {
+        "digits": 4300,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_6_empty",
+      "spec": {
+        "digits": 4300,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_7_text",
+      "spec": {
+        "digits": 4300,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_7_json",
+      "spec": {
+        "digits": 4300,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_7_empty",
+      "spec": {
+        "digits": 4300,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_8_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_8_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_8_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_9_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_9_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_9_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_10_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_10_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_10_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_11_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_11_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_11_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_12_text",
+      "spec": {
+        "digits": 4302,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_12_json",
+      "spec": {
+        "digits": 4302,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_12_empty",
+      "spec": {
+        "digits": 4302,
+        "digit": "0",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_13_text",
+      "spec": {
+        "digits": 4302,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_13_json",
+      "spec": {
+        "digits": 4302,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_13_empty",
+      "spec": {
+        "digits": 4302,
+        "digit": "0",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_14_text",
+      "spec": {
+        "digits": 4302,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_14_json",
+      "spec": {
+        "digits": 4302,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_14_empty",
+      "spec": {
+        "digits": 4302,
+        "digit": "9",
+        "base": "charset",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_15_text",
+      "spec": {
+        "digits": 4302,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_15_json",
+      "spec": {
+        "digits": 4302,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_15_empty",
+      "spec": {
+        "digits": 4302,
+        "digit": "9",
+        "base": "other",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4302 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_16_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "charset",
+        "suffix": "*"
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_16_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "charset",
+        "suffix": "*"
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_16_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "0",
+        "base": "charset",
+        "suffix": "*"
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_17_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "charset",
+        "suffix": "*"
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      }
+    },
+    {
+      "name": "ordinal_17_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "charset",
+        "suffix": "*"
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_17_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "charset",
+        "suffix": "*"
+      },
+      "body_hex": "",
+      "charset": {
+        "error_class": "ValueError",
+        "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_18_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "other",
+        "suffix": "x"
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_18_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "other",
+        "suffix": "x"
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_18_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "other",
+        "suffix": "x"
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    },
+    {
+      "name": "ordinal_19_text",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "invalid-name",
+        "suffix": ""
+      },
+      "body_hex": "636166e9",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "café"
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": "café"
+        }
+      }
+    },
+    {
+      "name": "ordinal_19_json",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "invalid-name",
+        "suffix": ""
+      },
+      "body_hex": "7b226163636570746564223a747275657d",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": "{\"accepted\":true}"
+      },
+      "excerpt": {
+        "value": {
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "ordinal_19_empty",
+      "spec": {
+        "digits": 4301,
+        "digit": "9",
+        "base": "invalid-name",
+        "suffix": ""
+      },
+      "body_hex": "",
+      "charset": {
+        "value": "latin1"
+      },
+      "text": {
+        "value": ""
+      },
+      "excerpt": {
+        "value": {
+          "body_excerpt": ""
+        }
+      }
+    }
+  ]
+}

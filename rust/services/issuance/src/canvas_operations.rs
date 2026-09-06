@@ -34,6 +34,7 @@ pub struct CanvasOperationsService {
     pool: PgPool,
     security: ManagementSecurity,
     jobs: Option<PostgresCanvasLtiBootstrapSyncEnqueuer>,
+    reviews: Option<crate::canvas_review_resolution::CanvasReviewResolver>,
 }
 
 impl CanvasOperationsService {
@@ -43,6 +44,7 @@ impl CanvasOperationsService {
             pool,
             security: ManagementSecurity::new(management_key.filter(|key| !key.is_empty())),
             jobs: None,
+            reviews: None,
         }
     }
 
@@ -77,6 +79,18 @@ impl CanvasOperationsService {
             .map_err(enqueue_error)?;
         let row = self.load_job(organization, &ids.job_id).await?;
         self.job_view(organization, &row).await
+    }
+
+    #[must_use]
+    pub fn with_review_operations(
+        mut self,
+        lifecycle: Option<Arc<dyn crate::canvas_review_resolution::CanvasReviewLifecycle>>,
+    ) -> Self {
+        self.reviews = Some(crate::canvas_review_resolution::CanvasReviewResolver::new(
+            self.pool.clone(),
+            lifecycle,
+        ));
+        self
     }
 
     async fn transition_job(
@@ -312,6 +326,10 @@ impl CanvasOperationsService {
 pub fn candidate_router(service: CanvasOperationsService) -> Router {
     Router::new()
         .route(
+            "/v1/integrations/canvas/evidence-policy-reviews/{id}/resolve",
+            post(resolve_review),
+        )
+        .route(
             "/v1/integrations/canvas/applications/{id}/canvas-sync",
             post(enqueue),
         )
@@ -345,6 +363,137 @@ async fn enqueue(
         .enqueue(&headers, &id)
         .await
         .map(|value| (StatusCode::ACCEPTED, Json(value)))
+}
+
+async fn resolve_review(
+    State(service): State<CanvasOperationsService>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, OperationsError> {
+    let headers = request.headers().clone();
+    // The transport owns request size limits; this candidate does not add a
+    // smaller application-body limit than the released Python endpoint.
+    let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+        .await
+        .map_err(|_| OperationsError::Internal)?;
+    // Published FastAPI decodes JSON before dependencies, but validates the
+    // request model after management authentication. Preserve that ordering.
+    let json_content = header(&headers, "content-type").is_none_or(|value| {
+        let media = value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        media
+            .strip_prefix("application/")
+            .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
+    });
+    let payload = if bytes.is_empty() {
+        Value::Null
+    } else if json_content {
+        serde_json::from_slice(&bytes).map_err(|error| {
+            OperationsError::Public(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"detail":[crate::python_json_diagnostic::diagnostic(&bytes, &error)]}),
+            )
+        })?
+    } else {
+        json!(String::from_utf8_lossy(&bytes))
+    };
+    service.authorize(&headers)?;
+    let (action, notes) = review_payload(&payload)?;
+    let organization = organization(&headers)?;
+    let actor = ["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]
+        .iter()
+        .filter_map(|name| header(&headers, name))
+        .find(|value| !value.is_empty());
+    let result = service
+        .reviews
+        .as_ref()
+        .ok_or(OperationsError::Internal)?
+        .resolve(organization, &id, action, notes, actor)
+        .await?;
+    Collection::Reviews.project(&result).map(Json)
+}
+
+fn review_payload(
+    value: &Value,
+) -> Result<(crate::canvas_review_resolution::ReviewAction, Option<&str>), OperationsError> {
+    use crate::canvas_review_resolution::ReviewAction;
+    if value.is_null() {
+        return Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":[validation_issue("missing",json!(["body"]),"Field required",Value::Null,None)]}),
+        ));
+    }
+    let Some(object) = value.as_object() else {
+        return Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":[
+                validation_issue("model_attributes_type",json!(["body"]),"Input should be a valid dictionary or object to extract fields from",value.clone(),None)
+            ]}),
+        ));
+    };
+    let mut errors = Vec::new();
+    let action = match object.get("action") {
+        Some(Value::String(action)) if action == "dismiss" => Some(ReviewAction::Dismiss),
+        Some(Value::String(action)) if action == "suspend" => Some(ReviewAction::Suspend),
+        Some(Value::String(action)) if action == "revoke" => Some(ReviewAction::Revoke),
+        Some(input) => {
+            errors.push(validation_issue(
+                "literal_error",
+                json!(["body", "action"]),
+                "Input should be 'dismiss', 'suspend' or 'revoke'",
+                input.clone(),
+                Some(json!({"expected":"'dismiss', 'suspend' or 'revoke'"})),
+            ));
+            None
+        }
+        None => {
+            errors.push(validation_issue(
+                "missing",
+                json!(["body", "action"]),
+                "Field required",
+                value.clone(),
+                None,
+            ));
+            None
+        }
+    };
+    let notes = match object.get("note") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(note)) => {
+            if note.chars().count() > 2000 {
+                errors.push(validation_issue(
+                    "string_too_long",
+                    json!(["body", "note"]),
+                    "String should have at most 2000 characters",
+                    json!(note),
+                    Some(json!({"max_length":2000})),
+                ));
+            }
+            Some(note.as_str())
+        }
+        Some(input) => {
+            errors.push(validation_issue(
+                "string_type",
+                json!(["body", "note"]),
+                "Input should be a valid string",
+                input.clone(),
+                None,
+            ));
+            None
+        }
+    };
+    if errors.is_empty() {
+        Ok((action.ok_or(OperationsError::Internal)?, notes))
+    } else {
+        Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":errors}),
+        ))
+    }
 }
 async fn retry_job(
     State(service): State<CanvasOperationsService>,
@@ -622,11 +771,24 @@ impl ListQuery {
 }
 
 fn validation(kind: &str, message: &str, input: &str, context: Option<Value>) -> OperationsError {
-    let mut error = json!({"type": kind, "loc": ["query", "limit"], "msg": message, "input": input, "url": format!("https://errors.pydantic.dev/2.11/v/{kind}")});
+    OperationsError::Public(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        json!({"detail": [validation_issue(kind,json!(["query","limit"]),message,json!(input),context)]}),
+    )
+}
+
+fn validation_issue(
+    kind: &str,
+    location: Value,
+    message: &str,
+    input: Value,
+    context: Option<Value>,
+) -> Value {
+    let mut error = json!({"type": kind, "loc": location, "msg": message, "input": input, "url": format!("https://errors.pydantic.dev/2.11/v/{kind}")});
     if let Some(context) = context {
         error["ctx"] = context;
     }
-    OperationsError::Public(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [error]}))
+    error
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -720,6 +882,7 @@ fn public_job_result(value: &Value) -> Value {
 
 pub enum OperationsError {
     Public(StatusCode, Value),
+    Lifecycle(crate::credential_management::CredentialManagementError),
     Internal,
 }
 impl OperationsError {
@@ -731,6 +894,10 @@ impl IntoResponse for OperationsError {
     fn into_response(self) -> Response {
         match self {
             Self::Public(status, body) => (status, Json(body)).into_response(),
+            Self::Lifecycle(error) => {
+                crate::credential_management_http::CredentialManagementHttpError::Lifecycle(error)
+                    .into_response()
+            }
             Self::Internal => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
             }
@@ -750,10 +917,15 @@ mod tests {
                 "candidate_id": "candidate", "facts_changed": 1.5,
                 "sources_checked": ["private"], "policy_allowed": {"private":true},
                 "roster_remaining": 8, "access_token": "synthetic-private",
+                "target_config_version": 1,
             })),
             json!({"facts_observed":2,"no_change":true,"application_id":null,"candidate_id":"candidate"})
         );
         assert_eq!(public_job_result(&Value::Null), json!({}));
+        assert_eq!(
+            public_job_result(&json!({"target_config_version": 1})),
+            json!({})
+        );
     }
 
     #[test]

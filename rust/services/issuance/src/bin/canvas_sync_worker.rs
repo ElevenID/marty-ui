@@ -9,18 +9,18 @@ use marty_issuance_service::{
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
     canvas_provider_http::CanvasHttpClientPolicy,
-    canvas_sync_processor::NativeCanvasSyncProcessor,
+    canvas_sync_processor::{CanvasRosterBounds, NativeCanvasSyncProcessor},
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
     canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
     canvas_sync_worker_lifecycle::{
-        finish_on_shutdown, spawn_with_postgres_cleanup, WorkerShutdown,
+        finish_on_shutdown, spawn_with_postgres_cleanup, worker_pool_options, WorkerShutdown,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     integration_secret::IntegrationSecretCipher,
 };
 use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::PgPool;
 use tokio::sync::watch;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -44,7 +44,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     });
     let master_key = integration_master_key()?;
     let cipher = IntegrationSecretCipher::from_base64(&master_key)?;
-    let pool = PgPoolOptions::new()
+    let pool = worker_pool_options()
         .min_connections(1)
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
@@ -139,8 +139,10 @@ async fn run_initialized_worker(
     let signing_key =
         required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
     let signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
-        required_env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID")?,
-        required_env("CANVAS_LTI_TOOL_ISSUER_DID")?,
+        // Published startup does not require an LTI identity. The shared signer
+        // validates it before resolving or signing, without blocking idle work.
+        env::var("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID").unwrap_or_default(),
+        env::var("CANVAS_LTI_TOOL_ISSUER_DID").unwrap_or_default(),
         true,
         Arc::new(HttpCanvasLtiToolIdentityResolver::new(
             signing_url.clone(),
@@ -165,12 +167,18 @@ async fn run_initialized_worker(
         },
         self_managed_origins,
     ));
-    let processor = Arc::new(NativeCanvasSyncProcessor::new(
+    let processor = Arc::new(NativeCanvasSyncProcessor::new_with_roster_configuration(
         Arc::new(PostgresCanvasSyncProcessorRepository::new(pool.clone())),
         authoritative_provider,
         config.clone(),
-        bounded_usize("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE", 500, 1, 2_000)?,
-        bounded_usize("CANVAS_BACKGROUND_ROSTER_MAX_SIZE", 5_000, 1, 10_000)?,
+        CanvasRosterBounds::from_values(
+            env::var("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE")
+                .ok()
+                .as_deref(),
+            env::var("CANVAS_BACKGROUND_ROSTER_MAX_SIZE")
+                .ok()
+                .as_deref(),
+        ),
     ));
     let worker = CanvasSyncWorker::new(
         worker_repository,
@@ -183,14 +191,6 @@ async fn run_initialized_worker(
     info!(worker = ?worker, "starting standalone Rust Canvas sync worker candidate");
     worker.run_loop(stop).await?;
     Ok(())
-}
-
-fn required_env(name: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{name} is required").into())
 }
 
 fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
@@ -230,22 +230,6 @@ fn first_present_or_else<T, E>(
         Some(value) => Ok(Some(value)),
         None => fallback(),
     }
-}
-
-fn bounded_usize(
-    name: &str,
-    default: usize,
-    minimum: usize,
-    maximum: usize,
-) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    let value = env::var(name)
-        .ok()
-        .map(|value| value.trim().parse::<i64>())
-        .transpose()?
-        .unwrap_or(i64::try_from(default)?);
-    Ok(usize::try_from(
-        value.clamp(i64::try_from(minimum)?, i64::try_from(maximum)?),
-    )?)
 }
 
 fn env_bool(name: &str) -> bool {

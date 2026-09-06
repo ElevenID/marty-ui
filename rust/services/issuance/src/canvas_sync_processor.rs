@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
+use mmf_config::numeric_config::PythonConfigInteger;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -221,22 +222,79 @@ pub trait CanvasSyncProcessorRepository: Send + Sync {
     ) -> Result<(), CanvasSyncProcessingError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanvasRosterBounds {
+    batch_size: usize,
+    limit: usize,
+}
+
+impl CanvasRosterBounds {
+    const MAX_BATCH_SIZE: usize = 2_000;
+    const MAX_ROSTER_SIZE: usize = 10_000;
+
+    fn new(batch_size: usize, limit: usize) -> Self {
+        let batch_size = batch_size.clamp(1, Self::MAX_BATCH_SIZE);
+        Self {
+            batch_size,
+            limit: limit.clamp(batch_size, Self::MAX_ROSTER_SIZE),
+        }
+    }
+
+    /// Parse without requiring a roster job to exist. Callers retain an error
+    /// until roster processing; unrelated application work must remain available.
+    pub fn from_values(
+        batch: Option<&str>,
+        limit: Option<&str>,
+    ) -> Result<Self, CanvasSyncProcessingError> {
+        fn bounded(
+            value: Option<&str>,
+            default: u64,
+            minimum: usize,
+            maximum: u64,
+        ) -> Result<usize, CanvasSyncProcessingError> {
+            let value = match value {
+                None => PythonConfigInteger::from(default),
+                Some(value) => value.parse::<PythonConfigInteger>().map_err(|_| {
+                    CanvasSyncProcessingError::terminal(
+                        "canvas_roster_configuration_invalid",
+                        "Canvas roster bounds are invalid",
+                    )
+                })?,
+            };
+            let value = value.max((minimum as u64).into()).min(maximum.into());
+            Ok(
+                usize::try_from(value.to_u64().expect("bounded roster integer fits u64"))
+                    .expect("roster bound at most 10000 fits usize"),
+            )
+        }
+        let batch_size = bounded(batch, 500, 1, Self::MAX_BATCH_SIZE as u64)?;
+        let limit = bounded(limit, 5_000, batch_size, Self::MAX_ROSTER_SIZE as u64)?;
+        Ok(Self { batch_size, limit })
+    }
+}
+
 #[derive(Clone)]
 pub struct NativeCanvasSyncProcessor {
     repository: Arc<dyn CanvasSyncProcessorRepository>,
     provider: Arc<dyn CanvasAuthoritativeProvider>,
     config: CanvasSyncWorkerConfig,
-    roster_batch_size: usize,
-    roster_limit: usize,
+    roster_configuration: Result<CanvasRosterBounds, CanvasSyncProcessingError>,
 }
 
 impl std::fmt::Debug for NativeCanvasSyncProcessor {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("NativeCanvasSyncProcessor")
-            .field("roster_batch_size", &self.roster_batch_size)
-            .field("roster_limit", &self.roster_limit)
-            .finish_non_exhaustive()
+        let mut debug = formatter.debug_struct("NativeCanvasSyncProcessor");
+        match &self.roster_configuration {
+            Ok(bounds) => {
+                debug
+                    .field("roster_batch_size", &bounds.batch_size)
+                    .field("roster_limit", &bounds.limit);
+            }
+            Err(error) => {
+                debug.field("roster_configuration_error", &error.code);
+            }
+        }
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -249,13 +307,26 @@ impl NativeCanvasSyncProcessor {
         roster_batch_size: usize,
         roster_limit: usize,
     ) -> Self {
-        let roster_batch_size = roster_batch_size.clamp(1, 2_000);
+        Self::new_with_roster_configuration(
+            repository,
+            provider,
+            config,
+            Ok(CanvasRosterBounds::new(roster_batch_size, roster_limit)),
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_roster_configuration(
+        repository: Arc<dyn CanvasSyncProcessorRepository>,
+        provider: Arc<dyn CanvasAuthoritativeProvider>,
+        config: CanvasSyncWorkerConfig,
+        roster_configuration: Result<CanvasRosterBounds, CanvasSyncProcessingError>,
+    ) -> Self {
         Self {
             repository,
             provider,
             config,
-            roster_batch_size,
-            roster_limit: roster_limit.clamp(roster_batch_size, 10_000),
+            roster_configuration,
         }
     }
 
@@ -410,12 +481,11 @@ impl NativeCanvasSyncProcessor {
             ));
         }
         if let Some(retry_after_seconds) = retry_after {
-            return Err(CanvasSyncProcessingError {
-                code: "canvas_rate_limited",
-                summary: "Canvas rate limited one or more authoritative evidence reads",
-                retryable: true,
-                retry_after_seconds: Some(retry_after_seconds),
-            });
+            return Err(CanvasSyncProcessingError::retryable(
+                "canvas_rate_limited",
+                "Canvas rate limited one or more authoritative evidence reads",
+            )
+            .with_retry_after(retry_after_seconds));
         }
         if checked.is_empty() {
             return Err(CanvasSyncProcessingError::retryable(
@@ -449,6 +519,7 @@ impl NativeCanvasSyncProcessor {
         resources: &CanvasSyncResources,
     ) -> Result<Map<String, Value>, CanvasSyncProcessingError> {
         let requirements = requirements(resources)?;
+        let bounds = self.roster_configuration.as_ref().map_err(Clone::clone)?;
         let has_rest = requirements
             .iter()
             .any(|item| text(item.get("source")) == "canvas_rest");
@@ -458,7 +529,7 @@ impl NativeCanvasSyncProcessor {
         let mixed = has_rest && has_ags;
         let roster = self
             .provider
-            .roster(target, resources, &requirements, self.roster_limit)
+            .roster(target, resources, &requirements, bounds.limit)
             .await
             .map_err(provider_processing_error)?;
         let preloaded_observations = roster.preloaded_observations.clone();
@@ -505,7 +576,7 @@ impl NativeCanvasSyncProcessor {
         let batch = inputs
             .iter()
             .skip(cursor)
-            .take(self.roster_batch_size)
+            .take(bounds.batch_size)
             .cloned()
             .collect::<Vec<_>>();
         let existing = self
@@ -513,7 +584,7 @@ impl NativeCanvasSyncProcessor {
             .existing_candidates(
                 &target.organization_id,
                 &resources.binding_id(),
-                self.roster_limit,
+                bounds.limit,
             )
             .await?
             .into_iter()
@@ -608,12 +679,11 @@ impl NativeCanvasSyncProcessor {
                     Err(CanvasProviderReadError::RateLimited {
                         retry_after_seconds,
                     }) => {
-                        return Err(CanvasSyncProcessingError {
-                            code: "canvas_rate_limited",
-                            summary: "Canvas background evidence could not be read",
-                            retryable: true,
-                            retry_after_seconds: Some(retry_after_seconds),
-                        });
+                        return Err(CanvasSyncProcessingError::retryable(
+                            "canvas_rate_limited",
+                            "Canvas background evidence could not be read",
+                        )
+                        .with_retry_after(retry_after_seconds));
                     }
                     Err(_) => {} // Preserve the current observation head.
                 }
@@ -770,12 +840,11 @@ fn provider_processing_error(error: CanvasProviderReadError) -> CanvasSyncProces
     match error {
         CanvasProviderReadError::RateLimited {
             retry_after_seconds,
-        } => CanvasSyncProcessingError {
-            code: "canvas_rate_limited",
-            summary: "Canvas background evidence could not be read",
-            retryable: true,
-            retry_after_seconds: Some(retry_after_seconds),
-        },
+        } => CanvasSyncProcessingError::retryable(
+            "canvas_rate_limited",
+            "Canvas background evidence could not be read",
+        )
+        .with_retry_after(retry_after_seconds),
         CanvasProviderReadError::InvalidConfiguration => CanvasSyncProcessingError::terminal(
             "canvas_requirements_invalid",
             "Canvas evidence requirements are invalid",
@@ -943,6 +1012,117 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn roster_bounds_use_lossless_integer_grammar_and_clamp_before_conversion() {
+        assert_eq!(
+            CanvasRosterBounds::from_values(None, None).unwrap(),
+            CanvasRosterBounds::new(500, 5000)
+        );
+        for (batch, limit, expected) in [
+            ("0", "-9", (1, 1)),
+            ("+1_000", "9", (1000, 1000)),
+            ("\u{a0}+٢_٠٠٠\u{a0}", "１００００", (2000, 10000)),
+            (
+                "999999999999999999999999999999",
+                "999999999999999999999999999999",
+                (2000, 10000),
+            ),
+            (
+                "-999999999999999999999999999999",
+                "-999999999999999999999999999999",
+                (1, 1),
+            ),
+        ] {
+            let actual = CanvasRosterBounds::from_values(Some(batch), Some(limit)).unwrap();
+            assert_eq!((actual.batch_size, actual.limit), expected);
+        }
+        let maximum_digits = "9".repeat(4300);
+        assert_eq!(
+            CanvasRosterBounds::from_values(Some(&maximum_digits), Some(&maximum_digits)).unwrap(),
+            CanvasRosterBounds::new(2000, 10000)
+        );
+        for invalid in [
+            "",
+            " ",
+            "synthetic-invalid-bound",
+            "1__0",
+            "1.5",
+            "1e3",
+            &"9".repeat(4301),
+        ] {
+            for (batch, limit) in [(Some(invalid), None), (None, Some(invalid))] {
+                let error = CanvasRosterBounds::from_values(batch, limit).unwrap_err();
+                assert_eq!(
+                    error,
+                    CanvasSyncProcessingError::terminal(
+                        "canvas_roster_configuration_invalid",
+                        "Canvas roster bounds are invalid"
+                    )
+                );
+                assert!(!format!("{error:?}").contains("synthetic-invalid-bound"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn roster_configuration_error_is_deferred_without_disabling_application_work() {
+        let repository = Arc::new(SimulatorRepository {
+            resources: simulator_resources(vec![requirement(
+                "assignment",
+                "canvas_rest",
+                "canvas.assignment_score",
+                json!({"course_id":"1","activity_id":"2"}),
+                json!({"min_score_percent":70}),
+            )]),
+            facts: Mutex::new(Vec::new()),
+            candidates: Mutex::new(BTreeMap::new()),
+            observations: Mutex::new(BTreeMap::new()),
+            cursor: Mutex::new(None),
+            disabled: Mutex::new(false),
+        });
+        let processor = NativeCanvasSyncProcessor::new_with_roster_configuration(
+            repository.clone(),
+            Arc::new(SimulatorProvider),
+            enabled_config(),
+            CanvasRosterBounds::from_values(Some("synthetic-invalid-bound"), None),
+        );
+        let error = run_simulated(&processor, target(CanvasSyncTargetType::BackgroundRoster))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "canvas_roster_configuration_invalid");
+        assert_eq!(error.summary, "Canvas roster bounds are invalid");
+        assert!(!error.retryable);
+        assert!(repository.facts.lock().unwrap().is_empty());
+        assert!(repository.candidates.lock().unwrap().is_empty());
+        for kind in [
+            CanvasSyncTargetType::LearnerApplication,
+            CanvasSyncTargetType::IssuedDrift,
+        ] {
+            let result = run_simulated(&processor, target(kind)).await.unwrap();
+            assert_eq!(
+                result.get("requirements_checked").map(|value| value.get()),
+                Some("1")
+            );
+        }
+        assert_eq!(
+            run_simulated(&processor, target(CanvasSyncTargetType::AwardCandidate))
+                .await
+                .unwrap_err()
+                .code,
+            "canvas_sync_target_type_unsupported"
+        );
+        let mut closed = processor;
+        closed.config.portable_enabled = false;
+        assert_eq!(
+            run_simulated(&closed, target(CanvasSyncTargetType::BackgroundRoster))
+                .await
+                .unwrap()
+                .get("no_change")
+                .map(|value| value.get()),
+            Some("true")
+        );
+    }
 
     #[test]
     fn candidate_ags_projection_preserves_full_learner_and_rest_observations() {

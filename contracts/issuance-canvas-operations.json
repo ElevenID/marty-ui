@@ -1,6 +1,6 @@
 {
   "schema": "marty.issuance-canvas-operations/v1",
-  "status": "behavior-freeze; seven native read/job candidates; manual review resolution and full cutover qualification pending",
+  "status": "behavior-freeze; all eight native operations candidates; extended manual input/lifecycle and full cutover qualification pending",
   "provenance": {
     "credentials_snapshot": "e3e79c96ab655f4ac699074c6452cd8c4c43dcb6",
     "source": "services/issuance/infrastructure/api/canvas_operations_routes.py",

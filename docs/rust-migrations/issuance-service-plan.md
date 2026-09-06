@@ -20,7 +20,13 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns 32 frozen HTTP operations: the exact legacy
+The coverage contract currently records 63 of the 131 frozen HTTP operations
+and all 12 gRPC methods as implemented in Rust, leaving 68 HTTP operations in
+its remaining inventory. Implementation ownership is not proof that every
+deployment consumer has switched. The Canvas worker is a separate unrouted
+candidate; see [worker cutover readiness](canvas-worker-cutover-readiness.md).
+
+The earlier 32-operation HTTP checkpoint included the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
 the global plus three organization-scoped OAuth discovery variants, and all
 three tenant-backed credential-issuer metadata variants. The six deterministic
@@ -74,12 +80,15 @@ and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
 
 MMF-owned readiness, lifecycle, and version diagnostics remain additive. The
-shared service image and entrypoint package the native binary. Beta uses a
-separate `issuance-native` sidecar and the gateway sends only the 32
-contract-owned paths to it. The other 99 HTTP operations, all 12 gRPC methods,
-the Canvas synchronization worker, and packaging and schema ownership remain
-on the Python issuance service. Production Compose remains unchanged and
-selects only the Python issuance service.
+shared service image and entrypoint package the native binary. Beta's source
+configuration uses a separate `issuance-native` sidecar and the gateway's
+contract-owned HTTP path split. The 31-route Canvas management migration brings
+the HTTP ownership inventory to 63. The other 68 HTTP operations, complete API
+runtime cutover, the Canvas synchronization worker, and final packaging and
+schema ownership remain open. All 12 gRPC methods now have native ownership;
+consumer routing and runtime acceptance must be verified separately. These are
+source/contract facts, not a fresh beta health or deployment attestation.
+Production remains unchanged by this migration lane.
 
 ## Dependency and removal order
 
@@ -94,10 +103,13 @@ selects only the Python issuance service.
    cryptography and credential formats and preserving idempotency/race gates.
    Token exchange, nonce issuance, and credential issuance are complete in the
    beta path split.
-5. Port revocation/status lifecycle, physical-document paths, the remaining
-   Canvas integration surface, all 12 gRPC methods, and the Canvas worker. The
-   eleven frozen Canvas/LTI paths and three Canvas OAuth lifecycle paths listed
-   above are complete in the beta path split.
+5. Reconcile the remaining HTTP/runtime and Canvas worker consumers. Native
+   ownership includes the Canvas/LTI and OAuth paths above, all 31 Canvas
+   management routes, and all 12 gRPC methods; do not port them again based on
+   the older checkpoint prose. Qualify the eight additional Canvas operations
+   and standalone worker candidates before advancing their routing/deletion
+   boundary. Keep the coverage contract authoritative for the remaining HTTP
+   inventory and verify implementation and consumer adoption separately.
 6. Replay the frozen positive, negative, concurrency, database, protocol, and
    migration contracts against both implementations; resolve every divergence.
 7. Atomically move image/SBOM/provenance ownership, delete the Python issuance

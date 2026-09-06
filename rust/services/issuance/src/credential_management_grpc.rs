@@ -814,9 +814,8 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
         | CredentialManagementError::NotSuspended => Status::failed_precondition(error.to_string()),
         CredentialManagementError::RepositoryUnavailable(_)
         | CredentialManagementError::PublicationUnavailable(_)
-        | CredentialManagementError::CanvasRetryUnavailable(_) => {
-            Status::internal(error.to_string())
-        }
+        | CredentialManagementError::CanvasRetryUnavailable(_)
+        | CredentialManagementError::CanvasTextEncoding => Status::internal(error.to_string()),
     }
 }
 
@@ -899,7 +898,7 @@ mod tests {
             _credential: &ManagedCredential,
             action: CredentialLifecycleAction,
             _reason: Option<&str>,
-        ) -> Result<(), CredentialManagementPortError> {
+        ) -> Result<(), crate::credential_management::CanvasLifecycleSyncError> {
             self.calls
                 .lock()
                 .expect("calls")

@@ -1848,6 +1848,10 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
             .into_response();
     }
     let (status, detail) = match error {
+        CanvasPlatformManagementError::CanvasCredentialsValidationFailed => {
+            // Match the published exception boundary without operator details.
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
+        }
         CanvasPlatformManagementError::Security(error) => match error {
             TransactionReadError::ApiKeyNotConfigured => (
                 StatusCode::SERVICE_UNAVAILABLE,

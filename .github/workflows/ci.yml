@@ -692,6 +692,22 @@ jobs:
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py
+      - name: Test native Canvas operation timeout TLS parity
+        working-directory: rust
+        run: |
+          python3 -m venv "$RUNNER_TEMP/canvas-operation-tls"
+          "$RUNNER_TEMP/canvas-operation-tls/bin/pip" install --disable-pip-version-check httpx==0.26.0 cryptography==44.0.3
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
+          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}"
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
@@ -1127,6 +1143,10 @@ jobs:
           done
           docker logs "$container"
           exit 1
+      - name: Smoke-test Canvas worker image entrypoint and secret preflight
+        run: python3 scripts/test_canvas_worker_image_entrypoint.py marty-issuance:ci
+      - name: Test packaged Canvas worker startup with published schema and secret sources
+        run: python3 scripts/test_canvas_worker_image_startup.py marty-issuance:ci
       - name: Smoke-test organization image with PostgreSQL and Redis
         shell: bash
         run: |

@@ -1,0 +1,14 @@
+{
+  "schema": "marty.canvas-worker-startup-scenarios/v1",
+  "scope": "Actual process initialization and empty-queue idle heartbeat; not authoritative provider or signing behavior",
+  "cases": [
+    {"name": "disabled_missing_identity", "database_scheme": "postgresql", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "false"}},
+    {"name": "disabled_empty_identity", "database_scheme": "postgresql+asyncpg", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "false", "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "", "CANVAS_LTI_TOOL_ISSUER_DID": ""}},
+    {"name": "disabled_organization_only", "database_scheme": "postgresql", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "false", "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "bootstrap-org"}},
+    {"name": "disabled_did_only", "database_scheme": "postgresql+asyncpg", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "false", "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:bootstrap.invalid"}},
+    {"name": "disabled_configured_identity", "database_scheme": "postgresql", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "false", "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "bootstrap-org", "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:bootstrap.invalid"}},
+    {"name": "enabled_missing_identity", "database_scheme": "postgresql+asyncpg", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "true"}},
+    {"name": "enabled_invalid_did", "database_scheme": "postgresql", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "true", "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "bootstrap-org", "CANVAS_LTI_TOOL_ISSUER_DID": "not-a-did"}},
+    {"name": "enabled_configured_identity", "database_scheme": "postgresql+asyncpg", "environment": {"CANVAS_PORTABLE_INTEGRATION_ENABLED": "true", "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "bootstrap-org", "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:bootstrap.invalid"}}
+  ]
+}

@@ -73,4 +73,3 @@ test -x target/debug/organization-repository-postgres-contract
 target/debug/organization-migration-contract --test-threads=1
 target/debug/organization-application-postgres-contract --test-threads=1
 target/debug/organization-repository-postgres-contract --test-threads=1
-

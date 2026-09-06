@@ -5,10 +5,11 @@ use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use mmf_runtime::managed_task::{ManagedTask, TaskCompletion, TaskJoinError};
-use sqlx::PgPool;
+use sqlx::{postgres::PgPoolOptions, Connection, PgPool};
 use tokio::sync::watch;
 
 /// Explicit graceful stop and task cancellation are separate control events.
@@ -16,6 +17,26 @@ use tokio::sync::watch;
 pub enum WorkerShutdown {
     Drain,
     Cancel,
+}
+
+/// Bound validation of a connection whose query future has already returned or
+/// been dropped. SQLx otherwise pings it indefinitely on release; a cancelled
+/// lock-waiting query can then prevent pool.close() from acknowledging cleanup.
+/// This is not a statement deadline and never truncates an owned active query.
+/// It also covers a released child query while the worker remains active;
+/// closing admission on whole-worker cancellation does not cover that case.
+pub fn worker_pool_options() -> PgPoolOptions {
+    PgPoolOptions::new().after_release(|connection, _| {
+        Box::pin(async move {
+            match tokio::time::timeout(Duration::from_secs(1), connection.ping()).await {
+                Ok(result) => result.map(|()| true),
+                // SQLx hard-closes connections when this hook returns an error.
+                Err(_) => Err(sqlx::Error::Protocol(
+                    "Cancelled Canvas connection did not settle on release".into(),
+                )),
+            }
+        })
+    })
 }
 
 // Close the pool's admission gate before dropping the operation's SQL futures.

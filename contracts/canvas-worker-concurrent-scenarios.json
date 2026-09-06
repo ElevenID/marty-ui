@@ -1,0 +1,9 @@
+{
+  "schema": "marty.canvas-worker-concurrent-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "worker_ids": ["worker-rest", "worker-contender"],
+  "barrier_sql": "LOCK TABLE issuance_service.canvas_evidence_sync_targets IN ACCESS EXCLUSIVE MODE",
+  "blocked_schedulers_sql": "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND state='active' AND wait_event_type='Lock' AND query LIKE '%canvas_evidence_sync_targets%'",
+  "heartbeats_sql": "SELECT COALESCE(jsonb_agg(jsonb_build_object('role',role,'metadata',metadata) ORDER BY metadata->>'phase',worker_id),'[]'::jsonb) FROM issuance_service.canvas_worker_heartbeats",
+  "scope": "Two actual worker processes wait concurrently at a fixture-owned target-table lock before scheduling the same due target. Release the database barrier, hold actual provider HTTPS, require one leased job and one idle contender, then one successful job/request and both workers idle/alive. No clock/job-state mutation, no claim about crash reclaimers or changed-target races. Worker identities are omitted only from the ordered heartbeat projection; process ownership and job lease owner are checked separately."
+}

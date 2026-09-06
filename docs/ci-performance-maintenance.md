@@ -76,3 +76,19 @@ dropping an unfinished operation, then still awaits complete disposal. A
 deterministic destruction-order regression and the existing real SIGINT/SIGTERM
 cases enforce this; the 10-second exit deadline and graceful-drain checks remain
 unchanged. Signal logs identify each case without exposing worker configuration.
+
+The Canvas continuation retains bounded connection-release validation as well as
+close-before-operation-drop ordering. These protect different ownership points:
+a child query can be released while its worker remains active, whereas closing
+pool admission applies when the whole worker operation is cancelled. The shared
+pool factory remains authoritative for release policy and the managed owner for
+awaited shutdown. Both regressions remain required; active queries and graceful
+drain are not given a new statement deadline.
+
+When integrating later Canvas changes, move all published-schema executable
+assertions into `scripts/ci/run-published-canvas-contracts.sh`; do not revert to
+the older inline workflow or discard newer guards. The current script preserves
+all 20 assertions from the charset continuation, including status recovery and
+header/transport behavior. The separate native TLS parity step also remains
+mandatory. Workflow tests follow the extracted script while retaining the cache,
+isolated-runner, packaging and cutover assertions from PR #815.

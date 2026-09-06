@@ -2,11 +2,15 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
+use chrono::{DateTime, Utc};
+use mmf_config::numeric_config::PythonConfigInteger;
 use reqwest::{redirect::Policy, Client, Response};
 use url::Url;
+
+pub(crate) const MAX_RETRY_AFTER_SECONDS: u64 = 86_400;
 
 #[derive(Clone)]
 pub struct CanvasHttpClientPolicy {
@@ -14,6 +18,37 @@ pub struct CanvasHttpClientPolicy {
     pub private_origin_allowlist: Vec<String>,
     pub allow_private_networks: bool,
     pub allow_http_localhost: bool,
+}
+
+#[derive(Clone, Default)]
+pub struct CanvasOriginPolicy {
+    pub private_origin_allowlist: Vec<String>,
+    pub allow_private_networks: bool,
+    pub allow_http_localhost: bool,
+}
+
+impl From<&CanvasHttpClientPolicy> for CanvasOriginPolicy {
+    fn from(policy: &CanvasHttpClientPolicy) -> Self {
+        Self {
+            private_origin_allowlist: policy.private_origin_allowlist.clone(),
+            allow_private_networks: policy.allow_private_networks,
+            allow_http_localhost: policy.allow_http_localhost,
+        }
+    }
+}
+
+impl std::fmt::Debug for CanvasOriginPolicy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasOriginPolicy")
+            .field(
+                "private_origin_allowlist_count",
+                &self.private_origin_allowlist.len(),
+            )
+            .field("allow_private_networks", &self.allow_private_networks)
+            .field("allow_http_localhost", &self.allow_http_localhost)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for CanvasHttpClientPolicy {
@@ -35,6 +70,25 @@ pub async fn client_for_canvas_origin(
     canvas_base_url: &str,
     policy: &CanvasHttpClientPolicy,
 ) -> Result<(Client, Url), ()> {
+    let (origin, pinned) =
+        resolve_canvas_origin(canvas_base_url, &CanvasOriginPolicy::from(policy)).await?;
+    let host = origin.host_str().ok_or(())?;
+    let client = Client::builder()
+        .timeout(policy.timeout)
+        .redirect(Policy::none())
+        .no_proxy()
+        .resolve(host, pinned)
+        .build()
+        .map_err(|_| ())?;
+    Ok((client, origin))
+}
+
+/// One origin/DNS policy owner for both existing total-deadline clients and the
+/// operation-deadline candidate. This function does not apply request timeouts.
+pub(crate) async fn resolve_canvas_origin(
+    canvas_base_url: &str,
+    policy: &CanvasOriginPolicy,
+) -> Result<(Url, SocketAddr), ()> {
     let origin = Url::parse(canvas_base_url).map_err(|_| ())?;
     let host = origin.host_str().ok_or(())?;
     let http_localhost = origin.scheme() == "http"
@@ -76,14 +130,7 @@ pub async fn client_for_canvas_origin(
         return Err(());
     }
     let pinned = preferred_address(&addresses).ok_or(())?;
-    let client = Client::builder()
-        .timeout(policy.timeout)
-        .redirect(Policy::none())
-        .no_proxy()
-        .resolve(host, pinned)
-        .build()
-        .map_err(|_| ())?;
-    Ok((client, origin))
+    Ok((origin, pinned))
 }
 
 fn normalized_origin(url: &Url) -> Option<String> {
@@ -112,18 +159,27 @@ pub fn canvas_retry_after_seconds(response: &Response) -> Option<u64> {
         .headers()
         .get(reqwest::header::RETRY_AFTER)?
         .to_str()
-        .ok()?
-        .trim();
-    if let Ok(seconds) = raw.parse::<u64>() {
-        return Some(seconds.min(86_400));
+        .ok()?;
+    parse_canvas_retry_after(raw, Utc::now())
+}
+
+/// Shared provider/worker deadline parsing. Apply the published domain bounds
+/// before machine conversion; a valid oversized integer is not a missing header.
+pub(crate) fn parse_canvas_retry_after(value: &str, now: DateTime<Utc>) -> Option<u64> {
+    let normalized = value.trim();
+    if let Ok(seconds) = normalized.parse::<PythonConfigInteger>() {
+        return seconds
+            .max(0_u64.into())
+            .min(MAX_RETRY_AFTER_SECONDS.into())
+            .to_u64();
     }
-    let retry_at = httpdate::parse_http_date(raw).ok()?;
+    let retry_at: DateTime<Utc> = httpdate::parse_http_date(normalized).ok()?.into();
     Some(
-        retry_at
-            .duration_since(SystemTime::now())
-            .unwrap_or_default()
-            .as_secs()
-            .min(86_400),
+        (retry_at - now)
+            .num_seconds()
+            .max(0)
+            .cast_unsigned()
+            .min(MAX_RETRY_AFTER_SECONDS),
     )
 }
 
@@ -203,6 +259,106 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use super::*;
+
+    #[test]
+    fn provider_retry_after_preserves_frozen_oversized_day_clamp() {
+        let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        let case = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "huge_integer")
+            .unwrap();
+        let response: Response = http::Response::builder()
+            .status(429)
+            .header(
+                reqwest::header::RETRY_AFTER,
+                case["headers"]["Retry-After"].as_str().unwrap(),
+            )
+            .body("")
+            .unwrap()
+            .into();
+        assert_eq!(
+            canvas_retry_after_seconds(&response),
+            case["delay_bounds"][0].as_u64()
+        );
+    }
+
+    #[test]
+    fn shared_retry_after_retains_frozen_worker_vectors() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-sync-worker.json"
+        ))
+        .unwrap();
+        for case in contract["executable_fixtures"]["retry_after"]
+            .as_array()
+            .unwrap()
+        {
+            let now = case["now"]
+                .as_str()
+                .unwrap()
+                .parse::<DateTime<Utc>>()
+                .unwrap();
+            assert_eq!(
+                parse_canvas_retry_after(case["value"].as_str().unwrap(), now),
+                case["seconds"].as_u64()
+            );
+        }
+    }
+
+    #[test]
+    fn shared_retry_after_bounds_lossless_integers_before_conversion() {
+        let now = "2026-09-06T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        for (raw, expected) in [
+            ("0".into(), Some(0)),
+            (" -184467440737095516160000 ".into(), Some(0)),
+            ("+37".into(), Some(37)),
+            ("8_6_4_0_1".into(), Some(86400)),
+            ("86400".into(), Some(86400)),
+            ("184467440737095516160000".into(), Some(86400)),
+            ("9".repeat(4300), Some(86400)),
+            ("9".repeat(4301), None),
+            ("".into(), None),
+            ("8__6".into(), None),
+            ("_86".into(), None),
+            ("86_".into(), None),
+            ("1.5".into(), None),
+            ("NaN".into(), None),
+        ] {
+            assert_eq!(parse_canvas_retry_after(&raw, now), expected);
+            let response: Response = http::Response::builder()
+                .status(429)
+                .header(reqwest::header::RETRY_AFTER, raw)
+                .body("")
+                .unwrap()
+                .into();
+            assert_eq!(canvas_retry_after_seconds(&response), expected);
+        }
+        assert_eq!(parse_canvas_retry_after("١٢", now), Some(12));
+    }
+
+    #[test]
+    fn provider_retry_after_rejects_missing_or_non_text_headers() {
+        let response: Response = http::Response::builder()
+            .status(429)
+            .body("")
+            .unwrap()
+            .into();
+        assert_eq!(canvas_retry_after_seconds(&response), None);
+        let response: Response = http::Response::builder()
+            .status(429)
+            .header(
+                reqwest::header::RETRY_AFTER,
+                http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+            )
+            .body("")
+            .unwrap()
+            .into();
+        assert_eq!(canvas_retry_after_seconds(&response), None);
+    }
 
     #[test]
     fn dns_pin_policy_rejects_private_special_and_documentation_ranges() {

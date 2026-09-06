@@ -8,6 +8,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod lossless_json;
+pub mod lossless_json_tree;
+mod lossless_json_write;
+pub mod owned_json_value;
+mod python_json_diagnostic;
+pub mod python_text;
 mod python_value;
 
 pub mod canvas_award_candidate;
@@ -17,12 +23,16 @@ pub mod canvas_award_candidate_postgres;
 pub mod canvas_award_candidate_service;
 pub mod canvas_binding_domain;
 pub mod canvas_catalog;
+mod canvas_content_decoder;
+mod canvas_credentials_protocol;
+pub mod canvas_credentials_status;
 pub mod canvas_credentials_validation;
 pub mod canvas_event_status;
 pub mod canvas_event_status_postgres;
 pub mod canvas_issuance_guard;
 pub mod canvas_legacy_ingest;
 pub mod canvas_legacy_ingest_postgres;
+pub mod canvas_lifecycle_delivery;
 pub mod canvas_lti_bootstrap;
 pub mod canvas_lti_deep_linking;
 pub mod canvas_lti_deep_linking_postgres;
@@ -40,13 +50,18 @@ pub mod canvas_management_domain;
 pub mod canvas_management_http;
 pub mod canvas_management_postgres;
 pub mod canvas_management_service;
+pub mod canvas_network_timeout;
 pub mod canvas_oauth;
 pub mod canvas_oauth_http;
 pub mod canvas_oauth_postgres;
+mod canvas_operation_http;
 pub mod canvas_operations;
+pub mod canvas_operator_secret;
 pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
+mod canvas_response_text;
+pub mod canvas_review_resolution;
 pub mod canvas_sync_lease;
 pub mod canvas_sync_processor;
 pub mod canvas_sync_processor_postgres;

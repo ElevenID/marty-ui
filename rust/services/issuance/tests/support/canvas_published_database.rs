@@ -119,6 +119,338 @@ impl PublishedDatabase {
         oracle: Option<(&str, &str, &str, &str)>,
         extra_fixture: Option<&'static str>,
     ) -> Result<Self, String> {
+        Self::start_probe_with_migration(oracle, extra_fixture, false).await
+    }
+
+    pub async fn start_with_review_recovery() -> Result<Self, String> {
+        Self::start_probe_with_migration(None, None, true).await
+    }
+
+    pub async fn start_with_status_provider() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "status_provider",
+                "status-provider",
+                "status_provider",
+                "MARTY_CANVAS_STATUS_PROVIDER_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    pub async fn start_with_provider_configuration() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "provider_configuration",
+            "provider-configuration",
+            "provider_configuration",
+            "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE=1",
+        )))
+        .await
+    }
+
+    pub async fn start_with_utf7_consumer() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "utf7_consumer",
+                "utf7-consumer",
+                "utf7_consumer",
+                "MARTY_CANVAS_UTF7_CONSUMER_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    pub async fn start_with_json_consumer() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "json_consumer",
+                "json-consumer",
+                "json_consumer",
+                "MARTY_CANVAS_JSON_CONSUMER_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    pub async fn start_with_json_depth() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "json_depth",
+                "json-depth",
+                "json_depth",
+                "MARTY_CANVAS_JSON_DEPTH_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_startup() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "worker_startup",
+            "worker-startup",
+            "worker_startup",
+            "MARTY_CANVAS_WORKER_STARTUP_ORACLE=1",
+        )))
+        .await
+    }
+
+    pub async fn start_with_worker_rest() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_rest",
+                "worker-rest",
+                "worker_rest",
+                "MARTY_CANVAS_WORKER_REST_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_facts() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_facts",
+                "worker-facts",
+                "worker_facts",
+                "MARTY_CANVAS_WORKER_FACTS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_provider_signal(signal: &str) -> Result<Self, String> {
+        if !matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL") {
+            return Err("unsupported owned worker signal".into());
+        }
+        let flag = format!("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL={signal}");
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_signals",
+                "worker-provider-signals",
+                "worker_provider_signals",
+                &flag,
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_retry_after(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-retry-after-scenarios.json"),
+            "worker_retry_after",
+            "worker-retry-after",
+            "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_oauth_revocation(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
+            "worker_oauth_revocation",
+            "worker-oauth-revocation",
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE",
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_validation(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-validation-scenarios.json"),
+            "worker_validation",
+            "worker-validation",
+            "MARTY_CANVAS_WORKER_VALIDATION_CASE",
+        )
+        .await
+    }
+
+    async fn start_with_worker_case(
+        case: &str,
+        source: &str,
+        script: &str,
+        scenario: &str,
+        flag_name: &str,
+    ) -> Result<Self, String> {
+        let scenarios: Value = serde_json::from_str(source).unwrap();
+        if !scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["name"] == case)
+        {
+            return Err("unsupported owned worker matrix case".into());
+        }
+        let flag = format!("{flag_name}={case}");
+        Self::start_probe_with_extra(
+            Some((script, scenario, script, &flag)),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_provider_recovery(case: &str) -> Result<Self, String> {
+        if !matches!(case, "renewal" | "recovery") {
+            return Err("unsupported owned worker recovery case".into());
+        }
+        let flag = format!("MARTY_CANVAS_WORKER_PROVIDER_RECOVERY={case}");
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_recovery",
+                "worker-provider-recovery",
+                "worker_provider_recovery",
+                &flag,
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_reclaimers_retry() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_reclaimers_retry",
+                "worker-reclaimers-retry",
+                "worker_reclaimers_retry",
+                "MARTY_CANVAS_WORKER_RECLAIMERS_RETRY_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_reclaimers() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_reclaimers",
+                "worker-reclaimers",
+                "worker_reclaimers",
+                "MARTY_CANVAS_WORKER_RECLAIMERS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_concurrent() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_concurrent",
+                "worker-concurrent",
+                "worker_concurrent",
+                "MARTY_CANVAS_WORKER_CONCURRENT_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_provider_final() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_final",
+                "worker-provider-final",
+                "worker_provider_final",
+                "MARTY_CANVAS_WORKER_PROVIDER_FINAL_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_retry() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_retry",
+                "worker-retry",
+                "worker_retry",
+                "MARTY_CANVAS_WORKER_RETRY_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
+    pub async fn start_with_validation_boundary() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "validation_boundary",
+            "validation-boundary",
+            "validation_boundary",
+            "MARTY_CANVAS_VALIDATION_BOUNDARY_ORACLE=1",
+        )))
+        .await
+    }
+
+    pub async fn start_with_timeout_consumer() -> Result<Self, String> {
+        Self::start_probe(Some((
+            "timeout_consumer",
+            "timeout-consumer",
+            "timeout_consumer",
+            "MARTY_CANVAS_TIMEOUT_CONSUMER_ORACLE=1",
+        )))
+        .await
+    }
+
+    pub async fn start_with_review_lifecycle() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "operations",
+                "review-lifecycle",
+                "review_lifecycle",
+                "MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    pub async fn start_with_review_inputs() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "operations",
+                "review-input",
+                "review_inputs",
+                "MARTY_CANVAS_REVIEW_INPUT_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    pub async fn start_with_operations_recovery() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "operations",
+                "operations",
+                "operations",
+                "MARTY_CANVAS_OPERATIONS_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
+    async fn start_probe_with_migration(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+    ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -220,6 +552,197 @@ impl PublishedDatabase {
             "/verification/scripts/prepare_canvas_published_schema.py",
         ];
         let (script, scenario, report_key, flag) = oracle.unwrap_or_default();
+        let multibyte_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_multibyte_codec_oracle.py,readonly",
+            root.join("scripts/canvas_multibyte_codec_oracle.py").display()
+        );
+        let gb18030_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_gb18030_codec_oracle.py,readonly",
+            root.join("scripts/canvas_gb18030_codec_oracle.py").display()
+        );
+        let euc_kr_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_euc_kr_codec_oracle.py,readonly",
+            root.join("scripts/canvas_euc_kr_codec_oracle.py").display()
+        );
+        let iso2022_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_iso2022_codec_oracle.py,readonly",
+            root.join("scripts/canvas_iso2022_codec_oracle.py").display()
+        );
+        let ordinal_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_charset_ordinal_oracle.py,readonly",
+            root.join("scripts/canvas_charset_ordinal_oracle.py").display()
+        );
+        let utf7_mount = format!(
+            "type=bind,source={},target=/verification/scripts/canvas_utf7_codec_oracle.py,readonly",
+            root.join("scripts/canvas_utf7_codec_oracle.py").display()
+        );
+        let worker_trust_mount = format!(
+            "type=bind,source={},target=/verification/worker_trust/sitecustomize.py,readonly",
+            root.join("contracts/fixtures/canvas_worker_test_trust.py")
+                .display()
+        );
+        let worker_https = matches!(
+            script,
+            "worker_rest"
+                | "worker_facts"
+                | "worker_oauth_revocation"
+                | "worker_retry"
+                | "worker_retry_after"
+                | "worker_validation"
+                | "worker_provider_signals"
+                | "worker_provider_recovery"
+                | "worker_provider_final"
+                | "worker_concurrent"
+                | "worker_reclaimers"
+                | "worker_reclaimers_retry"
+        );
+        if worker_https {
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777",
+                    "--mount",
+                    &worker_trust_mount,
+                ],
+            );
+        }
+        if script == "timeout_consumer" {
+            // Only the TLS oracle needs ephemeral certificate storage. Preserve
+            // the read-only image and all host mounts; nothing is persisted.
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777",
+                    "--mount",
+                    &multibyte_mount,
+                    "--mount",
+                    &gb18030_mount,
+                    "--mount",
+                    &euc_kr_mount,
+                    "--mount",
+                    &iso2022_mount,
+                    "--mount",
+                    &ordinal_mount,
+                    "--mount",
+                    &utf7_mount,
+                ],
+            );
+        }
+        let mut consumer_helpers: Vec<String> =
+            if matches!(script, "utf7_consumer" | "json_consumer" | "json_depth") {
+                [
+                    "run_canvas_validation_boundary_oracle.py",
+                    "run_canvas_status_provider_oracle.py",
+                    "canvas_observation_values.py",
+                    "canvas_json_tree_observation.py",
+                ]
+                .into_iter()
+                .map(|name| {
+                    let path = format!("scripts/{name}");
+                    format!(
+                        "type=bind,source={},target=/verification/{path},readonly",
+                        root.join(&path).display()
+                    )
+                })
+                .collect()
+            } else if worker_https {
+                [
+                    "run_canvas_worker_startup_oracle.py",
+                    "test_canvas_lti_https.py",
+                    "canvas_worker_https_fixture.py",
+                ]
+                .into_iter()
+                .map(|name| {
+                    format!(
+                        "type=bind,source={},target=/verification/scripts/{name},readonly",
+                        root.join("scripts").join(name).display()
+                    )
+                })
+                .collect()
+            } else {
+                Vec::new()
+            };
+        if matches!(
+            script,
+            "worker_facts"
+                | "worker_retry"
+                | "worker_oauth_revocation"
+                | "worker_retry_after"
+                | "worker_validation"
+                | "worker_provider_signals"
+                | "worker_provider_recovery"
+                | "worker_provider_final"
+                | "worker_concurrent"
+                | "worker_reclaimers"
+                | "worker_reclaimers_retry"
+        ) {
+            consumer_helpers.extend(
+                [
+                    "scripts/run_canvas_worker_rest_oracle.py",
+                    "contracts/canvas-worker-rest-scenarios.json",
+                ]
+                .into_iter()
+                .map(|path| {
+                    format!(
+                        "type=bind,source={},target=/verification/{path},readonly",
+                        root.join(path).display()
+                    )
+                }),
+            );
+        }
+        if matches!(
+            script,
+            "worker_provider_recovery"
+                | "worker_provider_final"
+                | "worker_concurrent"
+                | "worker_reclaimers"
+                | "worker_reclaimers_retry"
+        ) {
+            let path = "scripts/run_canvas_worker_provider_signals_oracle.py";
+            consumer_helpers.push(format!(
+                "type=bind,source={},target=/verification/{path},readonly",
+                root.join(path).display()
+            ));
+        }
+        if matches!(
+            script,
+            "worker_provider_final"
+                | "worker_concurrent"
+                | "worker_reclaimers"
+                | "worker_reclaimers_retry"
+        ) {
+            let path = "scripts/run_canvas_worker_provider_recovery_oracle.py";
+            consumer_helpers.push(format!(
+                "type=bind,source={},target=/verification/{path},readonly",
+                root.join(path).display()
+            ));
+        }
+        let extra_scenarios: &[&str] = match script {
+            "worker_reclaimers" => &[
+                "contracts/canvas-worker-provider-final-scenarios.json",
+                "contracts/canvas-worker-concurrent-scenarios.json",
+            ],
+            "worker_reclaimers_retry" => &[
+                "contracts/canvas-worker-provider-recovery-scenarios.json",
+                "contracts/canvas-worker-reclaimers-scenarios.json",
+                "contracts/canvas-worker-concurrent-scenarios.json",
+            ],
+            _ => &[],
+        };
+        for path in extra_scenarios {
+            consumer_helpers.push(format!(
+                "type=bind,source={},target=/verification/{path},readonly",
+                root.join(path).display()
+            ));
+        }
+        for mount in &consumer_helpers {
+            let index = arguments.len() - 2;
+            arguments.splice(index..index, ["--mount", mount]);
+        }
         let script_path = format!("scripts/run_canvas_{script}_oracle.py");
         let scenario_path = format!("contracts/canvas-{scenario}-scenarios.json");
         let oracle_script_mount = format!(
@@ -257,6 +780,32 @@ impl PublishedDatabase {
             let index = arguments.len() - 2;
             arguments.splice(index..index, ["--mount", mount]);
         }
+        let recovery: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-recovery-migration.json"
+        ))
+        .unwrap();
+        let recovery_mount = format!(
+            "type=bind,source={},target=/app/{},readonly",
+            root.join("contracts/fixtures/canvas_review_recovery_claim.py")
+                .display(),
+            recovery["source"].as_str().unwrap()
+        );
+        let recovery_provenance = format!("type=bind,source={},target=/verification/contracts/canvas-review-recovery-migration.json,readonly",
+            root.join("contracts/canvas-review-recovery-migration.json").display());
+        if recovery_schema {
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--env",
+                    "MARTY_CANVAS_REVIEW_RECOVERY_SCHEMA=1",
+                    "--mount",
+                    &recovery_mount,
+                    "--mount",
+                    &recovery_provenance,
+                ],
+            );
+        }
         let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());
@@ -277,12 +826,20 @@ impl PublishedDatabase {
         }
         let report: Value = serde_json::from_str(&docker(&["logs", &probe])?)
             .map_err(|_| "Invalid migration report")?;
+        let expected_revisions = if recovery_schema {
+            serde_json::json!([recovery["revision"]])
+        } else {
+            fixture["migration_revisions"].clone()
+        };
         if report["status"] != "passed"
-            || report["migration_revisions"] != fixture["migration_revisions"]
+            || report["migration_revisions"] != expected_revisions
             || report["worker_sha256"] != fixture["observed_source_sha256"]
             || report["organization_dependency"] != "synthetic-minimal"
         {
             return Err("Published migration evidence incomplete".into());
+        }
+        if recovery_schema && report["review_recovery_overlay"] != recovery {
+            return Err("Official review recovery provenance incomplete".into());
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
         if oracle.is_some() {

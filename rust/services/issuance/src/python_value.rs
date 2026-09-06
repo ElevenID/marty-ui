@@ -118,8 +118,10 @@ fn quoted(value: &str) -> String {
 
 // Also used by the canonical JSON owner, keeping exponent formatting DRY.
 pub(crate) fn number(value: &serde_json::Number) -> String {
-    if value.is_i64() || value.is_u64() {
-        return value.to_string();
+    let lexical = value.to_string();
+    if !lexical.contains(['.', 'e', 'E']) {
+        // Arbitrary-precision JSON integers must never pass through f64.
+        return lexical;
     }
     let Some(value) = value.as_f64() else {
         return value.to_string();
@@ -149,5 +151,14 @@ mod tests {
             .all(|pair| pair[0][1] < pair[1][0]));
         assert!(table.whitespace.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(strip("\u{001c}x\u{001f}"), "x");
+    }
+
+    #[test]
+    fn large_json_integers_keep_their_exact_decimal_identity() {
+        for decimal in ["18446744073709551617", "-18446744073709551617"] {
+            let value: Value = serde_json::from_str(decimal).unwrap();
+            assert_eq!(value.to_string(), decimal);
+            assert_eq!(python_string(&value).unwrap(), decimal);
+        }
     }
 }

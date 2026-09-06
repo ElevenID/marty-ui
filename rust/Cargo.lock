@@ -2557,6 +2557,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -4581,14 +4582,20 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "ed25519-dalek",
+ "flate2",
  "futures-core",
  "futures-util",
  "hex",
  "hmac 0.12.1",
  "hostname",
+ "http 1.5.0",
+ "http-body-util",
  "httpdate",
+ "hyper",
+ "hyper-util",
  "jsonwebtoken",
  "marty-didcomm",
  "marty-oid4vci",
@@ -4605,12 +4612,15 @@ dependencies = [
  "rand 0.9.5",
  "reqwest",
  "rsa",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tonic",
  "tonic-health",
@@ -9868,6 +9878,12 @@ dependencies = [
  "sha3",
  "thiserror 2.0.20",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

@@ -47,18 +47,28 @@ pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, S
     let mut request = Request::builder()
         .method(case["method"].as_str().unwrap_or("GET"))
         .uri(case["path"].as_str().unwrap());
+    let mut payload = case.get("body").cloned().unwrap_or_else(|| json!({}));
+    if let Some(length) = case["note_length"].as_u64() {
+        payload["note"] = json!("n".repeat(usize::try_from(length).unwrap()));
+    }
+    let body = case["raw_body"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| payload.to_string());
+    if case["method"] == "POST" {
+        let content_type = case
+            .get("content_type")
+            .map_or(Some("application/json"), Value::as_str);
+        if let Some(value) = content_type {
+            request = request.header("content-type", value);
+        }
+    }
     for (key, value) in headers {
         request = request.header(key, value);
     }
     let response = router
         .clone()
-        .oneshot(
-            request
-                .body(Body::from(
-                    case["raw_body"].as_str().unwrap_or("").to_owned(),
-                ))
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::from(body)).unwrap())
         .await
         .unwrap();
     let status = response.status().as_u16();
@@ -176,10 +186,14 @@ pub(super) async fn seed(pool: &PgPool) {
             .await
             .unwrap();
     }
+    insert_review(pool, "review-dismiss").await;
+}
+
+pub(super) async fn insert_review(pool: &PgPool, id: &str) {
     sqlx::query("INSERT INTO issuance_service.evidence_policy_reviews \
         (id,organization_id,application_id,credential_id,binding_id,status,prior_decision,current_decision,resolution_recovery_pending,created_at,updated_at) \
-        VALUES ('review-dismiss','org-review','application-review','credential-review','binding-review','open','{\"allowed\":true}','{\"allowed\":false}',false,now(),now())")
-        .execute(pool).await.unwrap();
+        VALUES ($1,'org-review','application-review','credential-review','binding-review','open','{\"allowed\":true}','{\"allowed\":false}',false,now(),now())")
+        .bind(id).execute(pool).await.unwrap();
 }
 
 pub async fn replay(pool: &PgPool) {
@@ -244,7 +258,10 @@ pub async fn replay(pool: &PgPool) {
     assert_eq!(body, json!("Internal Server Error"));
 }
 
-fn generated_ids(value: &mut Value, aliases: &mut std::collections::BTreeMap<String, String>) {
+pub(super) fn generated_ids(
+    value: &mut Value,
+    aliases: &mut std::collections::BTreeMap<String, String>,
+) {
     match value {
         Value::Object(object) => {
             for (key, value) in object {

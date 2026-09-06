@@ -31,6 +31,24 @@ def prepare():
     ).hexdigest()
     if worker_hash != fixture["observed_source_sha256"]:
         raise RuntimeError("Published worker provenance mismatch")
+    expected_revisions = fixture["migration_revisions"]
+    overlay = None
+    if os.environ.get("MARTY_CANVAS_REVIEW_RECOVERY_SCHEMA") == "1":
+        overlay = json.loads(
+            Path(
+                "/verification/contracts/canvas-review-recovery-migration.json"
+            ).read_text()
+        )
+        source = Path("/app") / overlay["source"]
+        normalized = source.read_text(encoding="utf-8").encode()
+        if hashlib.sha256(normalized).hexdigest() != overlay["sha256"]:
+            raise RuntimeError("Official review recovery migration hash mismatch")
+        git_blob = b"blob " + str(len(normalized)).encode() + b"\0" + normalized
+        if hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() != overlay["blob"]:
+            raise RuntimeError("Official review recovery migration blob mismatch")
+        if expected_revisions != [overlay["parent"]]:
+            raise RuntimeError("Official review recovery migration parent mismatch")
+        expected_revisions = [overlay["revision"]]
     os.environ["DATABASE_URL"] = DATABASE
     engine = create_engine(DATABASE, hide_parameters=True)
     try:
@@ -58,7 +76,7 @@ def prepare():
                     text("SELECT version_num FROM issuance_service.alembic_version")
                 ).scalars()
             )
-        if revisions != fixture["migration_revisions"]:
+        if revisions != expected_revisions:
             raise RuntimeError("Published migration head mismatch")
         report = {
             "status": "passed",
@@ -66,7 +84,125 @@ def prepare():
             "worker_sha256": worker_hash,
             "organization_dependency": "synthetic-minimal",
         }
+        if overlay is not None:
+            report["review_recovery_overlay"] = overlay
+        provider_signal = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL")
+        validation_case = os.environ.get("MARTY_CANVAS_WORKER_VALIDATION_CASE")
+        if validation_case is not None:
+            from run_canvas_worker_validation_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_validation"] = run(validation_case)
+        retry_after_case = os.environ.get("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE")
+        revocation_case = os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE")
+        if revocation_case is not None:
+            from run_canvas_worker_oauth_revocation_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_oauth_revocation"] = run(revocation_case)
+        if retry_after_case is not None:
+            from run_canvas_worker_retry_after_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_retry_after"] = run(retry_after_case)
+        if provider_signal is not None:
+            if provider_signal not in {"SIGINT", "SIGTERM", "SIGKILL"}:
+                raise ValueError("Unsupported owned worker signal")
+            from run_canvas_worker_provider_signals_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_provider_signals"] = run(provider_signal)
+        recovery_case = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_RECOVERY")
+        if recovery_case is not None:
+            if recovery_case not in {"renewal", "recovery"}:
+                raise ValueError("Unsupported owned worker recovery case")
+            from run_canvas_worker_provider_recovery_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_provider_recovery"] = run(recovery_case)
+        if os.environ.get("MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["review_lifecycle"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_operations_oracle.py"
+                )["run"]("canvas-review-lifecycle-scenarios.json")
+        if os.environ.get("MARTY_CANVAS_REVIEW_INPUT_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["review_inputs"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_operations_oracle.py"
+                )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
+            (
+                "MARTY_CANVAS_WORKER_RECLAIMERS_RETRY_ORACLE",
+                "worker_reclaimers_retry",
+                "worker_reclaimers_retry",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_RECLAIMERS_ORACLE",
+                "worker_reclaimers",
+                "worker_reclaimers",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_CONCURRENT_ORACLE",
+                "worker_concurrent",
+                "worker_concurrent",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_FINAL_ORACLE",
+                "worker_provider_final",
+                "worker_provider_final",
+            ),
+            ("MARTY_CANVAS_WORKER_RETRY_ORACLE", "worker_retry", "worker_retry"),
+            ("MARTY_CANVAS_WORKER_FACTS_ORACLE", "worker_facts", "worker_facts"),
+            ("MARTY_CANVAS_WORKER_REST_ORACLE", "worker_rest", "worker_rest"),
+            ("MARTY_CANVAS_WORKER_STARTUP_ORACLE", "worker_startup", "worker_startup"),
+            ("MARTY_CANVAS_JSON_DEPTH_ORACLE", "json_depth", "json_depth"),
+            ("MARTY_CANVAS_JSON_CONSUMER_ORACLE", "json_consumer", "json_consumer"),
+            ("MARTY_CANVAS_UTF7_CONSUMER_ORACLE", "utf7_consumer", "utf7_consumer"),
+            (
+                "MARTY_CANVAS_VALIDATION_BOUNDARY_ORACLE",
+                "validation_boundary",
+                "validation_boundary",
+            ),
+            (
+                "MARTY_CANVAS_TIMEOUT_CONSUMER_ORACLE",
+                "timeout_consumer",
+                "timeout_consumer",
+            ),
+            (
+                "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE",
+                "provider_configuration",
+                "provider_configuration",
+            ),
+            (
+                "MARTY_CANVAS_STATUS_PROVIDER_ORACLE",
+                "status_provider",
+                "status_provider",
+            ),
             ("MARTY_CANVAS_ENQUEUE_INPUT_ORACLE", "enqueue_input", "enqueue_inputs"),
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),
             (

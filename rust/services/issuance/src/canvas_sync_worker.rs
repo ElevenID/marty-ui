@@ -32,11 +32,11 @@ use crate::{
         CanvasOAuthConnection, CanvasOAuthError, CanvasOAuthPlatformPatch, CanvasOAuthProvider,
         CanvasOAuthProviderError, CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
+    canvas_provider_http::{parse_canvas_retry_after, MAX_RETRY_AFTER_SECONDS},
     integration_secret::integration_secret_id_from_ref,
 };
 
 pub const CANVAS_SYNC_ROLE: &str = "canvas_sync";
-const MAX_RETRY_AFTER_SECONDS: u64 = 86_400;
 const MAX_RESULT_STRING_CHARS: usize = 200;
 const MAX_ERROR_CODE_CHARS: usize = 120;
 const MAX_ERROR_SUMMARY_CHARS: usize = 500;
@@ -328,6 +328,23 @@ pub enum CanvasSyncRepositoryError {
     DurationRange,
 }
 
+/// Payload-free classification for failures outside an adapter's known domain errors.
+/// Never carries an exception message, HTTP body, URL, header or credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnexpectedCanvasSyncFailure {
+    Runtime,
+    HttpStatus(http::StatusCode),
+}
+
+impl UnexpectedCanvasSyncFailure {
+    const fn class(self) -> &'static str {
+        match self {
+            Self::Runtime => "CanvasSyncUnexpectedError",
+            Self::HttpStatus(_) => "CanvasSyncHttpStatusError",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 #[error("{summary}")]
 pub struct CanvasSyncProcessingError {
@@ -335,6 +352,7 @@ pub struct CanvasSyncProcessingError {
     pub summary: &'static str,
     pub retryable: bool,
     pub retry_after_seconds: Option<u64>,
+    pub unexpected: Option<UnexpectedCanvasSyncFailure>,
 }
 
 impl CanvasSyncProcessingError {
@@ -345,6 +363,7 @@ impl CanvasSyncProcessingError {
             summary,
             retryable: true,
             retry_after_seconds: None,
+            unexpected: None,
         }
     }
 
@@ -355,7 +374,54 @@ impl CanvasSyncProcessingError {
             summary,
             retryable: false,
             retry_after_seconds: None,
+            unexpected: None,
         }
+    }
+
+    #[must_use]
+    pub fn unexpected(kind: UnexpectedCanvasSyncFailure) -> Self {
+        let code = match kind {
+            UnexpectedCanvasSyncFailure::HttpStatus(status)
+                if status == http::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                "canvas_rate_limited"
+            }
+            _ => "canvas_sync_unexpected_error",
+        };
+        let summary = match kind {
+            UnexpectedCanvasSyncFailure::Runtime => {
+                "Canvas synchronization failed (CanvasSyncUnexpectedError)"
+            }
+            UnexpectedCanvasSyncFailure::HttpStatus(_) => {
+                "Canvas synchronization failed (CanvasSyncHttpStatusError)"
+            }
+        };
+        Self {
+            code,
+            summary,
+            retryable: true,
+            retry_after_seconds: None,
+            unexpected: Some(kind),
+        }
+    }
+
+    fn canonicalize_unexpected(self) -> Self {
+        if let Some(kind) = self.unexpected {
+            // Reconstruct at the worker boundary: public diagnostic fields
+            // must not override the unexpected-failure privacy policy.
+            Self {
+                retry_after_seconds: self.retry_after_seconds,
+                ..Self::unexpected(kind)
+            }
+        } else {
+            self
+        }
+    }
+
+    #[must_use]
+    pub const fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after_seconds = Some(seconds);
+        self
     }
 }
 
@@ -500,7 +566,7 @@ impl CanvasSyncWorker {
     ) -> Result<CanvasSyncWorkerCycleResult, CanvasSyncRepositoryError> {
         self.heartbeat("scheduling", 0).await?;
         let (oauth_revocations_succeeded, oauth_revocations_retried) =
-            self.process_oauth_revocations().await;
+            self.process_oauth_revocations().await?;
         let scheduled = self
             .repository
             .enqueue_due(&self.config.schedule_limit)
@@ -553,6 +619,7 @@ impl CanvasSyncWorker {
                 Ok((_, Ok(_))) => {}
                 Ok((job_id, Err(error))) => {
                     error!(
+                        event = "canvas_sync_job_outcome_failed",
                         job_id,
                         exception_class = error.class(),
                         "Canvas sync job escaped outcome handling"
@@ -581,8 +648,9 @@ impl CanvasSyncWorker {
             }
             if let Err(error) = self.run_cycle().await {
                 error!(
+                    event = "canvas_sync_cycle_failed",
                     exception_class = error.class(),
-                    "Canvas sync worker cycle failed"
+                    "Canvas synchronization worker cycle failed"
                 );
             }
             tokio::select! {
@@ -726,16 +794,29 @@ impl CanvasSyncWorker {
                 .await
             }
             Ok(Err(processing)) => {
-                self.persist_failure(
-                    &job,
-                    JobFailure {
-                        error_code: processing.code,
-                        error_summary: Some(processing.summary),
-                        retry_after_seconds: processing.retry_after_seconds,
-                        force_dead_letter: !processing.retryable,
-                    },
-                )
-                .await
+                let processing = processing.canonicalize_unexpected();
+                let status = self
+                    .persist_failure(
+                        &job,
+                        JobFailure {
+                            error_code: processing.code,
+                            error_summary: Some(processing.summary),
+                            retry_after_seconds: processing.retry_after_seconds,
+                            force_dead_letter: !processing.retryable,
+                        },
+                    )
+                    .await;
+                if status.is_ok() {
+                    if let Some(kind) = processing.unexpected {
+                        error!(
+                            event = "canvas_sync_job_failed",
+                            job_id = %job.id,
+                            exception_class = kind.class(),
+                            "Canvas sync job failed"
+                        );
+                    }
+                }
+                status
             }
             Ok(Ok(result)) => {
                 if [
@@ -819,8 +900,8 @@ impl CanvasSyncWorker {
             .ok_or(EscapedJobError::StaleLease)
     }
 
-    async fn process_oauth_revocations(&self) -> (usize, usize) {
-        let due = match self
+    async fn process_oauth_revocations(&self) -> Result<(usize, usize), CanvasSyncRepositoryError> {
+        let due = self
             .oauth_repository
             .due_revocations(
                 self.config
@@ -832,16 +913,9 @@ impl CanvasSyncWorker {
                     .expect("bounded OAuth revocation limit"),
             )
             .await
-        {
-            Ok(due) => due,
-            Err(error) => {
-                warn!(
-                    exception_class = oauth_error_class(&error),
-                    "Canvas OAuth revocation queue read failed"
-                );
-                return (0, 0);
-            }
-        };
+            // An unreadable queue is not an empty queue. Preserve the
+            // reference's cycle failure and next-loop recovery boundary.
+            .map_err(|_| CanvasSyncRepositoryError::Unavailable)?;
         let mut succeeded = 0;
         let mut retried = 0;
         for pending in due {
@@ -885,7 +959,7 @@ impl CanvasSyncWorker {
                 OAuthRevocationOutcome::OwnerFenceLost => {}
             }
         }
-        (succeeded, retried)
+        Ok((succeeded, retried))
     }
 
     async fn revoke_connection(
@@ -976,11 +1050,12 @@ impl CanvasSyncWorker {
             )
             .await
         {
-            warn!(
+            error!(
+                event = "canvas_oauth_disconnect_marker_failed",
                 organization_id = %connection.organization_id,
                 platform_id = %connection.platform_id,
                 exception_class = oauth_error_class(&error),
-                "Canvas OAuth disconnected projection failed"
+                "Canvas OAuth platform disconnect marker failed"
             );
         }
         OAuthRevocationOutcome::Succeeded
@@ -1079,19 +1154,7 @@ pub fn safe_result(input: &CanvasSyncResult) -> CanvasSyncResult {
 
 #[must_use]
 pub fn retry_after_seconds(value: &str, now: DateTime<Utc>) -> Option<u64> {
-    let normalized = value.trim();
-    if let Ok(seconds) = normalized.parse::<i64>() {
-        return Some(seconds.max(0).cast_unsigned().min(MAX_RETRY_AFTER_SECONDS));
-    }
-    let retry_at = httpdate::parse_http_date(normalized).ok()?;
-    let retry_at: DateTime<Utc> = retry_at.into();
-    Some(
-        (retry_at - now)
-            .num_seconds()
-            .max(0)
-            .cast_unsigned()
-            .min(MAX_RETRY_AFTER_SECONDS),
-    )
+    parse_canvas_retry_after(value, now)
 }
 
 #[must_use]
@@ -1208,6 +1271,169 @@ where
             EscapedJobError::Repository(error) => Ok((processing.await, Some(error))),
         },
         outcome = &mut processing => Ok((outcome, None)),
+    }
+}
+
+#[cfg(test)]
+mod processing_error_tests {
+    use super::{CanvasSyncProcessingError, UnexpectedCanvasSyncFailure};
+
+    #[tokio::test]
+    async fn real_revocation_transport_keeps_frozen_worker_error_categories() {
+        use crate::{
+            canvas_oauth::CanvasOAuthProvider, canvas_oauth_http::HttpCanvasOAuthProvider,
+        };
+        use axum::{
+            http::{HeaderMap, Method},
+            response::Response,
+            routing::any,
+            Router,
+        };
+        use serde_json::{json, Map, Value};
+        use std::{
+            sync::{Arc, Mutex},
+            time::Duration,
+        };
+
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
+        ))
+        .unwrap();
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-oauth-revocation-oracle.json"
+        ))
+        .unwrap();
+        let mut actual_codes = Map::new();
+        let mut expected_codes = Map::new();
+        for case in matrix["cases"].as_array().unwrap() {
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let calls = observed.clone();
+            let response_case = case.clone();
+            let app = Router::new().route("/login/oauth2/token", any(move |method: Method, headers: HeaderMap| {
+                let calls = calls.clone();
+                let response_case = response_case.clone();
+                async move {
+                    calls.lock().unwrap().push(json!({
+                        "method": method.as_str(),
+                        "authorization": headers.get("authorization").and_then(|value| value.to_str().ok()),
+                        "accept": headers.get("accept").and_then(|value| value.to_str().ok()),
+                    }));
+                    if response_case["hold_response"] == true {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    let mut response = Response::builder().status(u16::try_from(response_case["status"].as_u64().unwrap()).unwrap());
+                    if let Some(headers) = response_case["headers"].as_object() {
+                        for (name, value) in headers { response = response.header(name.as_str(), value.as_str().unwrap()); }
+                    }
+                    response.body(axum::body::Body::empty()).unwrap()
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let (shutdown, stopping) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = stopping.await;
+                    })
+                    .await
+            });
+            // Explicit owned-loopback policy; no TLS or host trust settings change.
+            // The timeout is scaled only for this adapter-category test, not
+            // the separately frozen whole-worker deadline/state qualification.
+            let provider = HttpCanvasOAuthProvider::new_with_policy(
+                Duration::from_millis(200),
+                Vec::new(),
+                false,
+                true,
+            );
+            let outcome = provider
+                .revoke(&origin, "synthetic-worker-rest-token")
+                .await;
+            shutdown.send(()).unwrap();
+            server.await.unwrap().unwrap();
+            assert_eq!(
+                *observed.lock().unwrap(),
+                [json!({
+                    "method": "DELETE", "authorization": "Bearer synthetic-worker-rest-token", "accept": "application/json"
+                })]
+            );
+            let name = case["name"].as_str().unwrap();
+            assert!(actual_codes
+                .insert(
+                    name.into(),
+                    json!(outcome
+                        .err()
+                        .map(|error| super::oauth_revocation_error_code(&error)))
+                )
+                .is_none());
+            expected_codes.insert(
+                name.into(),
+                reference[name]["connection"]["error_code"].clone(),
+            );
+        }
+        // Do not repair HTTP-adapter composition by changing the worker's
+        // general classification for a provider that returns a raw timeout.
+        assert_eq!(
+            super::oauth_revocation_error_code(&super::CanvasOAuthProviderError::Timeout),
+            "canvas_oauth_revoke_timeout"
+        );
+        assert_eq!(
+            super::oauth_revocation_error_code(&super::CanvasOAuthProviderError::Failed {
+                retry_after_seconds: None
+            }),
+            "canvas_oauth_revoke_unavailable"
+        );
+        assert_eq!(actual_codes, expected_codes);
+    }
+
+    #[test]
+    fn unexpected_policy_rebuilds_diagnostics_and_preserves_retry_hints() {
+        for (status, code, class) in [
+            (
+                None,
+                "canvas_sync_unexpected_error",
+                "CanvasSyncUnexpectedError",
+            ),
+            (
+                Some(401),
+                "canvas_sync_unexpected_error",
+                "CanvasSyncHttpStatusError",
+            ),
+            (
+                Some(429),
+                "canvas_rate_limited",
+                "CanvasSyncHttpStatusError",
+            ),
+            (
+                Some(503),
+                "canvas_sync_unexpected_error",
+                "CanvasSyncHttpStatusError",
+            ),
+        ] {
+            let kind = status.map_or(UnexpectedCanvasSyncFailure::Runtime, |status| {
+                UnexpectedCanvasSyncFailure::HttpStatus(http::StatusCode::from_u16(status).unwrap())
+            });
+            for delay in [0, 45, u64::MAX] {
+                let mut failure =
+                    CanvasSyncProcessingError::unexpected(kind).with_retry_after(delay);
+                failure.code = "synthetic-private-code";
+                failure.summary = "synthetic-private-detail";
+                failure.retryable = false;
+                let canonical = failure.canonicalize_unexpected();
+                assert_eq!(canonical.code, code);
+                assert_eq!(
+                    canonical.summary,
+                    format!("Canvas synchronization failed ({class})")
+                );
+                assert_eq!(canonical.unexpected.unwrap().class(), class);
+                assert!(canonical.retryable);
+                assert_eq!(canonical.retry_after_seconds, Some(delay));
+            }
+        }
+        let known = CanvasSyncProcessingError::retryable("known_code", "Known diagnostic")
+            .with_retry_after(45);
+        assert_eq!(known.clone().canonicalize_unexpected(), known);
     }
 }
 

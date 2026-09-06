@@ -884,7 +884,7 @@ impl CredentialManagementRepository for CredentialLifecycleHarness {
         _credential: &ManagedCredential,
         action: CredentialLifecycleAction,
         _reason: Option<&str>,
-    ) -> Result<(), CredentialManagementPortError> {
+    ) -> Result<(), marty_issuance_service::credential_management::CanvasLifecycleSyncError> {
         self.calls
             .lock()
             .expect("lifecycle calls")
