@@ -63,6 +63,12 @@ independently captures SIGINT/SIGTERM/SIGKILL with the real HTTPS response held.
 Native adoption and graceful drain, crash/restart, renewal and disposal remain
 open; raw process exit must not be substituted for those qualifications.
 
+The [provider renewal/recovery reference](canvas-worker-provider-recovery.md)
+independently records actual lease/heartbeat renewal, then success or forced
+process loss followed by real expiry/retry and same-job completion. Two capture
+pairs agree and regeneration passes locally. Native adoption is pending; final-attempt recovery,
+concurrent scheduler/reclaimer and ownership/generation fences remain separate.
+
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 

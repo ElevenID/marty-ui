@@ -32,9 +32,11 @@ async fn main() -> Result<(), String> {
         "worker-provider-sigint" => PublishedDatabase::start_with_worker_provider_signal("SIGINT").await?,
         "worker-provider-sigterm" => PublishedDatabase::start_with_worker_provider_signal("SIGTERM").await?,
         "worker-provider-sigkill" => PublishedDatabase::start_with_worker_provider_signal("SIGKILL").await?,
+        "worker-provider-renewal" => PublishedDatabase::start_with_worker_provider_recovery("renewal").await?,
+        "worker-provider-recovery" => PublishedDatabase::start_with_worker_provider_recovery("recovery").await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry or worker-provider-{sigint,sigterm,sigkill}"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery}"
                     .into(),
             )
         }

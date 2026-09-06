@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
+now has two matching captures per case. A real pending HTTPS request spans lease
+and both heartbeat renewal without generation change. After forced process loss,
+real lease expiry and retry eligibility lead to the same job succeeding on attempt
+two with issuance/token ciphertext preserved. Reference regeneration passes
+locally; native adoption and final-attempt/concurrency/fence cases remain open.
+
 The [active-provider signal reference](rust-migrations/canvas-worker-provider-signals.md)
 now records SIGINT, SIGTERM and SIGKILL against actual published worker processes
 while a real HTTPS response is held. Each pair of independent captures agrees;

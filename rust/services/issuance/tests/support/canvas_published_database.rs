@@ -245,6 +245,23 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_provider_recovery(case: &str) -> Result<Self, String> {
+        if !matches!(case, "renewal" | "recovery") {
+            return Err("unsupported owned worker recovery case".into());
+        }
+        let flag = format!("MARTY_CANVAS_WORKER_PROVIDER_RECOVERY={case}");
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_recovery",
+                "worker-provider-recovery",
+                "worker_provider_recovery",
+                &flag,
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_retry() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -457,7 +474,11 @@ impl PublishedDatabase {
         );
         let worker_https = matches!(
             script,
-            "worker_rest" | "worker_facts" | "worker_retry" | "worker_provider_signals"
+            "worker_rest"
+                | "worker_facts"
+                | "worker_retry"
+                | "worker_provider_signals"
+                | "worker_provider_recovery"
         );
         if worker_https {
             let index = arguments.len() - 2;
@@ -531,7 +552,10 @@ impl PublishedDatabase {
             };
         if matches!(
             script,
-            "worker_facts" | "worker_retry" | "worker_provider_signals"
+            "worker_facts"
+                | "worker_retry"
+                | "worker_provider_signals"
+                | "worker_provider_recovery"
         ) {
             consumer_helpers.extend(
                 [
@@ -546,6 +570,13 @@ impl PublishedDatabase {
                     )
                 }),
             );
+        }
+        if script == "worker_provider_recovery" {
+            let path = "scripts/run_canvas_worker_provider_signals_oracle.py";
+            consumer_helpers.push(format!(
+                "type=bind,source={},target=/verification/{path},readonly",
+                root.join(path).display()
+            ));
         }
         for mount in &consumer_helpers {
             let index = arguments.len() - 2;

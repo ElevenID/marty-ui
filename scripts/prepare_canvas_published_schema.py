@@ -97,6 +97,17 @@ def prepare():
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 report["worker_provider_signals"] = run(provider_signal)
+        recovery_case = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_RECOVERY")
+        if recovery_case is not None:
+            if recovery_case not in {"renewal", "recovery"}:
+                raise ValueError("Unsupported owned worker recovery case")
+            from run_canvas_worker_provider_recovery_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_provider_recovery"] = run(recovery_case)
         if os.environ.get("MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE") == "1":
             import runpy
 

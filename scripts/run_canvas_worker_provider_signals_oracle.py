@@ -3,14 +3,13 @@
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import signal
 
 from sqlalchemy import create_engine, text
 
 from canvas_worker_https_fixture import WorkerHttpsFixture
-from run_canvas_worker_rest_oracle import seed_worker_database
+from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
 from run_canvas_worker_startup_oracle import DATABASE, finish_worker, start_worker
 
 
@@ -53,20 +52,7 @@ def run(signal_name):
                 engine, https.origin, spec, shared
             )
             https.stage = {**spec["stages"][0], "hold_response": True}
-            child = start_worker(
-                {
-                    "database_scheme": "postgresql+asyncpg",
-                    "environment": {
-                        "CANVAS_PORTABLE_INTEGRATION_ENABLED": "true",
-                        "CANVAS_PILOT_ORGANIZATION_IDS": "org-review",
-                        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST": https.origin,
-                        "MARTY_CANVAS_TEST_CA_FILE": str(https.cert),
-                        "PYTHONPATH": "/verification/worker_trust:"
-                        + os.environ.get("PYTHONPATH", ""),
-                    },
-                },
-                "worker-rest",
-            )
+            child = start_worker(worker_case(https.origin, https.cert), "worker-rest")
             try:
                 assert https.received.wait(15), (
                     "Actual worker did not reach provider I/O"

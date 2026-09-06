@@ -102,6 +102,21 @@ def seed_worker_database(engine, origin, spec, shared):
     return preserved, ciphertext
 
 
+def worker_case(origin, cert, extra=None):
+    return {
+        "database_scheme": "postgresql+asyncpg",
+        "environment": {
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED": "true",
+            "CANVAS_PILOT_ORGANIZATION_IDS": "org-review",
+            "CANVAS_PRIVATE_ORIGIN_ALLOWLIST": origin,
+            "MARTY_CANVAS_TEST_CA_FILE": str(cert),
+            "PYTHONPATH": "/verification/worker_trust:"
+            + os.environ.get("PYTHONPATH", ""),
+            **(extra or {}),
+        },
+    }
+
+
 def run_scenarios(spec, shared, https):
     origin, cert, requests = https.origin, https.cert, https.requests
     engine = create_engine(DATABASE, hide_parameters=True)
@@ -147,20 +162,7 @@ def run_scenarios(spec, shared, https):
                 connection.execute(
                     text("TRUNCATE issuance_service.canvas_worker_heartbeats")
                 )
-            child = start_worker(
-                {
-                    "database_scheme": "postgresql+asyncpg",
-                    "environment": {
-                        "CANVAS_PORTABLE_INTEGRATION_ENABLED": "true",
-                        "CANVAS_PILOT_ORGANIZATION_IDS": "org-review",
-                        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST": origin,
-                        "MARTY_CANVAS_TEST_CA_FILE": str(cert),
-                        "PYTHONPATH": "/verification/worker_trust:"
-                        + os.environ.get("PYTHONPATH", ""),
-                    },
-                },
-                "worker-rest",
-            )
+            child = start_worker(worker_case(origin, cert), "worker-rest")
             try:
                 deadline = time.monotonic() + 25
                 while time.monotonic() < deadline:
