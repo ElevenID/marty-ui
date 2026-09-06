@@ -19,7 +19,7 @@ from unittest.mock import patch
 import httpx
 
 
-async def observe(cases=None):
+async def observe(cases=None, *, capture_diagnostics=False):
     os.environ["ISSUANCE_API_KEY"] = "synthetic-validation-key"
     from issuance import main
     from issuance.domain.ports import IIssuanceRepository
@@ -189,17 +189,23 @@ async def observe(cases=None):
         expected_exceptions = (
             [case["expected_exception"]] if case.get("expected_exception") else []
         )
-        assert (
-            exceptions == expected_exceptions
-            if "response_hex" in case
-            else exceptions in ([], ["UnicodeDecodeError"])
-        ), f"unexpected published exception: {exceptions}"
+        if not capture_diagnostics:
+            assert (
+                exceptions == expected_exceptions
+                if "response_hex" in case
+                else exceptions in ([], ["UnicodeDecodeError"])
+            ), f"unexpected published exception: {exceptions}"
+        body_text = result.text
         if result.headers.get("content-type", "").startswith("application/json"):
             body = result.json()
             if "validated_at" in body:
                 assert datetime.fromisoformat(
                     body["validated_at"].replace("Z", "+00:00")
                 ).tzinfo
+                # Keep wire evidence for duplicate/replaced object keys and
+                # numeric rendering. Only this fixture's generated timestamp is
+                # normalized; the parsed object alone could hide duplicate keys.
+                body_text = body_text.replace(body["validated_at"], "$timestamp")
                 body["validated_at"] = "$timestamp"
         else:
             body = result.text
@@ -212,6 +218,11 @@ async def observe(cases=None):
                 "files": files,
                 "lookups": lookups,
                 "requests": requests,
+                **(
+                    {"exceptions": exceptions, "body_text": body_text}
+                    if capture_diagnostics
+                    else {}
+                ),
             }
         )
     return {

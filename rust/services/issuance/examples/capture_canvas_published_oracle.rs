@@ -8,14 +8,22 @@ mod canvas_published_database;
 async fn main() -> Result<(), String> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     let [scenario] = arguments.as_slice() else {
-        return Err("expected validation-boundary, status-provider or utf7-consumer".into());
+        return Err(
+            "expected validation-boundary, status-provider, utf7-consumer or json-consumer".into(),
+        );
     };
     use canvas_published_database::PublishedDatabase;
     let owned = match scenario.as_str() {
         "validation-boundary" => PublishedDatabase::start_with_validation_boundary().await?,
         "status-provider" => PublishedDatabase::start_with_status_provider().await?,
         "utf7-consumer" => PublishedDatabase::start_with_utf7_consumer().await?,
-        _ => return Err("expected validation-boundary, status-provider or utf7-consumer".into()),
+        "json-consumer" => PublishedDatabase::start_with_json_consumer().await?,
+        _ => {
+            return Err(
+                "expected validation-boundary, status-provider, utf7-consumer or json-consumer"
+                    .into(),
+            )
+        }
     };
     let observation = owned
         .oracle

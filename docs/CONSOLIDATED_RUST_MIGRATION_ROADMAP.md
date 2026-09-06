@@ -33,6 +33,21 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+JSON consumer behavior is now frozen independently before native parser changes.
+Two final byte-identical captures cover 66 validation, 66 provider, 66 delivery-save
+and 198 full credential-route observations. They expose different validation and
+persistence policies for surrogate keys/values, non-finite numbers, NUL and integer
+limits; wire bodies preserve key-collision evidence. A shared collision-safe
+diagnostic encoder has 18 unit cases, and the new 29th configured image/schema
+gate regenerates the complete reference. Native JSON parsing/rendering/persistence
+adoption remains open; no runtime implementation is claimed by this capture.
+See [JSON consumer evidence](../contracts/canvas-json-consumers.md).
+All 29 configured image/schema gates pass (262.33 seconds, none ignored or
+filtered), including unchanged UTF-7 and prior consumer references. All 88 affected
+Python tests, strict Clippy, formatting and CI-runner syntax checks pass.
+The preceding `7f7fffb0a` head is hosted-green; this reference checkpoint still
+requires its own hosted checks and does not authorize routing or deletion.
+
 UTF-7 response bodies are now integrated through shared lossless native text,
 metadata and provider-error values. Validation renders retained-surrogate
 failures as the published plain HTTP 500. Lifecycle persistence detects invalid

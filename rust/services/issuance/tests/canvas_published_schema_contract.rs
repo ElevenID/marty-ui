@@ -48,6 +48,24 @@ async fn utf7_consumer_diagnostic_matches_published_boundaries() {
 }
 
 #[tokio::test]
+async fn json_consumer_diagnostic_matches_published_boundaries() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    // Frozen published app/provider/database evidence, not native JSON adoption.
+    let owned = canvas_published_database::PublishedDatabase::start_with_json_consumer()
+        .await
+        .unwrap();
+    let oracle = owned.oracle.clone().unwrap();
+    owned.close().unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-json-consumer-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(oracle, expected);
+}
+
+#[tokio::test]
 async fn timeout_consumer_matches_published_socket_behavior() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
