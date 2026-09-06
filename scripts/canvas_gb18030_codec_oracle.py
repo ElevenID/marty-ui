@@ -1,15 +1,9 @@
 """Published GB18030 mappings and complete-input observations; no native model."""
 
-import encodings.aliases
-import hashlib
 import itertools
 import json
-import struct
 
-import httpx
-from httpx._decoders import TextDecoder
-
-from canvas_multibyte_codec_oracle import compressed, record
+from canvas_multibyte_codec_oracle import CompleteInputOracle
 
 
 POINTER_COUNT = 126 * 10 * 126 * 10
@@ -46,33 +40,12 @@ def pointer_bytes(pointer):
 
 
 def observe():
-    def hashes():
-        return hashlib.sha256(), hashlib.sha256()
-
-    def observe_payload(digests, payload):
-        # Expectations come directly from fresh published decoders, never from
-        # the mapping ranges or any proposed Rust byte-consumption algorithm.
-        decoder = TextDecoder("gb18030")
-        record(digests[0], decoder.decode(payload) + decoder.flush())
-        try:
-            value = payload.decode("gb18030", errors="strict")
-        except UnicodeDecodeError:
-            value = None
-        record(digests[1], value)
-        return value
-
-    short_hashes, pointer_hashes, grid_hashes = hashes(), hashes(), hashes()
-    pairs = []
-    for first in range(256):
-        observe_payload(short_hashes, bytes([first]))
-        for second in range(256):
-            value = observe_payload(short_hashes, bytes([first, second]))
-            if first >= 128:
-                assert value is None or len(value) == 1
-                pairs.append(0xFFFFFFFF if value is None else ord(value))
+    oracle = CompleteInputOracle("gb18030")
+    pairs, short_hashes = oracle.pairs()
+    pointer_hashes, grid_hashes = oracle.hashes(), oracle.hashes()
     ranges = []
     for pointer in range(POINTER_COUNT):
-        value = observe_payload(pointer_hashes, pointer_bytes(pointer))
+        value = oracle.observe(pointer_hashes, pointer_bytes(pointer))
         if value is None:
             continue
         assert len(value) == 1 and not 0xD800 <= ord(value) <= 0xDFFF
@@ -87,7 +60,7 @@ def observe():
             ranges.append([pointer, pointer + 1, scalar])
     for width in range(5):
         for values in itertools.product(REPRESENTATIVES, repeat=width):
-            observe_payload(grid_hashes, bytes(values))
+            oracle.observe(grid_hashes, bytes(values))
 
     payloads = [
         b"",
@@ -116,35 +89,11 @@ def observe():
         for pointer in (start - 1, start, end - 1, end):
             if 0 <= pointer < POINTER_COUNT:
                 payloads.append(pointer_bytes(pointer))
-    aliases = sorted(
-        {"gb18030"}
-        | {
-            alias
-            for alias, target in encodings.aliases.aliases.items()
-            if target == "gb18030"
-        }
-    )
-    cases = []
-    for payload in dict.fromkeys(payloads):
-        text = httpx.Response(
-            403,
-            content=payload,
-            headers={"content-type": "text/plain; charset=gb18030"},
-        ).text
-        for alias in aliases:
-            assert (
-                httpx.Response(
-                    403,
-                    content=payload,
-                    headers={"content-type": "text/plain; charset=" + alias},
-                ).text
-                == text
-            )
-        cases.append({"body_hex": payload.hex(), "text": text})
+    aliases, cases = oracle.responses(payloads)
     return {
         "schema": "marty.canvas-gb18030-codec/v1",
         "pointer_count": POINTER_COUNT,
-        "pairs_zlib_base64": compressed(struct.pack(f"<{len(pairs)}I", *pairs)),
+        "pairs_zlib_base64": pairs,
         "ranges": ranges,
         "representatives": REPRESENTATIVES,
         "short_hashes": [digest.hexdigest() for digest in short_hashes],

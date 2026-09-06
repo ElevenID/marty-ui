@@ -156,6 +156,14 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         oracle["gb18030_codec"], gb18030,
         "published GB18030 mappings and independent observations"
     );
+    let euc_kr: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-euc-kr-codec.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        oracle["euc_kr_codec"], euc_kr,
+        "published EUC-KR mappings and independent observations"
+    );
 }
 
 #[tokio::test]

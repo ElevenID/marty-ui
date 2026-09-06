@@ -359,6 +359,15 @@ mod tests {
     }
 
     #[test]
+    fn euc_kr_response_cases_match_published_codec() {
+        let frozen = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-euc-kr-codec.json"
+        ))
+        .unwrap();
+        assert_published_codec_cases(&frozen);
+    }
+
+    #[test]
     fn charset_headers_match_published_parameter_text_and_json_behavior() {
         let frozen: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../contracts/canvas-charset-headers-oracle.json"

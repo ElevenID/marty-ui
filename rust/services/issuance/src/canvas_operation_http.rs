@@ -577,6 +577,7 @@ mod tests {
                 | "text_multibyte_euc_jisx0213"
                 | "text_multibyte_hz"
                 | "text_gb18030"
+                | "text_euc_kr"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),

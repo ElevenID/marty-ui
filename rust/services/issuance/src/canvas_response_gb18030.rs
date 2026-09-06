@@ -13,7 +13,7 @@ struct Frozen {
 }
 
 pub(super) struct Decoder {
-    pairs: Vec<u32>,
+    pairs: super::Pairs,
     ranges: Vec<[u32; 3]>,
 }
 
@@ -22,13 +22,7 @@ impl Decoder {
         let frozen: Frozen = serde_json::from_str(SOURCE).expect("embedded GB18030 schema");
         assert_eq!(frozen.schema, "marty.canvas-gb18030-codec/v1");
         assert_eq!(frozen.pointer_count, POINTER_COUNT);
-        let pairs = super::decompress(&frozen.pairs_zlib_base64, 128 * 256 * 4)
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        assert!(pairs
-            .iter()
-            .all(|scalar| *scalar == u32::MAX || char::from_u32(*scalar).is_some()));
+        let pairs = super::Pairs::new(&frozen.pairs_zlib_base64);
         let mut previous_end = 0;
         for &[start, end, scalar] in &frozen.ranges {
             assert!(previous_end <= start && start < end && end <= POINTER_COUNT);
@@ -62,82 +56,50 @@ impl Decoder {
             .then(|| char::from_u32(scalar + pointer - start).unwrap())
     }
 
-    pub(super) fn decode(&self, mut bytes: &[u8], strict: bool) -> Option<String> {
-        let mut output = String::new();
-        while let Some(&first) = bytes.first() {
-            if first.is_ascii() {
-                output.push(char::from(first));
-                bytes = &bytes[1..];
-                continue;
-            }
-            // CPython checks required input length before validating byte classes.
-            // An incomplete final sequence consumes ALL remaining bytes together.
-            let width = if bytes.get(1).is_some_and(u8::is_ascii_digit) {
-                4
-            } else {
-                2
-            };
-            let incomplete = bytes.len() < width;
-            let scalar = if incomplete {
-                None
-            } else if width == 4 {
-                self.four_byte_scalar(bytes)
-            } else {
-                char::from_u32(self.pairs[usize::from(first - 128) * 256 + usize::from(bytes[1])])
-            };
-            match scalar {
-                Some(value) => {
-                    output.push(value);
-                    bytes = &bytes[width..];
+    pub(super) fn decode(&self, bytes: &[u8], strict: bool) -> Option<String> {
+        super::decode_complete(
+            bytes,
+            strict,
+            |bytes| {
+                if bytes.get(1).is_some_and(u8::is_ascii_digit) {
+                    4
+                } else {
+                    2
                 }
-                None if strict => return None,
-                None => {
-                    output.push('\u{fffd}');
-                    bytes = &bytes[if incomplete { bytes.len() } else { 1 }..];
+            },
+            |bytes| {
+                if bytes.len() == 4 {
+                    self.four_byte_scalar(bytes)
+                } else {
+                    self.pairs.scalar(bytes)
                 }
-            }
-        }
-        Some(output)
+            },
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::{assert_hashes, observe};
     use super::*;
     use sha2::{Digest, Sha256};
-
-    fn observe(decoder: &Decoder, digests: &mut [Sha256; 2], bytes: &[u8]) {
-        for (digest, strict) in digests.iter_mut().zip([false, true]) {
-            super::super::tests::record(digest, decoder.decode(bytes, strict));
-        }
-    }
-
-    fn assert_hashes(digests: [Sha256; 2], frozen: &serde_json::Value, key: &str) {
-        for (index, digest) in digests.into_iter().enumerate() {
-            assert_eq!(
-                hex::encode(digest.finalize()),
-                frozen[key][index],
-                "{key} mode {index}"
-            );
-        }
-    }
 
     #[test]
     fn all_pairs_pointers_and_byte_class_sequences_match_published_decoders() {
         let frozen: serde_json::Value = serde_json::from_str(SOURCE).unwrap();
-        let decoder = Decoder::new();
+        let decoder = super::super::lookup("gb18030").unwrap();
         let mut short = [Sha256::new(), Sha256::new()];
         for first in 0..=255u8 {
-            observe(&decoder, &mut short, &[first]);
+            observe(decoder, &mut short, &[first]);
             for second in 0..=255u8 {
-                observe(&decoder, &mut short, &[first, second]);
+                observe(decoder, &mut short, &[first, second]);
             }
         }
         assert_hashes(short, &frozen, "short_hashes");
         let mut pointers = [Sha256::new(), Sha256::new()];
         for pointer in 0..POINTER_COUNT {
             observe(
-                &decoder,
+                decoder,
                 &mut pointers,
                 &[
                     (pointer / 12600 + 0x81) as u8,
@@ -163,7 +125,7 @@ mod tests {
                     *byte = representatives[remainder % representatives.len()];
                     remainder /= representatives.len();
                 }
-                observe(&decoder, &mut grid, &payload);
+                observe(decoder, &mut grid, &payload);
             }
         }
         assert_hashes(grid, &frozen, "grid_hashes");

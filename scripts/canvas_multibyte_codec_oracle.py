@@ -49,6 +49,66 @@ def record(digest, value):
         digest.update(b"\x01" + struct.pack("<I", len(encoded)) + encoded)
 
 
+class CompleteInputOracle:
+    """Fresh published decoders shared by compact variable-width captures."""
+
+    def __init__(self, name):
+        self.name = name
+
+    @staticmethod
+    def hashes():
+        return hashlib.sha256(), hashlib.sha256()
+
+    def observe(self, digests, payload):
+        decoder = TextDecoder(self.name)
+        record(digests[0], decoder.decode(payload) + decoder.flush())
+        try:
+            value = payload.decode(self.name, errors="strict")
+        except UnicodeDecodeError:
+            value = None
+        record(digests[1], value)
+        return value
+
+    def pairs(self):
+        digests, pairs = self.hashes(), []
+        for first in range(256):
+            self.observe(digests, bytes([first]))
+            for second in range(256):
+                value = self.observe(digests, bytes([first, second]))
+                if first >= 128:
+                    assert value is None or len(value) == 1
+                    pairs.append(0xFFFFFFFF if value is None else ord(value))
+        return compressed(struct.pack(f"<{len(pairs)}I", *pairs)), digests
+
+    def responses(self, payloads):
+        aliases = sorted(
+            {self.name}
+            | {
+                alias
+                for alias, target in encodings.aliases.aliases.items()
+                if target == self.name
+            }
+        )
+        cases = []
+        for payload in dict.fromkeys(payloads):
+            text = httpx.Response(
+                403,
+                content=payload,
+                headers={"content-type": "text/plain; charset=" + self.name},
+            ).text
+            for alias in aliases:
+                assert (
+                    httpx.Response(
+                        403,
+                        content=payload,
+                        headers={"content-type": "text/plain; charset=" + alias},
+                    ).text
+                    == text
+                )
+            cases.append({"body_hex": payload.hex(), "text": text})
+        return aliases, cases
+
+
 def observe(name):
     assert name in NAMES
     decoder_type = codecs.getincrementaldecoder(name)

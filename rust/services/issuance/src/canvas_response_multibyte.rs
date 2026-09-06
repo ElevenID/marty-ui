@@ -1,8 +1,10 @@
-//! Published finite-state text mappings. One decoder serves every frozen machine.
-//! This does not qualify codecs absent from SOURCES.
+//! Published text mappings: finite machines and compact variable-width codecs.
+//! Coverage is explicit; registered aliases alone do not qualify other codecs.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{collections::BTreeMap, io::Read, sync::OnceLock};
 
+#[path = "canvas_response_euc_kr.rs"]
+mod euc_kr;
 #[path = "canvas_response_gb18030.rs"]
 mod gb18030;
 
@@ -99,6 +101,63 @@ fn decompress(encoded: &str, expected: usize) -> Vec<u8> {
     output
 }
 
+struct Pairs(Vec<u32>);
+
+impl Pairs {
+    fn new(encoded: &str) -> Self {
+        let values = decompress(encoded, 128 * 256 * 4)
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(values
+            .iter()
+            .all(|scalar| *scalar == u32::MAX || char::from_u32(*scalar).is_some()));
+        Self(values)
+    }
+
+    fn scalar(&self, bytes: &[u8]) -> Option<char> {
+        char::from_u32(self.0[usize::from(bytes[0] - 128) * 256 + usize::from(bytes[1])])
+    }
+}
+
+// Complete-input CJK codecs share ASCII handling and CPython error consumption.
+// Each codec supplies only required sequence length and its scalar mapping.
+fn decode_complete(
+    mut bytes: &[u8],
+    strict: bool,
+    width: impl Fn(&[u8]) -> usize,
+    scalar: impl Fn(&[u8]) -> Option<char>,
+) -> Option<String> {
+    let mut output = String::new();
+    while let Some(&first) = bytes.first() {
+        if first.is_ascii() {
+            output.push(char::from(first));
+            bytes = &bytes[1..];
+            continue;
+        }
+        // Availability precedes validation: incomplete final bytes coalesce.
+        let width = width(bytes);
+        let incomplete = bytes.len() < width;
+        let value = if incomplete {
+            None
+        } else {
+            scalar(&bytes[..width])
+        };
+        match value {
+            Some(value) => {
+                output.push(value);
+                bytes = &bytes[width..];
+            }
+            None if strict => return None,
+            None => {
+                output.push('\u{fffd}');
+                bytes = &bytes[if incomplete { bytes.len() } else { 1 }..];
+            }
+        }
+    }
+    Some(output)
+}
+
 impl Machine {
     fn from_frozen(name: &str, source: &str) -> Self {
         let frozen: Frozen = serde_json::from_str(source).expect("embedded codec schema");
@@ -155,6 +214,7 @@ pub(super) struct Codec(CodecKind);
 enum CodecKind {
     Machine(Machine),
     Gb18030(gb18030::Decoder),
+    EucKr(euc_kr::Decoder),
 }
 
 impl Codec {
@@ -162,11 +222,16 @@ impl Codec {
         match &self.0 {
             CodecKind::Machine(machine) => machine.decode(bytes, strict),
             CodecKind::Gb18030(decoder) => decoder.decode(bytes, strict),
+            CodecKind::EucKr(decoder) => decoder.decode(bytes, strict),
         }
     }
 }
 
 pub(super) fn lookup(name: &str) -> Option<&'static Codec> {
+    if name == "euc_kr" {
+        static EUC_KR: OnceLock<Codec> = OnceLock::new();
+        return Some(EUC_KR.get_or_init(|| Codec(CodecKind::EucKr(euc_kr::Decoder::new()))));
+    }
     if name == "gb18030" {
         static GB18030: OnceLock<Codec> = OnceLock::new();
         return Some(GB18030.get_or_init(|| Codec(CodecKind::Gb18030(gb18030::Decoder::new()))));
@@ -204,6 +269,22 @@ mod tests {
                 digest.update(u32::try_from(text.len()).unwrap().to_le_bytes());
                 digest.update(text.as_bytes());
             }
+        }
+    }
+
+    pub(super) fn observe(decoder: &Codec, digests: &mut [Sha256; 2], bytes: &[u8]) {
+        for (digest, strict) in digests.iter_mut().zip([false, true]) {
+            record(digest, decoder.decode(bytes, strict));
+        }
+    }
+
+    pub(super) fn assert_hashes(digests: [Sha256; 2], frozen: &serde_json::Value, key: &str) {
+        for (index, digest) in digests.into_iter().enumerate() {
+            assert_eq!(
+                hex::encode(digest.finalize()),
+                frozen[key][index],
+                "{key} mode {index}"
+            );
         }
     }
 

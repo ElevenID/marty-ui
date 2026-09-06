@@ -414,6 +414,14 @@ class Handler(BaseHTTPRequestHandler):
                     "text/plain; charset=gb18030",
                     "c4e3bac390308130e3329a35ff30ff3041803041",
                 ),
+                "/text_euc_kr": (
+                    "text/plain; charset=euc-kr",
+                    "c7d1b1db"
+                    + "a4d4a4a1a4bfa4d4"
+                    + "a4d4a4bea4d3a4be"
+                    + "a4d441a1a4bfa4d4"
+                    + "a4d441",
+                ),
             }
             for name in multibyte_owner().NAMES:
                 text_cases[f"/text_multibyte_{name}"] = (
@@ -716,6 +724,7 @@ def run(source=None, response_source=None):
         "charset_headers": charset_headers(response_source),
         "multibyte_codecs": multibyte_owner().run(),
         "gb18030_codec": codec_owner("canvas_gb18030_codec_oracle").observe(),
+        "euc_kr_codec": codec_owner("canvas_euc_kr_codec_oracle").observe(),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)

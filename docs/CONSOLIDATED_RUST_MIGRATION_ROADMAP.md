@@ -33,6 +33,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+EUC-KR now preserves both two-byte text and eight-byte Hangul composition through
+the shared Rust complete-input owner used by GB18030. Independently captured
+evidence covers all 16,777,216 component triples (11,172 valid), 65,792 short inputs,
+769 component observations, 98,304 mutated/prefix/suffix inputs per mode and 98
+responses across nine labels. The previous fallback failed before repair. Local
+303 library, 5 worker, 28 managed HTTP, 22 behavior and 70 affected Python tests
+pass, as does strict Clippy. Native TLS matches all 85 observations, preserving
+the previous 84. All 23 configured image/schema tests pass (197.45 seconds, none
+ignored/filtered), including complete EUC-KR regeneration and unchanged previous
+codec artifacts. Fresh hosted qualification remains required.
+See [EUC-KR evidence](../contracts/canvas-euc-kr-codec.md).
+Other codec families and whole-worker/all-consumer adoption remain open.
+
 GB18030 now has a native compact range/pair decoder shared by response text and
 strict encoded labels. Two independent immutable-image captures agreed before
 implementation; the previous UTF-8 fallback failed the regression. Rust matches
@@ -58,7 +71,7 @@ observation unchanged. Local 299 library, 5 worker, 28 managed HTTP, 22 behavior
 70 workflow/image/ownership/cutover checks, strict Clippy and all 23 configured
 image/schema tests pass. No dependencies or runtime Python are added. The prior
 integration head `ded29ea7c` CI and Rust CodeQL passed; new source still requires
-its own hosted checks. EUC-KR, ISO-2022, UTF-7/special/escape codecs,
+its own hosted checks. ISO-2022, UTF-7/special/escape codecs,
 exceptional metadata/JSON/configuration/transport behavior and whole-worker/all-
 consumer adoption remain open. No deployment or reachable-Python deletion occurs.
 

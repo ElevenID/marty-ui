@@ -101,7 +101,7 @@ and the existing 68 TLS observations pass. Fresh hosted checks remain required.
 
 ## Remaining gates
 
-Unqualified multibyte/stateful codecs (including EUC-KR and ISO-2022),
+Unqualified multibyte/stateful codecs (including ISO-2022),
 UTF-7 and special/escape codecs, including their encoded-parameter-label use,
 exceptional header metadata such as Python's decimal-conversion limit for very
 long continuation ordinals, exceptional JSON values and other configuration or
@@ -217,3 +217,27 @@ published-image/schema tests pass in 158.38 seconds with none ignored/filtered,
 including complete GB18030 regeneration and the expanded TLS observations.
 The preceding `cf8246918` hosted checks are green; the continuation requires its
 own hosted qualification before landing.
+
+## EUC-KR continuation
+
+The [EUC-KR artifact](../../contracts/canvas-euc-kr-codec.md) preserves ordinary
+two-byte mappings and eight-byte Hangul composition, not an assumed CP949 subset.
+Two independent immutable-image captures agreed before the new native module;
+the previous UTF-8 fallback failed the response regression. Rust matches both
+decoding modes for all 16,777,216 component triples, every single/two-byte input,
+769 component observations and 98,304 mutated/prefix/suffix sequences. All 98
+response examples pass across nine labels, including all 11,172 valid composition
+results in the exhaustive hash replay.
+
+The Rust implementation shares pair-table validation and complete-input error
+consumption with GB18030. Both strict parameter labels and replacement response
+text use the same codec facade; tests share observation/hash helpers. Offline
+capture scripts likewise share one fresh-decoder observer, pair capture and
+alias-response check. The existing GB18030 artifact is unchanged. No runtime
+Python, dependency or lockfile is added. Independent TLS captures grow 84 to 85
+with every prior observation unchanged, and native TLS matches all 85.
+Final gates pass: 303 library, 5 worker, 28 managed HTTP, 22 behavior, 70 affected
+Python tests and strict Clippy. All 23 configured image/schema tests pass in
+197.45 seconds with none ignored/filtered, including complete EUC-KR regeneration
+and unchanged earlier codec artifacts. Fresh hosted qualification is required.
+No deployment or reachable-Python deletion occurs in this continuation.
