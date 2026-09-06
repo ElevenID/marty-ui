@@ -1,11 +1,12 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `56f4658e1ac9a3d0d8fed8cb9638352b35065879`,
+Status: latest qualified composed checkpoint `a7e8ff3206dc4798e9ca6d890e16ec695bc21b89`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 70 configured runtime tests (CI34053145533 and Rust CodeQL34053145588).
-All eleven initial native validation cases passed, retaining the earlier
-Retry-After/worker gates. The newer reference-removal races and four processor
-failures still await their own Linux qualification. PR #814 draft and
+and 70 configured runtime tests in 1520.47 seconds (CI34054910209 and
+Rust CodeQL34054910162). All seventeen native validation/failure cases passed,
+including three reference-removal barriers and four processor failures, retaining
+the earlier Retry-After/worker gates. The newer deferred roster configuration
+and typed-processor signing-guard regression await fresh qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -69,8 +70,24 @@ template removal after application read. Three roster-setting cases additionally
 freeze job-local configuration errors and non-roster continuation; the native
 binary's eager integer parsing has been replaced by deferred, lossless bounded
 configuration in the shared processor. The twelve processor outcomes outside
-this corpus are tracked separately. Full exact-head Linux qualification and
-broader processor failures remain pending; gate 9 is open.
+this corpus are tracked separately. The first seventeen cases passed actual
+native Linux replay at `a7e8ff320`; the three roster cases still require their
+own exact-head qualification. Broader processor failures remain pending;
+gate 9 is open.
+
+The existing PostgreSQL worker contract now also exercises the normative
+no-signing guard through real `run_cycle` calls and durable repositories, using
+the existing observed-worker owner with a controlled typed processor. All four
+forbidden fields are checked independently with null, false, zero, empty string,
+synthetic string, object and array values (28 failures), alongside two successful
+controls. Assertions cover exact terminal code/static summary, attempt-one
+dead-letter, empty persisted result, lease release, disabled target, no success
+timestamp, successful sibling sanitization and no next-cycle retry. All three
+configured PostgreSQL contract tests passed locally in 92.93 seconds; strict
+all-target Clippy passed. The loopback-only tmpfs database was removed afterward.
+This is native boundary regression coverage, not published-process parity or
+proof of signing-service effects/log privacy. No runtime or contract change was
+needed for this guard; whole-worker gate 9 remains open.
 
 The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized

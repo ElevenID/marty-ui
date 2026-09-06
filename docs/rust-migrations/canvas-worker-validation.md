@@ -203,6 +203,15 @@ and diff checks passed. The earlier 34-entry worker regression remains recorded
 above for the shared barrier implementation; this corpus extension adds no
 new process/barrier implementation.
 
+The seventeen-case checkpoint `a7e8ff3206dc4798e9ca6d890e16ec695bc21b89` is now
+qualified: CI34054910209 and Rust CodeQL34054910162 succeeded. Runtime
+job101545013474 passed all 70 configured entries in 1520.47 seconds at
+19:59:21 UTC, with seventeen explicit native validation/failure markers, each
+with zero requests, including all three actual reference-removal barriers.
+Image job101545013487 passed eight preflight and 24 packaged startup cases,
+retaining the original issuance API health gate. The three roster cases below
+are newer and still require their own exact-head native qualification.
+
 ## Deferred roster-only configuration
 
 Source inspection identified another composition gap: the native binary used

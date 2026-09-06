@@ -48,8 +48,11 @@ summaries match all nine captured validation codes. The race checkpoint passed
 with one existing opt-in skip. The initial eleven native validation cases passed
 at `56f4658e1` (CI34053145533, Rust CodeQL34053145588): all 70 configured tests
 passed in 1399.33 seconds, with eight image-preflight and 24 packaged startup
-cases. Newer races/processor cases require fresh exact-head Linux qualification;
-broader processor failures remain open, so gate 9 is not closed.
+cases. The newer `a7e8ff320` checkpoint now passes CI34054910209 and
+Rust CodeQL34054910162: 70 configured tests in 1520.47 seconds, all seventeen
+actual native validation/failure markers (zero requests), eight image-preflight
+and 24 packaged startup cases. This includes all three reference-removal
+barriers. Broader processor failures remain open, so gate 9 is not closed.
 
 Three roster-configuration cases additionally freeze invalid batch/maximum
 settings and continued non-roster application processing. Rust now defers those
@@ -59,6 +62,17 @@ fields are preserved. Current local checks pass 414 Rust tests (including five
 worker-binary tests), strict Clippy, 907 Python tests and all 34 configured local
 worker entries in 515.83 seconds. Reference regeneration passed; fresh
 Linux/image qualification remains required.
+
+The existing PostgreSQL worker suite additionally covers the typed-processor
+no-signing guard: four forbidden result keys across seven JSON value shapes,
+plus two successful controls. All 28 forbidden results terminate before result
+sanitization, with static errors, cleared result/leases and disabled targets;
+valid siblings retain successful sanitized results. All three configured
+PostgreSQL tests passed locally in 92.93 seconds, including existing lifecycle
+and renewal regressions; strict Clippy passed and the disposable fixture was
+removed. This is native worker-cycle coverage, not a new published-Python oracle
+or whole-worker acceptance. No production implementation was deleted or changed
+for this guard regression.
 
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,
