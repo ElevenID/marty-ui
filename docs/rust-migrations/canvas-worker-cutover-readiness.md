@@ -1,12 +1,12 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `f195ad484ff47cab0fcbde3649c4e9b52dc17da1`,
+Status: latest qualified composed checkpoint `53c51314f2c22d8d83fd524f9ac4d494d61ceb44`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 70 configured runtime tests in 1280.90 seconds (CI34056846912 and
-Rust CodeQL34056846952). All twenty native validation/failure cases passed,
+and 70 configured runtime tests in 1516.06 seconds (CI34059018294; all exact-head
+checks, including Rust CodeQL, passed). All twenty native validation/failure cases passed,
 including deferred roster configuration and all three reference-removal barriers.
 The configured PostgreSQL worker contract, including the typed-processor
-signing guard, passed all three entries in 94.99 seconds. Earlier worker gates
+signing guard, passed all three entries in 95.20 seconds. Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
@@ -173,8 +173,8 @@ changed-generation races remain open.
 | 10. OAuth revocation failure and owner fences | OAuth behavior and PostgreSQL tests cover refresh/revocation, due selection and tenant-atomic cleanup | Whole-worker remote revocation rate-limit/timeout, Retry-After, patch failure and owner-fence-loss matrix; explicitly retain Rust's stronger atomic cleanup. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
-| 13. Bounded signing error detail | Credentials PR269 implements one shared 500-character bound for JSON string/object and text diagnostics, with 51 detail tests; exact-head CI is green | Complete protected landing, capture the hardened language-neutral observations with revised provenance, and compare Rust before sharing them as parity evidence. |
-| 14. Allowlisted worker logs | Credentials PR269 uses one safe event owner and twelve worker error-branch executions, retaining retries, cleanup, sibling completion and loop recovery; exact-head CI is green | Complete protected landing and frozen cross-language log/state projections; source unit coverage alone is not aggregate acceptance. |
+| 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Land the capture follow-up and compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |
+| 14. Allowlisted worker logs | Landed PR269 retains retries, cleanup, sibling completion and loop recovery; PR271 freezes twelve actual reference error/log executions | Land the capture follow-up and execute native log/state comparison with explicit type/severity mappings; source unit coverage alone is not aggregate acceptance. |
 
 Reference-side observations above were read from the clean local
 `marty-credentials` checkout at `28b53d433031fe46b3f0c0c589d91f2c85d22c6e`.
@@ -182,12 +182,32 @@ That is a local source observation, not a new claim about protected main or the
 immutable reference image. Check remote branch ownership and provenance before
 changing reference source; preserve the other worker's unrelated work.
 
-The scoped repair is now [Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269),
-reviewed at `9c03b57e5826b7dce430a05eef91ee68e334d825` from protected main
-`2dfbd6a0a82bb302ecb2c29b9df0ce1c2056ef6f`. CI34058252789 passed, including
+The scoped repair [Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269)
+landed at protected `d418ac0df283625f43b0c011fb1c72fd7d3013a9` after review of
+`9c03b57e5826b7dce430a05eef91ee68e334d825`. CI34058252789 passed, including
 1673 tests and 200 subtests on each of Python 3.11 and 3.12, PostgreSQL, Rust,
-bindings, security and WASM gates. The normal merge request entered the protected
-queue; landing is not yet claimed here. No immutable earlier oracle was changed.
+bindings, security and WASM gates. Merge-queue CI34058846815 and protected-main
+CI34059299079 passed. Exact tree comparison confirmed the landed content before
+retiring only the completed branch name; source and evidence remain recoverable.
+No immutable earlier oracle was changed.
+
+[Credentials PR271](https://github.com/ElevenID/marty-credentials/pull/271) adds
+the 63-case hardened reference without changing runtime source. Its existing
+tests are the single observation owner; two independent captures agree at SHA256
+`2bcffee4bfd78152e1a6eb611442391a228fa034cce1266818ded532f8f35c05`.
+Source trees, runtime blobs, test blobs and imported module locations are checked.
+Maintainer-review additions bring local affected qualification to 741 tests and
+200 subtests, followed by unchanged 63-case regeneration. Exact-head hosted
+qualification and protected landing remain required for the follow-up.
+
+Native adoption must not hide source-inspection differences by changing that
+artifact: the resolver currently omits diagnostic detail on non-success, while
+the signer bounds raw text instead of sharing JSON-detail selection. Worker
+error events also need explicit class/severity/event comparison; existing renewal
+tests collect selected job/class fields, not the complete log allowlist. These
+are inspection findings, not yet native replay failures. Coordinate signing
+adapter ownership with the crypto worker before editing overlapping code; keep
+Rust's stronger tenant-atomic OAuth cleanup and generation fences intact.
 
 [Credentials issue270](https://github.com/ElevenID/marty-credentials/issues/270)
 retains a separate release-qualification discrepancy. Exact checksum-verified

@@ -81,15 +81,29 @@ The same `f195ad484` checkpoint also passed all three configured Linux
 PostgreSQL worker-contract entries in 94.99 seconds, retaining the guard and
 existing lifecycle/renewal cases.
 
-The two reference privacy prerequisites now have reviewed
-[Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269):
+The two reference privacy prerequisites now have landed
+[Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269)
+at protected `d418ac0df283625f43b0c011fb1c72fd7d3013a9`:
 shared bounded diagnostics and allowlisted worker error events without changing
 job behavior. Exact-head CI34058252789 passed, including 1673 tests and 200
 subtests on each Python version (3.11/3.12), plus Rust, PostgreSQL, binding,
-security and WASM checks. The PR is in the protected merge queue; landing and
-hardened language-neutral capture remain required before closing gates 13/14.
-Existing frozen observations, reachable features and other-worker code remain
-untouched.
+security and WASM checks. Merge-queue CI34058846815 and protected-main
+CI34059299079 also passed. [Credentials PR271](https://github.com/ElevenID/marty-credentials/pull/271)
+now freezes 63 hardened observations from the existing reference tests, with
+matching independent captures and mandatory provenance/regeneration checks.
+Maintainer-review capture-tool regressions pass locally: 741 affected tests,
+200 subtests and all 63 regenerated observations. The follow-up still requires
+exact-head hosted qualification and protected landing. Native replay/adoption
+and whole-worker acceptance remain required before closing gates 13/14.
+Existing frozen observations, reachable features and other-worker code remain untouched.
+
+Latest UI checkpoint `53c51314f2c22d8d83fd524f9ac4d494d61ceb44` passed
+CI34059018294 and all exact-head checks, including Rust CodeQL. Runtime
+job101556092864 passed 70 configured tests in 1516.06 seconds, with twenty
+actual native validation/failure cases and all three configured PostgreSQL
+worker-contract entries in 95.20 seconds. Image job101556092865 also passed.
+PR814 remains draft/unrouted; these are retained boundary qualifications, not
+authorization to remove live Python or claim aggregate beta acceptance.
 
 [Credentials issue270](https://github.com/ElevenID/marty-credentials/issues/270)
 tracks an aggregate release gate: both exact published Windows Core 0.1.60 and
