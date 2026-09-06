@@ -41,6 +41,9 @@ pub enum CanvasOperationHttpError {
     Response,
     #[error("Provider response content decoding failed")]
     Decoding,
+    #[cfg(test)]
+    #[error(transparent)]
+    Text(#[from] crate::canvas_response_text::CanvasResponseTextError),
     #[error("Provider {0:?} operation timed out")]
     Timeout(CanvasNetworkPhase),
 }
@@ -256,7 +259,7 @@ impl CanvasOperationResponse {
         Ok(crate::canvas_response_text::response_text(
             &self.bytes().await?,
             content_type.as_deref(),
-        ))
+        )?)
     }
 }
 
@@ -609,7 +612,7 @@ mod tests {
                 json!(crate::canvas_credentials_protocol::response_excerpt(
                     &response.bytes().await?,
                     content_type.as_deref()
-                ))
+                )?)
             } else {
                 json!(response.text().await?)
             };
@@ -624,6 +627,7 @@ mod tests {
                 CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Write) => "WriteTimeout",
                 CanvasOperationHttpError::Connect | CanvasOperationHttpError::Tls => "ConnectError",
                 CanvasOperationHttpError::Decoding => "DecodingError",
+                CanvasOperationHttpError::Text(_) => "UnicodeError",
                 _ => panic!("unexpected fixture outcome: {error:?}"),
             }}),
         };

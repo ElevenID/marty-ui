@@ -5,7 +5,8 @@ use super::*;
 use marty_issuance_service::{
     canvas_credentials_validation::{
         CanvasCredentialsProviderResponse, CanvasCredentialsSecretResolver,
-        CanvasCredentialsValidationService, CanvasCredentialsValidationTransport,
+        CanvasCredentialsTransportError, CanvasCredentialsValidationService,
+        CanvasCredentialsValidationTransport,
     },
     canvas_operator_secret::CanvasOperatorSecretReader,
 };
@@ -57,12 +58,25 @@ impl CanvasCredentialsValidationTransport for Ports {
         origin: &str,
         url: &str,
         token: &str,
-    ) -> Result<CanvasCredentialsProviderResponse, ()> {
+    ) -> Result<CanvasCredentialsProviderResponse, CanvasCredentialsTransportError> {
         assert_eq!(origin, "https://api.badgr.io");
         self.requests
             .lock()
             .unwrap()
             .push(json!({"method":"GET", "url":url, "authorization":format!("Bearer {token}")}));
+        if let Some(body) = self.case["response_hex"].as_str() {
+            return CanvasCredentialsProviderResponse::from_body(
+                self.case["response_status"]
+                    .as_u64()
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                Some("synthetic-provider".into()),
+                &hex::decode(body).unwrap(),
+                self.case["response_content_type"].as_str(),
+            )
+            .map_err(Into::into);
+        }
         Ok(CanvasCredentialsProviderResponse {
             status_code: 200,
             request_id: Some("synthetic-provider".into()),
@@ -83,7 +97,7 @@ async fn native_validation_matches_all_published_http_and_lookup_observations() 
     .unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
     let expected = oracle["observations"].as_array().unwrap();
-    assert_eq!(cases.len(), 20);
+    assert_eq!(cases.len(), 28);
     assert_eq!(cases.len(), expected.len());
     for (case, expected) in cases.iter().zip(expected) {
         assert_eq!(case["name"], expected["name"]);

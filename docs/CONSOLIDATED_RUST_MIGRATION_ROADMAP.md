@@ -33,7 +33,31 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
-The current single-byte continuation replaces hand-maintained ASCII/Latin-1
+The Unicode-text continuation adds shared UTF-16/32 decoding for both byte orders
+and all 16 published aliases. A new 372-case language-neutral corpus separately
+freezes text and JSON/excerpt outcomes, including BOM requirements, invalid
+scalars/surrogates, truncated prefixes and JSON precedence. Independent captures
+agree; the unchanged native decoder failed, and the replacement passes. The
+actual published application corpus expands from 20 to 28 cases: missing required
+BOMs return plain HTTP 500, successful provider bodies are not text-decoded, and
+short prefixes receive replacement characters. Native full-router replay and an
+eight-case real HTTP transport regression preserve these distinctions via typed
+decoder errors, not network-failure results. All earlier observations remain.
+Local 296 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
+ownership tests, strict Clippy and the existing 68 TLS cases pass. All 21 configured
+published-image tests pass (137.06 seconds, none ignored/filtered); fresh hosted
+checks must qualify this continuation. The previous pushed
+`ef24ba1a128d2db91b242da99496f9de51dafb80` has successful Rust CodeQL; its CI
+is still running. PR #814 stays draft and unrouted.
+
+Other multibyte/stateful codecs, extended headers/label normalization, exceptional
+JSON behavior and the broader status-service decoder-exception boundary remain
+open. The validation UTF-16/32 boundary is now qualified; it is not a claim about
+every consumer's exception handling. Whole-consumer cutover, Python deletion,
+branch reconciliation, demos/device/wallet/CSCA follow-up and aggregate beta/soak
+remain required. The checkpoints below retain prior evidence chronologically.
+
+The preceding single-byte continuation replaces hand-maintained ASCII/Latin-1
 branches with one shared Rust table decoder for 73 codecs and 291 registered
 aliases. The language-neutral tables come from the exact published response
 helper, not WHATWG approximations; the immutable-image gate independently

@@ -397,18 +397,17 @@ impl CanvasLifecycleStatusProvider for CanvasCredentialsStatusService {
                 ))
             })?;
         if !(200..300).contains(&response.status) {
+            let text = response_text(&response.body, response.content_type.as_deref())
+                .map_err(|failure| error(failure.to_string()))?;
             return Err(error(format!(
                 "Canvas Credentials {operation} failed (HTTP {}): {}",
                 response.status,
-                truncate_text(&response_text(
-                    &response.body,
-                    response.content_type.as_deref()
-                ))
+                truncate_text(&text)
             )));
         }
         let mut metadata = object(
             json!({"status_sync_url":url,"status_sync_http_status":response.status,
-            "status_sync_response":response_excerpt(&response.body, response.content_type.as_deref()),
+            "status_sync_response":response_excerpt(&response.body, response.content_type.as_deref()).map_err(|failure| error(failure.to_string()))?,
             "status_sync_request_id":response.request_id,"status_synced_at":chrono::Utc::now().to_rfc3339()}),
         );
         if real_provider {
@@ -788,7 +787,7 @@ mod tests {
         assert_eq!(results[0].body, b"{\"accepted\":true}");
         assert_eq!(results[3].body, b"Synthetic redirect caf\xe9");
         assert_eq!(
-            response_text(&results[3].body, results[3].content_type.as_deref()),
+            response_text(&results[3].body, results[3].content_type.as_deref()).unwrap(),
             "Synthetic redirect café"
         );
         assert_eq!(
@@ -799,7 +798,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            response_excerpt(&results[1].body, results[1].content_type.as_deref()),
+            response_excerpt(&results[1].body, results[1].content_type.as_deref()).unwrap(),
             json!({"accepted":true}).as_object().unwrap().clone()
         );
         let calls = calls.lock().unwrap();

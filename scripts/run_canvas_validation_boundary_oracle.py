@@ -101,6 +101,15 @@ async def observe():
                     "authorization": request.headers.get("authorization"),
                 }
             )
+            if "response_hex" in case:
+                return httpx.Response(
+                    case["response_status"],
+                    content=bytes.fromhex(case["response_hex"]),
+                    headers={
+                        "x-request-id": "synthetic-provider",
+                        "content-type": case["response_content_type"],
+                    },
+                )
             return httpx.Response(
                 200,
                 json={"accepted": True},
@@ -176,9 +185,14 @@ async def observe():
         assert result.status_code not in {422, 503}, (
             "fixture must pass actual authentication and body parsing"
         )
-        assert exceptions in ([], ["UnicodeDecodeError"]), (
-            f"unexpected published exception: {exceptions}"
+        expected_exceptions = (
+            [case["expected_exception"]] if case.get("expected_exception") else []
         )
+        assert (
+            exceptions == expected_exceptions
+            if "response_hex" in case
+            else exceptions in ([], ["UnicodeDecodeError"])
+        ), f"unexpected published exception: {exceptions}"
         if result.headers.get("content-type", "").startswith("application/json"):
             body = result.json()
             if "validated_at" in body:
@@ -208,3 +222,7 @@ async def observe():
 
 def run():
     return asyncio.run(observe())
+
+
+if __name__ == "__main__":
+    print(json.dumps(run(), sort_keys=True))

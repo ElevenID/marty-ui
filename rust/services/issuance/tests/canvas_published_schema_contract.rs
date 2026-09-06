@@ -61,6 +61,14 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         oracle["single_byte_codecs"], codecs,
         "published single-byte codec mappings and aliases"
     );
+    let unicode: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-unicode-text-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        oracle["unicode_text_codecs"], unicode,
+        "published Unicode text and excerpt behavior"
+    );
 }
 
 #[tokio::test]

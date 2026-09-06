@@ -425,6 +425,218 @@
       "name": "tenant_missing_reference_blocks_adapter",
       "requests": [],
       "status": 400
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [],
+      "lookups": [],
+      "name": "utf16_missing_bom_error",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 500
+    },
+    {
+      "body": "Internal Server Error",
+      "content_type": "text/plain; charset=utf-8",
+      "files": [],
+      "lookups": [],
+      "name": "utf32_missing_bom_error",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 500
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": null,
+        "issuer_id": "issuer-review",
+        "ok": true,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": null,
+        "status_code": 200,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "utf16_missing_bom_success_ignored",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": null,
+        "issuer_id": "issuer-review",
+        "ok": true,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": null,
+        "status_code": 200,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "utf32_missing_bom_success_ignored",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": "Canvas Credentials validation failed with HTTP 403",
+        "issuer_id": "issuer-review",
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": {
+          "body_excerpt": "café"
+        },
+        "status_code": 403,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "utf16_bom_error_text",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": "Canvas Credentials validation failed with HTTP 403",
+        "issuer_id": "issuer-review",
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": {
+          "body_excerpt": "café"
+        },
+        "status_code": 403,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "utf32_bom_error_text",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": "Canvas Credentials validation failed with HTTP 403",
+        "issuer_id": "issuer-review",
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": {
+          "body_excerpt": "�"
+        },
+        "status_code": 403,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "utf16_truncated_prefix_error_text",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "body": {
+        "api_base_url": "https://api.badgr.io",
+        "assertion_scope": "badgeclasses",
+        "badgeclass_id": "badge-review",
+        "error": "Canvas Credentials validation failed with HTTP 403",
+        "issuer_id": "issuer-review",
+        "ok": false,
+        "provider": "badgr_api",
+        "request_id": "synthetic-provider",
+        "response_excerpt": {
+          "body_excerpt": "�"
+        },
+        "status_code": 403,
+        "token_configured": true,
+        "validated_at": "$timestamp",
+        "validation_url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+      },
+      "content_type": "application/json",
+      "files": [],
+      "lookups": [],
+      "name": "utf32_truncated_prefix_error_text",
+      "requests": [
+        {
+          "authorization": "Bearer synthetic-direct",
+          "method": "GET",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-review"
+        }
+      ],
+      "status": 200
     }
   ],
   "sources": {

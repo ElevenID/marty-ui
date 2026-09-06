@@ -155,6 +155,96 @@ def single_byte_codecs(response_source):
     }
 
 
+def unicode_text_codecs(response_source):
+    """Freeze text decoding separately from byte-first JSON/excerpt projection."""
+    project = response_owner(response_source)
+    names = {"utf_16", "utf_16_le", "utf_16_be", "utf_32", "utf_32_le", "utf_32_be"}
+    aliases = {name: name for name in names}
+    aliases.update(
+        (alias, target)
+        for alias, target in encodings.aliases.aliases.items()
+        if target in names
+    )
+    payloads = {"empty": b"", "json_first": b'{"accepted":true}'}
+    for width in (2, 4):
+        for endian in ("le", "be"):
+            encoding = f"utf_{width * 8}_{endian}"
+            bom = (0xFEFF).to_bytes(width, "little" if endian == "le" else "big")
+            text = "caf\u00e9 \U0001f642".encode(encoding)
+            payloads[encoding] = text
+            payloads[encoding + "_bom"] = bom + text
+            payloads[encoding + "_double_bom"] = bom + bom + text
+            for length in range(1, width + 1):
+                payloads[f"{encoding}_prefix_{length}"] = bom[:length]
+            for suffix in (b"\xff", b"\xff\xfe", b"\xff\xfe\x00"):
+                payloads[f"{encoding}_trailing_{len(suffix)}"] = bom + text + suffix
+            invalid_units = (
+                (
+                    [0xD800],
+                    [0xDC00],
+                    [0xD800, 0x61],
+                    [0xD800, 0xD800, 0xDC00],
+                    [0xD800, 0xFFFD],
+                    [0xDFFF, 0xDFFF],
+                )
+                if width == 2
+                else ([0xD800], [0xDC00], [0x110000], [0xFFFFFFFF])
+            )
+            for index, units in enumerate(invalid_units):
+                payloads[f"{encoding}_invalid_{index}"] = bom + b"".join(
+                    unit.to_bytes(width, "little" if endian == "le" else "big")
+                    for unit in units
+                )
+            if width == 2:
+                for index in (0, 2):
+                    payloads[f"{encoding}_invalid_{index}_partial"] = (
+                        payloads[f"{encoding}_invalid_{index}"] + b"\xff"
+                    )
+    cases = []
+    for alias, target in sorted(aliases.items()):
+        assert codecs.lookup(alias).name == codecs.lookup(target).name
+        for label in (alias, alias.upper().replace("_", "-")):
+            response = httpx.Response(
+                403,
+                content="caf\u00e9 \U0001f642".encode(target),
+                headers={"content-type": "text/plain; charset=" + label},
+            )
+            assert response.text == "caf\u00e9 \U0001f642", label
+    for alias in sorted(names):
+        for name, payload in sorted(payloads.items()):
+            response = httpx.Response(
+                403,
+                content=payload,
+                headers={"content-type": "text/plain; charset=" + alias},
+            )
+            observed = {}
+            for projection, operation in (
+                ("text", lambda: response.text),
+                ("excerpt", lambda: project(response)),
+            ):
+                try:
+                    observed[projection] = {"value": operation()}
+                except UnicodeError as failure:
+                    assert type(failure) is UnicodeError, "unexpected decoder exception"
+                    observed[projection] = {
+                        "error_class": type(failure).__name__,
+                        "error": str(failure),
+                    }
+            cases.append(
+                {
+                    "name": alias + "/" + name,
+                    "charset": alias,
+                    "body_hex": payload.hex(),
+                    **observed,
+                }
+            )
+    return {
+        "schema": "marty.canvas-unicode-text/v1",
+        "aliases": dict(sorted(aliases.items())),
+        "cases": cases,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -488,6 +578,7 @@ def run(source=None, response_source=None):
         "source_sha256": SOURCE_SHA256,
         "response_source_sha256": RESPONSE_SOURCE_SHA256,
         "single_byte_codecs": single_byte_codecs(response_source),
+        "unicode_text_codecs": unicode_text_codecs(response_source),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)

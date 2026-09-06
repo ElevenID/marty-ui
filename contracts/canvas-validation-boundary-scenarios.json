@@ -20,6 +20,14 @@
     {"name":"real_file_success","provider":"badgr_api","files":["value"]},
     {"name":"real_tenant_skips_bad_file","provider":"badgr_api","files":["invalid_utf8"],"config":{"api_token_secret_id":"secret-review"}},
     {"name":"tenant_wrong_owner_blocks_adapter","provider":"bridge","files":["invalid_utf8"],"config":{"api_token_secret_id":"secret-review"},"secret_organization":"org-other"},
-    {"name":"tenant_missing_reference_blocks_adapter","provider":"bridge","files":["invalid_utf8"],"config":{"provider":"bridge"}}
+    {"name":"tenant_missing_reference_blocks_adapter","provider":"bridge","files":["invalid_utf8"],"config":{"provider":"bridge"}},
+    {"name":"utf16_missing_bom_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"630061006600e900","expected_exception":"UnicodeError"},
+    {"name":"utf32_missing_bom_error","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-32","response_hex":"6300000061000000","expected_exception":"UnicodeError"},
+    {"name":"utf16_missing_bom_success_ignored","provider":"badgr_api","direct":"synthetic-direct","response_status":200,"response_content_type":"text/plain; charset=utf-16","response_hex":"63006100"},
+    {"name":"utf32_missing_bom_success_ignored","provider":"badgr_api","direct":"synthetic-direct","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"63000000"},
+    {"name":"utf16_bom_error_text","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"fffe630061006600e900"},
+    {"name":"utf32_bom_error_text","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-32","response_hex":"0000feff000000630000006100000066000000e9"},
+    {"name":"utf16_truncated_prefix_error_text","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-16","response_hex":"ff"},
+    {"name":"utf32_truncated_prefix_error_text","provider":"badgr_api","direct":"synthetic-direct","response_status":403,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe"}
   ]
 }

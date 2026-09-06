@@ -1,15 +1,40 @@
 //! Shared response-text projection, separate from JSON byte decoding.
 //! Stateless single-byte mappings come from the frozen published response owner.
-//! Multibyte/stateful codecs remain an explicit adoption gate.
+//! Other multibyte/stateful codecs remain an explicit adoption gate.
 use std::{collections::BTreeMap, sync::OnceLock};
 
-struct SingleByteCodecs {
-    tables: BTreeMap<String, [char; 256]>,
-    aliases: BTreeMap<String, String>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CanvasResponseTextError {
+    #[error("UTF-16 stream does not start with BOM")]
+    Utf16MissingBom,
+    #[error("UTF-32 stream does not start with BOM")]
+    Utf32MissingBom,
 }
 
-fn single_byte_codecs() -> &'static SingleByteCodecs {
-    static REGISTRY: OnceLock<SingleByteCodecs> = OnceLock::new();
+#[derive(Clone, Copy, serde::Deserialize)]
+enum UnicodeEncoding {
+    #[serde(rename = "utf_16")]
+    Utf16,
+    #[serde(rename = "utf_16_le")]
+    Utf16Le,
+    #[serde(rename = "utf_16_be")]
+    Utf16Be,
+    #[serde(rename = "utf_32")]
+    Utf32,
+    #[serde(rename = "utf_32_le")]
+    Utf32Le,
+    #[serde(rename = "utf_32_be")]
+    Utf32Be,
+}
+
+struct ResponseCodecs {
+    tables: BTreeMap<String, [char; 256]>,
+    aliases: BTreeMap<String, String>,
+    unicode_aliases: BTreeMap<String, UnicodeEncoding>,
+}
+
+fn response_codecs() -> &'static ResponseCodecs {
+    static REGISTRY: OnceLock<ResponseCodecs> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         #[derive(serde::Deserialize)]
         struct Frozen {
@@ -38,20 +63,37 @@ fn single_byte_codecs() -> &'static SingleByteCodecs {
             .aliases
             .values()
             .all(|name| tables.contains_key(name)));
-        SingleByteCodecs {
+        #[derive(serde::Deserialize)]
+        struct Unicode {
+            schema: String,
+            aliases: BTreeMap<String, UnicodeEncoding>,
+        }
+        let unicode: Unicode = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-unicode-text-oracle.json"
+        ))
+        .expect("embedded published Unicode codec data must be valid");
+        assert_eq!(unicode.schema, "marty.canvas-unicode-text/v1");
+        ResponseCodecs {
             tables,
             aliases: frozen.aliases,
+            unicode_aliases: unicode.aliases,
         }
     })
 }
 
-pub(crate) fn response_text(bytes: &[u8], content_type: Option<&str>) -> String {
+pub(crate) fn response_text(
+    bytes: &[u8],
+    content_type: Option<&str>,
+) -> Result<String, CanvasResponseTextError> {
     let charset = content_type.and_then(charset_parameter).unwrap_or_default();
     let normalized = normalize_encoding(&charset);
-    let registry = single_byte_codecs();
+    let registry = response_codecs();
     if let Some(name) = registry.aliases.get(&normalized) {
         let table = &registry.tables[name];
-        return bytes.iter().map(|byte| table[usize::from(*byte)]).collect();
+        return Ok(bytes.iter().map(|byte| table[usize::from(*byte)]).collect());
+    }
+    if let Some(encoding) = registry.unicode_aliases.get(&normalized) {
+        return unicode_text(bytes, *encoding);
     }
     let bytes = match normalized.as_str() {
         "utf_8_sig" => bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes),
@@ -59,7 +101,86 @@ pub(crate) fn response_text(bytes: &[u8], content_type: Option<&str>) -> String 
         // Other recognized Python codecs still require their own qualification.
         _ => bytes,
     };
-    String::from_utf8_lossy(bytes).into_owned()
+    Ok(String::from_utf8_lossy(bytes).into_owned())
+}
+
+fn unicode_text(
+    mut bytes: &[u8],
+    encoding: UnicodeEncoding,
+) -> Result<String, CanvasResponseTextError> {
+    use UnicodeEncoding::*;
+    let (width, mut little, generic) = match encoding {
+        Utf16 => (2, true, true),
+        Utf16Le => (2, true, false),
+        Utf16Be => (2, false, false),
+        Utf32 => (4, true, true),
+        Utf32Le => (4, true, false),
+        Utf32Be => (4, false, false),
+    };
+    if generic && bytes.len() >= width {
+        let (le, be): (&[u8], &[u8]) = if width == 2 {
+            (&[0xff, 0xfe], &[0xfe, 0xff])
+        } else {
+            (&[0xff, 0xfe, 0, 0], &[0, 0, 0xfe, 0xff])
+        };
+        little = if bytes.starts_with(le) {
+            true
+        } else if bytes.starts_with(be) {
+            false
+        } else {
+            return Err(if width == 2 {
+                CanvasResponseTextError::Utf16MissingBom
+            } else {
+                CanvasResponseTextError::Utf32MissingBom
+            });
+        };
+        bytes = &bytes[width..];
+    }
+    let mut text = String::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let remaining = &bytes[index..];
+        if remaining.len() < width {
+            text.push(char::REPLACEMENT_CHARACTER);
+            break;
+        }
+        let scalar = if width == 4 {
+            let word = [remaining[0], remaining[1], remaining[2], remaining[3]];
+            if little {
+                u32::from_le_bytes(word)
+            } else {
+                u32::from_be_bytes(word)
+            }
+        } else {
+            let unit = |pair: &[u8]| {
+                if little {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
+            };
+            let first = unit(remaining);
+            if (0xd800..=0xdbff).contains(&first) {
+                // A high surrogate plus an incomplete next unit is one error.
+                if remaining.len() < 4 {
+                    text.push(char::REPLACEMENT_CHARACTER);
+                    break;
+                }
+                let second = unit(&remaining[2..]);
+                if (0xdc00..=0xdfff).contains(&second) {
+                    index += 2;
+                    0x10000 + ((u32::from(first) - 0xd800) << 10) + (u32::from(second) - 0xdc00)
+                } else {
+                    u32::from(first)
+                }
+            } else {
+                u32::from(first)
+            }
+        };
+        text.push(char::from_u32(scalar).unwrap_or(char::REPLACEMENT_CHARACTER));
+        index += width;
+    }
+    Ok(text)
 }
 
 fn normalize_encoding(value: &str) -> String {
@@ -123,6 +244,53 @@ fn charset_parameter(content_type: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn observation<T: serde::Serialize>(
+        result: Result<T, CanvasResponseTextError>,
+    ) -> serde_json::Value {
+        match result {
+            Ok(value) => serde_json::json!({"value":value}),
+            Err(error) => {
+                serde_json::json!({"error_class":"UnicodeError","error":error.to_string()})
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_text_and_excerpt_match_published_decoder_corpus() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-unicode-text-oracle.json"
+        ))
+        .unwrap();
+        assert_eq!(frozen["cases"].as_array().unwrap().len(), 372);
+        assert_eq!(frozen["aliases"].as_object().unwrap().len(), 16);
+        for case in frozen["cases"].as_array().unwrap() {
+            let bytes = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
+            for (alias, target) in frozen["aliases"].as_object().unwrap() {
+                if target != &case["charset"] {
+                    continue;
+                }
+                for label in [alias.clone(), alias.to_ascii_uppercase().replace('_', "-")] {
+                    let content_type = format!("text/plain; charset={label}");
+                    assert_eq!(
+                        observation(response_text(&bytes, Some(&content_type))),
+                        case["text"],
+                        "text {label} {}",
+                        case["name"]
+                    );
+                    assert_eq!(
+                        observation(crate::canvas_credentials_protocol::response_excerpt(
+                            &bytes,
+                            Some(&content_type)
+                        )),
+                        case["excerpt"],
+                        "excerpt {label} {}",
+                        case["name"]
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_published_single_byte_alias_preserves_all_byte_values() {
         let frozen: serde_json::Value = serde_json::from_str(include_str!(
@@ -136,7 +304,7 @@ mod tests {
             let expected = frozen["codecs"][name.as_str().unwrap()].as_str().unwrap();
             for label in [alias.clone(), alias.to_ascii_uppercase().replace('_', "-")] {
                 assert_eq!(
-                    response_text(&bytes, Some(&format!("text/plain; charset={label}"))),
+                    response_text(&bytes, Some(&format!("text/plain; charset={label}"))).unwrap(),
                     expected,
                     "{alias}"
                 );
@@ -147,7 +315,8 @@ mod tests {
                 response_text(
                     &bytes,
                     Some(&format!("text/plain; charset={}", alias.as_str().unwrap()))
-                ),
+                )
+                .unwrap(),
                 String::from_utf8_lossy(&bytes),
                 "unregistered alias must retain the published fallback"
             );
@@ -157,7 +326,7 @@ mod tests {
     #[test]
     fn ascii_and_latin1_keep_their_distinct_byte_mappings() {
         let bytes = (0..=255).collect::<Vec<u8>>();
-        let ascii = response_text(&bytes, Some("text/plain; charset=ascii"));
+        let ascii = response_text(&bytes, Some("text/plain; charset=ascii")).unwrap();
         assert_eq!(
             ascii.chars().take(128).collect::<String>(),
             (0..128).map(char::from).collect::<String>()
@@ -168,6 +337,7 @@ mod tests {
             .all(|c| c == char::REPLACEMENT_CHARACTER));
         assert_eq!(
             response_text(&bytes, Some("text/plain; charset=latin1"))
+                .unwrap()
                 .chars()
                 .map(u32::from)
                 .collect::<Vec<_>>(),
@@ -181,20 +351,21 @@ mod tests {
             response_text(
                 &[0xe9],
                 Some("synthetic; note=\"x; charset=ascii\"; CHARSET=\"ISO 8859-1\"; charset=ascii")
-            ),
+            )
+            .unwrap(),
             "é"
         );
         let bom = b"\xef\xbb\xbfcaf\xc3\xa9";
         assert_eq!(
-            response_text(bom, Some("text/plain; charset=utf-8-sig")),
+            response_text(bom, Some("text/plain; charset=utf-8-sig")).unwrap(),
             "café"
         );
         assert_eq!(
-            response_text(bom, Some("text/plain; charset=utf-8")),
+            response_text(bom, Some("text/plain; charset=utf-8")).unwrap(),
             "\u{feff}café"
         );
         assert_eq!(
-            response_text(bom, Some("text/plain; charset=ascii")),
+            response_text(bom, Some("text/plain; charset=ascii")).unwrap(),
             "���caf��"
         );
     }

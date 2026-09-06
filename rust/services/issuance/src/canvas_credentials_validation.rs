@@ -116,6 +116,36 @@ pub struct CanvasCredentialsProviderResponse {
     pub response_excerpt: Option<Map<String, Value>>,
 }
 
+pub use crate::canvas_response_text::CanvasResponseTextError;
+
+impl CanvasCredentialsProviderResponse {
+    /// Project an already-complete response. Successful bodies are not decoded.
+    pub fn from_body(
+        status_code: u16,
+        request_id: Option<String>,
+        body: &[u8],
+        content_type: Option<&str>,
+    ) -> Result<Self, CanvasResponseTextError> {
+        Ok(Self {
+            status_code,
+            request_id,
+            response_excerpt: if (200..300).contains(&status_code) {
+                None
+            } else {
+                Some(failure_excerpt(body, content_type)?)
+            },
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CanvasCredentialsTransportError {
+    #[error("Canvas Credentials validation request failed")]
+    Request,
+    #[error(transparent)]
+    ResponseText(#[from] CanvasResponseTextError),
+}
+
 #[async_trait]
 pub trait CanvasCredentialsSecretResolver: Send + Sync {
     async fn secret_value(
@@ -132,7 +162,7 @@ pub trait CanvasCredentialsValidationTransport: Send + Sync {
         api_origin: &str,
         validation_url: &str,
         token: &str,
-    ) -> Result<CanvasCredentialsProviderResponse, ()>;
+    ) -> Result<CanvasCredentialsProviderResponse, CanvasCredentialsTransportError>;
 }
 
 #[async_trait]
@@ -148,6 +178,8 @@ pub trait CanvasCredentialsValidator: Send + Sync {
 pub enum CanvasCredentialsValidationError {
     #[error(transparent)]
     OperatorSecret(#[from] CanvasOperatorSecretError),
+    #[error(transparent)]
+    ResponseText(#[from] CanvasResponseTextError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -434,7 +466,8 @@ impl CanvasCredentialsValidator for CanvasCredentialsValidationService {
             .await
         {
             Ok(response) => response,
-            Err(()) => {
+            Err(CanvasCredentialsTransportError::ResponseText(error)) => return Err(error.into()),
+            Err(CanvasCredentialsTransportError::Request) => {
                 result.error = Some("Canvas Credentials validation request failed".to_owned());
                 return Ok(result);
             }
@@ -491,22 +524,23 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
         api_origin: &str,
         validation_url: &str,
         token: &str,
-    ) -> Result<CanvasCredentialsProviderResponse, ()> {
-        let target = Url::parse(validation_url).map_err(|_| ())?;
-        if target.origin() != Url::parse(api_origin).map_err(|_| ())?.origin() {
-            return Err(());
+    ) -> Result<CanvasCredentialsProviderResponse, CanvasCredentialsTransportError> {
+        use CanvasCredentialsTransportError::Request;
+        let target = Url::parse(validation_url).map_err(|_| Request)?;
+        if target.origin() != Url::parse(api_origin).map_err(|_| Request)?.origin() {
+            return Err(Request);
         }
         let mut headers = http::HeaderMap::new();
         headers.insert(ACCEPT, http::HeaderValue::from_static("application/json"));
         headers.insert(
             AUTHORIZATION,
-            http::HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| ())?,
+            http::HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| Request)?,
         );
         let mut response = self
             .client
             .send(http::Method::GET, target, headers, Vec::new())
             .await
-            .map_err(|_| ())?;
+            .map_err(|_| Request)?;
         let status_code = response.response.status().as_u16();
         let request_id = response
             .response
@@ -514,26 +548,25 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let response_excerpt = if (200..300).contains(&status_code) {
+        let content_type = response.content_type();
+        let body = if (200..300).contains(&status_code) {
             // Published HTTPX get() consumes the body before returning. Drain
             // without retaining it: headers alone cannot attest success when a
             // later read stalls or the peer truncates the response.
-            while response.chunk().await.map_err(|_| ())?.is_some() {}
-            None
+            while response.chunk().await.map_err(|_| Request)?.is_some() {}
+            bytes::Bytes::new()
         } else {
             // HTTPX consumes the entire response before JSON/excerpt projection.
             // The excerpt limit is not a response-read cutoff or a JSON limit.
-            let content_type = response.content_type();
-            Some(failure_excerpt(
-                &response.bytes().await.map_err(|_| ())?,
-                content_type.as_deref(),
-            ))
+            response.bytes().await.map_err(|_| Request)?
         };
-        Ok(CanvasCredentialsProviderResponse {
+        CanvasCredentialsProviderResponse::from_body(
             status_code,
             request_id,
-            response_excerpt,
-        })
+            &body,
+            content_type.as_deref(),
+        )
+        .map_err(Into::into)
     }
 }
 
@@ -560,6 +593,87 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn unicode_response_errors_and_success_bypass_use_actual_http_transport() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-validation-boundary-scenarios.json"
+        ))
+        .unwrap();
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-validation-boundary-oracle.json"
+        ))
+        .unwrap();
+        let mut count = 0;
+        for (case, expected) in scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(oracle["observations"].as_array().unwrap())
+        {
+            let Some(encoded) = case["response_hex"].as_str() else {
+                continue;
+            };
+            count += 1;
+            assert_eq!(case["name"], expected["name"]);
+            let body = hex::decode(encoded).unwrap();
+            let status = case["response_status"].as_u64().unwrap();
+            let content_type = case["response_content_type"].as_str().unwrap().to_owned();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                socket.write_all(format!("HTTP/1.1 {status} Synthetic\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nx-request-id: synthetic-provider\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
+            });
+            let transport = HttpCanvasCredentialsValidationTransport::with_operation_timeout(
+                CanvasOriginPolicy {
+                    allow_http_localhost: true,
+                    ..Default::default()
+                },
+                CanvasNetworkTimeout::from_seconds(2.0),
+            );
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                transport.get(&origin, &origin, "synthetic-token"),
+            )
+            .await
+            .unwrap();
+            if expected["status"] == 500 {
+                assert!(
+                    matches!(
+                        result,
+                        Err(CanvasCredentialsTransportError::ResponseText(_))
+                    ),
+                    "decoder failure must remain distinct from a network failure: {}",
+                    case["name"]
+                );
+            } else {
+                let response = result.unwrap();
+                assert_eq!(u64::from(response.status_code), status);
+                assert_eq!(response.request_id.as_deref(), Some("synthetic-provider"));
+                assert_eq!(
+                    serde_json::to_value(response.response_excerpt).unwrap(),
+                    expected["body"]["response_excerpt"],
+                    "{}",
+                    case["name"]
+                );
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert_eq!(count, 8);
+    }
 
     #[tokio::test]
     async fn failure_body_completion_and_json_are_not_limited_by_excerpt_buffer() {
@@ -818,7 +932,7 @@ mod tests {
             origin: &str,
             url: &str,
             token: &str,
-        ) -> Result<CanvasCredentialsProviderResponse, ()> {
+        ) -> Result<CanvasCredentialsProviderResponse, CanvasCredentialsTransportError> {
             self.calls
                 .lock()
                 .unwrap()
@@ -974,17 +1088,17 @@ mod tests {
     #[test]
     fn failure_excerpts_preserve_objects_wrap_arrays_and_bound_text() {
         assert_eq!(
-            failure_excerpt(br#"{"error":"denied"}"#, None),
+            failure_excerpt(br#"{"error":"denied"}"#, None).unwrap(),
             json!({"error": "denied"}).as_object().unwrap().clone()
         );
         assert_eq!(
-            failure_excerpt(br#"["one","two"]"#, None),
+            failure_excerpt(br#"["one","two"]"#, None).unwrap(),
             json!({"payload": ["one", "two"]})
                 .as_object()
                 .unwrap()
                 .clone()
         );
-        let excerpt = failure_excerpt(&vec![b'x'; MAX_EXCERPT_CHARS + 50], None);
+        let excerpt = failure_excerpt(&vec![b'x'; MAX_EXCERPT_CHARS + 50], None).unwrap();
         let body = excerpt["body_excerpt"].as_str().unwrap();
         assert_eq!(body.chars().count(), MAX_EXCERPT_CHARS + 1);
         assert!(body.ends_with('…'));

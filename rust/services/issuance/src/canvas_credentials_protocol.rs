@@ -1,5 +1,5 @@
 //! Shared protocol primitives, without conflating validation and delivery policy.
-use crate::canvas_response_text::response_text;
+use crate::canvas_response_text::{response_text, CanvasResponseTextError};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -48,15 +48,21 @@ pub(crate) fn https_origin(value: &str) -> Option<String> {
 
 /// Projection follows complete body consumption. Only text excerpts are bounded;
 /// valid JSON objects/scalars must not silently lose fields at an I/O buffer size.
-pub(crate) fn response_excerpt(bytes: &[u8], content_type: Option<&str>) -> Map<String, Value> {
+pub(crate) fn response_excerpt(
+    bytes: &[u8],
+    content_type: Option<&str>,
+) -> Result<Map<String, Value>, CanvasResponseTextError> {
     if let Some(payload) = response_json(bytes) {
-        return match payload {
+        return Ok(match payload {
             Value::Object(object) => object,
             payload => Map::from_iter([("payload".into(), payload)]),
-        };
+        });
     }
-    let text = response_text(bytes, content_type);
-    Map::from_iter([("body_excerpt".into(), Value::String(truncate_text(&text)))])
+    let text = response_text(bytes, content_type)?;
+    Ok(Map::from_iter([(
+        "body_excerpt".into(),
+        Value::String(truncate_text(&text)),
+    )]))
 }
 
 /// Python's JSON byte reader detects UTF-8/16/32 independently of the response
@@ -208,7 +214,7 @@ mod tests {
         }
         let text = b"\xef\xbb\xbfnot JSON";
         assert_eq!(
-            response_excerpt(text, None),
+            response_excerpt(text, None).unwrap(),
             serde_json::json!({"body_excerpt":"\u{feff}not JSON"})
                 .as_object()
                 .unwrap()

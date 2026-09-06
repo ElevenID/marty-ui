@@ -1,7 +1,14 @@
 # Canvas credentials validation boundary
 
-The new 20-case corpus closes the known operator-file exception and token-lookup
-ordering differences for the managed validation endpoint. It does not declare
+The 28-case corpus closes the known operator-file exception, token-lookup ordering
+and UTF-16/32 response-text exception differences for the managed validation
+endpoint. Eight Unicode cases extend the original 20 without changing them.
+Missing required BOMs produce plain HTTP 500, successful response bodies bypass
+text decoding, valid BOMs decode correctly and short prefixes are replaced.
+Typed Rust response-text errors preserve that application boundary separately
+from network failures. The native full router and actual HTTP transport replay
+the new observations. See [the codec contract](canvas-response-codecs.md).
+This does not declare
 all validation URL, encoding, transport or deployment behavior complete.
 
 ## Independent baseline

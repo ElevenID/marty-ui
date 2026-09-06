@@ -3,7 +3,8 @@
 The candidate uses one Rust response-text owner for validation error excerpts
 and status-provider error bodies. JSON stays byte-first and independent of the
 Content-Type charset. This checkpoint qualifies stateless single-byte text
-decoders; it does not establish whole-provider or whole-worker cutover parity.
+decoders and UTF-16/32 text plus its validation exception boundary; it does not
+establish whole-provider or whole-worker cutover parity.
 
 ## Independent observations
 
@@ -46,14 +47,42 @@ published-image/schema tests (164.97 seconds, none ignored or filtered). Both
 native TLS replays pass all 68 cases. Hosted checks must qualify the new commit
 separately; these local results do not prove deployment acceptance.
 
+## Unicode text and validation exceptions
+
+`contracts/canvas-unicode-text-oracle.json` freezes 372 observations for the six
+UTF-16/32 codec variants and records all 16 registered aliases. Text and excerpt
+results are captured separately: valid JSON can bypass a text decoder that would
+otherwise reject a missing BOM. The corpus includes opposite byte orders,
+repeated BOMs, supplementary characters, lone surrogates, invalid UTF-32 scalars,
+truncated prefixes and incomplete surrogate pairs. Independent captures agree;
+the initial unchanged native decoder failed before repair. The image gate checks
+the artifact using the actual published helper and HTTPX text decoder. Aliases
+and normalized uppercase/hyphen labels are checked against the published decoder;
+Rust replays the corresponding vectors for every alias.
+
+One shared Rust Unicode text implementation returns typed missing-BOM errors,
+replaces invalid scalar sequences as observed, and preserves explicit-endian BOM
+characters. It is intentionally separate from the strict JSON byte decoder.
+`CanvasCredentialsProviderResponse::from_body` is the single complete-body
+projection boundary used by the actual HTTP validation transport and native
+application replay. Transport failures and response-text failures are distinct;
+successful validation bodies are drained without text decoding.
+
+The actual published application corpus now has 28 cases, preserving all prior
+20. Eight additions prove plain HTTP 500 for missing required BOMs, successful
+responses ignoring those charsets, valid BOM decoding and replacement of short
+prefixes. Both the full native router and real HTTP transport replay these cases.
+The Unicode continuation passes 296 library, 5 worker, 28 management HTTP,
+22 behavior, 42 workflow/image/ownership tests, strict Clippy, the existing
+68 TLS observations, and all 21 configured published-image tests (137.06 seconds,
+none ignored/filtered). Fresh hosted qualification is still required.
+
 ## Remaining gates
 
-Multibyte/stateful codecs, extended/RFC2231 charset headers, less common codec
-label normalization, and decoder exception propagation still need published
-observations and native implementation. Their current fallback is an adoption
-gap, not an approved reduction of supported functionality. Generic UTF-16/32
-text decoding can raise errors when byte-order markers are absent; qualify the
-actual adapter/application boundary before choosing a Rust error projection.
+Other multibyte/stateful codecs, extended/RFC2231 charset headers, less common
+codec label normalization, exceptional JSON values and the broader status-service
+decoder-exception boundary still need qualification. Existing unsupported-codec
+fallback is an adoption gap, not an approved reduction of supported functionality.
 
 Complete provider configuration/network behavior and whole-worker/all-consumer
 deployment adoption remain separate gates. Keep reachable Python until its
