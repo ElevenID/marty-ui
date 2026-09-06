@@ -31,10 +31,12 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
 
     workflow = text(".github/workflows/ci.yml")
     assert (
-        "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL: "
+        "export MARTY_ISSUANCE_POSTGRES_CONTRACT_URL="
         "postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test"
-        in workflow
+        in text("scripts/ci/run-rust-db-contracts.sh")
     )
+    assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
+    workflow += text("scripts/ci/run-rust-db-contracts.sh")
     assert 'startswith("canvas_")' in workflow
     assert 'endswith("_postgres_contract")' in workflow
     assert "canvas_*_postgres_contract-*" in workflow
