@@ -73,6 +73,12 @@ Linux qualification pending; final-attempt recovery,
 concurrent scheduler/reclaimer and ownership/generation fences remain separate.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
+The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
+matching independent captures and a mandatory regeneration gate. It seeds
+historical attempts before worker startup, then observes actual attempt-eight
+renewal, crash, real expiry and dead-letter/target-disable without another read.
+Native final-attempt replay and concurrent/changed-generation races remain open.
+
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 
 | Gate | Inspected evidence | Remaining qualification |

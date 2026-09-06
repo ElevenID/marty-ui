@@ -187,6 +187,22 @@ async fn worker_facts_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_provider_final_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_worker_provider_final()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-provider-final-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
+    owned.close().unwrap();
+}
+
+#[tokio::test]
 async fn worker_provider_recovery_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

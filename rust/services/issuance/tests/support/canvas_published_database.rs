@@ -262,6 +262,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_provider_final() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_final",
+                "worker-provider-final",
+                "worker_provider_final",
+                "MARTY_CANVAS_WORKER_PROVIDER_FINAL_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_retry() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -479,6 +492,7 @@ impl PublishedDatabase {
                 | "worker_retry"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
+                | "worker_provider_final"
         );
         if worker_https {
             let index = arguments.len() - 2;
@@ -556,6 +570,7 @@ impl PublishedDatabase {
                 | "worker_retry"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
+                | "worker_provider_final"
         ) {
             consumer_helpers.extend(
                 [
@@ -571,8 +586,15 @@ impl PublishedDatabase {
                 }),
             );
         }
-        if script == "worker_provider_recovery" {
+        if matches!(script, "worker_provider_recovery" | "worker_provider_final") {
             let path = "scripts/run_canvas_worker_provider_signals_oracle.py";
+            consumer_helpers.push(format!(
+                "type=bind,source={},target=/verification/{path},readonly",
+                root.join(path).display()
+            ));
+        }
+        if script == "worker_provider_final" {
+            let path = "scripts/run_canvas_worker_provider_recovery_oracle.py";
             consumer_helpers.push(format!(
                 "type=bind,source={},target=/verification/{path},readonly",
                 root.join(path).display()

@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [final-attempt crash reference](rust-migrations/canvas-worker-provider-final.md)
+has two identical independent captures and a mandatory regeneration gate. After
+actual attempt-eight renewal and forced process loss, real lease expiry leads
+to dead-letter/target-disable with no second provider request. Earlier attempts
+are explicitly seeded history, not executed evidence. Native final-attempt
+replay, concurrency and changed-generation races remain open.
+
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease
 and both heartbeat renewal without generation change. After forced process loss,

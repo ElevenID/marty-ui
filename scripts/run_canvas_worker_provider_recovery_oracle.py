@@ -50,11 +50,9 @@ def generation(engine):
         )
 
 
-def run(case_name):
+def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
     contracts = Path("/verification/contracts")
-    cases = json.loads(
-        (contracts / "canvas-worker-provider-recovery-scenarios.json").read_text()
-    )
+    cases = json.loads((contracts / scenario).read_text())
     assert case_name in cases["cases"]
     spec = json.loads((contracts / cases["reference_scenario"]).read_text())
     shared = json.loads((contracts / spec["shared_seed"]).read_text())
@@ -63,6 +61,18 @@ def run(case_name):
         child = None
         try:
             preserved = seed_worker_database(engine, https.origin, spec, shared)
+            if "initial_job_seed" in cases:
+                # Historical fixture state is inserted before any worker starts;
+                # running attempt/lease/outcome state is never edited.
+                assert (
+                    scalar(
+                        engine,
+                        "SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs",
+                    )
+                    == 0
+                )
+                with engine.begin() as connection:
+                    connection.exec_driver_sql(cases["initial_job_seed"])
             worker_input = worker_case(
                 https.origin,
                 https.cert,
@@ -129,7 +139,7 @@ def run(case_name):
                 "lease_and_both_heartbeats_advanced": True,
                 "generation_preserved_during_renewal": True,
             }
-            if case_name == "recovery":
+            if case_name in {"recovery", "final"}:
                 child.send_signal(signal.SIGKILL)
                 result["crash_exit_code"] = child.wait(timeout=10)
                 result["after_crash"] = observe()
@@ -144,7 +154,9 @@ def run(case_name):
                     35,
                     "real lease expiry",
                 )
-                child, restarted = start()
+                child, started = start()
+            if case_name == "recovery":
+                restarted = started
                 result["reclaimed"] = wait_for(
                     lambda: idle_outcome("retry", 1, restarted),
                     15,
@@ -176,10 +188,12 @@ def run(case_name):
                 https.release.set()
             result["completed"] = wait_for(
                 lambda: idle_outcome(
-                    "succeeded", 2 if case_name == "recovery" else 1, started
+                    "dead_letter" if case_name == "final" else "succeeded",
+                    {"renewal": 1, "recovery": 2, "final": 8}[case_name],
+                    started,
                 ),
                 25,
-                "successful actual worker outcome",
+                "terminal actual worker outcome",
                 child,
             )
             child.send_signal(signal.SIGINT)
@@ -190,6 +204,13 @@ def run(case_name):
             result["same_job_and_original_start"] = True
             result["requests"] = list(https.requests)
             assert len(https.requests) == (2 if case_name == "recovery" else 1)
+            if case_name == "final":
+                result["target_enabled"] = scalar(
+                    engine,
+                    "SELECT enabled FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'",
+                )
+                assert result["target_enabled"] is False
+                assert result["completed"]["facts"] == []
             result["source_sha256"] = {
                 name: hashlib.sha256(
                     Path(importlib.util.find_spec(name).origin)
