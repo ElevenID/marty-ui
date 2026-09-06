@@ -49,8 +49,9 @@ The [concurrent scheduler reference](rust-migrations/canvas-worker-concurrent.md
 has two matching captures and a mandatory regeneration gate. Two real schedulers
 are observed waiting on a fixture-owned database barrier before simultaneous
 release; exactly one job/provider request succeeds and both workers remain alive.
-Native replay is implemented and awaits Linux qualification; crash-reclaimer
-concurrency and changed-target races remain open.
+Native replay passed at `a329b980e` (CI34042598584, Rust34042598554), including the
+actual one-request concurrent case and all 59 configured tests in 948.70 seconds.
+Crash-reclaimer concurrency and changed-target races remain open.
 
 The [final-attempt crash reference](rust-migrations/canvas-worker-provider-final.md)
 has two identical independent captures and a mandatory regeneration gate. After

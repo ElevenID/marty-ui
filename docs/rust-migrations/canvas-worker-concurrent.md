@@ -1,9 +1,9 @@
 # Actual concurrent scheduler reference
 
 Status: two independent published-process captures agree; mandatory reference
-regeneration passes locally. Native concurrent replay is implemented and awaits
-Linux qualification. No worker
-cutover, Python deletion or deployment follows from this reference alone.
+regeneration passes locally. Native concurrent replay qualified at `a329b980e`
+(CI34042598584 and RustCodeQL34042598554). No worker cutover, Python deletion or
+deployment follows from this reference alone.
 
 Two distinct actual worker processes run on the official published schema with
 real HTTPS and encrypted OAuth storage. A transaction owned only by this isolated
@@ -57,8 +57,11 @@ alive. Both native workers must exit 130 after SIGINT, corresponding to the
 reference's raw -2 exits. The parent checks the single exact provider request.
 
 Local native compilation and three strict comparison tests pass, as do all 60
-affected Python tests (3.33 seconds). Mandatory Linux execution remains required;
-these local checks do not establish native concurrency runtime parity.
+affected Python tests (3.33 seconds). Linux job 101511954495 at `a329b980e`
+explicitly records the actual concurrent case with one HTTPS request, retained
+final/recovery/signals and all 59 configured tests passing in 948.70 seconds.
+The separate 0.36-second unconfigured run is not runtime evidence. Subsequent
+extensions require their own exact-head qualification.
 
 This case is not evidence for simultaneous crash reclaimers, changed-target
 generation, owner-fence loss, final-completion races or application disposal.

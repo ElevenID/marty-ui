@@ -1,7 +1,7 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `e959e113d0a69e03eabcb2e64372034091157b91`,
-with newer native concurrent scheduler replay awaiting qualification. PR #814 draft and
+Status: latest qualified composed checkpoint `a329b980ec9cce04bf5cea55dd0edcab64525dd2`,
+with newer native two-reclaimer replay awaiting qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -76,9 +76,9 @@ concurrent scheduler/reclaimer and ownership/generation fences remain separate.
 The [concurrent scheduler reference](canvas-worker-concurrent.md) now has two
 matching captures. PostgreSQL observes two actual worker scheduler queries
 blocked at the owned fixture barrier; after release, one job/request succeeds
-while both processes remain alive. Native replay is implemented; its Linux
-qualification and crash-reclaimer/changed-target races remain open. This does
-not close all of gate 5.
+while both processes remain alive. Native replay passed at `a329b980e`
+(CI34042598584, Rust34042598554; 59 configured tests in 948.70 seconds).
+Crash-reclaimer/changed-target races remain separate; this does not close all of gate 5.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 The [two-reclaimer reference](canvas-worker-reclaimers.md) has two matching
@@ -156,7 +156,7 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
    do not repeat the repaired LTI-identity requirement as an open runtime bug.
 2. Retain the qualified REST/facts/retry/signal/renewal and nonfinal recovery
    sequences on the pinned migrations with real native provider/OAuth adapters.
-   Retain final-attempt qualification and qualify the newer concurrent scheduler replay, then extend
+   Retain final-attempt and concurrent scheduler qualification, qualify the newer two-reclaimer replay, then extend
    the same harness across the remaining crash-reclaimer, mutation, OAuth,
    failure and cleanup requirements above. Do not repeat completed boundaries
    as though their native adoption were still missing.
