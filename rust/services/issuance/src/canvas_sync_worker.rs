@@ -328,6 +328,23 @@ pub enum CanvasSyncRepositoryError {
     DurationRange,
 }
 
+/// Payload-free classification for failures outside an adapter's known domain errors.
+/// Never carries an exception message, HTTP body, URL, header or credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnexpectedCanvasSyncFailure {
+    Runtime,
+    HttpStatus(http::StatusCode),
+}
+
+impl UnexpectedCanvasSyncFailure {
+    const fn class(self) -> &'static str {
+        match self {
+            Self::Runtime => "CanvasSyncUnexpectedError",
+            Self::HttpStatus(_) => "CanvasSyncHttpStatusError",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 #[error("{summary}")]
 pub struct CanvasSyncProcessingError {
@@ -335,6 +352,7 @@ pub struct CanvasSyncProcessingError {
     pub summary: &'static str,
     pub retryable: bool,
     pub retry_after_seconds: Option<u64>,
+    pub unexpected: Option<UnexpectedCanvasSyncFailure>,
 }
 
 impl CanvasSyncProcessingError {
@@ -345,6 +363,7 @@ impl CanvasSyncProcessingError {
             summary,
             retryable: true,
             retry_after_seconds: None,
+            unexpected: None,
         }
     }
 
@@ -355,7 +374,54 @@ impl CanvasSyncProcessingError {
             summary,
             retryable: false,
             retry_after_seconds: None,
+            unexpected: None,
         }
+    }
+
+    #[must_use]
+    pub fn unexpected(kind: UnexpectedCanvasSyncFailure) -> Self {
+        let code = match kind {
+            UnexpectedCanvasSyncFailure::HttpStatus(status)
+                if status == http::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                "canvas_rate_limited"
+            }
+            _ => "canvas_sync_unexpected_error",
+        };
+        let summary = match kind {
+            UnexpectedCanvasSyncFailure::Runtime => {
+                "Canvas synchronization failed (CanvasSyncUnexpectedError)"
+            }
+            UnexpectedCanvasSyncFailure::HttpStatus(_) => {
+                "Canvas synchronization failed (CanvasSyncHttpStatusError)"
+            }
+        };
+        Self {
+            code,
+            summary,
+            retryable: true,
+            retry_after_seconds: None,
+            unexpected: Some(kind),
+        }
+    }
+
+    fn canonicalize_unexpected(self) -> Self {
+        if let Some(kind) = self.unexpected {
+            // Reconstruct at the worker boundary: public diagnostic fields
+            // must not override the unexpected-failure privacy policy.
+            Self {
+                retry_after_seconds: self.retry_after_seconds,
+                ..Self::unexpected(kind)
+            }
+        } else {
+            self
+        }
+    }
+
+    #[must_use]
+    pub const fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after_seconds = Some(seconds);
+        self
     }
 }
 
@@ -728,16 +794,29 @@ impl CanvasSyncWorker {
                 .await
             }
             Ok(Err(processing)) => {
-                self.persist_failure(
-                    &job,
-                    JobFailure {
-                        error_code: processing.code,
-                        error_summary: Some(processing.summary),
-                        retry_after_seconds: processing.retry_after_seconds,
-                        force_dead_letter: !processing.retryable,
-                    },
-                )
-                .await
+                let processing = processing.canonicalize_unexpected();
+                let status = self
+                    .persist_failure(
+                        &job,
+                        JobFailure {
+                            error_code: processing.code,
+                            error_summary: Some(processing.summary),
+                            retry_after_seconds: processing.retry_after_seconds,
+                            force_dead_letter: !processing.retryable,
+                        },
+                    )
+                    .await;
+                if status.is_ok() {
+                    if let Some(kind) = processing.unexpected {
+                        error!(
+                            event = "canvas_sync_job_failed",
+                            job_id = %job.id,
+                            exception_class = kind.class(),
+                            "Canvas sync job failed"
+                        );
+                    }
+                }
+                status
             }
             Ok(Ok(result)) => {
                 if [
@@ -1192,6 +1271,60 @@ where
             EscapedJobError::Repository(error) => Ok((processing.await, Some(error))),
         },
         outcome = &mut processing => Ok((outcome, None)),
+    }
+}
+
+#[cfg(test)]
+mod processing_error_tests {
+    use super::{CanvasSyncProcessingError, UnexpectedCanvasSyncFailure};
+
+    #[test]
+    fn unexpected_policy_rebuilds_diagnostics_and_preserves_retry_hints() {
+        for (status, code, class) in [
+            (
+                None,
+                "canvas_sync_unexpected_error",
+                "CanvasSyncUnexpectedError",
+            ),
+            (
+                Some(401),
+                "canvas_sync_unexpected_error",
+                "CanvasSyncHttpStatusError",
+            ),
+            (
+                Some(429),
+                "canvas_rate_limited",
+                "CanvasSyncHttpStatusError",
+            ),
+            (
+                Some(503),
+                "canvas_sync_unexpected_error",
+                "CanvasSyncHttpStatusError",
+            ),
+        ] {
+            let kind = status.map_or(UnexpectedCanvasSyncFailure::Runtime, |status| {
+                UnexpectedCanvasSyncFailure::HttpStatus(http::StatusCode::from_u16(status).unwrap())
+            });
+            for delay in [0, 45, u64::MAX] {
+                let mut failure =
+                    CanvasSyncProcessingError::unexpected(kind).with_retry_after(delay);
+                failure.code = "synthetic-private-code";
+                failure.summary = "synthetic-private-detail";
+                failure.retryable = false;
+                let canonical = failure.canonicalize_unexpected();
+                assert_eq!(canonical.code, code);
+                assert_eq!(
+                    canonical.summary,
+                    format!("Canvas synchronization failed ({class})")
+                );
+                assert_eq!(canonical.unexpected.unwrap().class(), class);
+                assert!(canonical.retryable);
+                assert_eq!(canonical.retry_after_seconds, Some(delay));
+            }
+        }
+        let known = CanvasSyncProcessingError::retryable("known_code", "Known diagnostic")
+            .with_retry_after(45);
+        assert_eq!(known.clone().canonicalize_unexpected(), known);
     }
 }
 

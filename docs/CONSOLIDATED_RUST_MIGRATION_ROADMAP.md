@@ -96,11 +96,13 @@ Maintainer-review capture-tool regressions pass locally: 741 affected tests,
 `948bca975b493285c512c20a13d5abf8ee5e6305` after exact-head CI34061052204 and
 protected merge-queue CI34061438212 passed; protected-main CI34061898106 also passed.
 The [native privacy replay](rust-migrations/canvas-worker-privacy.md) now covers
-six escaped-job/loop/disconnect observations locally through PostgreSQL, with complete
+twelve worker observations locally through PostgreSQL, with complete
 producer/formatter fields and explicit class/storage mappings. Failure-first
 tests drove scoped Rust queue-recovery and stable-event corrections, preserving
 the existing tenant-atomic revocation cleanup and verifying encrypted token
-removal with an unrelated-tenant retention control. Other
+removal with an unrelated-tenant retention control. The six processing cases now
+use payload-free Rust failure categories with canonical diagnostic reconstruction,
+shared retry-hint construction and known-error preservation controls. Signing
 privacy observations, fresh exact-head qualification and whole-worker acceptance
 remain required before closing gates 13/14.
 Existing frozen observations, reachable features and other-worker code remain untouched.

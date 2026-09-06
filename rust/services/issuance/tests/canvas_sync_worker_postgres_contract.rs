@@ -431,7 +431,7 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     // Reset only this test's disposable schema after all existing stateful
     // recovery/fencing assertions. Range observations require empty queues.
     setup_worker_schema(&pool).await;
-    canvas_worker_privacy_replay::assert_repository_failure_privacy(&pool).await;
+    canvas_worker_privacy_replay::assert_worker_failure_privacy(&pool).await;
     setup_worker_schema(&pool).await;
     canvas_worker_signing_guard::assert_signing_guard(&pool).await;
     setup_worker_schema(&pool).await;

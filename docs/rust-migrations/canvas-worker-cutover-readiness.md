@@ -174,7 +174,7 @@ changed-generation races remain open.
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
 | 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |
-| 14. Allowlisted worker logs | Landed PR271 freezes twelve actual reference error/log executions; six escaped-job/loop/disconnect observations now pass native PostgreSQL replay locally | Qualify the six-case native follow-up, then adopt processing observations and composed failures; source unit coverage alone is not aggregate acceptance. |
+| 14. Allowlisted worker logs | All twelve landed reference worker observations now pass native PostgreSQL replay locally, with typed unexpected-failure categories and known-error preservation controls | Qualify the complete worker-reference follow-up and remaining composed driver/provider failures; boundary coverage alone is not aggregate acceptance. |
 
 Reference-side observations above were read from the clean local
 `marty-credentials` checkout at `28b53d433031fe46b3f0c0c589d91f2c85d22c6e`.
@@ -203,14 +203,17 @@ and protected merge-queue CI34061438212 passed. Post-merge main CI34061898106
 also passed. The completed capture branch name was retired only after exact
 reviewed/merged tree comparison; source and evidence remain recoverable.
 
-The [native privacy replay](canvas-worker-privacy.md) now compares six actual
+The [native privacy replay](canvas-worker-privacy.md) now compares twelve actual
 worker/loop log-state observations through PostgreSQL, including ambient tracing
 context. Failure-first tests identified swallowed OAuth queue-read errors and
 missing stable event IDs. The disconnect-marker extension preserves real
 encrypted-secret cleanup and another tenant's secret while restoring the exact
-error event; cleanup behavior already matched. The canonical worker correction passes those local
-cases without removing the private SQL generation fence. Other worker and all
-signing observations remain pending; fresh exact-head hosted checks are required.
+error event; cleanup behavior already matched. The final six cases use payload-free
+unexpected processor categories and preserve known classified error behavior;
+they verify all durable outcomes and complete producer/formatter log fields.
+The corrections pass locally without removing the private SQL generation fence.
+All signing observations and composed driver/provider failures remain pending;
+fresh exact-head hosted checks are required.
 
 Native adoption must not hide source-inspection differences by changing that
 artifact: the resolver currently omits diagnostic detail on non-success, while

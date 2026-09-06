@@ -11,7 +11,7 @@ No old immutable oracle or observation is rewritten.
 
 ## Newly replayed boundaries
 
-Six of the twelve worker observations now execute through actual Rust worker
+All twelve worker observations now execute through actual Rust worker
 cycles/loops and PostgreSQL, using the existing observed-repository owner:
 
 - An escaped target-read error leaves that job leased while a sibling succeeds.
@@ -21,10 +21,13 @@ cycles/loops and PostgreSQL, using the existing observed-repository owner:
   retry, and removal of the connection and both token secrets. Real encrypted
   secret persistence is used; an unrelated tenant's secret must survive. The
   marker-failure adapter asserts the connection is already absent when invoked.
+- Unexpected runtime, HTTP 429 and HTTP 503 processor failures retain retry
+  status, static code/type-only summary, empty result, released lease and enabled
+  target. Native target validation is enabled for these cases.
 - Each branch runs once without ambient context and once inside a real tracing
   span carrying a synthetic correlation identifier.
 
-As in the reference, repository failures, the successful processor and remote
+As in the reference, repository failures, processor outcomes and remote
 revocation response are controlled. Unexpected token exchange/refresh calls fail
 the test, and the revoker asserts the synthetic endpoint and decrypted token.
 Other operations use the real native repositories. This is not a
@@ -47,6 +50,10 @@ collector configuration.
   `CanvasOAuthRepositoryUnavailable` for the disconnect marker. Each case's
   exact native class must match before
   this mapping; severity, event identifiers and static messages are not hidden.
+- Unexpected processor categories map `CanvasSyncUnexpectedError` to
+  `RuntimeError` and `CanvasSyncHttpStatusError` to `HTTPStatusError`. The exact
+  complete native type-only summary is checked before substituting its type
+  label. No arbitrary message or diagnostic text is normalized away.
 - Generated job identifiers are normalized only after equality with the actual
   failed durable job ID is asserted.
 - PostgreSQL retains `target_config_version` in the unfinished job result as an
@@ -104,11 +111,50 @@ tests in 42.87 seconds with the same existing opt-in skip. The frozen corpus
 hash remains unchanged. This local result still requires fresh exact-head
 hosted qualification; it does not close the whole-worker gates.
 
+## Unexpected processing boundary
+
+The first six worker cases were already passing when the remaining processing
+cases were added. With the new typed carrier but before handler integration,
+all six processing cases failed because no unexpected-job event was emitted.
+The complete reference artifact was unchanged.
+
+The shared worker now accepts an explicit, payload-free unexpected-failure
+category: runtime failure or HTTP status. It does not emulate Python exceptions,
+inspect an arbitrary exception object, or carry a URL, response body, header or
+credential. Known first-party adapter failures remain explicitly classified.
+This does not claim every actual driver/provider failure has been composed and
+qualified through those adapters; that remains a separate whole-worker gate.
+
+At the worker boundary, unexpected errors are rebuilt from their category before
+persistence. All six native cases deliberately overwrite public diagnostic
+fields and the retryable flag, proving those cannot bypass the static privacy
+policy. The error event is emitted only after successful durable failure
+handling. Existing renewal/persistence error precedence and lease fencing remain
+unchanged. Runtime/503 map to `canvas_sync_unexpected_error`, 429 to
+`canvas_rate_limited`; each retries within the existing attempt/deadline policy.
+
+A shared `with_retry_after` builder replaces three repeated constructions for
+known provider errors. Canonical unexpected reconstruction retains that numeric
+hint; a unit regression covers zero, ordinary and maximum hints without moving
+the existing deadline/clamping policy. Actual worker/SQL retryable and terminal
+controls prove known errors retain their codes, summaries, outcomes and lack of
+unexpected-error logging. Correlation-mode parsing explicitly handles the
+processing cases' additional status suffix; both actual formatter paths execute.
+
+All twelve worker observations and both known-error controls passed in the
+final configured PostgreSQL group (four entries, 94.15 seconds), including the
+builder refactor. The existing signing guard, range/lifecycle/disposal and 60
+renewal combinations remain green. The isolated loopback tmpfs fixture was
+removed afterward. Final qualification also passed 333 library, five worker
+binary and 23 behavior tests, strict all-target Clippy, and 907 Python tests in
+37.17 seconds with the same existing opt-in skip. The immutable 63-case hash is
+unchanged. Fresh exact-head hosted qualification remains required; local Windows
+results do not attest Linux process-signal behavior.
+
 ## Still required
 
-The six unexpected-processing worker observations still need native adoption,
-as do all 51 signing helper/operation observations.
+All 51 signing helper/operation observations still need native adoption.
 Coordinate overlapping signing-adapter work with the crypto worker. Whole-worker
 driver/provider failures, remote OAuth, races, all consumers and aggregate
-acceptance remain their own gates. This six-case replay does not close gates
+acceptance remain their own gates. This twelve-case replay does not close gates
 6, 13 or 14, authorize deleting live Python, or change production deployment.

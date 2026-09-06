@@ -1,5 +1,6 @@
 //! Hardened-reference log/state replay through actual native cycles and SQL.
-//! Only the reference's repository failure and successful processor are controlled.
+//! Repository failures, processor outcomes and revocation responses are controlled;
+//! worker scheduling, persistence, lease handling and encrypted cleanup are real.
 
 use std::{
     collections::BTreeMap,
@@ -20,7 +21,8 @@ use marty_issuance_service::{
     canvas_sync_lease::CanvasSyncLease,
     canvas_sync_worker::{
         canvas_sync_result, CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult,
-        CanvasSyncTarget, CanvasSyncWorkerConfig,
+        CanvasSyncTarget, CanvasSyncWorkerConfig, CanvasSyncWorkerCycleResult,
+        UnexpectedCanvasSyncFailure,
     },
     integration_secret::NewIntegrationSecret,
 };
@@ -183,10 +185,13 @@ fn portable_log(logs: Logs, ambient: bool, job_id: Option<&str>, native_class: &
     let message = fields
         .remove("message")
         .expect("actual static worker message");
-    // Explicit language mapping: the injected repository RuntimeError is a
-    // payload-free native persistence error, never an exception-object string.
+    // Explicit language mapping: each injected failure uses its exact native,
+    // payload-free category, never an exception-object string.
     assert_eq!(fields["exception_class"], native_class);
-    fields.insert("exception_class".into(), json!("RuntimeError"));
+    fields.insert(
+        "exception_class".into(),
+        json!(reference_class(native_class)),
+    );
     if let Some(job_id) = job_id {
         assert_eq!(
             fields["job_id"], job_id,
@@ -205,6 +210,107 @@ fn portable_log(logs: Logs, ambient: bool, job_id: Option<&str>, native_class: &
 }
 
 struct SuccessfulSibling;
+
+fn reference_class(native_class: &str) -> &'static str {
+    match native_class {
+        "CanvasSyncRepositoryUnavailable"
+        | "CanvasOAuthRepositoryUnavailable"
+        | "CanvasSyncUnexpectedError" => "RuntimeError",
+        "CanvasSyncHttpStatusError" => "HTTPStatusError",
+        other => panic!("unmapped native privacy category {other}"),
+    }
+}
+
+struct FailedProcessor(CanvasSyncProcessingError);
+
+#[async_trait]
+impl CanvasSyncProcessor for FailedProcessor {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    async fn process(
+        &self,
+        _: &CanvasSyncTarget,
+        _: &CanvasSyncLease,
+    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+        Err(self.0.clone())
+    }
+}
+
+fn cycle_observation(result: &CanvasSyncWorkerCycleResult) -> Value {
+    json!({"scheduled": result.scheduled, "leased": result.leased,
+        "succeeded": result.succeeded, "retried": result.retried,
+        "dead_lettered": result.dead_lettered,
+        "oauth_revocations_succeeded": result.oauth_revocations_succeeded,
+        "oauth_revocations_retried": result.oauth_revocations_retried})
+}
+
+async fn processing_observation(
+    pool: &PgPool,
+    mut config: CanvasSyncWorkerConfig,
+    ambient: bool,
+    case: &Value,
+) -> Value {
+    config.portable_enabled = true;
+    config.pilot_organizations.insert("org-1".into());
+    let worker_id = config.worker_id.clone();
+    let (kind, native_class) = if case["input"]["status"].is_null() {
+        (
+            UnexpectedCanvasSyncFailure::Runtime,
+            "CanvasSyncUnexpectedError",
+        )
+    } else {
+        (
+            UnexpectedCanvasSyncFailure::HttpStatus(
+                http::StatusCode::from_u16(
+                    u16::try_from(case["input"]["status"].as_u64().unwrap()).unwrap(),
+                )
+                .unwrap(),
+            ),
+            "CanvasSyncHttpStatusError",
+        )
+    };
+    super::seed_target(pool, "privacy-processing", 900).await;
+    let mut failure = CanvasSyncProcessingError::unexpected(kind);
+    // Existing public diagnostic fields cannot bypass the unexpected policy.
+    // The category itself has no place to carry a body, credential or message.
+    failure.code = "synthetic-unexpected-detail-must-not-persist";
+    failure.summary = "synthetic-unexpected-detail-must-not-persist";
+    failure.retryable = false;
+    let (worker, _) = observed_worker_with_fault(
+        pool,
+        config,
+        Arc::new(FailedProcessor(failure)),
+        None,
+        None,
+        None,
+    );
+    let (result, logs) = observe(worker.run_cycle(), ambient).await;
+    let result = result.unwrap();
+    let (job, enabled): (Value, bool) = sqlx::query_as(
+        "SELECT to_jsonb(j), t.enabled FROM issuance_service.canvas_evidence_sync_jobs j
+         JOIN issuance_service.canvas_evidence_sync_targets t ON t.id = j.target_id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let mut projected = job_observation(&job, &worker_id, None);
+    // Only the native type label is translated. Assert the entire native
+    // static summary before mapping; never conceal arbitrary diagnostic text.
+    assert_eq!(
+        projected["error_summary"],
+        format!("Canvas synchronization failed ({native_class})")
+    );
+    projected["error_summary"] = json!(format!(
+        "Canvas synchronization failed ({})",
+        reference_class(native_class)
+    ));
+    json!({
+        "cycle": cycle_observation(&result), "job": projected, "target_enabled": enabled,
+        "log": portable_log(logs, ambient, Some(job["id"].as_str().unwrap()), native_class),
+    })
+}
 
 #[derive(Default)]
 struct ObservedRevoker(Mutex<Vec<String>>);
@@ -387,10 +493,16 @@ fn job_observation(job: &Value, worker: &str, internal_generation: Option<i32>) 
 
 async fn assert_case(pool: &PgPool, case: &Value) {
     super::setup_worker_schema(pool).await;
-    let ambient = case["id"]
-        .as_str()
-        .unwrap()
-        .ends_with("[ambient-correlation]");
+    let mode = case["id"].as_str().unwrap().rsplit_once('[').unwrap().1;
+    let ambient = if mode.starts_with("ambient-correlation") {
+        true
+    } else {
+        assert!(
+            mode.starts_with("standalone"),
+            "unmapped reference correlation mode"
+        );
+        false
+    };
     let worker_id = "canvas-worker-1";
     let config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([
         ("CANVAS_SYNC_WORKER_ID".to_owned(), worker_id.to_owned()),
@@ -428,11 +540,7 @@ async fn assert_case(pool: &PgPool, case: &Value) {
                 "SELECT config_version FROM issuance_service.canvas_evidence_sync_targets WHERE id = 'privacy-failed'"
             ).fetch_one(pool).await.unwrap();
             json!({
-                "cycle": {"scheduled": result.scheduled, "leased": result.leased,
-                    "succeeded": result.succeeded, "retried": result.retried,
-                    "dead_lettered": result.dead_lettered,
-                    "oauth_revocations_succeeded": result.oauth_revocations_succeeded,
-                    "oauth_revocations_retried": result.oauth_revocations_retried},
+            "cycle": cycle_observation(&result),
             "failed_job": job_observation(failed, worker_id, Some(generation)),
             "sibling_job": job_observation(&jobs["privacy-sibling"], worker_id, None),
                 "log": portable_log(logs, ambient, Some(failed["id"].as_str().unwrap()), "CanvasSyncRepositoryUnavailable"),
@@ -473,13 +581,69 @@ async fn assert_case(pool: &PgPool, case: &Value) {
             })
         }
         "disconnect_marker" => disconnect_observation(pool, config, ambient).await,
+        "processing" => processing_observation(pool, config, ambient, case).await,
         other => panic!("unmapped privacy branch {other}"),
     };
     assert_eq!(actual, case["observed"], "{}", case["id"]);
     eprintln!("native hardened privacy replay PASS: {}", case["id"]);
 }
 
-pub async fn assert_repository_failure_privacy(pool: &PgPool) {
+async fn assert_classified_errors_unchanged(pool: &PgPool) {
+    for failure in [
+        CanvasSyncProcessingError::retryable(
+            "canvas_rate_limited",
+            "Canvas background evidence could not be read",
+        ),
+        CanvasSyncProcessingError::terminal(
+            "canvas_requirements_invalid",
+            "Canvas evidence requirements are invalid",
+        ),
+    ] {
+        super::setup_worker_schema(pool).await;
+        super::seed_target(pool, "classified-control", 900).await;
+        assert!(failure.unexpected.is_none());
+        let mut config = CanvasSyncWorkerConfig::from_values(&BTreeMap::new()).unwrap();
+        config.portable_enabled = true;
+        config.pilot_organizations.insert("org-1".into());
+        let (worker, _) = observed_worker_with_fault(
+            pool,
+            config,
+            Arc::new(FailedProcessor(failure.clone())),
+            None,
+            None,
+            None,
+        );
+        let (result, logs) = observe(worker.run_cycle(), true).await;
+        let result = result.unwrap();
+        assert_eq!(
+            (result.scheduled, result.leased, result.succeeded),
+            (1, 1, 0)
+        );
+        assert_eq!(
+            (result.retried, result.dead_lettered),
+            if failure.retryable { (1, 0) } else { (0, 1) }
+        );
+        let (job, enabled): (Value, bool) = sqlx::query_as(
+            "SELECT to_jsonb(j), t.enabled FROM issuance_service.canvas_evidence_sync_jobs j
+             JOIN issuance_service.canvas_evidence_sync_targets t ON t.id = j.target_id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(job["last_error_code"], failure.code);
+        assert_eq!(job["last_error_summary"], failure.summary);
+        assert_eq!(job["result"], json!({}));
+        assert_eq!(enabled, failure.retryable);
+        assert!(
+            logs.events.lock().unwrap().is_empty(),
+            "classified failures do not become unexpected log events"
+        );
+        assert!(logs.rendered.lock().unwrap().is_empty());
+    }
+    eprintln!("native classified error controls PASS: retry and terminal semantics unchanged");
+}
+
+pub async fn assert_worker_failure_privacy(pool: &PgPool) {
     assert_eq!(
         format!(
             "{:x}",
@@ -500,14 +664,14 @@ pub async fn assert_repository_failure_privacy(pool: &PgPool) {
         .filter(|case| {
             matches!(
                 case["input"]["branch"].as_str(),
-                Some("escaped_job" | "cycle_failure" | "disconnect_marker")
+                Some("escaped_job" | "cycle_failure" | "disconnect_marker" | "processing")
             )
         })
         .collect();
     assert_eq!(
         cases.len(),
-        6,
-        "three branches, each with/without ambient correlation"
+        12,
+        "all four reference worker branches, including three processing categories and both correlation modes"
     );
     let mut failed = Vec::new();
     for case in cases {
@@ -525,4 +689,5 @@ pub async fn assert_repository_failure_privacy(pool: &PgPool) {
         failed.is_empty(),
         "native privacy replay failed: {failed:?}"
     );
+    assert_classified_errors_unchanged(pool).await;
 }

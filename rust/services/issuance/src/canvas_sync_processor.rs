@@ -481,12 +481,11 @@ impl NativeCanvasSyncProcessor {
             ));
         }
         if let Some(retry_after_seconds) = retry_after {
-            return Err(CanvasSyncProcessingError {
-                code: "canvas_rate_limited",
-                summary: "Canvas rate limited one or more authoritative evidence reads",
-                retryable: true,
-                retry_after_seconds: Some(retry_after_seconds),
-            });
+            return Err(CanvasSyncProcessingError::retryable(
+                "canvas_rate_limited",
+                "Canvas rate limited one or more authoritative evidence reads",
+            )
+            .with_retry_after(retry_after_seconds));
         }
         if checked.is_empty() {
             return Err(CanvasSyncProcessingError::retryable(
@@ -680,12 +679,11 @@ impl NativeCanvasSyncProcessor {
                     Err(CanvasProviderReadError::RateLimited {
                         retry_after_seconds,
                     }) => {
-                        return Err(CanvasSyncProcessingError {
-                            code: "canvas_rate_limited",
-                            summary: "Canvas background evidence could not be read",
-                            retryable: true,
-                            retry_after_seconds: Some(retry_after_seconds),
-                        });
+                        return Err(CanvasSyncProcessingError::retryable(
+                            "canvas_rate_limited",
+                            "Canvas background evidence could not be read",
+                        )
+                        .with_retry_after(retry_after_seconds));
                     }
                     Err(_) => {} // Preserve the current observation head.
                 }
@@ -842,12 +840,11 @@ fn provider_processing_error(error: CanvasProviderReadError) -> CanvasSyncProces
     match error {
         CanvasProviderReadError::RateLimited {
             retry_after_seconds,
-        } => CanvasSyncProcessingError {
-            code: "canvas_rate_limited",
-            summary: "Canvas background evidence could not be read",
-            retryable: true,
-            retry_after_seconds: Some(retry_after_seconds),
-        },
+        } => CanvasSyncProcessingError::retryable(
+            "canvas_rate_limited",
+            "Canvas background evidence could not be read",
+        )
+        .with_retry_after(retry_after_seconds),
         CanvasProviderReadError::InvalidConfiguration => CanvasSyncProcessingError::terminal(
             "canvas_requirements_invalid",
             "Canvas evidence requirements are invalid",
