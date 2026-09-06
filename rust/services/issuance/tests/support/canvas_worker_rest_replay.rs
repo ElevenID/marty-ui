@@ -167,18 +167,59 @@ pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> Work
 }
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &str) {
-    let fixture = prepare(pool, origin, scenario).await;
+    let fixture = prepare(
+        pool,
+        origin,
+        if scenario == "retry-after" {
+            "rest"
+        } else {
+            scenario
+        },
+    )
+    .await;
     let (spec, shared) = (fixture.spec, fixture.shared);
-    let reference: Value = serde_json::from_str(match scenario {
+    let mut retry_stages = Value::Null;
+    let mut reference: Value = serde_json::from_str(match scenario {
         "rest" => include_str!("../../../../../contracts/canvas-worker-rest-oracle.json"),
         "facts" => include_str!("../../../../../contracts/canvas-worker-facts-oracle.json"),
         "retry" => include_str!("../../../../../contracts/canvas-worker-retry-oracle.json"),
+        "retry-after" => {
+            include_str!("../../../../../contracts/canvas-worker-retry-after-oracle.json")
+        }
         _ => unreachable!(),
     })
     .unwrap();
-    let stages = spec["stages"].as_array().unwrap();
+    if scenario == "retry-after" {
+        let name = std::env::var("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE").unwrap();
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        let cases = matrix["cases"].as_array().unwrap();
+        let matches = cases
+            .iter()
+            .filter(|case| case["name"] == name)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "unknown or duplicate Retry-After case");
+        retry_stages = json!([matches[0]]);
+        reference = reference[&name].clone();
+    }
+    let stages = if scenario == "retry-after" {
+        &retry_stages
+    } else {
+        &spec["stages"]
+    }
+    .as_array()
+    .unwrap();
     let observations = reference["observations"].as_array().unwrap();
-    assert_eq!(stages.len(), if scenario == "retry" { 5 } else { 4 });
+    assert_eq!(
+        stages.len(),
+        match scenario {
+            "retry" => 5,
+            "retry-after" => 1,
+            _ => 4,
+        }
+    );
     assert_eq!(stages.len(), observations.len());
     for (index, (stage, expected)) in stages.iter().zip(observations).enumerate() {
         assert_eq!(stage["name"], expected["name"]);
@@ -269,5 +310,19 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             assert_eq!(observed, expected[key], "{key} in {}", stage["name"]);
         }
         fixture.assert_preserved(pool).await;
+        if scenario == "retry-after" {
+            let (available_at, updated_at): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
+                sqlx::query_as("SELECT available_at,updated_at FROM issuance_service.canvas_evidence_sync_jobs")
+                    .fetch_one(pool).await.unwrap();
+            // Transient synthetic timing evidence only. The HTTPS parent checks
+            // this actual deadline against its emitted header, never a mock clock.
+            println!(
+                "\nCANVAS_WORKER_RETRY_TIMING={}",
+                json!({
+                    "available_at": available_at.to_rfc3339(),
+                    "updated_at": updated_at.to_rfc3339(),
+                })
+            );
+        }
     }
 }

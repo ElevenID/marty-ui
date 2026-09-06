@@ -145,6 +145,11 @@ fn worker_facts_match_frozen_published_process() {
 }
 
 #[test]
+fn worker_retry_after_matches_frozen_published_process() {
+    assert_worker_https("retry-after");
+}
+
+#[test]
 fn worker_retry_matches_frozen_published_process() {
     assert_worker_https("retry");
 }
@@ -194,7 +199,10 @@ async fn worker_rest_native_child() {
         .await
         .unwrap();
     let scenario = std::env::var("MARTY_CANVAS_WORKER_REST_SCENARIO").unwrap();
-    assert!(matches!(scenario.as_str(), "rest" | "facts" | "retry"));
+    assert!(matches!(
+        scenario.as_str(),
+        "rest" | "facts" | "retry" | "retry-after"
+    ));
     canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, &scenario).await;
     pool.close().await;
     owned.close().unwrap();

@@ -3,6 +3,8 @@
 Status: all 24 cases passed locally and in hosted image job `101527827400`
 at `505dcf50660e3ca74004d1765bb642c47fc234e7` (CI `34048520936`).
 The hosted startup markers are recorded at 2026-09-06 17:39:03 UTC.
+That head also passed all 65 configured runtime tests in 1165.59 seconds
+(job101527827413) and Rust CodeQL34048520957.
 This extends the [image preflight](canvas-worker-image-entrypoint.md)
 and [frozen startup reference](canvas-worker-startup.md), not whole-worker
 acceptance or permission to switch deployed consumers.

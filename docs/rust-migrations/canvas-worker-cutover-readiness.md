@@ -1,9 +1,9 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `e424761f532bcba72b3c352b203fba4c7bc381bb`,
-including eight image-preflight cases and 65 configured runtime tests; newer
-24-case packaged startup passes locally and in image job101527827400 at `505dcf506`;
-that head's complete runtime job is still being checked. PR #814 draft and
+Status: latest qualified composed checkpoint `505dcf50660e3ca74004d1765bb642c47fc234e7`,
+including eight image-preflight cases, 24 packaged startup/configuration cases
+and 65 configured runtime tests (CI34048520936 and Rust CodeQL34048520957).
+The newer Retry-After replay still awaits its own Linux qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -56,7 +56,8 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized
-integer clamping. Two captures agree; native adoption remains pending. Gate 8
+integer clamping. Two captures agree; native replay is implemented but pending Linux
+execution and any demonstrated runtime corrections. Gate 8
 is not closed by this reference alone.
 
 The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual

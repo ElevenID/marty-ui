@@ -3,7 +3,8 @@
 Status: seven independently captured published-worker cases are frozen. Two
 complete captures match byte-for-byte with SHA-256
 `043023af2b132ed5be9a86be3b3c9b05832baa78f80e762234f8ac873290c017`.
-Native adoption and exact-head Linux qualification remain pending. This extends
+Native replay is implemented; actual Linux execution and any demonstrated runtime
+corrections remain pending. This extends
 [retry/rejection evidence](canvas-worker-retry-reference.md), not whole-worker
 acceptance or permission to delete or switch deployed consumers.
 
@@ -53,6 +54,30 @@ The large positive integer is therefore a specific native-adoption risk to
 reproduce through the actual worker path before changing shared parsing. Preserve
 all existing HTTP/provider behavior and stronger ownership fences; do not weaken
 this reference to match an overflow fallback.
+
+The new mandatory `worker_retry_after_matches_frozen_published_process` parent
+uses the existing native REST child and its official-schema/OAuth/process owner.
+Each case starts a separate child/database, so a short earlier retry cannot become
+eligible during another case. Every original jobs/heartbeat/facts/OAuth/issuance
+and ciphertext assertion remains intact, including native SIGINT exit 130.
+The real HTTPS parent compares the emitted request exactly, then checks the
+persisted native timestamps against the actual emitted date or frozen delay
+bounds. Transient timestamp records are not substituted for frozen expectations.
+
+Comparator tests reject missing/duplicate evidence, naive timestamps, out-of-range
+deadlines and a short overflow-fallback delay; positive date/boundary cases pass.
+Dispatch tests retain all four REST/fact and five retry stages and require seven
+separate new child executions. These fixture tests and Windows compilation are
+not native Linux parity evidence. Application parsing is unchanged pending the
+actual composed observation; this checkpoint must not be called a gate-8 pass.
+
+Native-replay checkpoint local validation: 899 Python tests passed in 44.60
+seconds, with the same existing opt-in skip; 52 affected comparator/CI tests
+passed. The filtered configured Rust command passed two entries in 43.11
+seconds: all seven published cases regenerated, while the Linux-only native
+parent returned on Windows. The 65 other entries were filtered, not executed.
+Strict all-target Clippy passed. The next full configured Linux suite has 67
+entries and must execute the new parent as well as retain all prior cases.
 
 This corpus establishes retry scheduling, not execution after a one-day delay,
 remote OAuth revocation, every header grammar, or all error/privacy boundaries.

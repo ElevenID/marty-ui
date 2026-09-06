@@ -273,6 +273,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'worker_retry_after_reference_matches_published_process: test'"
         in published
     )
+    assert (
+        "grep -Fx 'worker_retry_after_matches_frozen_published_process: test'"
+        in published
+    )
     assert "grep -Fx 'worker_facts_match_frozen_published_process: test'" in published
     assert (
         "grep -Fx 'worker_facts_reference_matches_published_process: test'" in published
