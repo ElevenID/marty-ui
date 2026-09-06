@@ -262,6 +262,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_concurrent() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_concurrent",
+                "worker-concurrent",
+                "worker_concurrent",
+                "MARTY_CANVAS_WORKER_CONCURRENT_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_provider_final() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -493,6 +506,7 @@ impl PublishedDatabase {
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
+                | "worker_concurrent"
         );
         if worker_https {
             let index = arguments.len() - 2;
@@ -571,6 +585,7 @@ impl PublishedDatabase {
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
+                | "worker_concurrent"
         ) {
             consumer_helpers.extend(
                 [
@@ -586,14 +601,17 @@ impl PublishedDatabase {
                 }),
             );
         }
-        if matches!(script, "worker_provider_recovery" | "worker_provider_final") {
+        if matches!(
+            script,
+            "worker_provider_recovery" | "worker_provider_final" | "worker_concurrent"
+        ) {
             let path = "scripts/run_canvas_worker_provider_signals_oracle.py";
             consumer_helpers.push(format!(
                 "type=bind,source={},target=/verification/{path},readonly",
                 root.join(path).display()
             ));
         }
-        if script == "worker_provider_final" {
+        if matches!(script, "worker_provider_final" | "worker_concurrent") {
             let path = "scripts/run_canvas_worker_provider_recovery_oracle.py";
             consumer_helpers.push(format!(
                 "type=bind,source={},target=/verification/{path},readonly",

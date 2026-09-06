@@ -130,6 +130,11 @@ def prepare():
                 )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
             (
+                "MARTY_CANVAS_WORKER_CONCURRENT_ORACLE",
+                "worker_concurrent",
+                "worker_concurrent",
+            ),
+            (
                 "MARTY_CANVAS_WORKER_PROVIDER_FINAL_ORACLE",
                 "worker_provider_final",
                 "worker_provider_final",

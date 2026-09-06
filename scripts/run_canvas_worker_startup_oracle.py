@@ -103,6 +103,20 @@ def observe(engine, case):
         finish_worker(child)
 
 
+def worker_source_sha256():
+    return {
+        name: hashlib.sha256(
+            Path(importlib.util.find_spec(name).origin)
+            .read_text(encoding="utf-8")
+            .encode()
+        ).hexdigest()
+        for name in [
+            "issuance.canvas_worker",
+            "issuance.infrastructure.api.canvas_routes",
+        ]
+    }
+
+
 def run():
     scenarios = json.loads(
         Path("/verification/contracts/canvas-worker-startup-scenarios.json").read_text()
@@ -115,16 +129,6 @@ def run():
     return {
         "schema": "marty.canvas-worker-startup-oracle/v1",
         "python": sys.version.split()[0],
-        "source_sha256": {
-            name: hashlib.sha256(
-                Path(importlib.util.find_spec(name).origin)
-                .read_text(encoding="utf-8")
-                .encode()
-            ).hexdigest()
-            for name in [
-                "issuance.canvas_worker",
-                "issuance.infrastructure.api.canvas_routes",
-            ]
-        },
+        "source_sha256": worker_source_sha256(),
         "cases": observations,
     }

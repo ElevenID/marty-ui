@@ -33,6 +33,12 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [concurrent scheduler reference](rust-migrations/canvas-worker-concurrent.md)
+has two matching captures and a mandatory regeneration gate. Two real schedulers
+are observed waiting on a fixture-owned database barrier before simultaneous
+release; exactly one job/provider request succeeds and both workers remain alive.
+Native replay, crash-reclaimer concurrency and changed-target races remain open.
+
 The [final-attempt crash reference](rust-migrations/canvas-worker-provider-final.md)
 has two identical independent captures and a mandatory regeneration gate. After
 actual attempt-eight renewal and forced process loss, real lease expiry leads

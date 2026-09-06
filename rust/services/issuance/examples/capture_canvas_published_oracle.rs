@@ -35,9 +35,10 @@ async fn main() -> Result<(), String> {
         "worker-provider-renewal" => PublishedDatabase::start_with_worker_provider_recovery("renewal").await?,
         "worker-provider-recovery" => PublishedDatabase::start_with_worker_provider_recovery("recovery").await?,
         "worker-provider-final" => PublishedDatabase::start_with_worker_provider_final().await?,
+        "worker-concurrent" => PublishedDatabase::start_with_worker_concurrent().await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-concurrent or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
                     .into(),
             )
         }

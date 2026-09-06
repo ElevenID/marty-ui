@@ -73,6 +73,12 @@ pairs agree and regeneration passes locally. Native replay passed at `d96a45ebe`
 (CI34039828427, Rust34039828424; 52 configured tests in 839.16 seconds). Final-attempt recovery,
 concurrent scheduler/reclaimer and ownership/generation fences remain separate.
 
+The [concurrent scheduler reference](canvas-worker-concurrent.md) now has two
+matching captures. PostgreSQL observes two actual worker scheduler queries
+blocked at the owned fixture barrier; after release, one job/request succeeds
+while both processes remain alive. Native replay and crash-reclaimer/changed-target
+races remain open; this does not close all of gate 5.
+
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
 matching independent captures and a mandatory regeneration gate. It seeds

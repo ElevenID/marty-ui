@@ -13,7 +13,7 @@ from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
 from run_canvas_worker_startup_oracle import DATABASE, finish_worker, start_worker
 
 
-def snapshot(engine, spec, shared):
+def snapshot(engine, spec, shared, heartbeat_sql=None):
     with engine.connect() as connection:
         state = {
             key: connection.execute(text(query)).scalar_one()
@@ -24,7 +24,8 @@ def snapshot(engine, spec, shared):
                 ("snapshot", shared["snapshot_sql"]),
                 (
                     "heartbeat",
-                    "SELECT jsonb_build_object('role',role,'metadata',metadata) FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest'",
+                    heartbeat_sql
+                    or "SELECT jsonb_build_object('role',role,'metadata',metadata) FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest'",
                 ),
             ]
         }
