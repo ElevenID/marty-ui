@@ -728,6 +728,22 @@ jobs:
           "${executables[0]}" --list | grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'
           "${executables[0]}" --list | grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'
           "${executables[0]}" --nocapture --test-threads=1
+      - name: Test native Canvas operation timeout TLS parity
+        working-directory: rust
+        run: |
+          python3 -m venv "$RUNNER_TEMP/canvas-operation-tls"
+          "$RUNNER_TEMP/canvas-operation-tls/bin/pip" install --disable-pip-version-check httpx==0.26.0 cryptography==44.0.3
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
+          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}"
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats

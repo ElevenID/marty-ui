@@ -121,7 +121,7 @@ bound write and response-header operations like the published HTTPX owner. Its
 connector layer also fixes the connection response type, preventing a simple
 external stream-wrapper replacement. Do not infer full parity from builder names.
 
-## Outstanding gates
+## Prior checkpoint outstanding gates (superseded by integration below)
 
 Prior lazy-secret implementation verification passed: 274 library tests (5.38s), five
 worker executable tests, 22 combined behavior tests, the unchanged 63-case
@@ -150,3 +150,73 @@ and lookup side effects before changing the public result/error contract.
 The status-provider URL/template, transport, persistence/recovery and all-consumer
 gates remain in force. No reachable Python was removed, no pending-only default
 was switched, and no beta, production or persistent self-host deployment changed.
+
+## Native operation HTTP integration and maintainer repair
+
+This continuation supersedes the earlier statements that the primitive was
+unwired and startup still required a positive Duration. The actual issuance
+config now retains CanvasNetworkTimeout's original IEEE bits, with all19 frozen
+full-import acceptance cases replayed through from_values. The existing shared
+MMF parser still owns lexical grammar and publish-before-status evaluation.
+
+One private CanvasOperationHttpClient now serves status synchronization and
+credentials validation. It uses Hyper's HTTP/1 framing, separately scoped TCP
+and TLS connection deadlines, and scoped read/write budgets. Response-read
+timing starts after request headers/body flush; split writes retain the intended
+header/body boundary. The response stream owns the connection task, and timeout,
+caller cancellation or response drop closes it. No shared pool, redirects or
+proxy is introduced. Production TLS uses rustls platform verification and the
+original host; the synthetic exact-leaf trust override exists only in the test
+child. Shared origin resolution/pinning is extracted without changing the
+existing catalog/OAuth/worker HTTP policy.
+
+The issuance crate adds eight direct dependencies already present in Cargo.lock:
+bytes, http, http-body-util, hyper, hyper-util, rustls, rustls-platform-verifier
+and tokio-rustls. No locked package versions change. The main validation assembly
+uses the new transport; the lifecycle factory remains a candidate, not a live
+default cutover. Neither source assembly constitutes a deployment.
+
+All17 native TLS observations match the unchanged published oracle using actual
+startup config. CI now requires explicit artifact discovery and the configured
+child replay, not credit from the unconfigured child's early return. The CI
+httpx0.26.0/cryptography44.0.3 fixture dependencies were installed into an isolated
+local venv and the native replay passed there too. Published-image dependency
+observations remain independently recorded; local transitive versions are not
+asserted to equal that image.
+
+Review found another transport consumer gap: validation returned successful
+headers before reading the body. It now drains successful bodies without storing
+them, preserving HTTPX get() completion semantics. A real socket regression
+failed before repair (the prematurely dropped response aborted the progressing
+server) and passes after it: progressing response, truncated response and stalled
+response. Split-header/read-budget ordering and connection cancellation/drop
+regressions pass as well.
+
+Hosted head40fccb65e failed both Python lint and release-contract ownership checks
+on the TLS fixture imports. Four exact path/statement/count allowances now state
+the test-only ephemeral certificate rationale; no service implementation is
+approved. A regression verifies the same imports in a service remain rejected,
+and an additional copy in the fixture is rejected. The guard implementation and
+scan scope are unchanged. This is test infrastructure, not new Python product
+cryptography. No certificate, private key or machine trust is persisted.
+
+Local integration qualification:285 library tests (5.79s),5 worker tests,
+22 behavior tests (0.01s),35 ownership/workflow tests (1.59s), strict all-target
+Clippy (15.26s), and native17-case TLS replay pass. The initial full configured
+20-test schema integration run passed (132.28s). After the response-completion
+repair, one full run failed19/20 at lifecycle database cleanup (Docker rm failed,
+236.80s). No labeled containers remained after its terminal failure; no daemon
+restart or cleanup relaxation was performed. The next complete run passes all20
+tests (126.72s), including both lifecycle variants and all published imports/TLS.
+Final library rerun passes285 (11.53s), all-target Clippy passes (66s), and the
+expanded ownership/workflow/image set passes40 (9.26s). Native17 TLS passes again
+against the final executable. No cases were ignored or filtered from the full
+schema run. New hosted qualification remains required.
+
+Still open: full managed-validation invalid-UTF-8 HTTP response and unsupported
+provider/token-lookup precedence; URL/port/template and response-encoding parity;
+backpressured full-request writes, early server replies and TLS handshake edge
+cases; failure-excerpt truncation versus full response completion; persistence,
+recovery and all-consumer cutover. The17-case socket baseline is not proof of all
+those behaviors. Reachable Python stays until its replacement gates pass; no
+runtime feature, other-worker change or deployment was removed.

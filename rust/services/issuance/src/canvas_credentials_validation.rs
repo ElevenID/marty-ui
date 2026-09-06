@@ -14,11 +14,13 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use url::Url;
 
+use crate::canvas_network_timeout::CanvasNetworkTimeout;
+use crate::canvas_operation_http::CanvasOperationHttpClient;
 use crate::canvas_operator_secret::{
     resolve_canvas_operator_token, CanvasOperatorSecretError, CanvasOperatorSecretReader,
     FileCanvasOperatorSecretReader,
 };
-use crate::canvas_provider_http::{client_for_canvas_origin, CanvasHttpClientPolicy};
+use crate::canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy};
 
 #[cfg(test)]
 use crate::canvas_credentials_protocol::MAX_EXCERPT_CHARS;
@@ -440,14 +442,14 @@ impl CanvasCredentialsValidator for CanvasCredentialsValidationService {
 
 #[derive(Clone)]
 pub struct HttpCanvasCredentialsValidationTransport {
-    policy: CanvasHttpClientPolicy,
+    client: CanvasOperationHttpClient,
 }
 
 impl std::fmt::Debug for HttpCanvasCredentialsValidationTransport {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("HttpCanvasCredentialsValidationTransport")
-            .field("policy", &self.policy)
+            .field("client", &self.client)
             .finish()
     }
 }
@@ -455,7 +457,17 @@ impl std::fmt::Debug for HttpCanvasCredentialsValidationTransport {
 impl HttpCanvasCredentialsValidationTransport {
     #[must_use]
     pub fn new(policy: CanvasHttpClientPolicy) -> Self {
-        Self { policy }
+        let timeout = CanvasNetworkTimeout::from_seconds(policy.timeout.as_secs_f64());
+        Self::with_operation_timeout(CanvasOriginPolicy::from(&policy), timeout)
+    }
+
+    pub fn with_operation_timeout(
+        policy: CanvasOriginPolicy,
+        timeout: CanvasNetworkTimeout,
+    ) -> Self {
+        Self {
+            client: CanvasOperationHttpClient::new(policy, timeout),
+        }
     }
 }
 
@@ -467,14 +479,22 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
         validation_url: &str,
         token: &str,
     ) -> Result<CanvasCredentialsProviderResponse, ()> {
-        let (client, _) = client_for_canvas_origin(api_origin, &self.policy).await?;
-        let mut response = client
-            .get(validation_url)
-            .header(ACCEPT, "application/json")
-            .header(AUTHORIZATION, format!("Bearer {token}"))
-            .send()
+        let target = Url::parse(validation_url).map_err(|_| ())?;
+        if target.origin() != Url::parse(api_origin).map_err(|_| ())?.origin() {
+            return Err(());
+        }
+        let mut headers = http::HeaderMap::new();
+        headers.insert(ACCEPT, http::HeaderValue::from_static("application/json"));
+        headers.insert(
+            AUTHORIZATION,
+            http::HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| ())?,
+        );
+        let mut response = self
+            .client
+            .send(http::Method::GET, target, headers, Vec::new())
             .await
-            .map_err(|_| ())?;
+            .map_err(|_| ())?
+            .response;
         let status_code = response.status().as_u16();
         let request_id = response
             .headers()
@@ -482,6 +502,10 @@ impl CanvasCredentialsValidationTransport for HttpCanvasCredentialsValidationTra
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let response_excerpt = if (200..300).contains(&status_code) {
+            // Published HTTPX get() consumes the body before returning. Drain
+            // without retaining it: headers alone cannot attest success when a
+            // later read stalls or the peer truncates the response.
+            while response.chunk().await.map_err(|_| ())?.is_some() {}
             None
         } else {
             Some(read_failure_excerpt(&mut response).await?)
@@ -538,6 +562,65 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn successful_status_requires_complete_body_with_progress_deadlines() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for mode in ["progress", "truncated", "stalled"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nx-request-id: synthetic-body\r\n\r\nr").await.unwrap();
+                if mode == "progress" {
+                    for byte in b"esult" {
+                        tokio::time::sleep(Duration::from_millis(75)).await;
+                        socket.write_all(&[*byte]).await.unwrap();
+                    }
+                } else if mode == "stalled" {
+                    // Only the owned client can close this incomplete response.
+                    assert_eq!(socket.read(&mut byte).await.unwrap(), 0);
+                }
+            });
+            let transport = HttpCanvasCredentialsValidationTransport::with_operation_timeout(
+                CanvasOriginPolicy {
+                    allow_http_localhost: true,
+                    ..Default::default()
+                },
+                CanvasNetworkTimeout::from_seconds(0.2),
+            );
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                transport.get(&origin, &origin, "synthetic-token"),
+            )
+            .await
+            .unwrap();
+            if mode == "progress" {
+                let response = result.unwrap();
+                assert_eq!(response.status_code, 200);
+                assert_eq!(response.request_id.as_deref(), Some("synthetic-body"));
+                assert!(response.response_excerpt.is_none());
+            } else {
+                assert!(
+                    result.is_err(),
+                    "{mode} response must not report validation success"
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
 
     struct CountingOperatorFile(std::sync::atomic::AtomicUsize);
     #[async_trait]

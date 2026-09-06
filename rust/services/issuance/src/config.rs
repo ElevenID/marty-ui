@@ -11,6 +11,7 @@ use serde_json::{json, Map, Value};
 
 use crate::canvas_credentials_status::CanvasCredentialsStatusConfig;
 use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
+use crate::canvas_network_timeout::CanvasNetworkTimeout;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
@@ -64,7 +65,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_credentials_api_origins: Vec<String>,
     pub canvas_credentials_validation: CanvasCredentialsValidationConfig,
     pub canvas_credentials_status: CanvasCredentialsStatusConfig,
-    pub canvas_credentials_validation_timeout: Duration,
+    pub canvas_credentials_validation_timeout: CanvasNetworkTimeout,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
@@ -607,10 +608,8 @@ impl IssuanceServiceConfig {
                 format!("{name} must be a number of seconds"),
             )
         })?;
-        let canvas_credentials_validation_timeout = positive_float_seconds(
-            status_timeout,
-            "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-        )?;
+        let canvas_credentials_validation_timeout =
+            CanvasNetworkTimeout::from_seconds(status_timeout);
         let canvas_allow_private_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
@@ -1046,21 +1045,6 @@ fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> 
     optional_trimmed(values.get(name).cloned())
 }
 
-fn positive_float_seconds(seconds: f64, name: &str) -> Result<Duration, MmfError> {
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return Err(MmfError::new(
-            ErrorCode::Configuration,
-            format!("{name} must be a positive number of seconds"),
-        ));
-    }
-    Duration::try_from_secs_f64(seconds).map_err(|_| {
-        MmfError::new(
-            ErrorCode::Configuration,
-            format!("{name} exceeds the current HTTP duration range"),
-        )
-    })
-}
-
 fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
     let parsed = url::Url::parse(value).map_err(|error| {
         MmfError::new(
@@ -1205,6 +1189,7 @@ fn validate_production_grpc_service_token(
 
 #[cfg(test)]
 mod tests {
+    use crate::canvas_network_timeout::CanvasNetworkTimeout;
     use mmf_core::ErrorCode;
 
     use super::{validate_production_grpc_service_token, IssuanceServiceConfig};
@@ -1267,7 +1252,7 @@ mod tests {
         assert_eq!(config.token_rate_window, std::time::Duration::from_secs(60));
         assert_eq!(
             config.canvas_credentials_validation_timeout,
-            std::time::Duration::from_secs(20)
+            CanvasNetworkTimeout::from_seconds(20.0)
         );
         assert_eq!(
             config.canvas_credentials_validation,
@@ -1388,7 +1373,7 @@ mod tests {
         assert_eq!(provider.allowed_api_origins.len(), 2);
         assert_eq!(
             config.canvas_credentials_validation_timeout,
-            std::time::Duration::from_millis(2_500)
+            CanvasNetworkTimeout::from_seconds(2.5)
         );
         let debug = format!("{config:?}");
         for secret_value in [
@@ -1402,7 +1387,7 @@ mod tests {
             assert!(!debug.contains(secret_value));
         }
 
-        for value in ["0", "-1", "not-a-number", "NaN", "inf"] {
+        for value in ["", "not-a-number", "1__0"] {
             let error = IssuanceServiceConfig::from_values(values(&[(
                 "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
                 value,
@@ -1477,7 +1462,7 @@ mod tests {
         );
         assert_eq!(
             config.canvas_credentials_validation_timeout,
-            std::time::Duration::from_millis(2750)
+            CanvasNetworkTimeout::from_seconds(2.75)
         );
         let debug = format!("{config:?}");
         for private in [
@@ -1509,7 +1494,7 @@ mod tests {
         );
         assert_eq!(
             direct.canvas_credentials_validation_timeout,
-            std::time::Duration::from_millis(3250)
+            CanvasNetworkTimeout::from_seconds(3.25)
         );
     }
 
@@ -1540,7 +1525,7 @@ mod tests {
     }
 
     #[test]
-    fn canvas_timeout_grammar_preserves_order_and_range_errors_do_not_panic() {
+    fn canvas_timeout_grammar_preserves_order_and_unrestricted_range() {
         for raw in ["  2.5  ", "２.５", "2_5e-1"] {
             let config = IssuanceServiceConfig::from_values(values(&[(
                 "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
@@ -1549,7 +1534,7 @@ mod tests {
             .unwrap();
             assert_eq!(
                 config.canvas_credentials_validation_timeout,
-                std::time::Duration::from_millis(2500)
+                CanvasNetworkTimeout::from_seconds(2.5)
             );
         }
         let error = IssuanceServiceConfig::from_values(values(&[
@@ -1560,8 +1545,7 @@ mod tests {
         assert!(error
             .to_string()
             .contains("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS"));
-        // This remains a documented consumer-adoption gate, not full Python
-        // range parity. The existing startup conversion must never panic.
+        // Preserve configuration accepted by the independently verified import.
         let huge = std::panic::catch_unwind(|| {
             IssuanceServiceConfig::from_values(values(&[(
                 "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
@@ -1569,7 +1553,46 @@ mod tests {
             )]))
         })
         .expect("range conversion must not panic");
-        assert_eq!(huge.unwrap_err().code, ErrorCode::Configuration);
+        assert_eq!(
+            huge.unwrap()
+                .canvas_credentials_validation_timeout
+                .seconds(),
+            1e30
+        );
+    }
+
+    #[test]
+    fn canvas_startup_acceptance_matches_all_published_import_observations() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-provider-configuration-scenarios.json"
+        ))
+        .unwrap();
+        let oracle: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-provider-configuration-oracle.json"
+        ))
+        .unwrap();
+        let cases = cases["timeouts"].as_array().unwrap();
+        let expected = oracle["timeouts"].as_array().unwrap();
+        assert_eq!(cases.len(), 19);
+        assert_eq!(cases.len(), expected.len());
+        for (case, expected) in cases.iter().zip(expected) {
+            assert_eq!(case["name"], expected["name"]);
+            let mut environment = Vec::new();
+            for (key, name) in [
+                ("publish", "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS"),
+                ("status", "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS"),
+            ] {
+                if let Some(raw) = case[key].as_str() {
+                    environment.push((name.to_owned(), raw.to_owned()));
+                }
+            }
+            let result = IssuanceServiceConfig::from_values(environment);
+            if expected.get("error_class").is_some() {
+                assert!(result.is_err(), "{}", case["name"]);
+            } else {
+                result.unwrap();
+            }
+        }
     }
 
     #[test]

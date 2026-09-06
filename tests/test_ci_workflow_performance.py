@@ -126,6 +126,25 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "[[ ${#executables[@]} == 1" in gate["run"]
 
 
+def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    gate = next(
+        step
+        for step in steps
+        if step.get("name") == "Test native Canvas operation timeout TLS parity"
+    )
+    assert "if" not in gate
+    assert not gate.get("continue-on-error", False)
+    assert (
+        "grep -Fx 'canvas_operation_http::tests::native_socket_case: test'"
+        in gate["run"]
+    )
+    assert "--native-executable" in gate["run"]
+    assert "select(.profile.test == true)" in gate["run"]
+    assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
+
+
 def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:
     _source, document = _workflow(CI_PATH)
     gate = next(

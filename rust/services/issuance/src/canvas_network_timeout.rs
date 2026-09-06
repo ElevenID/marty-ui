@@ -5,7 +5,12 @@
 //! connect, TLS, read, write or pool wait needs its own scope; this is not a total
 //! request deadline. Existing HTTP consumers are adopted only after wire parity.
 
-use std::{future::Future, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use tokio::time::Instant;
 
@@ -43,6 +48,23 @@ enum Deadline {
     Unbounded,
 }
 
+pub(crate) enum CanvasNetworkBudget {
+    Immediate,
+    Timer(Pin<Box<tokio::time::Sleep>>),
+    Unbounded,
+}
+
+impl Future for CanvasNetworkBudget {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        match self.get_mut() {
+            Self::Immediate => Poll::Ready(()),
+            Self::Unbounded => Poll::Pending,
+            Self::Timer(timer) => timer.as_mut().poll(cx),
+        }
+    }
+}
+
 impl CanvasNetworkTimeout {
     /// Store IEEE bits so configuration equality is reflexive even for NaN and
     /// does not erase signed zero. No positivity or finite-range restriction.
@@ -73,6 +95,16 @@ impl CanvasNetworkTimeout {
         now.checked_add(duration)
             .map(Deadline::At)
             .unwrap_or(Deadline::Unbounded)
+    }
+
+    pub(crate) fn budget(self) -> CanvasNetworkBudget {
+        match self.deadline(Instant::now()) {
+            Deadline::Immediate => CanvasNetworkBudget::Immediate,
+            Deadline::Unbounded => CanvasNetworkBudget::Unbounded,
+            Deadline::At(deadline) => {
+                CanvasNetworkBudget::Timer(Box::pin(tokio::time::sleep_until(deadline)))
+            }
+        }
     }
 
     /// Run one network operation. Dropping this future cancels its timer and

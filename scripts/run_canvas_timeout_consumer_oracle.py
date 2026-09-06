@@ -16,6 +16,7 @@ import importlib.metadata
 import importlib.util
 import ipaddress
 import json
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -149,7 +150,7 @@ def loopback_tls():
         thread.start()
         trust = ssl.create_default_context(cafile=str(cert))
         try:
-            yield f"https://127.0.0.1:{server.server_port}", trust
+            yield f"https://127.0.0.1:{server.server_port}", trust, cert
         finally:
             server.shutdown()
             server.server_close()
@@ -192,7 +193,7 @@ def run(source=None):
             / "contracts/canvas-timeout-consumer-scenarios.json"
         ).read_text(encoding="utf-8")
     )["cases"]
-    with loopback_tls() as (origin, trust):
+    with loopback_tls() as (origin, trust, _):
         observations = asyncio.run(observe(source, cases, origin, trust))
     return {
         "source_sha256": SOURCE_SHA256,
@@ -205,10 +206,62 @@ def run(source=None):
     }
 
 
+def run_native(executable):
+    root = Path(__file__).resolve().parents[1] / "contracts"
+    cases = json.loads((root / "canvas-timeout-consumer-scenarios.json").read_text())[
+        "cases"
+    ]
+    expected = json.loads((root / "canvas-timeout-consumer-oracle.json").read_text())[
+        "cases"
+    ]
+    observations = []
+    with loopback_tls() as (origin, _, cert):
+        for case in cases:
+            environment = dict(os.environ)
+            environment["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"] = json.dumps(case)
+            environment["MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN"] = origin
+            environment["MARTY_CANVAS_TIMEOUT_NATIVE_CERT"] = str(cert)
+            child = subprocess.run(
+                [
+                    str(executable),
+                    "canvas_operation_http::tests::native_socket_case",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ],
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+            assert child.returncode == 0, (
+                f"Native fixture child failed: {child.stdout} {child.stderr}"
+            )
+            lines = [
+                line.removeprefix("CANVAS_TIMEOUT_NATIVE=")
+                for line in child.stdout.splitlines()
+                if line.startswith("CANVAS_TIMEOUT_NATIVE=")
+            ]
+            assert len(lines) == 1, "native child must emit exactly one observation"
+            observations.append(json.loads(lines[0]))
+    assert observations == expected, {"expected": expected, "native": observations}
+    print(
+        json.dumps(
+            {"native_timeout_cases": len(observations), "status": "passed"},
+            sort_keys=True,
+        )
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-repository", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--source-repository")
+    mode.add_argument("--native-executable", type=Path)
     arguments = parser.parse_args()
+    if arguments.native_executable:
+        run_native(arguments.native_executable)
+        raise SystemExit(0)
     source = (
         subprocess.run(
             ["git", "show", SOURCE_REF],

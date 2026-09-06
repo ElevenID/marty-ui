@@ -16,6 +16,37 @@ pub struct CanvasHttpClientPolicy {
     pub allow_http_localhost: bool,
 }
 
+#[derive(Clone, Default)]
+pub struct CanvasOriginPolicy {
+    pub private_origin_allowlist: Vec<String>,
+    pub allow_private_networks: bool,
+    pub allow_http_localhost: bool,
+}
+
+impl From<&CanvasHttpClientPolicy> for CanvasOriginPolicy {
+    fn from(policy: &CanvasHttpClientPolicy) -> Self {
+        Self {
+            private_origin_allowlist: policy.private_origin_allowlist.clone(),
+            allow_private_networks: policy.allow_private_networks,
+            allow_http_localhost: policy.allow_http_localhost,
+        }
+    }
+}
+
+impl std::fmt::Debug for CanvasOriginPolicy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasOriginPolicy")
+            .field(
+                "private_origin_allowlist_count",
+                &self.private_origin_allowlist.len(),
+            )
+            .field("allow_private_networks", &self.allow_private_networks)
+            .field("allow_http_localhost", &self.allow_http_localhost)
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for CanvasHttpClientPolicy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -35,6 +66,25 @@ pub async fn client_for_canvas_origin(
     canvas_base_url: &str,
     policy: &CanvasHttpClientPolicy,
 ) -> Result<(Client, Url), ()> {
+    let (origin, pinned) =
+        resolve_canvas_origin(canvas_base_url, &CanvasOriginPolicy::from(policy)).await?;
+    let host = origin.host_str().ok_or(())?;
+    let client = Client::builder()
+        .timeout(policy.timeout)
+        .redirect(Policy::none())
+        .no_proxy()
+        .resolve(host, pinned)
+        .build()
+        .map_err(|_| ())?;
+    Ok((client, origin))
+}
+
+/// One origin/DNS policy owner for both existing total-deadline clients and the
+/// operation-deadline candidate. This function does not apply request timeouts.
+pub(crate) async fn resolve_canvas_origin(
+    canvas_base_url: &str,
+    policy: &CanvasOriginPolicy,
+) -> Result<(Url, SocketAddr), ()> {
     let origin = Url::parse(canvas_base_url).map_err(|_| ())?;
     let host = origin.host_str().ok_or(())?;
     let http_localhost = origin.scheme() == "http"
@@ -76,14 +126,7 @@ pub async fn client_for_canvas_origin(
         return Err(());
     }
     let pinned = preferred_address(&addresses).ok_or(())?;
-    let client = Client::builder()
-        .timeout(policy.timeout)
-        .redirect(Policy::none())
-        .no_proxy()
-        .resolve(host, pinned)
-        .build()
-        .map_err(|_| ())?;
-    Ok((client, origin))
+    Ok((origin, pinned))
 }
 
 fn normalized_origin(url: &Url) -> Option<String> {

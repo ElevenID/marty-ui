@@ -16,10 +16,12 @@ use crate::{
         CanvasCredentialsSecretResolver, CanvasCredentialsValidationConfig,
     },
     canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
+    canvas_network_timeout::CanvasNetworkTimeout,
+    canvas_operation_http::{CanvasOperationHttpClient, CanvasOperationHttpError},
     canvas_operator_secret::{
         resolve_canvas_operator_token, CanvasOperatorSecretReader, FileCanvasOperatorSecretReader,
     },
-    canvas_provider_http::{client_for_canvas_origin, CanvasHttpClientPolicy},
+    canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy},
     credential_management::{CredentialLifecycleAction, CredentialManagementPortError},
     python_value::{python_string, python_truthy, strip},
 };
@@ -98,12 +100,14 @@ impl CanvasCredentialsStatusService {
         Self::new(
             config.canvas_credentials_status.clone(),
             secrets,
-            Arc::new(HttpCanvasStatusTransport::new(CanvasHttpClientPolicy {
-                timeout: config.canvas_credentials_validation_timeout,
-                private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                allow_private_networks: config.canvas_allow_private_base_urls,
-                allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-            })),
+            Arc::new(HttpCanvasStatusTransport::with_operation_timeout(
+                CanvasOriginPolicy {
+                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
+                    allow_private_networks: config.canvas_allow_private_base_urls,
+                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
+                },
+                config.canvas_credentials_validation_timeout,
+            )),
         )
     }
 
@@ -450,12 +454,22 @@ fn error(detail: impl Into<String>) -> CredentialManagementPortError {
 
 #[derive(Clone, Debug)]
 pub struct HttpCanvasStatusTransport {
-    policy: CanvasHttpClientPolicy,
+    client: CanvasOperationHttpClient,
 }
 
 impl HttpCanvasStatusTransport {
     pub fn new(policy: CanvasHttpClientPolicy) -> Self {
-        Self { policy }
+        let timeout = CanvasNetworkTimeout::from_seconds(policy.timeout.as_secs_f64());
+        Self::with_operation_timeout(CanvasOriginPolicy::from(&policy), timeout)
+    }
+
+    pub fn with_operation_timeout(
+        policy: CanvasOriginPolicy,
+        timeout: CanvasNetworkTimeout,
+    ) -> Self {
+        Self {
+            client: CanvasOperationHttpClient::new(policy, timeout),
+        }
     }
 }
 
@@ -468,26 +482,35 @@ impl CanvasStatusTransport for HttpCanvasStatusTransport {
         }
         // Pin the actual request destination, including operator URL templates;
         // never construct a client for one origin then send a token to another.
-        let (client, _) =
-            client_for_canvas_origin(&parsed.origin().ascii_serialization(), &self.policy)
-                .await
-                .map_err(|()| "Provider origin is unavailable or disallowed")?;
-        let mut builder = client
-            .request(request.method, parsed)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .json(&request.body);
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
         if let Some(token) = request.token {
-            builder = builder.bearer_auth(token);
+            headers.insert(
+                http::header::AUTHORIZATION,
+                http::HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|_| "Provider request unavailable")?,
+            );
         }
-        let response = builder.send().await.map_err(|error| {
-            if error.is_timeout() {
-                "Provider request timed out"
-            } else {
-                "Provider request unavailable"
-            }
-        })?;
-        let status = response.status().as_u16();
+        let body = serde_json::to_vec(&request.body).map_err(|_| "Provider request unavailable")?;
+        let response = self
+            .client
+            .send(request.method, parsed, headers, body)
+            .await
+            .map_err(|error| match error {
+                CanvasOperationHttpError::Origin => "Provider origin is unavailable or disallowed",
+                CanvasOperationHttpError::Timeout(_) => "Provider request timed out",
+                _ => "Provider request unavailable",
+            })?;
+        let status = response.response.status().as_u16();
         let request_id = response
+            .response
             .headers()
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())

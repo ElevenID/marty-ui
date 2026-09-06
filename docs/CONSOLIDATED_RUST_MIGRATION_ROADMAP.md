@@ -31,7 +31,42 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-05
 
-### Current operations baseline and recovery repair
+### Current transport integration and merge gates
+
+The native operation-deadline owner is now wired in the candidate source to both
+status synchronization and credentials-validation HTTP. Startup retains the
+original floating-point value rather than rejecting Python-accepted timeout
+ranges. All19 published import-acceptance cases replay through the actual config,
+and all17 native TLS cases match the unchanged published socket oracle using the
+new transport and real config. Shared origin/DNS policy remains authoritative;
+catalog, OAuth and worker HTTP retain their existing separately qualified policy.
+
+Maintainer review also corrected validation returning success at response headers:
+it now drains successful bodies without retaining them, rejects truncation/stalls,
+and accepts ongoing progress beyond one total timeout. The new regression failed
+before repair. Local qualification passes285 library tests,5 worker tests,
+22 behavior tests,40 ownership/workflow/image tests and strict all-target Clippy.
+Final full configured schema qualification passes all20 tests (126.72s), including
+both lifecycle variants. An earlier19/20 run failed at Docker cleanup; it is
+retained as failed evidence, not reclassified or masked by excluding a test.
+
+Draft#814 remains unmerged. Hosted head40fccb65e has two failures with one cause:
+the loopback certificate fixture's four Python crypto imports lacked ownership
+metadata. Exact test-only allowances now document those imports; a regression
+proves they authorize neither service imports nor duplicate fixture imports.
+No guard logic, scan scope or production crypto owner was relaxed. Native TLS
+replay is now a mandatory CI step. These integration changes require fresh hosted
+checks after commit; prior-head green checks cannot qualify them.
+
+Remaining cutover gates include managed-validation error/lookup ordering,
+URL/template/response-encoding behavior, backpressured writes and early replies,
+whole-worker/runtime adoption and every deployment consumer. No reachable Python
+was deleted or pending-only lifecycle default switched. No deployment changed.
+The host restart interrupts beta soak; current beta health is not inferred from
+test-container availability. See the latest section in
+[provider configuration evidence](rust-migrations/canvas-provider-configuration.md).
+
+### Earlier operations qualification history (superseded where noted above)
 
 Docker became available again. The first full schema run passed19/20, including
 the19 fresh adapter imports; the remaining TLS probe lacked writable certificate
