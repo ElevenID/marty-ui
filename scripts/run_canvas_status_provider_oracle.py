@@ -19,14 +19,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
-async def observe(cases=None, *, delivery_lifecycle=False):
+async def observe(cases=None, *, delivery_lifecycle=False, credential_routes=False):
     from issuance.domain.entities import CredentialStatus
     from issuance.infrastructure.adapters import canvas_credentials_adapter as adapter
     from issuance.infrastructure.adapters.postgres_repository import (
         PostgresIssuanceRepository,
     )
 
-    if delivery_lifecycle:
+    if delivery_lifecycle or credential_routes:
         from issuance.infrastructure.api import routes as lifecycle_routes
 
         assert (
@@ -71,6 +71,163 @@ async def observe(cases=None, *, delivery_lifecycle=False):
                     )
                 )
             ).scalar_one()
+
+    async def credential_snapshot():
+        async with engine.connect() as connection:
+            return (
+                await connection.execute(
+                    text(
+                        "SELECT to_jsonb(c) FROM issuance_service.issued_credentials c "
+                        "WHERE id='credential-review'"
+                    )
+                )
+            ).scalar_one()
+
+    async def observe_credential_route(route_action, case, requests, sequence):
+        from issuance import main
+        from issuance.domain.ports import IIssuanceRepository
+        from issuance.infrastructure.adapters.postgres_repository import (
+            issuance_events_table,
+        )
+        from sqlalchemy import select
+
+        original = await credential_snapshot()
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE issuance_service.issued_credentials SET status=:status,"
+                    "revoked=false,revoked_at=NULL,revocation_reason=NULL "
+                    "WHERE id='credential-review'"
+                ),
+                {"status": "suspended" if route_action == "reinstate" else "active"},
+            )
+            await connection.exec_driver_sql(
+                "UPDATE issuance_service.credential_delivery_records SET "
+                'metadata=\'{"canvas_program_binding_id":"binding-review"}\','
+                "external_credential_id='external-assertion',last_error=NULL "
+                "WHERE id='delivery-provider'"
+            )
+            events_before = (
+                await connection.execute(select(issuance_events_table))
+            ).all()
+        before = await credential_snapshot()
+        delivery_before = await delivery_snapshot()
+        first_request = len(requests)
+        exceptions, publications = [], []
+        sequence.clear()
+
+        async def publication(credential_id, action, reason=None, credential=None):
+            sequence.append("publication")
+            publications.append(
+                {
+                    "credential_id": credential_id,
+                    "action": action,
+                    "reason": reason,
+                    "argument_status": credential.status.value,
+                    "persisted_status": (await credential_snapshot())["status"],
+                }
+            )
+            return {"success": True}
+
+        save_credential = repo.save_credential
+        save_delivery = repo.save_delivery_record
+
+        async def observed_save_credential(value):
+            await save_credential(value)
+            sequence.append("credential_saved")
+
+        async def observed_save_delivery(value):
+            sequence.append("delivery_save_attempt")
+            try:
+                await save_delivery(value)
+            except Exception:
+                sequence.append("delivery_save_failed")
+                raise
+            sequence.append("delivery_saved")
+
+        with (
+            patch.dict(os.environ, {"ISSUANCE_API_KEY": "synthetic-validation-key"}),
+            patch.object(
+                lifecycle_routes, "_delegate_to_revocation_profile", publication
+            ),
+            patch.object(repo, "save_credential", observed_save_credential),
+            patch.object(repo, "save_delivery_record", observed_save_delivery),
+        ):
+            app = main.create_app()
+            app.dependency_overrides[IIssuanceRepository] = lambda: repo
+
+            async def observed_app(scope, receive, send):
+                try:
+                    await app(scope, receive, send)
+                except Exception as error:
+                    exceptions.append(type(error).__name__)
+                    raise
+
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(
+                    app=observed_app, raise_app_exceptions=False
+                ),
+                base_url="http://published.invalid",
+            ) as session:
+                response = await session.post(
+                    f"/v1/issuance/credentials/credential-review/{route_action}",
+                    headers={
+                        "x-api-key": "synthetic-validation-key",
+                        "x-organization-id": "org-review",
+                        "x-request-id": "synthetic-credential-route",
+                    },
+                    json={"reason": case.get("reason", "synthetic reason")},
+                )
+        after = await credential_snapshot()
+        delivery_after = await delivery_snapshot()
+        async with engine.connect() as connection:
+            events_after = (
+                await connection.execute(select(issuance_events_table))
+            ).all()
+        assert len(publications) == 1 and len(requests) - first_request == 1, (
+            "fixture must pass authentication, parsing and Canvas delivery gates",
+            route_action,
+            response.status_code,
+        )
+        assert events_before == events_after, "published route event behavior changed"
+        # Reset only this synthetic credential's lifecycle projection.
+        # The outer complete-row preservation check still covers every credential
+        # and transaction; unrelated field changes cannot be hidden by this reset.
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE issuance_service.issued_credentials c SET "
+                    "status=o.status,status_updated_at=o.status_updated_at,"
+                    "revoked=o.revoked,revoked_at=o.revoked_at,"
+                    "revocation_reason=o.revocation_reason "
+                    "FROM jsonb_populate_record(NULL::issuance_service.issued_credentials,"
+                    "CAST(:original AS jsonb)) o WHERE c.id='credential-review'"
+                ),
+                {"original": json.dumps(original)},
+            )
+        route_requests = requests[first_request:]
+        del requests[first_request:]
+        return {
+            "action": route_action,
+            "http_status": response.status_code,
+            "content_type": response.headers.get("content-type"),
+            "body": normalize(response.json())
+            if response.headers.get("content-type", "").startswith("application/json")
+            else response.text,
+            "exceptions": exceptions,
+            "publication": publications,
+            "sequence": list(sequence),
+            "requests": route_requests,
+            "credential_before": normalize(before),
+            "credential_after": normalize(after),
+            "credential_changed_columns": sorted(
+                name for name in before if before[name] != after[name]
+            ),
+            "delivery_before": normalize(delivery_before),
+            "delivery_after": normalize(delivery_after),
+            "delivery_row_unchanged": delivery_before == delivery_after,
+            "events_unchanged": events_before == events_after,
+        }
 
     try:
         async with engine.begin() as connection:
@@ -125,7 +282,7 @@ async def observe(cases=None, *, delivery_lifecycle=False):
                     "revoke_url_template", ""
                 ),
             }
-            requests, secrets = [], []
+            requests, secrets, sequence = [], [], []
             credential = await repo.get_credential("credential-review")
             platform = await repo.get_canvas_platform("platform-review")
             delivery = await repo.get_delivery_record("delivery-provider")
@@ -164,6 +321,7 @@ async def observe(cases=None, *, delivery_lifecycle=False):
                 return "synthetic-tenant-token" if value else None
 
             def transport(request):
+                sequence.append("provider_request")
                 authorization = request.headers.get("authorization")
                 assert authorization in (
                     None,
@@ -282,6 +440,13 @@ async def observe(cases=None, *, delivery_lifecycle=False):
                         await delivery_snapshot() == delivery_before
                     )
                     outcome["delivery_lifecycle"] = lifecycle
+                if credential_routes:
+                    outcome["credential_routes"] = [
+                        await observe_credential_route(
+                            route_action, case, requests, sequence
+                        )
+                        for route_action in ("suspend", "reinstate", "revoke")
+                    ]
             if "response_hex" in case:
                 assert outcome.get("error_class") == case["expected_error_class"], (
                     case["name"],
@@ -306,6 +471,13 @@ async def observe(cases=None, *, delivery_lifecycle=False):
                 Path(adapter.__file__).read_text(encoding="utf-8").encode()
             ).hexdigest(),
             "normalization": "validated datetime presence and synthetic bearer-token labels; selected contractual HTTP headers",
+            **(
+                {
+                    "credential_routes_boundary": "actual create_app, authenticated credential routes, provider adapter and PostgreSQL saves; only canonical publication and existing HTTP/DNS boundaries controlled; lifespan disabled",
+                }
+                if credential_routes
+                else {}
+            ),
             **(
                 {
                     "delivery_lifecycle_boundary": "actual delivery sync helper and repository save; independent synthetic starting rows; credential transition and publication not invoked",

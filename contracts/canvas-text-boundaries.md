@@ -97,9 +97,10 @@ argument encoding. Supplementary scalar text and truncated-away surrogates save
 successfully. The lifecycle route source is pinned at SHA-256
 `2b6d2eb7cec34bb4596ef9b758d8af02a3172337e89bad3b5d26b558d0dd00b7`.
 
-The new required image test regenerates this entire diagnostic artifact. It
-does not call the full credential transition/publication route and does not
-qualify a native UTF-7 decoder. Backend exception text is diagnostic provenance,
+The required image test regenerates this entire diagnostic artifact. Its initial
+delivery-helper observations did not call the full credential route; the extension
+below now does. Neither scope qualifies native response-body adoption.
+Backend exception text is diagnostic provenance,
 not a requirement to imitate SQLAlchemy SQL strings in Rust; externally visible
 failure behavior and unchanged persistence still need end-to-end native proof.
 
@@ -119,11 +120,40 @@ fixture described here remains diagnostic source evidence, not a substitute for
 that decoder corpus. Lossless response-body/metadata/error integration and full
 credential-route behavior remain open; no native streaming interface is claimed.
 
-One specific integration question remains: the current native credential route
-maps `CanvasRetryUnavailable` to HTTP 503. This delivery-helper diagnostic does
-not establish the published full credential route's response to the database
-failure. Capture that route and its credential/publication/event effects before
-choosing the native error policy; do not infer parity from the helper alone.
+### Full credential-route continuation
+
+Two independent captures agree on 36 additional observations: suspend, reinstate
+and revoke for each of the twelve existing provider cases. They invoke the actual
+published `create_app` middleware, authenticated `/v1/issuance/credentials/{id}`
+routes, Canvas provider, and PostgreSQL repository. Only canonical status
+publication and the existing synthetic HTTP/DNS ports are controlled. Repository
+save observers delegate to the real implementations without changing results.
+Application lifespan remains disabled; this is not a deployed-worker soak.
+
+All 18 retained-surrogate cases return HTTP 500, text/plain UTF-8, with body
+`Internal Server Error` and an observed DBAPIError. Publication has already
+completed and the canonical credential status has already been saved. The entire
+delivery row remains unchanged. All 18 scalar/truncated-text cases return HTTP
+200 and save the delivery projection, including provider refusals recorded as
+delivery errors. No cases add issuance-event rows in the published routes.
+
+The observed order is publication, credential save, provider request, delivery
+save attempt, then delivery success/failure. Publication observes the original
+persisted status. Each route makes exactly one publication and one provider call.
+Whole credential and delivery snapshots, exact changed credential columns, raw
+delivery-row equality, and event-row equality are retained. Only the synthetic
+candidate's lifecycle fields are
+reset between independent scenarios; the original complete credential/transaction
+preservation fence still passes. All previous validation/provider/helper
+observations are structurally unchanged.
+
+This resolves the published HTTP policy question: the existing native
+`CanvasRetryUnavailable` HTTP 503 response is not equivalent for these failures.
+Native adoption must preserve the late save boundary and already-committed
+credential state, without replacing non-scalar text or rejecting it during
+decoding. Do not globally remap unrelated retry errors based on this evidence.
+Native lossless body/metadata/error plumbing and replay of all 36 routes remain
+required; this reference capture alone does not close the integration gate.
 
 ## Reproduction
 

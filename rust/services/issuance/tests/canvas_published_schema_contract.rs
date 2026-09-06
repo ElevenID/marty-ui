@@ -33,8 +33,8 @@ async fn utf7_consumer_diagnostic_matches_published_boundaries() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    // Freeze actual application and delivery persistence behavior. This is not
-    // native UTF-7 decoding or adoption qualification.
+    // Freeze actual application, full credential-route and delivery persistence
+    // behavior. This is not native UTF-7 body adoption qualification.
     let owned = canvas_published_database::PublishedDatabase::start_with_utf7_consumer()
         .await
         .unwrap();

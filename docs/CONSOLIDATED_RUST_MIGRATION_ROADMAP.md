@@ -33,6 +33,24 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Full published credential-route evidence now covers 36 UTF-7 scenarios through
+actual authenticated suspend/reinstate/revoke routes and real PostgreSQL saves.
+Two independent captures agree: 18 retained-surrogate cases return HTTP 500
+after canonical credential persistence, leaving the entire delivery row unchanged;
+18 scalar/truncated cases return HTTP 200 and save the delivery projection.
+No issuance events are added by these published routes. Publication/provider/save
+ordering is observed, and every earlier validation/provider/helper observation
+is unchanged. The required image diagnostic regenerates the expanded artifact.
+This settles the previously open published response-policy question; native
+lossless body/metadata/error adoption and full-route replay remain unfinished.
+The current generic native retry HTTP 503 must not be mistaken for parity with
+these late encoding/save failures. See the
+[full-route evidence](../contracts/canvas-text-boundaries.md#full-credential-route-continuation).
+All 27 configured image/schema tests pass (247.71 seconds, none ignored or
+filtered), together with 70 affected Python tests and formatting/lint checks.
+The preceding `61c5dd185` head has successful hosted CI and Rust analysis;
+this evidence checkpoint still needs its own hosted checks and stays unrouted.
+
 UTF-7 now has one complete-input native decoder for strict and replacement modes,
 using lossless Python codepoints. Independent frozen digests cover 2,347,269
 inputs per mode, including every supplementary scalar and all single-unit

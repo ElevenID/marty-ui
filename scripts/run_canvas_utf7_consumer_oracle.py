@@ -35,7 +35,9 @@ async def observe():
         "normalization": "only non-scalar observation strings become python_codepoints; application values are unchanged",
         "validation": await validation.observe(cases["validation"]),
         "provider": encode_surrogates(
-            await provider.observe(cases["provider"], delivery_lifecycle=True)
+            await provider.observe(
+                cases["provider"], delivery_lifecycle=True, credential_routes=True
+            )
         ),
     }
 
