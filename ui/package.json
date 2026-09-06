@@ -33,7 +33,7 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^9.3.0",
-    "@mui/material": "^9.3.0",
+    "@mui/material": "^9.4.0",
     "@mui/x-date-pickers": "^9.11.0",
     "axios": "^1.19.0",
     "date-fns": "^4.4.0",
