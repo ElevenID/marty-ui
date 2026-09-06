@@ -1,12 +1,12 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `53c51314f2c22d8d83fd524f9ac4d494d61ceb44`,
+Status: latest qualified composed checkpoint `2354f509bedd4d6e53e80bacc766b603b7e9f3a0`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 70 configured runtime tests in 1516.06 seconds (CI34059018294; all exact-head
+and 70 configured runtime tests in 1530.37 seconds (CI34061058905; all exact-head
 checks, including Rust CodeQL, passed). All twenty native validation/failure cases passed,
 including deferred roster configuration and all three reference-removal barriers.
 The configured PostgreSQL worker contract, including the typed-processor
-signing guard, passed all three entries in 95.20 seconds. Earlier worker gates
+signing guard, passed all three entries in 95.15 seconds. Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
@@ -174,7 +174,7 @@ changed-generation races remain open.
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
 | 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |
-| 14. Allowlisted worker logs | Landed PR271 freezes twelve actual reference error/log executions; four escaped-job/loop observations now pass native PostgreSQL replay locally | Qualify the four-case native follow-up, then adopt processing/disconnect observations and composed failures; source unit coverage alone is not aggregate acceptance. |
+| 14. Allowlisted worker logs | Landed PR271 freezes twelve actual reference error/log executions; six escaped-job/loop/disconnect observations now pass native PostgreSQL replay locally | Qualify the six-case native follow-up, then adopt processing observations and composed failures; source unit coverage alone is not aggregate acceptance. |
 
 Reference-side observations above were read from the clean local
 `marty-credentials` checkout at `28b53d433031fe46b3f0c0c589d91f2c85d22c6e`.
@@ -199,13 +199,16 @@ tests are the single observation owner; two independent captures agree at SHA256
 Source trees, runtime blobs, test blobs and imported module locations are checked.
 Maintainer-review additions bring local affected qualification to 741 tests and
 200 subtests, followed by unchanged 63-case regeneration. Exact-head CI34061052204
-and protected merge-queue CI34061438212 passed. Post-merge main qualification
-must be verified separately.
+and protected merge-queue CI34061438212 passed. Post-merge main CI34061898106
+also passed. The completed capture branch name was retired only after exact
+reviewed/merged tree comparison; source and evidence remain recoverable.
 
-The [native privacy replay](canvas-worker-privacy.md) now compares four actual
+The [native privacy replay](canvas-worker-privacy.md) now compares six actual
 worker/loop log-state observations through PostgreSQL, including ambient tracing
 context. Failure-first tests identified swallowed OAuth queue-read errors and
-missing stable event IDs. The canonical worker correction passes those local
+missing stable event IDs. The disconnect-marker extension preserves real
+encrypted-secret cleanup and another tenant's secret while restoring the exact
+error event; cleanup behavior already matched. The canonical worker correction passes those local
 cases without removing the private SQL generation fence. Other worker and all
 signing observations remain pending; fresh exact-head hosted checks are required.
 

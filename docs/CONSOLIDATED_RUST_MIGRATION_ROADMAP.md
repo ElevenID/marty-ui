@@ -94,20 +94,22 @@ matching independent captures and mandatory provenance/regeneration checks.
 Maintainer-review capture-tool regressions pass locally: 741 affected tests,
 200 subtests and all 63 regenerated observations. PR271 landed at
 `948bca975b493285c512c20a13d5abf8ee5e6305` after exact-head CI34061052204 and
-protected merge-queue CI34061438212 passed; post-merge main checks are separate.
+protected merge-queue CI34061438212 passed; protected-main CI34061898106 also passed.
 The [native privacy replay](rust-migrations/canvas-worker-privacy.md) now covers
-four escaped-job/loop observations locally through PostgreSQL, with complete
+six escaped-job/loop/disconnect observations locally through PostgreSQL, with complete
 producer/formatter fields and explicit class/storage mappings. Failure-first
-tests drove a scoped Rust queue-recovery and stable-event correction. Other
+tests drove scoped Rust queue-recovery and stable-event corrections, preserving
+the existing tenant-atomic revocation cleanup and verifying encrypted token
+removal with an unrelated-tenant retention control. Other
 privacy observations, fresh exact-head qualification and whole-worker acceptance
 remain required before closing gates 13/14.
 Existing frozen observations, reachable features and other-worker code remain untouched.
 
-Latest UI checkpoint `53c51314f2c22d8d83fd524f9ac4d494d61ceb44` passed
-CI34059018294 and all exact-head checks, including Rust CodeQL. Runtime
-job101556092864 passed 70 configured tests in 1516.06 seconds, with twenty
+Latest UI checkpoint `2354f509bedd4d6e53e80bacc766b603b7e9f3a0` passed
+CI34061058905 and all exact-head checks, including Rust CodeQL34061058903. Runtime
+job101561575585 passed 70 configured tests in 1530.37 seconds, with twenty
 actual native validation/failure cases and all three configured PostgreSQL
-worker-contract entries in 95.20 seconds. Image job101556092865 also passed.
+worker-contract entries in 95.15 seconds. Its image job also passed.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 

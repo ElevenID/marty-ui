@@ -11,17 +11,23 @@ No old immutable oracle or observation is rewritten.
 
 ## Newly replayed boundaries
 
-Four of the twelve worker observations now execute through actual Rust worker
+Six of the twelve worker observations now execute through actual Rust worker
 cycles/loops and PostgreSQL, using the existing observed-repository owner:
 
 - An escaped target-read error leaves that job leased while a sibling succeeds.
 - A first OAuth queue-read error fails the cycle, then the next real cycle
   reaches idle without stopping the loop.
+- A failed platform disconnect marker retains one successful revocation, no
+  retry, and removal of the connection and both token secrets. Real encrypted
+  secret persistence is used; an unrelated tenant's secret must survive. The
+  marker-failure adapter asserts the connection is already absent when invoked.
 - Each branch runs once without ambient context and once inside a real tracing
   span carrying a synthetic correlation identifier.
 
-As in the reference, only the repository failure and successful processor are
-controlled. Other operations use the real native repositories. This is not a
+As in the reference, repository failures, the successful processor and remote
+revocation response are controlled. Unexpected token exchange/refresh calls fail
+the test, and the revoker asserts the synthetic endpoint and decrypted token.
+Other operations use the real native repositories. This is not a
 published-process, actual driver-failure or full deployed log-collector test.
 No API credential, external signing endpoint or deployment database is used.
 
@@ -37,7 +43,9 @@ collector configuration.
 ## Explicit language and storage mappings
 
 - The reference's injected `RuntimeError` maps to the payload-free native
-  `CanvasSyncRepositoryUnavailable`. The exact native class must match before
+  `CanvasSyncRepositoryUnavailable` for cycle/job errors, or
+  `CanvasOAuthRepositoryUnavailable` for the disconnect marker. Each case's
+  exact native class must match before
   this mapping; severity, event identifiers and static messages are not hidden.
 - Generated job identifiers are normalized only after equality with the actual
   failed durable job ID is asserted.
@@ -66,6 +74,15 @@ scheduling phase across the two loop attempts. An initial test-only assumption
 of one idle write was corrected to the actual post-lease and final idle writes;
 the frozen output was never changed.
 
+The two subsequent disconnect-marker baseline cases matched all revocation and
+cleanup state but failed only the log projection: warning severity, missing
+stable event ID and different static message. The correction restores the
+reference's error severity, `canvas_oauth_disconnect_marker_failed` identifier
+and static message. It does not change the already-correct cleanup path, atomic
+transaction, lease checks or success/retry accounting. Both new cases then
+passed alongside the four earlier observations; raw worker logs contain none
+of the synthetic access, refresh or retained-control secrets.
+
 All four native observations passed locally. The original three-entry configured
 PostgreSQL group passed in 93.43 seconds, including the 28+2 signing guard,
 range/lifecycle/disposal and 60 renewal combinations. The subsequent observer
@@ -78,11 +95,20 @@ existing opt-in skip. Fresh exact-head hosted checks must pass before treating
 this follow-up as qualified. Windows does not attest the Linux process-signal
 cases; those remain mandatory in hosted CI.
 
+The expanded six-observation checkpoint passed all four configured PostgreSQL
+entries in 93.73 seconds, with all six native markers and the earlier guard,
+range, lifecycle, disposal and renewal cases retained. Its isolated loopback
+tmpfs database was removed. The new checkpoint also passed 332 library tests,
+5 worker-binary tests, 23 behavior tests, strict all-target Clippy, and 907 Python
+tests in 42.87 seconds with the same existing opt-in skip. The frozen corpus
+hash remains unchanged. This local result still requires fresh exact-head
+hosted qualification; it does not close the whole-worker gates.
+
 ## Still required
 
-The six unexpected-processing and two disconnect-marker worker observations
-still need native adoption, as do all 51 signing helper/operation observations.
+The six unexpected-processing worker observations still need native adoption,
+as do all 51 signing helper/operation observations.
 Coordinate overlapping signing-adapter work with the crypto worker. Whole-worker
 driver/provider failures, remote OAuth, races, all consumers and aggregate
-acceptance remain their own gates. This four-case replay does not close gates
+acceptance remain their own gates. This six-case replay does not close gates
 6, 13 or 14, authorize deleting live Python, or change production deployment.

@@ -448,6 +448,13 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
 async fn setup_worker_schema(pool: &sqlx::PgPool) {
     setup_schema(pool).await;
     sqlx::query(
+        "CREATE TABLE issuance_service.organization_integration_secrets (
+            id text PRIMARY KEY, organization_id text NOT NULL, name text NOT NULL,
+            provider text NOT NULL, purpose text NOT NULL, encrypted_secret_value text NOT NULL,
+            secret_hint text, metadata jsonb NOT NULL, enabled boolean NOT NULL,
+            created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, last_used_at timestamptz)"
+    ).execute(pool).await.unwrap();
+    sqlx::query(
         "CREATE TABLE issuance_service.canvas_oauth_connections (
             id text PRIMARY KEY, organization_id text NOT NULL, platform_id text NOT NULL,
             canvas_base_url text NOT NULL, platform_config_version integer NOT NULL,

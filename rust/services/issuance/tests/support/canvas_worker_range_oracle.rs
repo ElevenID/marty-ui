@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_oauth::{
         CanvasOAuthAuthorization, CanvasOAuthConnection, CanvasOAuthError, CanvasOAuthPlatform,
-        CanvasOAuthPlatformPatch, CanvasOAuthRepository,
+        CanvasOAuthPlatformPatch, CanvasOAuthProvider, CanvasOAuthRepository,
     },
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
@@ -49,15 +49,16 @@ pub(super) struct ObservedRepositories {
     events: Mutex<Vec<Value>>,
     cycles: AtomicUsize,
     stop: Option<(usize, watch::Sender<bool>)>,
-    fault: Option<ReadFault>,
+    fault: Option<RepositoryFault>,
     pub(super) oauth_reads: AtomicUsize,
 }
 
 // Controlled adapter failures, matching the reference's patched repository
 // boundaries. All other operations still reach the real PostgreSQL owner.
-pub(super) enum ReadFault {
+pub(super) enum RepositoryFault {
     Target(String),
     FirstOAuthQueueRead,
+    DisconnectMarker,
 }
 
 impl ObservedRepositories {
@@ -102,7 +103,7 @@ macro_rules! worker_repository {
         #[async_trait]
         impl CanvasSyncWorkerRepository for ObservedRepositories {
             async fn target(&self, organization_id: &str, target_id: &str) -> Result<Option<CanvasSyncTarget>, CanvasSyncRepositoryError> {
-                if matches!(&self.fault, Some(ReadFault::Target(id)) if id == target_id) {
+                if matches!(&self.fault, Some(RepositoryFault::Target(id)) if id == target_id) {
                     return Err(CanvasSyncRepositoryError::Unavailable);
                 }
                 self.worker.target(organization_id, target_id).await
@@ -148,11 +149,22 @@ macro_rules! oauth_repository {
     ($(fn $method:ident($($arg:ident: $ty:ty),*) -> $result:ty;)*) => {
         #[async_trait]
         impl CanvasOAuthRepository for ObservedRepositories {
+            async fn patch_platform(&self, organization_id: &str, platform_id: &str, expected_config_version: i64, patch: CanvasOAuthPlatformPatch) -> Result<bool, CanvasOAuthError> {
+                if matches!(self.fault, Some(RepositoryFault::DisconnectMarker)) {
+                    assert!(matches!(patch, CanvasOAuthPlatformPatch::Disconnected));
+                    assert!(self.oauth.connection(organization_id, platform_id).await?.is_none(),
+                        "disconnect projection must follow durable revocation cleanup");
+                    self.record(json!({"phase": "disconnect_marker", "event": "failure"}));
+                    return Err(CanvasOAuthError::RepositoryUnavailable);
+                }
+                self.oauth.patch_platform(organization_id, platform_id, expected_config_version, patch).await
+            }
+
             async fn due_revocations(&self, limit: usize) -> Result<Vec<CanvasOAuthConnection>, CanvasOAuthError> {
                 assert!((1..=500).contains(&limit), "bound before machine conversion");
                 self.record(json!({"phase": "oauth_queue", "event": "start"}));
                 let read = self.oauth_reads.fetch_add(1, Ordering::SeqCst);
-                if matches!(self.fault, Some(ReadFault::FirstOAuthQueueRead)) && read == 0 {
+                if matches!(self.fault, Some(RepositoryFault::FirstOAuthQueueRead)) && read == 0 {
                     self.record(json!({"phase": "oauth_queue", "event": "error"}));
                     return Err(CanvasOAuthError::RepositoryUnavailable);
                 }
@@ -177,7 +189,6 @@ oauth_repository! {
     fn connection(organization_id: &str, platform_id: &str) -> Result<Option<CanvasOAuthConnection>, CanvasOAuthError>;
     fn save_authorization(authorization: &CanvasOAuthAuthorization) -> Result<(), CanvasOAuthError>;
     fn consume_authorization(state_hash: &str, now: DateTime<Utc>) -> Result<Option<CanvasOAuthAuthorization>, CanvasOAuthError>;
-    fn patch_platform(organization_id: &str, platform_id: &str, expected_config_version: i64, patch: CanvasOAuthPlatformPatch) -> Result<bool, CanvasOAuthError>;
     fn patch_validation(organization_id: &str, platform_id: &str, expected_config_version: i64, validated_at: Option<DateTime<Utc>>, error_code: Option<&str>) -> Result<bool, CanvasOAuthError>;
     fn publish_connection(connection: &CanvasOAuthConnection) -> Result<Option<DateTime<Utc>>, CanvasOAuthError>;
     fn mark_reauthorization_required(organization_id: &str, platform_id: &str, expected_updated_at: DateTime<Utc>) -> Result<bool, CanvasOAuthError>;
@@ -279,7 +290,7 @@ pub(super) fn observed_worker(
     processor: Arc<dyn CanvasSyncProcessor>,
     stop: Option<(usize, watch::Sender<bool>)>,
 ) -> (CanvasSyncWorker, Arc<ObservedRepositories>) {
-    observed_worker_with_fault(pool, config, processor, stop, None)
+    observed_worker_with_fault(pool, config, processor, stop, None, None)
 }
 
 pub(super) fn observed_worker_with_fault(
@@ -287,7 +298,8 @@ pub(super) fn observed_worker_with_fault(
     config: CanvasSyncWorkerConfig,
     processor: Arc<dyn CanvasSyncProcessor>,
     stop: Option<(usize, watch::Sender<bool>)>,
-    fault: Option<ReadFault>,
+    fault: Option<RepositoryFault>,
+    provider: Option<Arc<dyn CanvasOAuthProvider>>,
 ) -> (CanvasSyncWorker, Arc<ObservedRepositories>) {
     let observed = Arc::new(ObservedRepositories {
         worker: PostgresCanvasSyncWorkerRepository::new(pool.clone()),
@@ -298,24 +310,30 @@ pub(super) fn observed_worker_with_fault(
         fault,
         oauth_reads: AtomicUsize::new(0),
     });
-    let cipher =
-        IntegrationSecretCipher::from_base64("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
-            .unwrap();
     (
         CanvasSyncWorker::new(
             observed.clone(),
             observed.clone(),
-            Arc::new(PostgresIntegrationSecretVault::new(pool.clone(), cipher)),
-            Arc::new(HttpCanvasOAuthProvider::new(
-                Duration::from_secs(1),
-                Vec::new(),
-                false,
-            )),
+            Arc::new(observed_vault(pool)),
+            provider.unwrap_or_else(|| {
+                Arc::new(HttpCanvasOAuthProvider::new(
+                    Duration::from_secs(1),
+                    Vec::new(),
+                    false,
+                ))
+            }),
             processor,
             config,
         ),
         observed,
     )
+}
+
+pub(super) fn observed_vault(pool: &PgPool) -> PostgresIntegrationSecretVault {
+    let cipher =
+        IntegrationSecretCipher::from_base64("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+            .unwrap();
+    PostgresIntegrationSecretVault::new(pool.clone(), cipher)
 }
 
 pub async fn assert_consumer_ranges(pool: &PgPool) {

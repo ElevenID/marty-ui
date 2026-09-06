@@ -971,11 +971,12 @@ impl CanvasSyncWorker {
             )
             .await
         {
-            warn!(
+            error!(
+                event = "canvas_oauth_disconnect_marker_failed",
                 organization_id = %connection.organization_id,
                 platform_id = %connection.platform_id,
                 exception_class = oauth_error_class(&error),
-                "Canvas OAuth disconnected projection failed"
+                "Canvas OAuth platform disconnect marker failed"
             );
         }
         OAuthRevocationOutcome::Succeeded

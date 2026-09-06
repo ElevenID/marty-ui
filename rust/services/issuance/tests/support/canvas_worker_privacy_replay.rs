@@ -13,11 +13,16 @@ use std::{
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use marty_issuance_service::{
+    canvas_oauth::{
+        CanvasOAuthProvider, CanvasOAuthProviderError, CanvasOAuthSecretVault,
+        CanvasOAuthTokenBundle,
+    },
     canvas_sync_lease::CanvasSyncLease,
     canvas_sync_worker::{
         canvas_sync_result, CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult,
         CanvasSyncTarget, CanvasSyncWorkerConfig,
     },
+    integration_secret::NewIntegrationSecret,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -26,7 +31,9 @@ use tokio::sync::watch;
 use tracing::{instrument::WithSubscriber, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, Layer};
 
-use super::canvas_worker_range_oracle::{observed_worker_with_fault, ReadFault};
+use super::canvas_worker_range_oracle::{
+    observed_vault, observed_worker_with_fault, RepositoryFault,
+};
 
 const TARGET: &str = "marty_issuance_service::canvas_sync_worker";
 const REFERENCE: &str =
@@ -57,7 +64,7 @@ async fn privacy_observer_does_not_discard_unexpected_fields_or_exception_metada
             ambient,
         )
         .await;
-        let actual = portable_log(logs, ambient, None);
+        let actual = portable_log(logs, ambient, None, "CanvasSyncRepositoryUnavailable");
         assert_eq!(
             actual["fields"]["unexpected_field"],
             "synthetic-private-detail"
@@ -145,7 +152,7 @@ async fn observe<F: Future>(future: F, ambient: bool) -> (F::Output, Logs) {
     (result, logs)
 }
 
-fn portable_log(logs: Logs, ambient: bool, job_id: Option<&str>) -> Value {
+fn portable_log(logs: Logs, ambient: bool, job_id: Option<&str>, native_class: &str) -> Value {
     let events = logs.events.lock().unwrap();
     assert_eq!(
         events.len(),
@@ -178,7 +185,7 @@ fn portable_log(logs: Logs, ambient: bool, job_id: Option<&str>) -> Value {
         .expect("actual static worker message");
     // Explicit language mapping: the injected repository RuntimeError is a
     // payload-free native persistence error, never an exception-object string.
-    assert_eq!(fields["exception_class"], "CanvasSyncRepositoryUnavailable");
+    assert_eq!(fields["exception_class"], native_class);
     fields.insert("exception_class".into(), json!("RuntimeError"));
     if let Some(job_id) = job_id {
         assert_eq!(
@@ -198,6 +205,149 @@ fn portable_log(logs: Logs, ambient: bool, job_id: Option<&str>) -> Value {
 }
 
 struct SuccessfulSibling;
+
+#[derive(Default)]
+struct ObservedRevoker(Mutex<Vec<String>>);
+
+#[async_trait]
+impl CanvasOAuthProvider for ObservedRevoker {
+    async fn exchange(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError> {
+        panic!("disconnect reference must not exchange a token")
+    }
+
+    async fn refresh(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError> {
+        panic!("disconnect reference must not refresh a token")
+    }
+
+    async fn revoke(
+        &self,
+        canvas_base_url: &str,
+        access_token: &str,
+    ) -> Result<(), CanvasOAuthProviderError> {
+        assert_eq!(canvas_base_url, "https://canvas.example.invalid");
+        self.0.lock().unwrap().push(access_token.to_owned());
+        Ok(())
+    }
+}
+
+async fn disconnect_observation(
+    pool: &PgPool,
+    config: CanvasSyncWorkerConfig,
+    ambient: bool,
+) -> Value {
+    let vault = observed_vault(pool);
+    for (id, organization, value) in [
+        ("access-secret-1", "org-1", "access-token-value"),
+        ("refresh-secret-1", "org-1", "refresh-token-value"),
+        (
+            "retained-control-secret",
+            "org-2",
+            "synthetic-retained-control",
+        ),
+    ] {
+        vault
+            .save(NewIntegrationSecret {
+                id: id.to_owned(),
+                organization_id: organization.to_owned(),
+                name: id.to_owned(),
+                provider: "canvas".into(),
+                purpose: "privacy-test".into(),
+                value: value.to_owned(),
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            vault.value(organization, id).await.unwrap().as_deref(),
+            Some(value)
+        );
+    }
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_platforms VALUES ('oauth-platform-1', 'org-1', true, NULL, 1)"
+    ).execute(pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_oauth_connections
+        (id, organization_id, platform_id, canvas_base_url, platform_config_version, client_id,
+         client_secret_ref, capabilities, scopes, access_token_secret_ref, refresh_token_secret_ref,
+         status, revoke_retry_count, updated_at)
+        VALUES ('privacy-oauth', 'org-1', 'oauth-platform-1', 'https://canvas.example.invalid', 1,
+         'synthetic-client', 'org_secret://org-1/client-secret', '[]', '[]',
+         'org_secret://org-1/access-secret-1', 'org_secret://org-1/refresh-secret-1',
+         'revocation_pending', 0, clock_timestamp())",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let revoker = Arc::new(ObservedRevoker::default());
+    let (worker, observed) = observed_worker_with_fault(
+        pool,
+        config,
+        Arc::new(SuccessfulSibling),
+        None,
+        Some(RepositoryFault::DisconnectMarker),
+        Some(revoker.clone()),
+    );
+    let (result, logs) = observe(worker.run_cycle(), ambient).await;
+    let result = result.unwrap();
+    assert_eq!(
+        (
+            result.scheduled,
+            result.leased,
+            result.succeeded,
+            result.retried,
+            result.dead_lettered
+        ),
+        (0, 0, 0, 0, 0),
+        "revocation must not create or alter background jobs"
+    );
+    assert_eq!(observed.phase_events("disconnect_marker"), ["failure"]);
+    assert_eq!(*revoker.0.lock().unwrap(), ["access-token-value"]);
+    assert_eq!(
+        vault
+            .value("org-2", "retained-control-secret")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("synthetic-retained-control"),
+        "cleanup must retain the other tenant's secret"
+    );
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_oauth_connections WHERE organization_id = 'org-1' AND platform_id = 'oauth-platform-1'"
+    ).fetch_one(pool).await.unwrap();
+    let raw_logs = String::from_utf8(logs.rendered.lock().unwrap().clone()).unwrap();
+    for secret in [
+        "access-token-value",
+        "refresh-token-value",
+        "synthetic-retained-control",
+    ] {
+        assert!(
+            !raw_logs.contains(secret),
+            "rendered worker log leaked a synthetic secret"
+        );
+    }
+    json!({
+        "succeeded": result.oauth_revocations_succeeded, "retried": result.oauth_revocations_retried,
+        "remote_revoke_count": revoker.0.lock().unwrap().len(), "connection_absent": remaining == 0,
+        "secrets_absent": {
+            "access-secret-1": vault.value("org-1", "access-secret-1").await.unwrap().is_none(),
+            "refresh-secret-1": vault.value("org-1", "refresh-secret-1").await.unwrap().is_none(),
+        },
+        "log": portable_log(logs, ambient, None, "CanvasOAuthRepositoryUnavailable"),
+    })
+}
 
 #[async_trait]
 impl CanvasSyncProcessor for SuccessfulSibling {
@@ -259,7 +409,8 @@ async fn assert_case(pool: &PgPool, case: &Value) {
                 config,
                 Arc::new(SuccessfulSibling),
                 None,
-                Some(ReadFault::Target("privacy-failed".into())),
+                Some(RepositoryFault::Target("privacy-failed".into())),
+                None,
             );
             let (result, logs) = observe(worker.run_cycle(), ambient).await;
             let result = result.unwrap();
@@ -284,7 +435,7 @@ async fn assert_case(pool: &PgPool, case: &Value) {
                     "oauth_revocations_retried": result.oauth_revocations_retried},
             "failed_job": job_observation(failed, worker_id, Some(generation)),
             "sibling_job": job_observation(&jobs["privacy-sibling"], worker_id, None),
-                "log": portable_log(logs, ambient, Some(failed["id"].as_str().unwrap())),
+                "log": portable_log(logs, ambient, Some(failed["id"].as_str().unwrap()), "CanvasSyncRepositoryUnavailable"),
             })
         }
         "cycle_failure" => {
@@ -294,7 +445,8 @@ async fn assert_case(pool: &PgPool, case: &Value) {
                 config,
                 Arc::new(SuccessfulSibling),
                 Some((2, sender)),
-                Some(ReadFault::FirstOAuthQueueRead),
+                Some(RepositoryFault::FirstOAuthQueueRead),
+                None,
             );
             let (result, logs) = observe(worker.run_loop(stop), ambient).await;
             result.unwrap();
@@ -317,9 +469,10 @@ async fn assert_case(pool: &PgPool, case: &Value) {
             json!({
                 "cycle_attempts": observed.oauth_reads.load(Ordering::SeqCst),
                 "heartbeat_phase": metadata["phase"], "worker_id": identity,
-                "log": portable_log(logs, ambient, None),
+                "log": portable_log(logs, ambient, None, "CanvasSyncRepositoryUnavailable"),
             })
         }
+        "disconnect_marker" => disconnect_observation(pool, config, ambient).await,
         other => panic!("unmapped privacy branch {other}"),
     };
     assert_eq!(actual, case["observed"], "{}", case["id"]);
@@ -347,14 +500,14 @@ pub async fn assert_repository_failure_privacy(pool: &PgPool) {
         .filter(|case| {
             matches!(
                 case["input"]["branch"].as_str(),
-                Some("escaped_job" | "cycle_failure")
+                Some("escaped_job" | "cycle_failure" | "disconnect_marker")
             )
         })
         .collect();
     assert_eq!(
         cases.len(),
-        4,
-        "two branches, each with/without ambient correlation"
+        6,
+        "three branches, each with/without ambient correlation"
     );
     let mut failed = Vec::new();
     for case in cases {
