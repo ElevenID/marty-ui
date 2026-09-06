@@ -20,8 +20,7 @@ from sqlalchemy import create_engine, text
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
 
 
-def observe(engine, case):
-    worker_id = f"startup-{case['name']}"
+def start_worker(case, worker_id):
     # The parent is the isolated immutable-image probe, not a host environment.
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("CANVAS_")
@@ -41,15 +40,26 @@ def observe(engine, case):
         CANVAS_PILOT_ORGANIZATION_IDS="bootstrap-org",
     )
     environment.update(case["environment"])
-    with engine.begin() as connection:
-        connection.execute(text("TRUNCATE issuance_service.canvas_worker_heartbeats"))
-    child = subprocess.Popen(
+    return subprocess.Popen(
         [sys.executable, "-m", "issuance.canvas_worker"],
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def finish_worker(child):
+    if child.poll() is None:
+        child.kill()
+    child.wait(timeout=10)
+
+
+def observe(engine, case):
+    worker_id = f"startup-{case['name']}"
+    with engine.begin() as connection:
+        connection.execute(text("TRUNCATE issuance_service.canvas_worker_heartbeats"))
+    child = start_worker(case, worker_id)
     heartbeat = None
     try:
         deadline = time.monotonic() + 20
@@ -90,9 +100,7 @@ def observe(engine, case):
             "job_count": jobs,
         }
     finally:
-        if child.poll() is None:
-            child.kill()
-        child.wait(timeout=10)
+        finish_worker(child)
 
 
 def run():

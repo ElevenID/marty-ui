@@ -2,6 +2,22 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[tokio::test]
+async fn worker_rest_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_worker_rest()
+        .await
+        .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-rest-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
+    owned.close().unwrap();
+}
+
 #[allow(dead_code)]
 #[path = "support/canvas_worker_process_signals.rs"]
 mod canvas_worker_process_signals;

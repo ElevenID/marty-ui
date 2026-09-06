@@ -1,6 +1,6 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: candidate implementation at `185af81d59e99982d1bdb9d20b2dacf76ca267db`,
+Status: candidate runtime at `017c7e42361182ed6baf4c030632abbc4d3d7cad`,
 PR #814 draft and unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -33,6 +33,12 @@ The source inspection exposes a composition gap between existing suites:
 
 None of these tests should be discarded or recaptured merely to obtain a
 whole-worker pass. Reuse their owners and add the missing composed execution.
+
+The [composed REST reference](canvas-worker-rest-reference.md) now independently
+executes four nonempty published worker processes with real HTTPS, encrypted
+OAuth storage and the official schema. Positive, negative, duplicate and
+rate-limited outcomes are frozen twice. Native composed-worker replay remains
+the next step; the reference gate does not close that side of the boundary.
 
 ## Normative legacy-gap reconciliation
 
@@ -92,12 +98,12 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
 
 ## Next implementation order
 
-1. Retain the qualified eight-case startup/idle boundary and finish fresh hosted
-   checks. Broader secret-source/entrypoint configurations remain consumer gates;
+1. Retain the qualified eight-case startup/idle boundary; its exact-head hosted
+   CI and security checks passed. Broader secret-source/entrypoint configurations remain consumer gates;
    do not repeat the repaired LTI-identity requirement as an open runtime bug.
-2. Add a composed worker-cycle gate on the pinned published migrations using
+2. Replay the frozen composed REST worker sequence on the pinned published migrations using
    real native provider/OAuth adapters and bounded synthetic provider servers.
-   Begin with a real REST job through scheduling, leasing, fact/policy effects,
+   Preserve actual scheduling, leasing, fact/policy effects,
    result persistence and heartbeat; extend the same harness across the named
    failure, mutation, OAuth and active-shutdown requirements above.
 3. Close the two explicit reference privacy requirements without changing frozen

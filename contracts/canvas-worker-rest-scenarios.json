@@ -1,0 +1,15 @@
+{
+  "schema": "marty.canvas-worker-rest-scenarios/v1",
+  "shared_seed": "canvas-issued-review-scenarios.json",
+  "scope": "Actual worker process, scheduler/lease, encrypted OAuth read, REST evidence, fact/policy/review persistence and idle heartbeat; selected projections, not all worker gates",
+  "token": "synthetic-worker-rest-token",
+  "stages": [
+    {"name": "initial_permit", "status": 200, "body": {"id": 11, "assignment_id": 9, "score": 90, "workflow_state": "graded", "assignment": {"points_possible": 100}, "updated_at": "2026-09-01T00:01:00Z"}},
+    {"name": "deny_after_issue", "status": 200, "body": {"id": 11, "assignment_id": 9, "score": 10, "workflow_state": "graded", "assignment": {"points_possible": 100}, "updated_at": "2026-09-01T00:02:00Z"}},
+    {"name": "duplicate_deny", "status": 200, "body": {"id": 11, "assignment_id": 9, "score": 10, "workflow_state": "graded", "assignment": {"points_possible": 100}, "updated_at": "2026-09-01T00:02:00Z"}},
+    {"name": "rate_limit_preserves_evidence", "status": 429, "headers": {"Retry-After": "37"}, "body": {"error": "synthetic-rate-limit"}}
+  ],
+  "jobs_sql": "SELECT COALESCE(jsonb_agg(jsonb_build_object('status',status,'attempt_count',attempt_count,'max_attempts',max_attempts,'result',result,'last_error_code',last_error_code,'last_error_summary',last_error_summary,'lease_owner_present',lease_owner IS NOT NULL,'lease_expires_present',lease_expires_at IS NOT NULL,'started',started_at IS NOT NULL,'completed',completed_at IS NOT NULL,'retry_delay_matches_37_seconds',CASE WHEN status='retry' THEN abs(extract(epoch FROM available_at-updated_at)-37)<1 ELSE NULL END,'retry_scheduled',CASE WHEN status='retry' THEN available_at>updated_at ELSE NULL END) ORDER BY created_at,id),'[]'::jsonb) FROM issuance_service.canvas_evidence_sync_jobs",
+  "facts_sql": "SELECT COALESCE(jsonb_agg(jsonb_build_object('fact_type',fact_type,'assertion',assertion,'payload_hash',payload_hash,'verification_method',verification->>'method','effective_at',effective_at) ORDER BY created_at,id),'[]'::jsonb) FROM issuance_service.evidence_facts",
+  "oauth_sql": "SELECT jsonb_build_object('status',c.status,'reauthorization_required',c.reauthorization_required,'refresh_lease_owner_present',c.refresh_lease_owner IS NOT NULL,'secret_enabled',s.enabled,'secret_used',s.last_used_at IS NOT NULL) FROM issuance_service.canvas_oauth_connections c JOIN issuance_service.organization_integration_secrets s ON s.id='worker-rest-token' WHERE c.id='worker-rest-connection'"
+}

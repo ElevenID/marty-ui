@@ -202,6 +202,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_rest() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_rest",
+                "worker-rest",
+                "worker_rest",
+                "MARTY_CANVAS_WORKER_REST_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -394,6 +407,23 @@ impl PublishedDatabase {
             "type=bind,source={},target=/verification/scripts/canvas_utf7_codec_oracle.py,readonly",
             root.join("scripts/canvas_utf7_codec_oracle.py").display()
         );
+        let worker_trust_mount = format!(
+            "type=bind,source={},target=/verification/worker_trust/sitecustomize.py,readonly",
+            root.join("contracts/fixtures/canvas_worker_test_trust.py")
+                .display()
+        );
+        if script == "worker_rest" {
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                [
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777",
+                    "--mount",
+                    &worker_trust_mount,
+                ],
+            );
+        }
         if script == "timeout_consumer" {
             // Only the TLS oracle needs ephemeral certificate storage. Preserve
             // the read-only image and all host mounts; nothing is persisted.
@@ -432,6 +462,19 @@ impl PublishedDatabase {
                     format!(
                         "type=bind,source={},target=/verification/{path},readonly",
                         root.join(&path).display()
+                    )
+                })
+                .collect()
+            } else if script == "worker_rest" {
+                [
+                    "run_canvas_worker_startup_oracle.py",
+                    "test_canvas_lti_https.py",
+                ]
+                .into_iter()
+                .map(|name| {
+                    format!(
+                        "type=bind,source={},target=/verification/scripts/{name},readonly",
+                        root.join("scripts").join(name).display()
                     )
                 })
                 .collect()

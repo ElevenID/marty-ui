@@ -33,6 +33,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [composed worker REST reference](rust-migrations/canvas-worker-rest-reference.md)
+now freezes four actual published worker processes using real HTTPS and encrypted
+OAuth persistence on the official schema: positive evidence, later negative
+evidence, duplicate reuse and a 429 retry honoring Retry-After37. Two finalized
+captures agree byte-for-byte. Issued credential/transaction rows and encrypted
+token bytes remain unchanged, with selected job/fact/review/heartbeat projections
+recorded. The published HTTPS constraint remains intact; fixture-specific trust
+is isolated to the test child. Native composed-worker replay is the next step,
+not a completion claim from the reference. Startup head `017c7e423` now has
+successful hosted CI and Rust analysis.
+
 The [actual worker startup gate](rust-migrations/canvas-worker-startup.md) now
 freezes eight published process/idle-heartbeat observations from two identical
 captures. It reproduced the eager LTI identity failure, then verifies the Rust
