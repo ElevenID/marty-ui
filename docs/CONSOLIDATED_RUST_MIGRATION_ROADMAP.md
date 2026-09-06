@@ -33,6 +33,16 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current operations baseline and recovery repair
 
+Docker became available again. The first full schema run passed19/20, including
+the19 fresh adapter imports; the remaining TLS probe lacked writable certificate
+storage in its read-only image. A timeout-probe-only8MiB tmpfs fixes that fixture,
+and all17 socket observations now pass in the published HTTPX0.26.0/httpcore1.0.9/
+AnyIO4.14.2 runtime. A shared native lossless scalar/per-operation deadline runner
+is implemented and passes six focused tests plus the280-test library suite, but
+is not yet wired into HTTP consumers. The full configured schema rerun now passes
+all20 tests (432.49s); new hosted checks remain required. Existing live timeout
+policies and production are unchanged.
+
 Timeout qualification now includes 17 independently repeated, real loopback-TLS
 observations from the exact published Canvas HTTP factory/pinning transport.
 They confirm that Python uses progress-sensitive operation deadlines, whereas

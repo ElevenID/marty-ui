@@ -308,6 +308,15 @@ impl PublishedDatabase {
             "/verification/scripts/prepare_canvas_published_schema.py",
         ];
         let (script, scenario, report_key, flag) = oracle.unwrap_or_default();
+        if script == "timeout_consumer" {
+            // Only the TLS oracle needs ephemeral certificate storage. Preserve
+            // the read-only image and all host mounts; nothing is persisted.
+            let index = arguments.len() - 2;
+            arguments.splice(
+                index..index,
+                ["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=8m,mode=1777"],
+            );
+        }
         let script_path = format!("scripts/run_canvas_{script}_oracle.py");
         let scenario_path = format!("contracts/canvas-{scenario}-scenarios.json");
         let oracle_script_mount = format!(

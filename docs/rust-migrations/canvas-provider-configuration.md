@@ -19,8 +19,8 @@ All original 37 observations remain unchanged after adding two newline cases.
 
 The native library replays the same frozen observations. A new mandatory hosted
 schema test, `provider_configuration_matches_published_helpers`, cross-checks the
-helper capture inside the pinned published image. The local Docker engine is
-unavailable, so that new image gate has not yet been run locally. This helper
+helper capture inside the pinned published image. It has now passed locally,
+including the later 19 fresh-process full-import assertions. The original helper
 qualification does **not** prove full module import, endpoint error projection,
 or actual HTTPX timeout behavior.
 
@@ -66,8 +66,8 @@ The mandatory `timeout_consumer_matches_published_socket_behavior` image test
 compares those observations and records the image's actual dependency versions.
 The existing helper image gate now also checks full adapter imports in 19 fresh
 child processes, one per timeout configuration, against the ordered-assignment
-oracle. Both extensions require new hosted qualification; local Docker remains
-unavailable. The original 39 helper observations are unchanged.
+oracle. Both extensions require new hosted qualification. Docker became available
+again and both passed locally; the original 39 helper observations are unchanged.
 
 This continuation changes tests, not the native timeout runtime. Rust currently
 uses a positive startup Duration and reqwest's whole-request `.timeout()`, so the
@@ -81,7 +81,45 @@ Local timeout-continuation verification: repeated 17-case TLS captures and all
 strict all-target Clippy passes (7.46s, final retry 1.25s); 33 workflow/image tests
 pass (1.43s). The final 20-test schema target compiles (4.35s) and its Docker-free
 63-case protocol replay passes (0.02s).
-The new published-image and full-import assertions have not been executed locally.
+At that initial checkpoint the new image/import assertions had not run locally;
+the subsequent results below supersede that limitation.
+
+## Native deadline owner and published-image verification
+
+The first full local 20-test schema run passed 19 tests, including the full-import
+gate. The TLS probe failed before assertions because its read-only image had no
+writable temporary directory for the synthetic certificate. Only that statically
+selected probe now receives an 8 MiB `/tmp` tmpfs with noexec/nosuid/nodev; the
+image and host mounts remain read-only. No deployment or host trust changed.
+
+The corrected socket gate passes all 17 observations in the actual published
+image (10.15s). Its installed versions are HTTPX0.26.0, httpcore1.0.9 and
+AnyIO4.14.2. These agree with the frozen outcomes despite the local version
+differences. This proves the tested import/network baseline, not native HTTP parity.
+
+`canvas_network_timeout.rs` implements a lossless IEEE-bit scalar and one scoped
+deadline runner for connect, TLS, read, write and pool operations. It preserves
+NaN and signed zero, accepts all frozen parsed scalars, safely handles deadlines
+beyond the platform clock, and drops operations/timers together on timeout or
+caller cancellation. Six tests cover immediate connection timeout, delayed
+NaN/infinity/huge operations, fresh budgets after progress, independent duplex
+read/write stalls, and cleanup. It is **not wired into runtime consumers yet**.
+
+The new primitive passes the complete 280-library-test suite (6.41s), five worker
+tests, 22 behavior tests, 33 workflow/image tests (8.95s), and strict all-target
+Clippy (70s). The full configured schema rerun after the tmpfs correction passes
+all20 tests (432.49s), including every published import/socket and database/HTTP
+assertion; no tests are ignored or filtered. The slower run followed build-cache
+contention, not a widened behavioral timeout or an excluded case.
+No dependency, lockfile, startup acceptance or live HTTP policy changed here.
+
+Transport adoption must use actual operation boundaries: reqwest0.13.4 creates
+its read-timeout future when constructing the pending request, before response
+headers arrive, and checks it while polling the entire in-flight request. Merely
+replacing `.timeout()` with `.read_timeout()` therefore does not independently
+bound write and response-header operations like the published HTTPX owner. Its
+connector layer also fixes the connection response type, preventing a simple
+external stream-wrapper replacement. Do not infer full parity from builder names.
 
 ## Outstanding gates
 
@@ -100,6 +138,14 @@ parity gap, not an approved restriction. Freeze actual import and network-consum
 behavior before changing the representation and all timeout consumers. Also
 qualify the full managed-validation invalid-UTF-8 response boundary; the native
 safe-failure regression alone does not establish published endpoint parity.
+Source review locates that boundary in the published
+`infrastructure/api/canvas_routes.py::validate_canvas_credentials_provider`,
+which directly awaits the adapter result. The bridge adapter reads the token
+before its URL-error handler; the real-provider handler catches RuntimeError,
+not UnicodeDecodeError. Also qualify unsupported-provider precedence: published
+validation rejects an unsupported provider without loading a token, while the
+current native validator loads the token first. Capture the actual HTTP response
+and lookup side effects before changing the public result/error contract.
 
 The status-provider URL/template, transport, persistence/recovery and all-consumer
 gates remain in force. No reachable Python was removed, no pending-only default

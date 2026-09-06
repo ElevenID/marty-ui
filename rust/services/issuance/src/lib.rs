@@ -44,6 +44,7 @@ pub mod canvas_management_domain;
 pub mod canvas_management_http;
 pub mod canvas_management_postgres;
 pub mod canvas_management_service;
+pub mod canvas_network_timeout;
 pub mod canvas_oauth;
 pub mod canvas_oauth_http;
 pub mod canvas_oauth_postgres;
