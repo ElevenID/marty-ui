@@ -1,5 +1,6 @@
 //! Actual native renewal/expiry/retry, using the independent published corpus.
 use super::{
+    canvas_worker_concurrent_replay::{heartbeats, start_blocked_workers, WORKER_IDS},
     canvas_worker_process_signals::OwnedWorker,
     canvas_worker_provider_signals_replay::{
         assert_generation_fenced_state, assert_leased_state, await_marker, control_directory, mark,
@@ -109,34 +110,60 @@ async fn await_database_condition(pool: &PgPool, query: &'static str, id: &str, 
 }
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str) {
-    assert!(matches!(case, "renewal" | "recovery" | "final"));
-    let (reference_json, scenarios_json) = if case == "final" {
-        (
+    assert!(matches!(
+        case,
+        "renewal" | "recovery" | "final" | "reclaimers"
+    ));
+    let final_attempt = matches!(case, "final" | "reclaimers");
+    let (reference_json, scenarios_json) = match case {
+        "reclaimers" => (
+            include_str!("../../../../../contracts/canvas-worker-reclaimers-oracle.json"),
+            include_str!("../../../../../contracts/canvas-worker-reclaimers-scenarios.json"),
+        ),
+        "final" => (
             include_str!("../../../../../contracts/canvas-worker-provider-final-oracle.json"),
             include_str!("../../../../../contracts/canvas-worker-provider-final-scenarios.json"),
-        )
-    } else {
-        (
+        ),
+        _ => (
             include_str!("../../../../../contracts/canvas-worker-provider-recovery-oracle.json"),
             include_str!("../../../../../contracts/canvas-worker-provider-recovery-scenarios.json"),
-        )
+        ),
     };
     let reference: Value = serde_json::from_str(reference_json).unwrap();
     static FINAL_SCENARIO: OnceLock<Value> = OnceLock::new();
     static RECOVERY_SCENARIO: OnceLock<Value> = OnceLock::new();
-    let cases = if case == "final" {
-        &FINAL_SCENARIO
-    } else {
-        &RECOVERY_SCENARIO
+    static RECLAIMERS_SCENARIO: OnceLock<Value> = OnceLock::new();
+    let cases = match case {
+        "final" => &FINAL_SCENARIO,
+        "reclaimers" => &RECLAIMERS_SCENARIO,
+        _ => &RECOVERY_SCENARIO,
     }
-    .get_or_init(|| serde_json::from_str(scenarios_json).unwrap());
-    let expected = if case == "final" {
+    .get_or_init(|| {
+        let parsed: Value = serde_json::from_str(scenarios_json).unwrap();
+        if case == "reclaimers" {
+            assert_eq!(
+                parsed["extends"],
+                "canvas-worker-provider-final-scenarios.json"
+            );
+            let mut base: Value = serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-worker-provider-final-scenarios.json"
+            ))
+            .unwrap();
+            base.as_object_mut()
+                .unwrap()
+                .extend(parsed.as_object().unwrap().clone());
+            base
+        } else {
+            parsed
+        }
+    });
+    let expected = if final_attempt {
         &reference
     } else {
         &reference[case]
     };
     let fixture = prepare(pool, origin, "rest").await;
-    if case == "final" {
+    if final_attempt {
         // Historical attempts are fixture input before any worker starts.
         let count: i64 =
             sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
@@ -154,6 +181,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
     environment.insert("CANVAS_SYNC_WORKER_LEASE_SECONDS".into(), "30".into());
     let control = control_directory();
     let (mut worker, mut started) = start(pool, database_url, &environment).await;
+    let mut contender: Option<OwnedWorker> = None;
     await_marker(&control, "request-received", &mut worker).await;
     assert_leased_state(snapshot(pool, &fixture).await, &expected["before"], 1);
     let first = generation(pool).await;
@@ -187,7 +215,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
     assert_eq!(expected["lease_and_both_heartbeats_advanced"], true);
     assert_eq!(expected["generation_preserved_during_renewal"], true);
     assert_leased_state(snapshot(pool, &fixture).await, &expected["renewed"], 1);
-    if matches!(case, "recovery" | "final") {
+    if matches!(case, "recovery" | "final" | "reclaimers") {
         worker.signal("SIGKILL");
         let status = worker.wait().await;
         #[cfg(unix)]
@@ -200,9 +228,34 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
         assert_leased_state(snapshot(pool, &fixture).await, &expected["after_crash"], 1);
         mark(&control, "release-response");
         await_database_condition(pool, "SELECT lease_expires_at<=clock_timestamp() FROM issuance_service.canvas_evidence_sync_jobs WHERE id=$1", &first.id, 35).await;
-        let (reclaimer, since) = start(pool, database_url, &environment).await;
-        worker = reclaimer;
-        started = since;
+        if case == "reclaimers" {
+            assert_eq!(cases["reclaimer_ids"], serde_json::json!(WORKER_IDS));
+            assert_eq!(
+                cases["concurrency_scenario"],
+                "canvas-worker-concurrent-scenarios.json"
+            );
+            started = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            let mut reclaimers = start_blocked_workers(
+                pool,
+                database_url,
+                &environment,
+                cases["barrier_sql"].as_str().unwrap(),
+                cases["blocked_reclaimers_sql"].as_str().unwrap(),
+                1,
+                || assert_eq!(expected["both_reclaimers_blocked"], true),
+            )
+            .await;
+            contender = reclaimers.pop();
+            worker = reclaimers.pop().unwrap();
+            assert!(reclaimers.is_empty());
+        } else {
+            let (reclaimer, since) = start(pool, database_url, &environment).await;
+            worker = reclaimer;
+            started = since;
+        }
     }
     if case == "recovery" {
         let reclaimed = idle_outcome(pool, &fixture, &mut worker, "retry", 1, started).await;
@@ -225,27 +278,47 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
         pool,
         &fixture,
         &mut worker,
-        if case == "final" {
+        if final_attempt {
             "dead_letter"
         } else {
             "succeeded"
         },
         match case {
-            "final" => 8,
+            "final" | "reclaimers" => 8,
             "recovery" => 2,
             _ => 1,
         },
         started,
     )
     .await;
-    if case == "final" {
+    if final_attempt {
         assert_generation_fenced_state(completed, &expected["completed"], 1);
+    } else {
+        assert_eq!(completed, expected["completed"]);
+    }
+    if let Some(other) = contender.as_mut() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                assert!(worker.0.try_wait().unwrap().is_none());
+                assert!(other.0.try_wait().unwrap().is_none());
+                let fresh: bool = sqlx::query_scalar("SELECT count(*)=2 AND bool_and(last_heartbeat_at >= $1 AND metadata->>'phase'='idle') FROM issuance_service.canvas_worker_heartbeats")
+                    .bind(started).fetch_one(pool).await.unwrap();
+                if fresh { break; }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }).await.expect("both reclaimer heartbeats must be fresh and idle after restart");
+        assert_eq!(heartbeats(pool).await, expected["reclaimer_heartbeats"]);
+        assert_generation_fenced_state(snapshot(pool, &fixture).await, &expected["completed"], 1);
+        assert_eq!(expected["both_reclaimers_alive_after_completion"], true);
+        other.signal("SIGINT");
+        assert_eq!(other.wait().await.code(), Some(130));
+        assert_eq!(expected["contender_exit_code_after_interrupt"], -2);
+    }
+    if final_attempt {
         let target_enabled: bool = sqlx::query_scalar("SELECT enabled FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'")
             .fetch_one(pool).await.unwrap();
         assert!(!target_enabled);
         assert_eq!(expected["target_enabled"], false);
-    } else {
-        assert_eq!(completed, expected["completed"]);
     }
     worker.signal("SIGINT");
     assert_eq!(worker.wait().await.code(), Some(130));

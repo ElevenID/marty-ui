@@ -24,14 +24,14 @@ def wait_for(child, predicate, description, timeout=30):
 
 def run(executable, scenario="signals"):
     assert sys.platform == "linux", "Actual POSIX worker signals require Linux"
-    assert scenario in {"signals", "recovery", "final", "concurrent"}
+    assert scenario in {"signals", "recovery", "final", "concurrent", "reclaimers"}
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / "contracts/canvas-worker-rest-scenarios.json").read_text()
     )
     reference_name = (
-        "canvas-worker-concurrent-oracle.json"
-        if scenario == "concurrent"
+        f"canvas-worker-{scenario}-oracle.json"
+        if scenario in {"concurrent", "reclaimers"}
         else f"canvas-worker-provider-{scenario}-oracle.json"
     )
     reference = json.loads((root / "contracts" / reference_name).read_text())
@@ -40,10 +40,11 @@ def run(executable, scenario="signals"):
         "recovery": ["renewal", "recovery"],
         "final": ["final"],
         "concurrent": ["concurrent"],
+        "reclaimers": ["reclaimers"],
     }[scenario]
-    if scenario == "final":
+    if scenario in {"final", "reclaimers"}:
         assert reference["case"] == "final"
-        reference = {"final": reference}
+        reference = {scenario: reference}
     elif scenario == "concurrent":
         assert reference["schema"] == "marty.canvas-worker-concurrent-oracle/v1"
         reference = {"concurrent": reference}
@@ -82,7 +83,7 @@ def run(executable, scenario="signals"):
                 # Synchronize the test harness only, never the worker or DB.
                 (control / "request-received").touch(exist_ok=False)
                 release_response = (
-                    scenario in {"recovery", "final", "concurrent"}
+                    scenario in {"recovery", "final", "concurrent", "reclaimers"}
                     or signal_name == "SIGTERM"
                 )
                 if release_response:
@@ -103,7 +104,12 @@ def run(executable, scenario="signals"):
                         "Recovery bypassed retry eligibility"
                     )
                     (control / "reclaimer-observed").touch(exist_ok=False)
-                stdout, stderr = child.communicate(timeout=90)
+                # The dual-reclaimer child additionally owns a 20-second DB
+                # barrier, 15-second second-heartbeat wait and two process exits.
+                # Let its bounded waits/RAII finish before parent-level timeout.
+                stdout, stderr = child.communicate(
+                    timeout=150 if scenario == "reclaimers" else 90
+                )
                 assert child.returncode == 0, (
                     f"Native {signal_name} failed: {stdout} {stderr}"
                 )
@@ -127,6 +133,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final|concurrent]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|concurrent|reclaimers]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

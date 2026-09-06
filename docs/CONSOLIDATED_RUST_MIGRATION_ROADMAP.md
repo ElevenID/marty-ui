@@ -37,8 +37,8 @@ The [competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers.md)
 has two matching independent captures and a mandatory regeneration gate. After
 real final-attempt crash/expiry, two actual processes are observed blocked at the
 job-table barrier, then reach fresh idle with one dead-letter and no additional
-provider request. Native replay and the remaining ownership/completion races
-are still open.
+provider request. Native replay is implemented and awaits Linux qualification;
+remaining ownership, nonfinal-reclaimer and completion races are still open.
 
 The [local branch cleanup checkpoint](rust-migrations/branch-cleanup-checkpoint.md)
 retires three already-merged CI branch names while retaining their exact commits

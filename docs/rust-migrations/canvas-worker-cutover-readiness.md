@@ -85,7 +85,8 @@ The [two-reclaimer reference](canvas-worker-reclaimers.md) has two matching
 captures after actual final-attempt renewal, process loss and real lease expiry.
 Both actual job queries wait at an owned job-table barrier before release; both
 workers then reach fresh idle with one dead-letter and no further provider read.
-Native adoption and other ownership/final-completion races remain open.
+Native adoption is implemented and awaits Linux qualification; other ownership,
+nonfinal-reclaimer and final-completion races remain open.
 
 The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
 matching independent captures and a mandatory regeneration gate. It seeds

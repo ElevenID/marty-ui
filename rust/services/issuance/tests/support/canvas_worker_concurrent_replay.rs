@@ -9,7 +9,72 @@ use super::{
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
-use std::{sync::OnceLock, time::Duration};
+use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
+
+pub(super) const WORKER_IDS: [&str; 2] = ["worker-rest", "worker-contender"];
+
+fn scenario() -> &'static Value {
+    static CASES: OnceLock<Value> = OnceLock::new();
+    CASES.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-concurrent-scenarios.json"
+        ))
+        .unwrap()
+    })
+}
+
+pub(super) async fn heartbeats(pool: &PgPool) -> Value {
+    sqlx::query_scalar(scenario()["heartbeats_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+pub(super) async fn start_blocked_workers(
+    pool: &PgPool,
+    database_url: &str,
+    environment: &BTreeMap<String, String>,
+    barrier_sql: &'static str,
+    blocked_sql: &'static str,
+    expected_jobs: i64,
+    before_release: impl FnOnce(),
+) -> Vec<OwnedWorker> {
+    let mut barrier = pool.begin().await.unwrap();
+    sqlx::raw_sql(barrier_sql)
+        .execute(&mut *barrier)
+        .await
+        .unwrap();
+    let mut workers: Vec<_> = WORKER_IDS
+        .iter()
+        .map(|id| OwnedWorker::start_with_environment(database_url, id, environment))
+        .collect();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            assert_alive(&mut workers);
+            let blocked: i64 = sqlx::query_scalar(blocked_sql)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            if blocked == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("both actual workers must wait at the fixture barrier");
+    // Use the lock-owning connection: a separate connection would deadlock
+    // when the shared barrier protects the jobs table for crash reclaimers.
+    let jobs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
+            .fetch_one(&mut *barrier)
+            .await
+            .unwrap();
+    assert_eq!(jobs, expected_jobs);
+    before_release();
+    barrier.commit().await.unwrap();
+    workers
+}
 
 fn assert_alive(workers: &mut [OwnedWorker]) {
     assert_eq!(workers.len(), 2);
@@ -24,7 +89,6 @@ fn assert_alive(workers: &mut [OwnedWorker]) {
 async fn phase_state(
     pool: &PgPool,
     fixture: &WorkerFixture,
-    cases: &'static Value,
     workers: &mut [OwnedWorker],
     phases: &[&str],
     status: &str,
@@ -33,10 +97,7 @@ async fn phase_state(
         loop {
             assert_alive(workers);
             let mut state = snapshot(pool, fixture).await;
-            state["heartbeat"] = sqlx::query_scalar(cases["heartbeats_sql"].as_str().unwrap())
-                .fetch_one(pool)
-                .await
-                .unwrap();
+            state["heartbeat"] = heartbeats(pool).await;
             let observed: Vec<_> = state["heartbeat"]
                 .as_array()
                 .unwrap()
@@ -57,63 +118,33 @@ async fn phase_state(
 }
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str) {
-    static CASES: OnceLock<Value> = OnceLock::new();
-    let cases = CASES.get_or_init(|| {
-        serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-worker-concurrent-scenarios.json"
-        ))
-        .unwrap()
-    });
+    let cases = scenario();
     let expected: Value = serde_json::from_str(include_str!(
         "../../../../../contracts/canvas-worker-concurrent-oracle.json"
     ))
     .unwrap();
-    let worker_ids = ["worker-rest", "worker-contender"];
+    let worker_ids = WORKER_IDS;
     assert_eq!(cases["worker_ids"], serde_json::json!(worker_ids));
     let fixture = prepare(pool, origin, "rest").await;
     let environment = worker_environment(origin);
     let control = control_directory();
-    // This transaction holds only the isolated fixture's target table. Its
-    // RAII rollback releases the barrier on failure as well as success.
-    let mut barrier = pool.begin().await.unwrap();
-    sqlx::raw_sql(cases["barrier_sql"].as_str().unwrap())
-        .execute(&mut *barrier)
-        .await
-        .unwrap();
-    let mut workers: Vec<_> = worker_ids
-        .iter()
-        .map(|id| OwnedWorker::start_with_environment(database_url, id, &environment))
-        .collect();
-    tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            assert_alive(&mut workers);
-            let blocked: i64 =
-                sqlx::query_scalar(cases["blocked_schedulers_sql"].as_str().unwrap())
-                    .fetch_one(pool)
-                    .await
-                    .unwrap();
-            if blocked == 2 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("both actual schedulers must wait at the fixture barrier");
-    assert_eq!(expected["both_schedulers_blocked"], true);
-    let jobs: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    assert_eq!(jobs, 0);
-    assert!(!control.join("request-received").exists());
-    barrier.commit().await.unwrap();
+    let mut workers = start_blocked_workers(
+        pool,
+        database_url,
+        &environment,
+        cases["barrier_sql"].as_str().unwrap(),
+        cases["blocked_schedulers_sql"].as_str().unwrap(),
+        0,
+        || {
+            assert_eq!(expected["both_schedulers_blocked"], true);
+            assert!(!control.join("request-received").exists());
+        },
+    )
+    .await;
     await_marker(&control, "request-received", &mut workers[0]).await;
     let before = phase_state(
         pool,
         &fixture,
-        cases,
         &mut workers,
         &["idle", "processing"],
         "leased",
@@ -131,15 +162,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str) {
     let owner: String = original.get("lease_owner");
     assert!(worker_ids.contains(&owner.as_str()));
     mark(&control, "release-response");
-    let completed = phase_state(
-        pool,
-        &fixture,
-        cases,
-        &mut workers,
-        &["idle", "idle"],
-        "succeeded",
-    )
-    .await;
+    let completed = phase_state(pool, &fixture, &mut workers, &["idle", "idle"], "succeeded").await;
     assert_eq!(completed, expected["completed"]);
     assert_alive(&mut workers);
     assert_eq!(expected["both_workers_alive_after_completion"], true);

@@ -1,7 +1,8 @@
 # Actual competing final-attempt reclaimers
 
 Status: two independent published-process captures agree; mandatory reference
-regeneration passes locally. Native two-reclaimer replay remains open. This is
+regeneration passes locally. Native two-reclaimer replay is implemented and
+awaits Linux qualification. This is
 not whole-worker cutover or Python deletion/deployment qualification.
 
 The existing final-attempt reference supplies historical queued attempt 7 before
@@ -44,8 +45,29 @@ failures, duplicate identities and importing process helpers without a database
 library. SQLAlchemy remains needed only for actual database observations; no new
 application or CI dependency was introduced.
 
-Native replay must retain the exact internal generation fence, all existing
-positive/negative state comparisons and both fresh heartbeat observations.
+## Native replay
+
+The mandatory native parent/child extends the shared recovery replay and retains
+the exact internal generation fence, all existing positive/negative comparisons
+and both fresh heartbeat observations. It uses the same pre-start historical
+seed, actual renewal/crash/expiry, and two owned Rust processes behind the job
+barrier. Both restart heartbeats must be fresh and idle before the exact state
+and target-disabled assertions are accepted. Both workers are interrupted and
+reaped; original job/start, issued rows and ciphertext remain preserved.
+
+Scheduler and reclaimer tests share the Rust barrier owner. The pre-release job
+count is checked using the lock-owning transaction (zero for the scheduler, one
+for reclaimers), avoiding a self-deadlock through a second connection. Bounded
+waits, process RAII and transaction rollback remain intact. The HTTPS parent
+checks exactly one request and gives this longer child 150 seconds to finish
+its additional bounded barrier/heartbeat/exit checks; existing cases retain
+their 90-second parent deadline. No individual behavior assertion was relaxed.
+
+Local native compilation, three strict comparison tests and all 68 affected
+Python tests pass (3.34 seconds for Python), together with strict lint/format
+and CI syntax checks. Actual native two-reclaimer runtime remains unqualified
+until the new mandatory Linux parent/child executes successfully.
+
 Changed-target/owner-fence loss, final-completion races, disposal and nonfinal
 competing-reclaimer outcomes remain separate requirements in the
 [cutover inventory](canvas-worker-cutover-readiness.md).
