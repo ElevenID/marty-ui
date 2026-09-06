@@ -1,0 +1,20 @@
+{
+  "schema": "marty.canvas-worker-validation-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "remaining_validation_errors": ["canvas_sync_target_application_invalid", "canvas_sync_target_candidate_invalid"],
+  "scope": "Fresh official-schema database per case; fixture target configuration and one queued job are seeded before the actual worker starts. No application clock, running job, lease or outcome is edited. Observe terminal validation without Canvas reads or changes to issued rows. Missing/foreign application and candidate references constrained by the schema require separate constraint/race evidence, not disabled foreign keys.",
+  "initial_job_seed": "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at) VALUES ('worker-validation-job','org-review','target-review','queued',0,8,'2026-09-01T00:00:00Z','{}','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')",
+  "cases": [
+    {"name": "incomplete_logical_key", "code": "canvas_sync_target_incomplete", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET logical_key=chr(9) WHERE id='target-review'"]},
+    {"name": "prohibited_metadata", "code": "canvas_sync_target_contains_secret", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET metadata='{\"access_token\":\"synthetic-prohibited-material\"}' WHERE id='target-review'"]},
+    {"name": "binding_platform_mismatch", "code": "canvas_sync_target_scope_invalid", "seed": ["INSERT INTO issuance_service.canvas_platforms (id,organization_id,canvas_account_id,canvas_base_url,lti_deployment_id,enabled) VALUES ('platform-secondary','org-review','secondary','https://secondary.example.invalid','secondary',true)", "UPDATE issuance_service.canvas_program_bindings SET platform_id='platform-secondary' WHERE id='binding-review'"]},
+    {"name": "target_disabled", "code": "canvas_sync_target_inactive", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=false WHERE id='target-review'"]},
+    {"name": "platform_disabled", "code": "canvas_sync_target_inactive", "seed": ["UPDATE issuance_service.canvas_platforms SET enabled=false WHERE id='platform-review'"]},
+    {"name": "platform_archived", "code": "canvas_sync_target_inactive", "seed": ["UPDATE issuance_service.canvas_platforms SET enabled=false,archived_at='2026-09-01T00:00:00Z' WHERE id='platform-review'"]},
+    {"name": "binding_disabled", "code": "canvas_sync_target_inactive", "seed": ["UPDATE issuance_service.canvas_program_bindings SET enabled=false WHERE id='binding-review'"]},
+    {"name": "binding_archived", "code": "canvas_sync_target_inactive", "seed": ["UPDATE issuance_service.canvas_program_bindings SET enabled=false,archived_at='2026-09-01T00:00:00Z' WHERE id='binding-review'"]},
+    {"name": "stale_configuration", "code": "canvas_sync_target_config_stale", "seed": ["UPDATE issuance_service.canvas_program_bindings SET config_version=2,validated_config_version=2 WHERE id='binding-review'"]},
+    {"name": "application_missing", "code": "canvas_sync_target_application_missing", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET application_id=NULL WHERE id='target-review'"]},
+    {"name": "candidate_missing", "code": "canvas_sync_target_candidate_missing", "seed": ["UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='award_candidate',application_id=NULL,candidate_id=NULL WHERE id='target-review'"]}
+  ]
+}

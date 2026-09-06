@@ -350,23 +350,37 @@ async fn worker_provider_signals_reference_matches_published_process() {
 
 #[tokio::test]
 async fn worker_retry_after_reference_matches_published_process() {
+    assert_worker_matrix_reference("retry-after").await;
+}
+
+#[tokio::test]
+async fn worker_validation_reference_matches_published_process() {
+    assert_worker_matrix_reference("validation").await;
+}
+
+async fn assert_worker_matrix_reference(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-retry-after-scenarios.json"
-    ))
-    .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-retry-after-oracle.json"
-    ))
-    .unwrap();
+    let (scenario_source, oracle_source) = match kind {
+        "retry-after" => (
+            include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
+            include_str!("../../../../contracts/canvas-worker-retry-after-oracle.json"),
+        ),
+        "validation" => (
+            include_str!("../../../../contracts/canvas-worker-validation-scenarios.json"),
+            include_str!("../../../../contracts/canvas-worker-validation-oracle.json"),
+        ),
+        _ => panic!("unknown static worker matrix"),
+    };
+    let scenarios: serde_json::Value = serde_json::from_str(scenario_source).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(oracle_source).unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
     let names = cases
         .iter()
         .map(|case| case["name"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
-    assert_eq!(cases.len(), names.len(), "duplicate Retry-After case");
+    assert_eq!(cases.len(), names.len(), "duplicate worker matrix case");
     assert_eq!(
         names,
         expected
@@ -377,10 +391,18 @@ async fn worker_retry_after_reference_matches_published_process() {
             .collect()
     );
     for name in names {
-        let owned =
-            canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
-                .await
-                .unwrap();
+        let owned = match kind {
+            "retry-after" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
+                    .await
+            }
+            "validation" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_validation(name)
+                    .await
+            }
+            _ => unreachable!(),
+        }
+        .unwrap();
         assert_eq!(owned.oracle.as_ref().unwrap(), &expected[name], "{name}");
         owned.close().unwrap();
     }

@@ -246,26 +246,46 @@ impl PublishedDatabase {
     }
 
     pub async fn start_with_worker_retry_after(case: &str) -> Result<Self, String> {
-        let scenarios: Value = serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
-        ))
-        .unwrap();
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-retry-after-scenarios.json"),
+            "worker_retry_after",
+            "worker-retry-after",
+            "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_validation(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-validation-scenarios.json"),
+            "worker_validation",
+            "worker-validation",
+            "MARTY_CANVAS_WORKER_VALIDATION_CASE",
+        )
+        .await
+    }
+
+    async fn start_with_worker_case(
+        case: &str,
+        source: &str,
+        script: &str,
+        scenario: &str,
+        flag_name: &str,
+    ) -> Result<Self, String> {
+        let scenarios: Value = serde_json::from_str(source).unwrap();
         if !scenarios["cases"]
             .as_array()
             .unwrap()
             .iter()
             .any(|item| item["name"] == case)
         {
-            return Err("unsupported owned worker Retry-After case".into());
+            return Err("unsupported owned worker matrix case".into());
         }
-        let flag = format!("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE={case}");
+        let flag = format!("{flag_name}={case}");
         Self::start_probe_with_extra(
-            Some((
-                "worker_retry_after",
-                "worker-retry-after",
-                "worker_retry_after",
-                &flag,
-            )),
+            Some((script, scenario, script, &flag)),
             Some("canvas-issued-review-scenarios.json"),
         )
         .await
@@ -556,6 +576,7 @@ impl PublishedDatabase {
                 | "worker_facts"
                 | "worker_retry"
                 | "worker_retry_after"
+                | "worker_validation"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -638,6 +659,7 @@ impl PublishedDatabase {
             "worker_facts"
                 | "worker_retry"
                 | "worker_retry_after"
+                | "worker_validation"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"

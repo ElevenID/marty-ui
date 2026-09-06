@@ -33,13 +33,22 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [target-validation reference](rust-migrations/canvas-worker-validation.md)
+freezes eleven actual published-worker cases with matching independent captures:
+no Canvas reads, exact terminal errors, disabled targets and preserved issued
+rows/token ciphertext. Native adoption and the two explicitly listed
+application/candidate-invalid paths remain open; this does not close gate 9.
+
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,
 negative/zero and clamped/oversized integer headers. Two independent captures
 match exactly; native replay is implemented and awaiting Linux qualification.
 Focused tests confirmed oversized-integer fallback in both Rust helpers; a
 single shared parser correction now passes local regressions and a real HTTP
-provider test. Full composed Linux qualification remains required for gate 8;
+provider test. The uncorrected replay at `f9ee06b42` confirmed the oversized-header
+failure in Linux (66 configured passes, one failure; CI34050156566).
+Correction `a6826de39` is pushed and awaiting fresh CI34051487770 and
+Rust CodeQL34051487785. Full composed Linux qualification remains required for gate 8;
 this is not a completed worker cutover.
 
 The [packaged startup/configuration gate](rust-migrations/canvas-worker-image-startup.md)

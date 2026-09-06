@@ -54,6 +54,12 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 ## Normative legacy-gap reconciliation
 
+The [target-validation reference](canvas-worker-validation.md) captures eleven
+actual published-worker cases with identical independent results. It covers
+seven terminal codes (including five inactive variants), no Canvas reads and
+preserved issued rows/token ciphertext. Native adoption and two explicitly
+uncovered application/candidate-invalid paths remain pending; gate 9 is open.
+
 The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized
 integer clamping. Two captures agree; native replay is implemented. Focused Rust

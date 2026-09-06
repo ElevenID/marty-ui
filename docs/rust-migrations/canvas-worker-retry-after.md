@@ -109,6 +109,15 @@ Python tests passed in 41.83 seconds with the same existing opt-in skip.
 The frozen reference/scenario files are unchanged. Full Linux runtime and
 image qualification of this correction remain required before cutover.
 
+The complete Linux replay at uncorrected `f9ee06b42` subsequently demonstrated
+the same defect: CI34050156566/runtime job101532215062 recorded 66 configured
+passes and one failure in 1064.79 seconds. Future/past dates, malformed,
+negative, zero and ordinary clamp stages passed with actual HTTPS requests;
+`huge_integer` alone failed the persisted-deadline comparison. Image
+job101532215068 and Rust CodeQL34050156545 passed. Correction `a6826de39`
+is now pushed for fresh CI34051487770/Rust CodeQL34051487785. This is a pending
+correction qualification, not a whole-worker pass.
+
 This corpus establishes retry scheduling, not execution after a one-day delay,
 remote OAuth revocation, every header grammar, or all error/privacy boundaries.
 Continue the [14-gate cutover inventory](canvas-worker-cutover-readiness.md).

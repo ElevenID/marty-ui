@@ -19,21 +19,31 @@ async fn main() -> Result<(), String> {
         _ => return Err("expected scenario [--output ABSOLUTE_NEW_FILE]".into()),
     };
     use canvas_published_database::PublishedDatabase;
-    if scenario == "worker-retry-after" {
-        let scenarios: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
-        ))
+    if matches!(
+        scenario.as_str(),
+        "worker-retry-after" | "worker-validation"
+    ) {
+        let scenarios: serde_json::Value = serde_json::from_str(match scenario.as_str() {
+            "worker-validation" => {
+                include_str!("../../../../contracts/canvas-worker-validation-scenarios.json")
+            }
+            _ => include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
+        })
         .unwrap();
         let mut matrix = serde_json::Map::new();
         for case in scenarios["cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();
-            let owned = PublishedDatabase::start_with_worker_retry_after(name).await?;
+            let owned = if scenario == "worker-validation" {
+                PublishedDatabase::start_with_worker_validation(name).await?
+            } else {
+                PublishedDatabase::start_with_worker_retry_after(name).await?
+            };
             matrix.insert(
                 name.into(),
                 owned
                     .oracle
                     .as_ref()
-                    .ok_or("missing Retry-After oracle")?
+                    .ok_or("missing worker matrix oracle")?
                     .clone(),
             );
             owned.close()?;
@@ -61,7 +71,7 @@ async fn main() -> Result<(), String> {
         "worker-reclaimers-retry" => PublishedDatabase::start_with_worker_reclaimers_retry().await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-retry-after, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-retry-after, worker-validation, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
                     .into(),
             )
         }
