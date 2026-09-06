@@ -19,7 +19,7 @@ from unittest.mock import patch
 import httpx
 
 
-async def observe(cases=None, *, capture_diagnostics=False):
+async def observe(cases=None, *, capture_diagnostics=False, response_projection=None):
     os.environ["ISSUANCE_API_KEY"] = "synthetic-validation-key"
     from issuance import main
     from issuance.domain.ports import IIssuanceRepository
@@ -209,6 +209,12 @@ async def observe(cases=None, *, capture_diagnostics=False):
                 body["validated_at"] = "$timestamp"
         else:
             body = result.text
+        if (
+            response_projection is not None
+            and isinstance(body, dict)
+            and body.get("response_excerpt") is not None
+        ):
+            body["response_excerpt"] = response_projection(body["response_excerpt"])
         observations.append(
             {
                 "name": case["name"],

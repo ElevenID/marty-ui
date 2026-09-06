@@ -219,6 +219,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'json_depth_diagnostic_matches_published_boundaries: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'"
         in published
     )

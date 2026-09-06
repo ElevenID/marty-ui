@@ -178,6 +178,20 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_json_depth() -> Result<Self, String> {
+        Self::start_probe_with_migration(
+            Some((
+                "json_depth",
+                "json-depth",
+                "json_depth",
+                "MARTY_CANVAS_JSON_DEPTH_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+            true,
+        )
+        .await
+    }
+
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -394,24 +408,26 @@ impl PublishedDatabase {
                 ],
             );
         }
-        let consumer_helpers: Vec<String> = if matches!(script, "utf7_consumer" | "json_consumer") {
-            [
-                "run_canvas_validation_boundary_oracle.py",
-                "run_canvas_status_provider_oracle.py",
-                "canvas_observation_values.py",
-            ]
-            .into_iter()
-            .map(|name| {
-                let path = format!("scripts/{name}");
-                format!(
-                    "type=bind,source={},target=/verification/{path},readonly",
-                    root.join(&path).display()
-                )
-            })
-            .collect()
-        } else {
-            Vec::new()
-        };
+        let consumer_helpers: Vec<String> =
+            if matches!(script, "utf7_consumer" | "json_consumer" | "json_depth") {
+                [
+                    "run_canvas_validation_boundary_oracle.py",
+                    "run_canvas_status_provider_oracle.py",
+                    "canvas_observation_values.py",
+                    "canvas_json_tree_observation.py",
+                ]
+                .into_iter()
+                .map(|name| {
+                    let path = format!("scripts/{name}");
+                    format!(
+                        "type=bind,source={},target=/verification/{path},readonly",
+                        root.join(&path).display()
+                    )
+                })
+                .collect()
+            } else {
+                Vec::new()
+            };
         for mount in &consumer_helpers {
             let index = arguments.len() - 2;
             arguments.splice(index..index, ["--mount", mount]);

@@ -33,6 +33,25 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Published depth behavior is now independently frozen across 64 validation,
+64 provider/helper and 192 full credential-route cases. Validation allows excerpt
+container depth 255 and fails at 256; array payload wrapping adds a level.
+Provider parsing and PostgreSQL saves succeed through every tested depth up to
+1,600. Therefore the current native 127-container guard is a confirmed cutover
+gap, not a compatibility policy. The fixture ceiling is not a runtime limit.
+Nonrecursive typed structural witnesses preserve deep response evidence without
+altering application recursion settings; complete validation wire bodies and
+full-route state evidence remain retained. Two raw captures agree byte-for-byte.
+The new required configured gate regenerates the entire reference.
+See [depth evidence and native next steps](../contracts/canvas-json-depth.md).
+This checkpoint changes test observation/capture infrastructure, not runtime
+behavior. Native stack-safe depth adoption and whole-worker cutover remain open.
+All 33 configured image/schema tests pass (301.31 seconds, none ignored or
+filtered), including unchanged prior JSON/UTF-7 references and native replay.
+All 102 affected Python tests, the large exclusive-create capture test, strict
+Clippy, formatting and CI-runner syntax pass. Previous implementation head
+`52785f6ff` is hosted-green; this depth checkpoint requires fresh hosted checks.
+
 Native JSON response adoption now passes the independently frozen 66-provider,
 66-managed-validation and 198-full-credential-route matrix. One parser retains
 lossless text/keys, duplicate-key order, non-finite values, signed zero and large

@@ -19,7 +19,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
-async def observe(cases=None, *, delivery_lifecycle=False, credential_routes=False):
+async def observe(
+    cases=None,
+    *,
+    delivery_lifecycle=False,
+    credential_routes=False,
+    capture_diagnostics=False,
+    response_projection=None,
+):
     from issuance.domain.entities import CredentialStatus
     from issuance.infrastructure.adapters import canvas_credentials_adapter as adapter
     from issuance.infrastructure.adapters.postgres_repository import (
@@ -52,6 +59,8 @@ async def observe(cases=None, *, delivery_lifecycle=False, credential_routes=Fal
     observations = []
 
     def normalize(value, key=""):
+        if key == "status_sync_response" and response_projection is not None:
+            return response_projection(value)
         if isinstance(value, dict):
             return {name: normalize(item, name) for name, item in value.items()}
         if isinstance(value, list):
@@ -403,12 +412,14 @@ async def observe(cases=None, *, delivery_lifecycle=False, credential_routes=Fal
                         reason=case.get("reason", "synthetic reason"),
                         secret_resolver=secret,
                     )
-                    outcome = {"metadata": normalize(result.metadata)}
                 except Exception as failure:
                     outcome = {
                         "error_class": type(failure).__name__,
                         "error": str(failure),
                     }
+                else:
+                    # Observer failures must never masquerade as adapter errors.
+                    outcome = {"metadata": normalize(result.metadata)}
                 if delivery_lifecycle:
                     before_lifecycle_requests = len(requests)
                     try:
@@ -447,7 +458,7 @@ async def observe(cases=None, *, delivery_lifecycle=False, credential_routes=Fal
                         )
                         for route_action in ("suspend", "reinstate", "revoke")
                     ]
-            if "response_hex" in case:
+            if "response_hex" in case and not capture_diagnostics:
                 assert outcome.get("error_class") == case["expected_error_class"], (
                     case["name"],
                     "unexpected published provider exception",
