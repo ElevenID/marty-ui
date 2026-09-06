@@ -500,7 +500,7 @@ impl CanvasSyncWorker {
     ) -> Result<CanvasSyncWorkerCycleResult, CanvasSyncRepositoryError> {
         self.heartbeat("scheduling", 0).await?;
         let (oauth_revocations_succeeded, oauth_revocations_retried) =
-            self.process_oauth_revocations().await;
+            self.process_oauth_revocations().await?;
         let scheduled = self
             .repository
             .enqueue_due(&self.config.schedule_limit)
@@ -553,6 +553,7 @@ impl CanvasSyncWorker {
                 Ok((_, Ok(_))) => {}
                 Ok((job_id, Err(error))) => {
                     error!(
+                        event = "canvas_sync_job_outcome_failed",
                         job_id,
                         exception_class = error.class(),
                         "Canvas sync job escaped outcome handling"
@@ -581,8 +582,9 @@ impl CanvasSyncWorker {
             }
             if let Err(error) = self.run_cycle().await {
                 error!(
+                    event = "canvas_sync_cycle_failed",
                     exception_class = error.class(),
-                    "Canvas sync worker cycle failed"
+                    "Canvas synchronization worker cycle failed"
                 );
             }
             tokio::select! {
@@ -819,8 +821,8 @@ impl CanvasSyncWorker {
             .ok_or(EscapedJobError::StaleLease)
     }
 
-    async fn process_oauth_revocations(&self) -> (usize, usize) {
-        let due = match self
+    async fn process_oauth_revocations(&self) -> Result<(usize, usize), CanvasSyncRepositoryError> {
+        let due = self
             .oauth_repository
             .due_revocations(
                 self.config
@@ -832,16 +834,9 @@ impl CanvasSyncWorker {
                     .expect("bounded OAuth revocation limit"),
             )
             .await
-        {
-            Ok(due) => due,
-            Err(error) => {
-                warn!(
-                    exception_class = oauth_error_class(&error),
-                    "Canvas OAuth revocation queue read failed"
-                );
-                return (0, 0);
-            }
-        };
+            // An unreadable queue is not an empty queue. Preserve the
+            // reference's cycle failure and next-loop recovery boundary.
+            .map_err(|_| CanvasSyncRepositoryError::Unavailable)?;
         let mut succeeded = 0;
         let mut retried = 0;
         for pending in due {
@@ -885,7 +880,7 @@ impl CanvasSyncWorker {
                 OAuthRevocationOutcome::OwnerFenceLost => {}
             }
         }
-        (succeeded, retried)
+        Ok((succeeded, retried))
     }
 
     async fn revoke_connection(

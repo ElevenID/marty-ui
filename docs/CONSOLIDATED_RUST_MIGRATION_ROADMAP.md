@@ -92,9 +92,15 @@ CI34059299079 also passed. [Credentials PR271](https://github.com/ElevenID/marty
 now freezes 63 hardened observations from the existing reference tests, with
 matching independent captures and mandatory provenance/regeneration checks.
 Maintainer-review capture-tool regressions pass locally: 741 affected tests,
-200 subtests and all 63 regenerated observations. The follow-up still requires
-exact-head hosted qualification and protected landing. Native replay/adoption
-and whole-worker acceptance remain required before closing gates 13/14.
+200 subtests and all 63 regenerated observations. PR271 landed at
+`948bca975b493285c512c20a13d5abf8ee5e6305` after exact-head CI34061052204 and
+protected merge-queue CI34061438212 passed; post-merge main checks are separate.
+The [native privacy replay](rust-migrations/canvas-worker-privacy.md) now covers
+four escaped-job/loop observations locally through PostgreSQL, with complete
+producer/formatter fields and explicit class/storage mappings. Failure-first
+tests drove a scoped Rust queue-recovery and stable-event correction. Other
+privacy observations, fresh exact-head qualification and whole-worker acceptance
+remain required before closing gates 13/14.
 Existing frozen observations, reachable features and other-worker code remain untouched.
 
 Latest UI checkpoint `53c51314f2c22d8d83fd524f9ac4d494d61ceb44` passed

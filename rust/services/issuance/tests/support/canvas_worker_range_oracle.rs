@@ -49,9 +49,28 @@ pub(super) struct ObservedRepositories {
     events: Mutex<Vec<Value>>,
     cycles: AtomicUsize,
     stop: Option<(usize, watch::Sender<bool>)>,
+    fault: Option<ReadFault>,
+    pub(super) oauth_reads: AtomicUsize,
+}
+
+// Controlled adapter failures, matching the reference's patched repository
+// boundaries. All other operations still reach the real PostgreSQL owner.
+pub(super) enum ReadFault {
+    Target(String),
+    FirstOAuthQueueRead,
 }
 
 impl ObservedRepositories {
+    pub(super) fn phase_events(&self, phase: &str) -> Vec<String> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|value| value["phase"] == phase)
+            .map(|value| value["event"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
     fn record(&self, event: Value) {
         self.events.lock().unwrap().push(event);
     }
@@ -82,6 +101,13 @@ macro_rules! worker_repository {
     ($(fn $method:ident($($arg:ident: $ty:ty),*) -> $result:ty;)*) => {
         #[async_trait]
         impl CanvasSyncWorkerRepository for ObservedRepositories {
+            async fn target(&self, organization_id: &str, target_id: &str) -> Result<Option<CanvasSyncTarget>, CanvasSyncRepositoryError> {
+                if matches!(&self.fault, Some(ReadFault::Target(id)) if id == target_id) {
+                    return Err(CanvasSyncRepositoryError::Unavailable);
+                }
+                self.worker.target(organization_id, target_id).await
+            }
+
             async fn upsert_heartbeat(&self, heartbeat: &WorkerHeartbeat) -> Result<(), CanvasSyncRepositoryError> {
                 self.record(json!({"phase": "heartbeat", "event": heartbeat.phase}));
                 if heartbeat.phase == "scheduling" {
@@ -111,7 +137,6 @@ macro_rules! worker_repository {
 }
 
 worker_repository! {
-    fn target(organization_id: &str, target_id: &str) -> Result<Option<CanvasSyncTarget>, CanvasSyncRepositoryError>;
     fn touch_target_heartbeat(target: &CanvasSyncTarget, worker_id: &str) -> Result<bool, CanvasSyncRepositoryError>;
     fn validate_target(target: &CanvasSyncTarget) -> Result<(), CanvasSyncProcessingError>;
     fn renew_lease(job: &CanvasSyncJob, worker_id: &str, lease_seconds: &PythonConfigInteger) -> Result<bool, CanvasSyncRepositoryError>;
@@ -126,6 +151,11 @@ macro_rules! oauth_repository {
             async fn due_revocations(&self, limit: usize) -> Result<Vec<CanvasOAuthConnection>, CanvasOAuthError> {
                 assert!((1..=500).contains(&limit), "bound before machine conversion");
                 self.record(json!({"phase": "oauth_queue", "event": "start"}));
+                let read = self.oauth_reads.fetch_add(1, Ordering::SeqCst);
+                if matches!(self.fault, Some(ReadFault::FirstOAuthQueueRead)) && read == 0 {
+                    self.record(json!({"phase": "oauth_queue", "event": "error"}));
+                    return Err(CanvasOAuthError::RepositoryUnavailable);
+                }
                 let result = self.oauth.due_revocations(limit).await;
                 match &result {
                     Ok(rows) => self.record(json!({"phase": "oauth_queue", "event": "complete", "row_count": rows.len()})),
@@ -249,12 +279,24 @@ pub(super) fn observed_worker(
     processor: Arc<dyn CanvasSyncProcessor>,
     stop: Option<(usize, watch::Sender<bool>)>,
 ) -> (CanvasSyncWorker, Arc<ObservedRepositories>) {
+    observed_worker_with_fault(pool, config, processor, stop, None)
+}
+
+pub(super) fn observed_worker_with_fault(
+    pool: &PgPool,
+    config: CanvasSyncWorkerConfig,
+    processor: Arc<dyn CanvasSyncProcessor>,
+    stop: Option<(usize, watch::Sender<bool>)>,
+    fault: Option<ReadFault>,
+) -> (CanvasSyncWorker, Arc<ObservedRepositories>) {
     let observed = Arc::new(ObservedRepositories {
         worker: PostgresCanvasSyncWorkerRepository::new(pool.clone()),
         oauth: PostgresCanvasOAuthRepository::new(pool.clone()),
         events: Mutex::new(Vec::new()),
         cycles: AtomicUsize::new(0),
         stop,
+        fault,
+        oauth_reads: AtomicUsize::new(0),
     });
     let cipher =
         IntegrationSecretCipher::from_base64("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
