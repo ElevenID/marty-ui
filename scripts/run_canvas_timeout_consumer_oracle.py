@@ -245,6 +245,113 @@ def unicode_text_codecs(response_source):
     }
 
 
+def charset_headers(response_source):
+    """Observe the actual HTTPX/email parameter reader, not an RFC approximation."""
+    project = response_owner(response_source)
+    headers = [
+        None,
+        "",
+        "text/plain",
+        "charset=latin1",
+        'charset="latin1"',
+        "text/plain; charset",
+        "text/plain; charset; charset=latin1",
+        "text/plain; charset=; charset=latin1",
+        "text/plain; charset=<latin1>",
+        "text/plain; charset='latin1'",
+        "text/plain; CHARSET=LATIN1",
+        "text/plain; charset=latin1; charset=ascii",
+        "text/plain; charset=ascii; charset=latin1",
+        'text/plain; charset="latin1"',
+        'text/plain; charset="latin1',
+        'text/plain; charset=latin1"',
+        'text/plain; charset="latin1; note=x"',
+        'text/plain; note="x; charset=ascii"; charset=latin1',
+        'text/plain; note="x\\"; charset=ascii"; charset=latin1',
+        'text/plain; note="x\\\\"; charset=ascii"; charset=latin1',
+        "text/plain; charset* = us-ascii''latin1",
+        "text/plain; charset*=us-ascii''latin%31",
+        "text/plain; charset*=utf-8'en'ISO-8859-1",
+        "text/plain; charset*=unknown''latin1",
+        "text/plain; charset*=latin1",
+        "text/plain; charset*=utf-8'latin1",
+        "text/plain; charset*=utf-8''%FF",
+        "text/plain; charset*=utf-8''%C3%A9",
+        "text/plain; charset*=unknown''%6catin1",
+        "text/plain; charset*=utf-8''latin%Q1",
+        "text/plain; charset*=utf-16le''l%00a%00t%00i%00n%001%00",
+        "text/plain; charset*=utf-16''l%00a%00t%00i%00n%001%00",
+        "text/plain; charset*=utf-32le''l%00%00%00a%00%00%00t%00%00%00i%00%00%00n%00%00%001%00%00%00",
+        "text/plain; charset*=us-ascii''<latin1>",
+        "text/plain; charset*=us-ascii''latin1; charset=ascii",
+        "text/plain; charset=ascii; charset*=us-ascii''latin1",
+        "text/plain; charset*0=latin; charset*1=1",
+        "text/plain; charset*1=1; charset*0=latin",
+        "text/plain; charset*1=latin; charset*5=1",
+        "text/plain; charset*10=1; charset*2=latin",
+        "text/plain; charset*0000000000000000000000000002=latin; charset*3=1",
+        "text/plain; charset*0*=utf-8''lat; charset*1=in1",
+        "text/plain; charset*0=utf-8''lat; charset*1*=in%31",
+        "text/plain; charset*0=latin; charset*1*=1",
+        "text/plain; charset*0=latin; charset*0=1",
+        "text/plain; charset*=latin; charset*=1",
+        "text/plain; charset*=latin; charset*0=1",
+        "text/plain; charset*0=latin; charset*=1",
+        "text/plain; charset=latin1; other*=x; other*0=y",
+        "text/plain; charset=latin1; other*0=x; other*=y",
+        "text/plain; charset*0*=utf-8''latin1; charset",
+        "text/plain; charset**=latin1; charset=ascii",
+        "text/plain; charset*0x=latin1; charset=ascii",
+        "text/plain; charset=iso.8859.1",
+        "text/plain; charset=latin.1",
+        "text/plain; charset=utf.16.le",
+        "text/plain; charset=utf.16le",
+        "text/plain; charset=cp.1252",
+        "text/plain; charset=windows.1252",
+    ]
+    cases = []
+    for index, header in enumerate(headers):
+        for payload_name, payload in (
+            ("text", b"caf\xe9"),
+            ("json", b'{"accepted":true}'),
+            ("empty", b""),
+        ):
+            response = httpx.Response(
+                403,
+                content=payload,
+                headers={} if header is None else {"content-type": header},
+            )
+            observed = {}
+            for projection, operation in (
+                ("charset", lambda: response.charset_encoding),
+                ("text", lambda: response.text),
+                ("excerpt", lambda: project(response)),
+            ):
+                try:
+                    observed[projection] = {"value": operation()}
+                except (UnicodeError, TypeError) as failure:
+                    assert type(failure) in (UnicodeError, TypeError), (
+                        "unexpected header error"
+                    )
+                    observed[projection] = {
+                        "error_class": type(failure).__name__,
+                        "error": str(failure),
+                    }
+            cases.append(
+                {
+                    "name": f"header_{index}_{payload_name}",
+                    "content_type": header,
+                    "body_hex": payload.hex(),
+                    **observed,
+                }
+            )
+    return {
+        "schema": "marty.canvas-charset-headers/v1",
+        "registry_aliases": dict(sorted(encodings.aliases.aliases.items())),
+        "cases": cases,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -579,6 +686,7 @@ def run(source=None, response_source=None):
         "response_source_sha256": RESPONSE_SOURCE_SHA256,
         "single_byte_codecs": single_byte_codecs(response_source),
         "unicode_text_codecs": unicode_text_codecs(response_source),
+        "charset_headers": charset_headers(response_source),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)

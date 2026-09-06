@@ -627,7 +627,7 @@ mod tests {
                 CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Write) => "WriteTimeout",
                 CanvasOperationHttpError::Connect | CanvasOperationHttpError::Tls => "ConnectError",
                 CanvasOperationHttpError::Decoding => "DecodingError",
-                CanvasOperationHttpError::Text(_) => "UnicodeError",
+                CanvasOperationHttpError::Text(error) => error.diagnostic_class(),
                 _ => panic!("unexpected fixture outcome: {error:?}"),
             }}),
         };

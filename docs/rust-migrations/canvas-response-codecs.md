@@ -62,7 +62,8 @@ Rust replays the corresponding vectors for every alias.
 
 One shared Rust Unicode text implementation returns typed missing-BOM errors,
 replaces invalid scalar sequences as observed, and preserves explicit-endian BOM
-characters. It is intentionally separate from the strict JSON byte decoder.
+characters. JSON and text retain separate detection/projection rules; the later
+header continuation shares their strict/replacement Unicode code-unit primitive.
 `CanvasCredentialsProviderResponse::from_body` is the single complete-body
 projection boundary used by the actual HTTP validation transport and native
 application replay. Transport failures and response-text failures are distinct;
@@ -100,12 +101,60 @@ and the existing 68 TLS observations pass. Fresh hosted checks remain required.
 
 ## Remaining gates
 
-Other multibyte/stateful codecs, extended/RFC2231 charset headers, less common
-codec label normalization, exceptional JSON values and other configuration or
-exception paths still need qualification. Existing unsupported-codec
+Other multibyte/stateful codecs (also when used to encode parameter labels),
+exceptional header metadata such as Python's decimal-conversion limit for very
+long continuation ordinals, exceptional JSON values and other configuration or
+exception paths still need qualification. The header corpus below qualifies its
+specified forms, not every possible metadata/codec combination. Existing unsupported-codec
 fallback is an adoption gap, not an approved reduction of supported functionality.
 
 Complete provider configuration/network behavior and whole-worker/all-consumer
 deployment adoption remain separate gates. Keep reachable Python until its
 replacement passes those gates, then remove it immediately. This checkpoint
 changes neither beta nor production and does not restart the interrupted soak.
+
+## Charset parameters and consumer error boundaries
+
+`contracts/canvas-charset-headers-oracle.json` freezes 177 observations: 59 header
+forms crossed with non-JSON bytes, valid JSON and an empty body. Each separately
+records the published charset getter, HTTPX response text and actual adapter
+excerpt helper, including error class and diagnostic. Two independent captures
+agree, and the immutable-image gate checks the complete artifact. The unchanged
+native parser failed before repair; the replacement passes all observations.
+
+The shared Rust parameter owner preserves first/bare/empty charset behavior,
+quoted and angle-unquoted values, published escaped-quote counting, ordinary
+parameter precedence, encoded labels, reordered/gapped/duplicate continuations,
+and the TypeError caused by mixing bare and numbered segments, including in
+unrelated groups. Empty response text and valid JSON excerpts bypass that error
+as the published consumers do. Registered dotted aliases use the frozen registry
+lookup rule; a canonical module name is not automatically a dotted alias. The
+326 registry entries are metadata, not implementation coverage for all codecs.
+
+Parameter labels use strict decoding; generic UTF-16/32 labels without a BOM
+use native byte order. Response text retains its distinct BOM requirement and
+replacement rules. JSON byte detection and precedence are unchanged. All three
+reuse one Unicode code-unit primitive, with strict versus replacement behavior
+explicitly selected; no duplicate codec implementation or dependency is added.
+
+The independent full-app validation corpus grows 28 -> 31 and the provider
+corpus 79 -> 82, with every old observation unchanged. A failed non-JSON validation
+response exposes the header error as plain HTTP 500; success ignores text and
+valid JSON remains a structured excerpt. Status synchronization instead decodes
+failed-response text even when its bytes contain JSON. Typed errors preserve
+these distinct boundaries without inferring classes from diagnostic messages.
+An eleven-case real HTTP validation replay and full managed router replay agree.
+
+The shared runtime fixture now supports baseline, Unicode and charset response
+scenarios without duplicating setup or persistence assertions. Real tenant vault,
+HTTP and PostgreSQL checks prove charset failure diagnostics survive canonical
+status updates and later successful synchronization clears both error fields.
+Attempt counters, unrelated metadata, publication ordering and the late delivery
+save failure remain checked. This composes captured provider behavior with native
+persistence and the previously inspected published catch/save boundary; it is
+not an independently captured full published lifecycle HTTP trace.
+
+Gates: 297 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
+ownership, strict Clippy, 68 native TLS and all 23 configured image/schema tests
+pass. CI explicitly requires both decoder-recovery tests to exist before running
+the complete suite. Fresh hosted checks must qualify the committed source.

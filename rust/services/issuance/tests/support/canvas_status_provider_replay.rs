@@ -244,7 +244,7 @@ pub async fn replay(expected: &Value) {
             Ok(metadata) => json!({"metadata":metadata}),
             Err(error) => json!({"error_class":match &error {
                 CanvasCredentialsStatusError::Runtime(_) => "RuntimeError",
-                CanvasCredentialsStatusError::ResponseText(_) => "UnicodeError",
+                CanvasCredentialsStatusError::ResponseText(error) => error.diagnostic_class(),
             },"error":error.to_string()}),
         };
         timestamps(&mut actual);

@@ -424,6 +424,9 @@
     {"name":"latin1_error_text","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=latin1","response_hex":"636166e9","expected_error_class":"RuntimeError"},
     {"name":"cp1252_success_text","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=windows-1252","response_hex":"8020636166e9","expected_error_class":null},
     {"name":"utf16_short_prefix","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-16","response_hex":"ff","expected_error_class":null},
-    {"name":"utf32_short_prefix","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe","expected_error_class":null}
+    {"name":"utf32_short_prefix","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=utf-32","response_hex":"fffe","expected_error_class":null},
+    {"name":"charset_mixed_continuation_text_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"636166e9","expected_error_class":"TypeError"},
+    {"name":"charset_mixed_continuation_json_200","action":"suspend","provider":"bridge","response_status":200,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d","expected_error_class":null},
+    {"name":"charset_mixed_continuation_json_403","action":"suspend","provider":"bridge","response_status":403,"response_content_type":"text/plain; charset=latin1; other*=x; other*0=y","response_hex":"7b226163636570746564223a747275657d","expected_error_class":"TypeError"}
   ]
 }

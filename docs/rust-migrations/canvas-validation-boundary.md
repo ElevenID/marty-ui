@@ -86,3 +86,11 @@ Complete bodies precede JSON/text projection; this does not yet qualify all
 response charset/compression or provider network-error behavior. The20-case
 managed app corpus above remains unchanged and still passes through the native
 router after this repair.
+
+The [response-codec continuation](canvas-response-codecs.md) expands the full-app
+corpus to 31 cases, preserving those 20 and the eight intervening Unicode cases.
+Three independently captured charset-header cases prove plain HTTP 500 on a
+failed non-JSON response with invalid continuation ordering, successful-response
+text bypass, and valid JSON excerpt bypass. The real native management router
+and eleven raw-response cases through the real HTTP transport match. This does
+not qualify all provider configuration or transport exception paths.

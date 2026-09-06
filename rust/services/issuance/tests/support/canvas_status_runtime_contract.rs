@@ -33,15 +33,28 @@ struct RuntimeState {
     calls: Mutex<Vec<Value>>,
     events: Mutex<Vec<String>>,
     remove_delivery_before_response: AtomicBool,
-    unicode_responses: bool,
+    responses: Responses,
 }
 
-fn unicode_case(action: &str) -> &'static str {
-    match action {
-        "suspend" => "utf-16_missing_bom_200",
-        "reinstate" => "utf-32_missing_bom_403",
-        "revoke" => "utf16_json_first_200",
-        _ => panic!("unexpected synthetic lifecycle action"),
+#[derive(Clone, Copy)]
+enum Responses {
+    Baseline,
+    Unicode,
+    Charset,
+}
+
+impl Responses {
+    fn case(self, action: &str) -> Option<&'static str> {
+        Some(match (self, action) {
+            (Self::Baseline, _) => return None,
+            (Self::Unicode, "suspend") => "utf-16_missing_bom_200",
+            (Self::Unicode, "reinstate") => "utf-32_missing_bom_403",
+            (Self::Unicode, "revoke") => "utf16_json_first_200",
+            (Self::Charset, "suspend") => "charset_mixed_continuation_text_200",
+            (Self::Charset, "reinstate") => "charset_mixed_continuation_json_403",
+            (Self::Charset, "revoke") => "charset_mixed_continuation_json_200",
+            _ => panic!("unexpected synthetic lifecycle action"),
+        })
     }
 }
 
@@ -86,12 +99,14 @@ async fn mirror(
         sqlx::query("DELETE FROM issuance_service.credential_delivery_records WHERE id='delivery-provider' AND organization_id='org-review'")
             .execute(&state.pool).await.unwrap();
     }
-    let mut response = if state.unicode_responses {
+    let mut response = if let Some(name) = state
+        .responses
+        .case(body["lifecycle_action"].as_str().unwrap())
+    {
         let scenarios: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-status-provider-scenarios.json"
         ))
         .unwrap();
-        let name = unicode_case(body["lifecycle_action"].as_str().unwrap());
         let case = scenarios["cases"]
             .as_array()
             .unwrap()
@@ -133,14 +148,18 @@ impl Drop for AbortServer {
 }
 
 pub async fn run(pool: &PgPool) {
-    run_scenario(pool, false).await;
+    run_scenario(pool, Responses::Baseline).await;
 }
 
 pub async fn run_unicode(pool: &PgPool) {
-    run_scenario(pool, true).await;
+    run_scenario(pool, Responses::Unicode).await;
 }
 
-async fn run_scenario(pool: &PgPool, unicode_responses: bool) {
+pub async fn run_charset(pool: &PgPool) {
+    run_scenario(pool, Responses::Charset).await;
+}
+
+async fn run_scenario(pool: &PgPool, responses: Responses) {
     let vault = Arc::new(PostgresIntegrationSecretVault::new(
         pool.clone(),
         IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -167,7 +186,7 @@ async fn run_scenario(pool: &PgPool, unicode_responses: bool) {
         calls: Mutex::new(Vec::new()),
         events: Mutex::new(Vec::new()),
         remove_delivery_before_response: AtomicBool::new(false),
-        unicode_responses,
+        responses,
     });
     let application = Router::new()
         .route("/status", post(mirror))
@@ -292,20 +311,27 @@ async fn run_scenario(pool: &PgPool, unicode_responses: bool) {
             status
         );
     }
-    if unicode_responses {
+    if !matches!(responses, Responses::Baseline) {
         let oracle: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-status-provider-oracle.json"
         ))
         .unwrap();
         for (index, action) in ["suspend", "reinstate"].into_iter().enumerate() {
-            let name = unicode_case(action);
+            let name = responses.case(action).unwrap();
             let expected = oracle["observations"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .find(|case| case["name"] == name)
                 .unwrap();
-            assert_eq!(expected["error_class"], "UnicodeError");
+            assert_eq!(
+                expected["error_class"],
+                match responses {
+                    Responses::Unicode => "UnicodeError",
+                    Responses::Charset => "TypeError",
+                    Responses::Baseline => unreachable!(),
+                }
+            );
             assert_eq!(deliveries[index]["last_error"], expected["error"]);
             assert_eq!(
                 deliveries[index]["metadata"]["last_status_sync_error"],

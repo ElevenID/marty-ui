@@ -97,7 +97,7 @@ async fn native_validation_matches_all_published_http_and_lookup_observations() 
     .unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
     let expected = oracle["observations"].as_array().unwrap();
-    assert_eq!(cases.len(), 28);
+    assert_eq!(cases.len(), 31);
     assert_eq!(cases.len(), expected.len());
     for (case, expected) in cases.iter().zip(expected) {
         assert_eq!(case["name"], expected["name"]);

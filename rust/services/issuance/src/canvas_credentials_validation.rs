@@ -595,7 +595,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn unicode_response_errors_and_success_bypass_use_actual_http_transport() {
+    async fn response_decoder_errors_and_success_bypass_use_actual_http_transport() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let scenarios: Value = serde_json::from_str(include_str!(
             "../../../../contracts/canvas-validation-boundary-scenarios.json"
@@ -672,7 +672,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
-        assert_eq!(count, 8);
+        assert_eq!(count, 11);
     }
 
     #[tokio::test]

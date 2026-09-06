@@ -3,12 +3,31 @@
 //! Other multibyte/stateful codecs remain an explicit adoption gate.
 use std::{collections::BTreeMap, sync::OnceLock};
 
+#[path = "canvas_response_charset.rs"]
+mod charset;
+use charset::charset_parameter;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CanvasResponseTextError {
     #[error("UTF-16 stream does not start with BOM")]
     Utf16MissingBom,
     #[error("UTF-32 stream does not start with BOM")]
     Utf32MissingBom,
+    #[error("'<' not supported between instances of 'int' and 'NoneType'")]
+    NumberedAfterBareContinuation,
+    #[error("'<' not supported between instances of 'NoneType' and 'int'")]
+    BareAfterNumberedContinuation,
+}
+
+impl CanvasResponseTextError {
+    pub const fn diagnostic_class(self) -> &'static str {
+        match self {
+            Self::Utf16MissingBom | Self::Utf32MissingBom => "UnicodeError",
+            Self::NumberedAfterBareContinuation | Self::BareAfterNumberedContinuation => {
+                "TypeError"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, serde::Deserialize)]
@@ -31,6 +50,7 @@ struct ResponseCodecs {
     tables: BTreeMap<String, [char; 256]>,
     aliases: BTreeMap<String, String>,
     unicode_aliases: BTreeMap<String, UnicodeEncoding>,
+    registry_aliases: BTreeMap<String, String>,
 }
 
 fn response_codecs() -> &'static ResponseCodecs {
@@ -73,10 +93,21 @@ fn response_codecs() -> &'static ResponseCodecs {
         ))
         .expect("embedded published Unicode codec data must be valid");
         assert_eq!(unicode.schema, "marty.canvas-unicode-text/v1");
+        #[derive(serde::Deserialize)]
+        struct Headers {
+            schema: String,
+            registry_aliases: BTreeMap<String, String>,
+        }
+        let headers: Headers = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-charset-headers-oracle.json"
+        ))
+        .expect("embedded published registry aliases must be valid");
+        assert_eq!(headers.schema, "marty.canvas-charset-headers/v1");
         ResponseCodecs {
             tables,
             aliases: frozen.aliases,
             unicode_aliases: unicode.aliases,
+            registry_aliases: headers.registry_aliases,
         }
     })
 }
@@ -85,8 +116,16 @@ pub(crate) fn response_text(
     bytes: &[u8],
     content_type: Option<&str>,
 ) -> Result<String, CanvasResponseTextError> {
-    let charset = content_type.and_then(charset_parameter).unwrap_or_default();
-    let normalized = normalize_encoding(&charset);
+    // HTTPX does not select a text decoder for an empty response body.
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+    let charset = content_type
+        .map(charset_parameter)
+        .transpose()?
+        .flatten()
+        .unwrap_or_default();
+    let normalized = resolve_encoding(&charset);
     let registry = response_codecs();
     if let Some(name) = registry.aliases.get(&normalized) {
         let table = &registry.tables[name];
@@ -136,11 +175,23 @@ fn unicode_text(
         };
         bytes = &bytes[width..];
     }
+    Ok(unicode_units(bytes, width, little, false).expect("replacement decoding cannot fail"))
+}
+
+pub(crate) fn unicode_units(
+    bytes: &[u8],
+    width: usize,
+    little: bool,
+    strict: bool,
+) -> Option<String> {
     let mut text = String::new();
     let mut index = 0;
     while index < bytes.len() {
         let remaining = &bytes[index..];
         if remaining.len() < width {
+            if strict {
+                return None;
+            }
             text.push(char::REPLACEMENT_CHARACTER);
             break;
         }
@@ -163,6 +214,9 @@ fn unicode_text(
             if (0xd800..=0xdbff).contains(&first) {
                 // A high surrogate plus an incomplete next unit is one error.
                 if remaining.len() < 4 {
+                    if strict {
+                        return None;
+                    }
                     text.push(char::REPLACEMENT_CHARACTER);
                     break;
                 }
@@ -177,10 +231,25 @@ fn unicode_text(
                 u32::from(first)
             }
         };
-        text.push(char::from_u32(scalar).unwrap_or(char::REPLACEMENT_CHARACTER));
+        let character = char::from_u32(scalar);
+        text.push(if strict {
+            character?
+        } else {
+            character.unwrap_or(char::REPLACEMENT_CHARACTER)
+        });
         index += width;
     }
-    Ok(text)
+    Some(text)
+}
+
+fn resolve_encoding(value: &str) -> String {
+    let normalized = normalize_encoding(value);
+    let aliases = &response_codecs().registry_aliases;
+    aliases
+        .get(&normalized)
+        .or_else(|| aliases.get(&normalized.replace('.', "_")))
+        .cloned()
+        .unwrap_or(normalized)
 }
 
 fn normalize_encoding(value: &str) -> String {
@@ -200,46 +269,6 @@ fn normalize_encoding(value: &str) -> String {
     output
 }
 
-fn charset_parameter(content_type: &str) -> Option<String> {
-    let mut parts = Vec::new();
-    let mut start = 0;
-    let mut quoted = false;
-    let mut escaped = false;
-    for (index, character) in content_type.char_indices() {
-        if escaped {
-            escaped = false;
-        } else if quoted && character == '\\' {
-            escaped = true;
-        } else if character == '"' {
-            quoted = !quoted;
-        } else if !quoted && character == ';' {
-            parts.push(&content_type[start..index]);
-            start = index + 1;
-        }
-    }
-    parts.push(&content_type[start..]);
-    // Python's email parameter reader accepts even an invalid media-type token
-    // and uses the first charset, while respecting quoted parameter separators.
-    parts.into_iter().skip(1).find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        if !name.trim().eq_ignore_ascii_case("charset") {
-            return None;
-        }
-        let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-            .unwrap_or(value)
-            .replace("\\\\", "\\")
-            .replace("\\\"", "\"");
-        Some(if value.is_ascii() {
-            value
-        } else {
-            String::new()
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,7 +279,7 @@ mod tests {
         match result {
             Ok(value) => serde_json::json!({"value":value}),
             Err(error) => {
-                serde_json::json!({"error_class":"UnicodeError","error":error.to_string()})
+                serde_json::json!({"error_class":error.diagnostic_class(),"error":error.to_string()})
             }
         }
     }
@@ -288,6 +317,45 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn charset_headers_match_published_parameter_text_and_json_behavior() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-charset-headers-oracle.json"
+        ))
+        .unwrap();
+        assert_eq!(frozen["cases"].as_array().unwrap().len(), 177);
+        for case in frozen["cases"].as_array().unwrap() {
+            let content_type = case["content_type"].as_str();
+            let body = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                observation(
+                    content_type
+                        .map(charset_parameter)
+                        .transpose()
+                        .map(Option::flatten)
+                ),
+                case["charset"],
+                "charset {}",
+                case["name"]
+            );
+            assert_eq!(
+                observation(response_text(&body, content_type)),
+                case["text"],
+                "text {}",
+                case["name"]
+            );
+            assert_eq!(
+                observation(crate::canvas_credentials_protocol::response_excerpt(
+                    &body,
+                    content_type
+                )),
+                case["excerpt"],
+                "excerpt {}",
+                case["name"]
+            );
         }
     }
 

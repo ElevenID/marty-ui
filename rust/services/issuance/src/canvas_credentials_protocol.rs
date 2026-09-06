@@ -97,31 +97,7 @@ fn response_json(bytes: &[u8]) -> Option<Value> {
     if !bytes.len().is_multiple_of(width) {
         return None;
     }
-    let decoded = if width == 2 {
-        let units = bytes.chunks_exact(2).map(|part| {
-            let pair = [part[0], part[1]];
-            if little {
-                u16::from_le_bytes(pair)
-            } else {
-                u16::from_be_bytes(pair)
-            }
-        });
-        char::decode_utf16(units)
-            .collect::<Result<String, _>>()
-            .ok()?
-    } else {
-        bytes
-            .chunks_exact(4)
-            .map(|part| {
-                let word = [part[0], part[1], part[2], part[3]];
-                char::from_u32(if little {
-                    u32::from_le_bytes(word)
-                } else {
-                    u32::from_be_bytes(word)
-                })
-            })
-            .collect::<Option<String>>()?
-    };
+    let decoded = crate::canvas_response_text::unicode_units(bytes, width, little, true)?;
     serde_json::from_str(&decoded).ok()
 }
 

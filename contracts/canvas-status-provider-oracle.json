@@ -2573,6 +2573,130 @@
         }
       ],
       "secrets": []
+    },
+    {
+      "error": "'<' not supported between instances of 'int' and 'NoneType'",
+      "error_class": "TypeError",
+      "name": "charset_mixed_continuation_text_200",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "charset_mixed_continuation_json_200",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "'<' not supported between instances of 'int' and 'NoneType'",
+      "error_class": "TypeError",
+      "name": "charset_mixed_continuation_json_403",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
     }
   ]
 }

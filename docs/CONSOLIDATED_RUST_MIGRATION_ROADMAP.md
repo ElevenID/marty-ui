@@ -33,6 +33,30 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Charset-header qualification adds 177 independent observations covering ordinary,
+quoted and RFC2231 parameters, continuation ordering, label decoding, registered
+dotted aliases, malformed-group error identity, and JSON/empty-body bypasses.
+The old native parser failed the frozen corpus. One shared Rust parser now passes
+it and reuses the codec registry and strict/replacement Unicode primitive; no
+runtime Python or dependency is added. The 326 registry aliases describe lookup
+semantics, not a claim that every referenced codec is implemented.
+Two independent immutable-image captures also expand validation from 28 to 31
+cases and status providers from 79 to 82, preserving every previous observation.
+Native managed HTTP and the real validation transport retain the distinct success,
+JSON and failure paths. The shared real HTTP/PostgreSQL lifecycle fixture now
+also verifies charset diagnostics, committed canonical status and recovery.
+Local 297 library, 5 worker, 28 managed HTTP, 22 behavior, 42 workflow/image/
+ownership tests, strict Clippy and 68 native TLS cases pass. All 23 configured
+published-image/schema tests pass; CI explicitly requires both Unicode and charset
+recovery tests. Prior head `137c939561d08c20c59fc6c780294501b9458a1b` CI and Rust
+CodeQL completed successfully; this continuation requires its own hosted checks.
+Unqualified multibyte/stateful codecs (including encoded parameter labels),
+exceptional metadata/JSON/configuration/transport behavior, whole-worker and
+all-consumer adoption still prevent cutover approval. No reachable Python is
+deleted, no rollout changes, and PR #814 remains draft. Branch reconciliation,
+UI/demo/crypto preservation, CSCA follow-up, recordings/device/wallet evidence,
+aggregate beta deployment and uninterrupted soak remain in the full active goal.
+
 Status-provider qualification expands the published corpus from 63 to 79 cases,
 preserving all earlier observations. Two independent immutable-image captures
 freeze success/error response decoding for bridge synchronization and real-provider
@@ -48,7 +72,8 @@ Local 296 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
 ownership tests, strict Clippy and all 68 existing TLS observations pass. The full
 configured 22-test image suite passes (136.27 seconds, none ignored/filtered);
 fresh hosted checks must qualify this continuation. Prior
-`81236f778b9a5403a6ad3bc5c9667e509a318361` CI is queued and Rust CodeQL running.
+`81236f778b9a5403a6ad3bc5c9667e509a318361` CI was cancelled after the subsequent
+source push; its Rust CodeQL completed successfully. Cancellation is not a pass.
 The full goal stays active, PR #814 draft/unrouted, and deployments unchanged.
 
 The Unicode-text continuation adds shared UTF-16/32 decoding for both byte orders
