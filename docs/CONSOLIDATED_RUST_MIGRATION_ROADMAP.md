@@ -33,6 +33,31 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The current single-byte continuation replaces hand-maintained ASCII/Latin-1
+branches with one shared Rust table decoder for 73 codecs and 291 registered
+aliases. The language-neutral tables come from the exact published response
+helper, not WHATWG approximations; the immutable-image gate independently
+checks them. Four representative code-page cases extend the TLS corpus to 68,
+preserving all 64 prior observations. Native 68-case replay, 294 library, 5 worker,
+28 management HTTP, 22 behavior and 42 workflow/image/ownership tests pass;
+strict all-target Clippy passes. Windows UTF-8 output and Unicode JSON record
+parsing repairs have regression coverage. No runtime Python or new dependency
+was introduced. See [the codec contract](rust-migrations/canvas-response-codecs.md).
+All 21 configured published-image tests also pass (164.97 seconds, none ignored
+or filtered). Fresh hosted qualification remains required for this continuation.
+The prior pushed head
+`69dbfe4bc2005834efb764d8d37bb91e35565b91` has green CI and Rust CodeQL;
+those results do not qualify later source changes. PR #814 remains draft.
+
+Current open gates are multibyte/stateful text codecs, extended charset headers
+and decoder exception boundaries; broader provider configuration/transport
+behavior; whole-worker/runtime and every deployment consumer; immediate removal
+of superseded Python after those gates; branch preservation/cleanup; all-demo,
+device/wallet and CSCA lifecycle follow-up; aggregate beta release and a new
+uninterrupted soak. Beta 217 does not qualify the current candidate. No deployment
+or other-worker change was made. The following paragraphs retain historical
+qualification checkpoints, not additional claims about the newest source.
+
 Core text-charset qualification extends the shared TLS corpus to64 observations,
 retaining the previous47. Two independent published-source captures freeze
 ASCII/Latin-1 mappings and aliases, UTF-8 signature handling, first/quoted charset

@@ -64,6 +64,10 @@
 {"name":"text_utf8_sig","seconds":"2","response":"text_utf8_sig","projection":"excerpt"},
 {"name":"text_ascii_bom","seconds":"2","response":"text_ascii_bom","projection":"excerpt"},
 {"name":"text_json_latin1","seconds":"2","response":"text_json_latin1","projection":"excerpt"},
-{"name":"text_long_latin1","seconds":"2","response":"text_long_latin1","projection":"excerpt"}
+{"name":"text_long_latin1","seconds":"2","response":"text_long_latin1","projection":"excerpt"},
+{"name":"text_cp1252","seconds":"2","response":"text_cp1252","projection":"excerpt"},
+{"name":"text_cp037","seconds":"2","response":"text_cp037","projection":"excerpt"},
+{"name":"text_koi8_r","seconds":"2","response":"text_koi8_r","projection":"excerpt"},
+{"name":"text_mac_roman","seconds":"2","response":"text_mac_roman","projection":"excerpt"}
   ]
 }

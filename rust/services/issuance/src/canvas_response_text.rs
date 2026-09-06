@@ -1,30 +1,59 @@
 //! Shared response-text projection, separate from JSON byte decoding.
-//! UTF-8/ASCII/Latin-1 are qualified here; additional Python codecs remain an
-//! explicit adoption gate, not an assertion of blanket charset compatibility.
+//! Stateless single-byte mappings come from the frozen published response owner.
+//! Multibyte/stateful codecs remain an explicit adoption gate.
+use std::{collections::BTreeMap, sync::OnceLock};
+
+struct SingleByteCodecs {
+    tables: BTreeMap<String, [char; 256]>,
+    aliases: BTreeMap<String, String>,
+}
+
+fn single_byte_codecs() -> &'static SingleByteCodecs {
+    static REGISTRY: OnceLock<SingleByteCodecs> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        #[derive(serde::Deserialize)]
+        struct Frozen {
+            schema: String,
+            codecs: BTreeMap<String, String>,
+            aliases: BTreeMap<String, String>,
+        }
+        let frozen: Frozen = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-single-byte-codecs.json"
+        ))
+        .expect("embedded published codec data must be valid");
+        assert_eq!(frozen.schema, "marty.canvas-single-byte-codecs/v1");
+        let tables = frozen
+            .codecs
+            .into_iter()
+            .map(|(name, mapping)| {
+                let table: [char; 256] = mapping
+                    .chars()
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .expect("embedded single-byte codec must map every byte");
+                (name, table)
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert!(frozen
+            .aliases
+            .values()
+            .all(|name| tables.contains_key(name)));
+        SingleByteCodecs {
+            tables,
+            aliases: frozen.aliases,
+        }
+    })
+}
 
 pub(crate) fn response_text(bytes: &[u8], content_type: Option<&str>) -> String {
     let charset = content_type.and_then(charset_parameter).unwrap_or_default();
     let normalized = normalize_encoding(&charset);
+    let registry = single_byte_codecs();
+    if let Some(name) = registry.aliases.get(&normalized) {
+        let table = &registry.tables[name];
+        return bytes.iter().map(|byte| table[usize::from(*byte)]).collect();
+    }
     let bytes = match normalized.as_str() {
-        "ascii" | "646" | "ansi_x3.4_1968" | "ansi_x3.4_1986" | "ansi_x3_4_1968" | "cp367"
-        | "csascii" | "ibm367" | "iso646_us" | "iso_646.irv_1991" | "iso_ir_6" | "us"
-        | "us_ascii" => {
-            return bytes
-                .iter()
-                .map(|byte| {
-                    if byte.is_ascii() {
-                        char::from(*byte)
-                    } else {
-                        char::REPLACEMENT_CHARACTER
-                    }
-                })
-                .collect();
-        }
-        "latin_1" | "8859" | "cp819" | "csisolatin1" | "ibm819" | "iso8859" | "iso8859_1"
-        | "iso_8859_1" | "iso_8859_1_1987" | "iso_ir_100" | "l1" | "latin" | "latin1" => {
-            // Python Latin-1 is not the WHATWG Windows-1252 alias.
-            return bytes.iter().map(|byte| char::from(*byte)).collect();
-        }
         "utf_8_sig" => bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes),
         // Includes UTF-8 aliases and unknown/missing/empty declarations.
         // Other recognized Python codecs still require their own qualification.
@@ -93,6 +122,37 @@ fn charset_parameter(content_type: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_published_single_byte_alias_preserves_all_byte_values() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-single-byte-codecs.json"
+        ))
+        .unwrap();
+        let bytes = (0..=255).collect::<Vec<u8>>();
+        assert_eq!(frozen["codecs"].as_object().unwrap().len(), 73);
+        assert_eq!(frozen["aliases"].as_object().unwrap().len(), 291);
+        for (alias, name) in frozen["aliases"].as_object().unwrap() {
+            let expected = frozen["codecs"][name.as_str().unwrap()].as_str().unwrap();
+            for label in [alias.clone(), alias.to_ascii_uppercase().replace('_', "-")] {
+                assert_eq!(
+                    response_text(&bytes, Some(&format!("text/plain; charset={label}"))),
+                    expected,
+                    "{alias}"
+                );
+            }
+        }
+        for alias in frozen["unregistered_aliases"].as_array().unwrap() {
+            assert_eq!(
+                response_text(
+                    &bytes,
+                    Some(&format!("text/plain; charset={}", alias.as_str().unwrap()))
+                ),
+                String::from_utf8_lossy(&bytes),
+                "unregistered alias must retain the published fallback"
+            );
+        }
+    }
 
     #[test]
     fn ascii_and_latin1_keep_their_distinct_byte_mappings() {

@@ -554,6 +554,10 @@ mod tests {
                 | "text_ascii_bom"
                 | "text_json_latin1"
                 | "text_long_latin1"
+                | "text_cp1252"
+                | "text_cp037"
+                | "text_koi8_r"
+                | "text_mac_roman"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),

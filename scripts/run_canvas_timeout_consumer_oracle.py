@@ -8,15 +8,19 @@ run unchanged. Local mode loads immutable Git source, image mode installed sourc
 import argparse
 import ast
 import asyncio
+import codecs
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
+import encodings
+import encodings.aliases
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.metadata
 import importlib.util
 import ipaddress
 import json
 import os
+import pkgutil
 from pathlib import Path
 import socket
 import ssl
@@ -96,6 +100,61 @@ def response_owner(source):
     return namespace["_response_json_or_excerpt"]
 
 
+def single_byte_codecs(response_source):
+    """Observe stateless single-byte text codecs, not multibyte/escape codecs."""
+    project = response_owner(response_source)
+    payload = bytes(range(256))
+    names = {"ascii", "latin_1", "charmap"}
+    for entry in pkgutil.iter_modules(encodings.__path__):
+        try:
+            module = importlib.import_module("encodings." + entry.name)
+        except ImportError:
+            # Platform-only mbcs/oem codecs are absent in the published image.
+            continue
+        table = getattr(module, "decoding_table", None)
+        if isinstance(table, str) and len(table) == 256:
+            names.add(entry.name)
+    tables = {}
+    for name in sorted(names):
+        response = httpx.Response(
+            403,
+            headers={"Content-Type": "text/plain; charset=" + name},
+            content=payload,
+        )
+        value = project(response)["body_excerpt"]
+        assert len(value) == 256, (name, "not a single-byte scalar mapping")
+        tables[name] = value
+    aliases = {name: name for name in tables}
+    unregistered_aliases = []
+    for alias, target in sorted(encodings.aliases.aliases.items()):
+        if target in tables:
+            # Exercise the original HTTPX codec selection for every alias too.
+            response = httpx.Response(
+                403,
+                headers={"Content-Type": "text/plain; charset=" + alias},
+                content=payload,
+            )
+            try:
+                resolved = codecs.lookup(alias)
+            except LookupError:
+                # Some stdlib alias keys are not themselves registered after
+                # Python's case normalization. Preserve the observed fallback.
+                assert project(response)["body_excerpt"] == payload.decode(
+                    "utf-8", errors="replace"
+                ), alias
+                unregistered_aliases.append(alias)
+                continue
+            assert project(response)["body_excerpt"] == tables[target], alias
+            assert resolved.name == codecs.lookup(target).name
+            aliases[alias] = target
+    return {
+        "schema": "marty.canvas-single-byte-codecs/v1",
+        "codecs": tables,
+        "aliases": dict(sorted(aliases.items())),
+        "unregistered_aliases": sorted(unregistered_aliases),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -105,6 +164,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             text_cases = {
+                "/text_cp1252": (
+                    "text/plain; charset=windows-1252",
+                    bytes(range(256)).hex(),
+                ),
+                "/text_cp037": ("text/plain; charset=cp037", bytes(range(256)).hex()),
+                "/text_koi8_r": ("text/plain; charset=koi8-r", bytes(range(256)).hex()),
+                "/text_mac_roman": (
+                    "text/plain; charset=mac-roman",
+                    bytes(range(256)).hex(),
+                ),
                 "/text_ascii": ("text/plain; charset=ascii", "636166e92080"),
                 "/text_ascii_alias": (
                     "text/plain; charset=ANSI_X3.4-1968",
@@ -418,6 +487,7 @@ def run(source=None, response_source=None):
     return {
         "source_sha256": SOURCE_SHA256,
         "response_source_sha256": RESPONSE_SOURCE_SHA256,
+        "single_byte_codecs": single_byte_codecs(response_source),
         "boundary": "exact published Canvas HTTP factory, pinning transport and helpers; actual HTTPX loopback TLS; test-only exact origin allowlist and per-pool CA trust; no full adapter import",
         "runtime": {
             name: importlib.metadata.version(name)
@@ -429,12 +499,12 @@ def run(source=None, response_source=None):
 
 def run_native(executable):
     root = Path(__file__).resolve().parents[1] / "contracts"
-    cases = json.loads((root / "canvas-timeout-consumer-scenarios.json").read_text())[
-        "cases"
-    ]
-    expected = json.loads((root / "canvas-timeout-consumer-oracle.json").read_text())[
-        "cases"
-    ]
+    cases = json.loads(
+        (root / "canvas-timeout-consumer-scenarios.json").read_text(encoding="utf-8")
+    )["cases"]
+    expected = json.loads(
+        (root / "canvas-timeout-consumer-oracle.json").read_text(encoding="utf-8")
+    )["cases"]
     observations = []
     with loopback_tls() as (origin, _, cert):
         for case in cases:
@@ -452,6 +522,7 @@ def run_native(executable):
                 ],
                 env=environment,
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
                 timeout=15,
             )
@@ -460,12 +531,19 @@ def run_native(executable):
             )
             lines = [
                 line.removeprefix("CANVAS_TIMEOUT_NATIVE=")
-                for line in child.stdout.splitlines()
+                # Unicode NEL/LS/PS are valid inside JSON strings, not records.
+                for line in child.stdout.split("\n")
                 if line.startswith("CANVAS_TIMEOUT_NATIVE=")
             ]
             assert len(lines) == 1, "native child must emit exactly one observation"
             observations.append(json.loads(lines[0]))
-    assert observations == expected, {"expected": expected, "native": observations}
+    assert observations == expected, {
+        "mismatches": [
+            {"expected": left, "native": right}
+            for left, right in zip(expected, observations, strict=True)
+            if left != right
+        ]
+    }
     print(
         json.dumps(
             {"native_timeout_cases": len(observations), "status": "passed"},

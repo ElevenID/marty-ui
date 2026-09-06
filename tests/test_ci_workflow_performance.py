@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import ast
+from contextlib import nullcontext
+
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -13,6 +17,94 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def test_canvas_native_oracle_decodes_artifacts_and_child_output_as_utf8() -> None:
+    source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    native = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_native"
+    )
+    reads = [
+        node
+        for node in ast.walk(native)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "read_text"
+    ]
+    children = [
+        node
+        for node in ast.walk(native)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+    ]
+    assert len(reads) == 2 and len(children) == 1
+    for call in reads + children:
+        assert any(
+            keyword.arg == "encoding"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value == "utf-8"
+            for keyword in call.keywords
+        )
+
+
+def test_canvas_native_oracle_preserves_unicode_line_separators(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    native = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_native"
+    )
+    contracts = tmp_path / "contracts"
+    contracts.mkdir()
+    case = {"name": "synthetic_unicode_record"}
+    observation = {
+        "name": case["name"],
+        "status": 403,
+        "body": {"body_excerpt": "NEL\u0085LINE\u2028PARA\u2029"},
+    }
+    (contracts / "canvas-timeout-consumer-scenarios.json").write_text(
+        json.dumps({"cases": [case]}), encoding="utf-8"
+    )
+    (contracts / "canvas-timeout-consumer-oracle.json").write_text(
+        json.dumps({"cases": [observation]}, ensure_ascii=False), encoding="utf-8"
+    )
+    child = SimpleNamespace(
+        returncode=0,
+        stderr="",
+        stdout="CANVAS_TIMEOUT_NATIVE="
+        + json.dumps(observation, ensure_ascii=False)
+        + "\n",
+    )
+    namespace = {
+        "__file__": str(tmp_path / "scripts" / "oracle.py"),
+        "Path": Path,
+        "json": json,
+        "os": SimpleNamespace(environ={}),
+        "subprocess": SimpleNamespace(run=lambda *args, **kwargs: child),
+        "loopback_tls": lambda: nullcontext(
+            ("https://127.0.0.1:1", None, tmp_path / "synthetic.pem")
+        ),
+    }
+    exec(
+        compile(
+            ast.Module(body=[native], type_ignores=[]), "<owned-native-oracle>", "exec"
+        ),
+        namespace,
+    )
+    namespace["run_native"](tmp_path / "never-executed")
+    assert json.loads(capsys.readouterr().out) == {
+        "native_timeout_cases": 1,
+        "status": "passed",
+    }
 
 
 def _workflow(path: Path) -> tuple[str, dict[str, object]]:
