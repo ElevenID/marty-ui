@@ -50,6 +50,11 @@ claim that its native or broader whole-worker requirements are closed.
 
 ## Normative legacy-gap reconciliation
 
+The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual
+same-job retry eligibility, recovery and provider failure/OAuth rejection
+observations for gates6/8. Native adoption is pending; remote OAuth revocation,
+all error/header variants and race/privacy requirements remain separate gates.
+
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 

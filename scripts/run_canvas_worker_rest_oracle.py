@@ -140,12 +140,39 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
         assert ciphertext != spec["token"]
         for index, stage in enumerate(spec["stages"]):
             requests.clear()
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "UPDATE issuance_service.canvas_evidence_sync_targets SET next_run_at=clock_timestamp() WHERE id='target-review'"
+            with engine.connect() as connection:
+                prior_job_ids = (
+                    connection.execute(
+                        text(
+                            "SELECT id FROM issuance_service.canvas_evidence_sync_jobs ORDER BY created_at,id"
+                        )
                     )
+                    .scalars()
+                    .all()
                 )
+            if stage.get("retry_existing"):
+                assert prior_job_ids
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    with engine.connect() as connection:
+                        due = connection.execute(
+                            text(
+                                "SELECT status='retry' AND available_at<=clock_timestamp() FROM issuance_service.canvas_evidence_sync_jobs WHERE id=:id"
+                            ),
+                            {"id": prior_job_ids[-1]},
+                        ).scalar_one()
+                    if due:
+                        break
+                    time.sleep(0.05)
+                else:
+                    raise AssertionError("Actual persisted retry did not become due")
+            with engine.begin() as connection:
+                if not stage.get("retry_existing"):
+                    connection.execute(
+                        text(
+                            "UPDATE issuance_service.canvas_evidence_sync_targets SET next_run_at=clock_timestamp() WHERE id='target-review'"
+                        )
+                    )
                 connection.execute(
                     text("TRUNCATE issuance_service.canvas_worker_heartbeats")
                 )
@@ -177,7 +204,9 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
                             )
                         ).scalar_one_or_none()
                     if (
-                        len(jobs) == index + 1
+                        len(jobs) == stage.get("expected_jobs", index + 1)
+                        and jobs[-1]["attempt_count"]
+                        == stage.get("expected_attempts", 1)
                         and jobs[-1]["status"] in {"succeeded", "retry", "dead_letter"}
                         and heartbeat
                     ):
@@ -188,6 +217,17 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
                 child.send_signal(signal.SIGINT)
                 exit_code = child.wait(timeout=10)
                 with engine.connect() as connection:
+                    if stage.get("retry_existing"):
+                        assert (
+                            connection.execute(
+                                text(
+                                    "SELECT id FROM issuance_service.canvas_evidence_sync_jobs ORDER BY created_at,id"
+                                )
+                            )
+                            .scalars()
+                            .all()
+                            == prior_job_ids
+                        )
                     snapshot = connection.execute(
                         text(shared["snapshot_sql"])
                     ).scalar_one()
@@ -219,6 +259,8 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
                         "exit_code_after_interrupt": exit_code,
                     }
                 )
+                if stage.get("retry_existing"):
+                    observations[-1]["same_job_ids"] = True
             finally:
                 finish_worker(child)
         return {

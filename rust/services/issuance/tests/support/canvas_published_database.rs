@@ -228,6 +228,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_retry() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_retry",
+                "worker-retry",
+                "worker_retry",
+                "MARTY_CANVAS_WORKER_RETRY_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -425,7 +438,7 @@ impl PublishedDatabase {
             root.join("contracts/fixtures/canvas_worker_test_trust.py")
                 .display()
         );
-        if matches!(script, "worker_rest" | "worker_facts") {
+        if matches!(script, "worker_rest" | "worker_facts" | "worker_retry") {
             let index = arguments.len() - 2;
             arguments.splice(
                 index..index,
@@ -478,7 +491,7 @@ impl PublishedDatabase {
                     )
                 })
                 .collect()
-            } else if matches!(script, "worker_rest" | "worker_facts") {
+            } else if matches!(script, "worker_rest" | "worker_facts" | "worker_retry") {
                 [
                     "run_canvas_worker_startup_oracle.py",
                     "test_canvas_lti_https.py",
@@ -494,7 +507,7 @@ impl PublishedDatabase {
             } else {
                 Vec::new()
             };
-        if script == "worker_facts" {
+        if matches!(script, "worker_facts" | "worker_retry") {
             consumer_helpers.extend(
                 [
                     "scripts/run_canvas_worker_rest_oracle.py",

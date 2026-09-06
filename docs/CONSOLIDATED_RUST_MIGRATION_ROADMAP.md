@@ -33,6 +33,11 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)
+now records real database eligibility and unchanged job identity across retry
+success,503failure and401token rejection. Two final captures agree; native
+adoption is pending. No clocks, retry timestamps or job outcomes are patched.
+
 The [all-four-fact worker reference](rust-migrations/canvas-worker-facts-reference.md)
 captures actual published assignment, quiz, module and course reads through the
 shared worker/HTTPS/OAuth/schema harness. Two captures match byte-for-byte. Its
