@@ -262,6 +262,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_reclaimers_retry() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_reclaimers_retry",
+                "worker-reclaimers-retry",
+                "worker_reclaimers_retry",
+                "MARTY_CANVAS_WORKER_RECLAIMERS_RETRY_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_reclaimers() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -521,6 +534,7 @@ impl PublishedDatabase {
                 | "worker_provider_final"
                 | "worker_concurrent"
                 | "worker_reclaimers"
+                | "worker_reclaimers_retry"
         );
         if worker_https {
             let index = arguments.len() - 2;
@@ -601,6 +615,7 @@ impl PublishedDatabase {
                 | "worker_provider_final"
                 | "worker_concurrent"
                 | "worker_reclaimers"
+                | "worker_reclaimers_retry"
         ) {
             consumer_helpers.extend(
                 [
@@ -622,6 +637,7 @@ impl PublishedDatabase {
                 | "worker_provider_final"
                 | "worker_concurrent"
                 | "worker_reclaimers"
+                | "worker_reclaimers_retry"
         ) {
             let path = "scripts/run_canvas_worker_provider_signals_oracle.py";
             consumer_helpers.push(format!(
@@ -631,7 +647,10 @@ impl PublishedDatabase {
         }
         if matches!(
             script,
-            "worker_provider_final" | "worker_concurrent" | "worker_reclaimers"
+            "worker_provider_final"
+                | "worker_concurrent"
+                | "worker_reclaimers"
+                | "worker_reclaimers_retry"
         ) {
             let path = "scripts/run_canvas_worker_provider_recovery_oracle.py";
             consumer_helpers.push(format!(
@@ -639,16 +658,23 @@ impl PublishedDatabase {
                 root.join(path).display()
             ));
         }
-        if script == "worker_reclaimers" {
-            for path in [
+        let extra_scenarios: &[&str] = match script {
+            "worker_reclaimers" => &[
                 "contracts/canvas-worker-provider-final-scenarios.json",
                 "contracts/canvas-worker-concurrent-scenarios.json",
-            ] {
-                consumer_helpers.push(format!(
-                    "type=bind,source={},target=/verification/{path},readonly",
-                    root.join(path).display()
-                ));
-            }
+            ],
+            "worker_reclaimers_retry" => &[
+                "contracts/canvas-worker-provider-recovery-scenarios.json",
+                "contracts/canvas-worker-reclaimers-scenarios.json",
+                "contracts/canvas-worker-concurrent-scenarios.json",
+            ],
+            _ => &[],
+        };
+        for path in extra_scenarios {
+            consumer_helpers.push(format!(
+                "type=bind,source={},target=/verification/{path},readonly",
+                root.join(path).display()
+            ));
         }
         for mount in &consumer_helpers {
             let index = arguments.len() - 2;

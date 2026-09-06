@@ -33,6 +33,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [retryable competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers-retry.md)
+has two matching independent captures and a passing local regeneration gate.
+Both replacement workers reach fresh idle at the durable retry
+boundary without an early provider read; after real retry eligibility, the same
+job succeeds on attempt two and its target stays enabled. Native replay remains
+open; this does not qualify a worker cutover or a deployment.
+
 The [competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers.md)
 has two matching independent captures and a mandatory regeneration gate. After
 real final-attempt crash/expiry, two actual processes are observed blocked at the

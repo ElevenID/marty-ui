@@ -81,6 +81,12 @@ while both processes remain alive. Native replay passed at `a329b980e`
 Crash-reclaimer/changed-target races remain separate; this does not close all of gate 5.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
+The [retryable two-reclaimer reference](canvas-worker-reclaimers-retry.md) has two
+matching captures: both workers reach fresh idle with one durable retry and no
+early read, then real eligibility permits same-job attempt-two success with the
+target enabled. Reference regeneration passes locally; native adoption
+and the remaining race requirements are still open.
+
 The [two-reclaimer reference](canvas-worker-reclaimers.md) has two matching
 captures after actual final-attempt renewal, process loss and real lease expiry.
 Both actual job queries wait at an owned job-table barrier before release; both

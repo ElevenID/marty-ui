@@ -61,6 +61,17 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
     cases = json.loads((contracts / scenario).read_text())
     if "extends" in cases:
         cases = {**json.loads((contracts / cases["extends"]).read_text()), **cases}
+    if "reclaimer_settings" in cases:
+        settings = json.loads((contracts / cases["reclaimer_settings"]).read_text())
+        # Share contention settings, never inherit final-attempt seed/history.
+        for key in [
+            "reclaimer_ids",
+            "barrier_sql",
+            "blocked_reclaimers_sql",
+            "concurrency_scenario",
+        ]:
+            cases[key] = settings[key]
+        assert "initial_job_seed" not in cases
     assert case_name in cases["cases"]
     spec = json.loads((contracts / cases["reference_scenario"]).read_text())
     shared = json.loads((contracts / spec["shared_seed"]).read_text())
@@ -148,6 +159,40 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                 "lease_and_both_heartbeats_advanced": True,
                 "generation_preserved_during_renewal": True,
             }
+
+            def record_reclaimers(state, boundary):
+                if not reclaimers:
+                    return
+                assert boundary in {"completion", "recovery"}
+                concurrency = json.loads(
+                    (contracts / cases["concurrency_scenario"]).read_text()
+                )
+
+                def both_idle():
+                    assert all(
+                        process.poll() is None for process in reclaimers.values()
+                    )
+                    fresh = scalar(
+                        engine,
+                        "SELECT count(*)=2 AND bool_and(last_heartbeat_at>=:since AND metadata->>'phase'='idle') FROM issuance_service.canvas_worker_heartbeats",
+                        {"since": started},
+                    )
+                    return (
+                        scalar(engine, concurrency["heartbeats_sql"]) if fresh else None
+                    )
+
+                result["reclaimer_heartbeats"] = wait_for(
+                    both_idle, 15, "both fresh idle reclaimers"
+                )
+                assert observe() == state
+                result[f"both_reclaimers_alive_after_{boundary}"] = True
+                contender = reclaimers["worker-contender"]
+                contender.send_signal(signal.SIGINT)
+                result["contender_exit_code_after_interrupt"] = contender.wait(
+                    timeout=10
+                )
+                assert result["contender_exit_code_after_interrupt"] == -2
+
             if case_name in {"recovery", "final"}:
                 child.send_signal(signal.SIGKILL)
                 result["crash_exit_code"] = child.wait(timeout=10)
@@ -164,7 +209,7 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                     "real lease expiry",
                 )
                 if "reclaimer_ids" in cases:
-                    assert case_name == "final"
+                    assert case_name in {"final", "recovery"}
                     assert cases["reclaimer_ids"] == ["worker-rest", "worker-contender"]
                     started = scalar(engine, "SELECT clock_timestamp()")
 
@@ -202,6 +247,10 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                     {"id": first["id"]},
                 )
                 assert result["recovery_backoff_in_range"]
+                record_reclaimers(result["reclaimed"], "recovery")
+                assert len(https.requests) == 1, (
+                    "Contending reclaimers must not bypass retry eligibility"
+                )
                 child.send_signal(signal.SIGINT)
                 result["reclaimer_exit_code"] = child.wait(timeout=10)
                 wait_for(
@@ -226,35 +275,8 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                 "terminal actual worker outcome",
                 child,
             )
-            if reclaimers:
-                concurrency = json.loads(
-                    (contracts / cases["concurrency_scenario"]).read_text()
-                )
-
-                def both_idle():
-                    assert all(
-                        process.poll() is None for process in reclaimers.values()
-                    )
-                    fresh = scalar(
-                        engine,
-                        "SELECT count(*)=2 AND bool_and(last_heartbeat_at>=:since AND metadata->>'phase'='idle') FROM issuance_service.canvas_worker_heartbeats",
-                        {"since": started},
-                    )
-                    return (
-                        scalar(engine, concurrency["heartbeats_sql"]) if fresh else None
-                    )
-
-                result["reclaimer_heartbeats"] = wait_for(
-                    both_idle, 15, "both fresh idle reclaimers"
-                )
-                assert observe() == result["completed"]
-                result["both_reclaimers_alive_after_completion"] = True
-                contender = reclaimers["worker-contender"]
-                contender.send_signal(signal.SIGINT)
-                result["contender_exit_code_after_interrupt"] = contender.wait(
-                    timeout=10
-                )
-                assert result["contender_exit_code_after_interrupt"] == -2
+            if case_name == "final":
+                record_reclaimers(result["completed"], "completion")
             child.send_signal(signal.SIGINT)
             result["exit_code_after_interrupt"] = child.wait(timeout=10)
             final = generation(engine)
@@ -263,12 +285,13 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
             result["same_job_and_original_start"] = True
             result["requests"] = list(https.requests)
             assert len(https.requests) == (2 if case_name == "recovery" else 1)
-            if case_name == "final":
+            if case_name == "final" or reclaimers:
                 result["target_enabled"] = scalar(
                     engine,
                     "SELECT enabled FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'",
                 )
-                assert result["target_enabled"] is False
+                assert result["target_enabled"] is (case_name != "final")
+            if case_name == "final":
                 assert result["completed"]["facts"] == []
             result["source_sha256"] = {
                 name: hashlib.sha256(

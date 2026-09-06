@@ -1,0 +1,7 @@
+{
+  "schema": "marty.canvas-worker-reclaimers-retry-scenarios/v1",
+  "extends": "canvas-worker-provider-recovery-scenarios.json",
+  "reclaimer_settings": "canvas-worker-reclaimers-scenarios.json",
+  "cases": ["recovery"],
+  "scope": "Actual first-attempt renewal/crash/real expiry, then two actual blocked reclaimers and one durable retry with both fresh idle heartbeats. Stop both reclaimers, wait real retry eligibility and restart for same-job attempt-two success. Target remains enabled; exactly two provider requests total. Reuse only barrier/identity/heartbeat settings from final-reclaimer scenario, never its historical attempt seed. No changed-target/owner-fence or completion-race claim."
+}
