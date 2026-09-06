@@ -118,9 +118,9 @@ The CI runner now requires both
 `status_runtime_matches_json_full_credential_routes`; the latter must run with
 `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`.
 
-Recursion/depth, other exceptional codecs and whole-worker/every-consumer adoption
-remain open. The parser temporarily retains the prior candidate's 127-container
-recursion guard, with a regression test against serde; this is explicitly NOT
-published interpreter-depth parity. Qualify the real depth/grammar consumer
-boundaries before cutover rather than treating this finite matrix as completion.
+The subsequent [depth reference and native adoption](canvas-json-depth.md)
+replace the prior 127-container parser guard with stack-safe parsing, writing,
+database ownership and the separately qualified typed-validation depth policy.
+General grammar, other exceptional codecs and whole-worker/every-consumer adoption
+are not proven merely by these finite matrices.
 PR #814 remains draft and unrouted; no reachable Python is deleted at this stage.

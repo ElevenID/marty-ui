@@ -2,8 +2,15 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_json_depth_replay.rs"]
+mod canvas_json_depth_replay;
 #[path = "support/canvas_observation_values.rs"]
 mod canvas_observation_values;
+
+#[tokio::test]
+async fn status_provider_matches_json_depth_reference() {
+    canvas_status_provider_replay::replay_depth().await;
+}
 
 #[path = "support/canvas_operations_read_replay.rs"]
 mod canvas_operations_read_replay;
@@ -458,6 +465,24 @@ async fn status_runtime_matches_json_full_credential_routes() {
         .await
         .unwrap();
     canvas_status_runtime_contract::run_json_body(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn status_runtime_matches_json_depth_full_credential_routes() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run_json_depth_body(&pool).await;
     pool.close().await;
     owned.close().unwrap();
 }

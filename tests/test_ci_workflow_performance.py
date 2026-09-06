@@ -205,6 +205,11 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'status_runtime_matches_json_full_credential_routes: test'"
         in published
     )
+    assert "grep -Fx 'status_provider_matches_json_depth_reference: test'" in published
+    assert (
+        "grep -Fx 'status_runtime_matches_json_depth_full_credential_routes: test'"
+        in published
+    )
     for decoder in ("unicode", "charset", "iso2022", "ordinal", "utf7_label"):
         assert (
             f"grep -Fx 'status_runtime_preserves_{decoder}_failures_and_recovery: test'"

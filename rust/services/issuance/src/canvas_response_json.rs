@@ -1,16 +1,30 @@
 //! Complete response JSON byte parsing into lossless values. JSON byte encoding
 //! detection is independent of Content-Type and of replacement text decoding.
+use crate::lossless_json_tree::{JsonNode, JsonTree};
 use crate::{lossless_json::LosslessJson, python_text::PythonText};
 use serde_json::Value;
 use std::collections::HashMap;
 
 pub(super) fn parse(bytes: &[u8]) -> Option<LosslessJson> {
+    parse_tree(bytes).map(|tree| LosslessJson::Parsed(std::sync::Arc::new(tree)))
+}
+
+pub(crate) fn parse_tree(bytes: &[u8]) -> Option<JsonTree> {
+    parse_with_numbers(bytes, false)
+}
+
+pub(crate) fn parse_json_tree(bytes: &[u8]) -> Option<JsonTree> {
+    parse_with_numbers(bytes, true)
+}
+
+fn parse_with_numbers(bytes: &[u8], literal_numbers: bool) -> Option<JsonTree> {
     let points = decode(bytes)?;
     let mut parser = Parser {
         points,
         position: 0,
+        literal_numbers,
     };
-    let value = parser.value(0)?;
+    let value = parser.value()?;
     parser.space();
     (parser.position == parser.points.len()).then_some(value)
 }
@@ -97,6 +111,7 @@ fn utf8_surrogatepass(bytes: &[u8]) -> Option<Vec<u32>> {
 struct Parser {
     points: Vec<u32>,
     position: usize,
+    literal_numbers: bool,
 }
 
 impl Parser {
@@ -124,94 +139,136 @@ impl Parser {
         }
         Some(())
     }
-    fn value(&mut self, depth: usize) -> Option<LosslessJson> {
-        self.space();
-        // Retain the existing serde candidate's bounded recursive parsing guard.
-        // Published interpreter-depth parity is still an explicit cutover gate;
-        // this must not be advertised as qualification for deep JSON inputs.
-        if matches!(self.peek(), Some(91 | 123)) && depth + 1 >= 128 {
-            return None;
+    fn value(&mut self) -> Option<JsonTree> {
+        enum Frame {
+            Array(Vec<usize>),
+            Object {
+                entries: Vec<(PythonText, usize)>,
+                positions: HashMap<PythonText, usize>,
+                key: PythonText,
+            },
         }
-        match self.peek()? {
-            34 => self.string().map(LosslessJson::Text),
-            91 => {
-                self.position += 1;
-                self.space();
-                let mut values = Vec::new();
-                if self.take(93) {
-                    return Some(LosslessJson::Array(values));
-                }
-                loop {
-                    values.push(self.value(depth + 1)?);
+        let mut frames = Vec::new();
+        let mut nodes = Vec::new();
+        loop {
+            self.space();
+            let node = match self.peek()? {
+                91 => {
+                    self.position += 1;
                     self.space();
                     if self.take(93) {
-                        break;
-                    }
-                    if !self.take(44) {
-                        return None;
-                    }
-                }
-                Some(LosslessJson::Array(values))
-            }
-            123 => {
-                self.position += 1;
-                self.space();
-                let mut entries: Vec<(PythonText, LosslessJson)> = Vec::new();
-                let mut positions = HashMap::new();
-                if self.take(125) {
-                    return Some(LosslessJson::PythonObject(entries));
-                }
-                loop {
-                    self.space();
-                    let key = self.string()?;
-                    self.space();
-                    if !self.take(58) {
-                        return None;
-                    }
-                    let value = self.value(depth + 1)?;
-                    if let Some(index) = positions.get(&key).copied() {
-                        entries[index] = (key, value);
+                        JsonNode::Array(Vec::new())
                     } else {
-                        positions.insert(key.clone(), entries.len());
-                        entries.push((key, value));
+                        frames.push(Frame::Array(Vec::new()));
+                        continue;
                     }
+                }
+                123 => {
+                    self.position += 1;
                     self.space();
                     if self.take(125) {
-                        break;
-                    }
-                    if !self.take(44) {
-                        return None;
+                        JsonNode::Object(Vec::new())
+                    } else {
+                        let key = self.object_key()?;
+                        frames.push(Frame::Object {
+                            entries: Vec::new(),
+                            positions: HashMap::new(),
+                            key,
+                        });
+                        continue;
                     }
                 }
-                Some(LosslessJson::PythonObject(entries))
+                34 => JsonNode::Text(self.string()?),
+                116 => {
+                    self.keyword("true")?;
+                    JsonNode::Scalar(Value::Bool(true))
+                }
+                102 => {
+                    self.keyword("false")?;
+                    JsonNode::Scalar(Value::Bool(false))
+                }
+                110 => {
+                    self.keyword("null")?;
+                    JsonNode::Scalar(Value::Null)
+                }
+                78 if !self.literal_numbers => {
+                    self.keyword("NaN")?;
+                    JsonNode::Float(f64::NAN)
+                }
+                73 if !self.literal_numbers => {
+                    self.keyword("Infinity")?;
+                    JsonNode::Float(f64::INFINITY)
+                }
+                45 if !self.literal_numbers && self.points.get(self.position + 1) == Some(&73) => {
+                    self.keyword("-Infinity")?;
+                    JsonNode::Float(f64::NEG_INFINITY)
+                }
+                45 | 48..=57 => self.number()?,
+                _ => return None,
+            };
+            let mut id = nodes.len();
+            nodes.push(node);
+            loop {
+                let Some(frame) = frames.last_mut() else {
+                    return Some(JsonTree::new(nodes, id));
+                };
+                self.space();
+                let finished = match frame {
+                    Frame::Array(children) => {
+                        children.push(id);
+                        if self.take(93) {
+                            true
+                        } else {
+                            if !self.take(44) {
+                                return None;
+                            }
+                            false
+                        }
+                    }
+                    Frame::Object {
+                        entries,
+                        positions,
+                        key,
+                    } => {
+                        let key = std::mem::take(key);
+                        if let Some(index) = positions.get(&key).copied() {
+                            entries[index] = (key, id);
+                        } else {
+                            positions.insert(key.clone(), entries.len());
+                            entries.push((key, id));
+                        }
+                        if self.take(125) {
+                            true
+                        } else {
+                            if !self.take(44) {
+                                return None;
+                            }
+                            let Frame::Object { key, .. } = frame else {
+                                unreachable!()
+                            };
+                            *key = self.object_key()?;
+                            false
+                        }
+                    }
+                };
+                if !finished {
+                    break;
+                }
+                let node = match frames.pop().unwrap() {
+                    Frame::Array(children) => JsonNode::Array(children),
+                    Frame::Object { entries, .. } => JsonNode::Object(entries),
+                };
+                id = nodes.len();
+                nodes.push(node);
             }
-            116 => {
-                self.keyword("true")?;
-                Some(Value::Bool(true).into())
-            }
-            102 => {
-                self.keyword("false")?;
-                Some(Value::Bool(false).into())
-            }
-            110 => {
-                self.keyword("null")?;
-                Some(Value::Null.into())
-            }
-            78 => {
-                self.keyword("NaN")?;
-                Some(LosslessJson::Float(f64::NAN))
-            }
-            73 => {
-                self.keyword("Infinity")?;
-                Some(LosslessJson::Float(f64::INFINITY))
-            }
-            45 if self.points.get(self.position + 1) == Some(&73) => {
-                self.keyword("-Infinity")?;
-                Some(LosslessJson::Float(f64::NEG_INFINITY))
-            }
-            45 | 48..=57 => self.number(),
-            _ => None,
         }
+    }
+
+    fn object_key(&mut self) -> Option<PythonText> {
+        self.space();
+        let key = self.string()?;
+        self.space();
+        self.take(58).then_some(key)
     }
     fn string(&mut self) -> Option<PythonText> {
         if !self.take(34) {
@@ -274,7 +331,7 @@ impl Parser {
         }
         Some(value)
     }
-    fn number(&mut self) -> Option<LosslessJson> {
+    fn number(&mut self) -> Option<JsonNode> {
         let start = self.position;
         self.take(45);
         let digits = self.position;
@@ -315,8 +372,11 @@ impl Parser {
             .iter()
             .map(|point| char::from_u32(*point).unwrap())
             .collect();
+        if self.literal_numbers {
+            return Some(JsonNode::Scalar(serde_json::from_str(&token).ok()?));
+        }
         if float {
-            return Some(LosslessJson::Float(token.parse().ok()?));
+            return Some(JsonNode::Float(token.parse().ok()?));
         }
         if integer_digits > 4300 {
             return None;
@@ -324,7 +384,7 @@ impl Parser {
         // Arbitrary-precision serde numbers retain valid Python integers; -0 is
         // Python's integer zero, unlike floating-point negative zero.
         let token = if token == "-0" { "0" } else { &token };
-        Some(LosslessJson::Scalar(serde_json::from_str(token).ok()?))
+        Some(JsonNode::Scalar(serde_json::from_str(token).ok()?))
     }
 }
 
@@ -381,10 +441,18 @@ mod tests {
     }
 
     fn points(bytes: &[u8]) -> Vec<u32> {
-        match parse(bytes).unwrap() {
-            LosslessJson::Text(text) => text.codepoints().collect(),
+        let tree = tree(bytes);
+        match tree.node(tree.root()) {
+            JsonNode::Text(text) => text.codepoints().collect(),
             other => panic!("expected text, received {other:?}"),
         }
+    }
+
+    fn tree(bytes: &[u8]) -> std::sync::Arc<JsonTree> {
+        let LosslessJson::Parsed(tree) = parse(bytes).unwrap() else {
+            panic!("expected parsed arena")
+        };
+        tree
     }
 
     #[test]
@@ -444,16 +512,16 @@ mod tests {
 
     #[test]
     fn duplicate_keys_keep_original_position_and_last_value() {
-        let value = parse(br#"{"b":1,"a":2,"\u0062":3,"\ud800":4,"\ud800":5}"#).unwrap();
-        let LosslessJson::PythonObject(entries) = value else {
+        let tree = tree(br#"{"b":1,"a":2,"\u0062":3,"\ud800":4,"\ud800":5}"#);
+        let JsonNode::Object(entries) = tree.node(tree.root()) else {
             panic!("expected object")
         };
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].0.as_scalar(), Some("b"));
-        assert_eq!(entries[0].1.to_scalar().unwrap(), json!(3));
+        assert_eq!(tree.node(entries[0].1), &JsonNode::Scalar(json!(3)));
         assert_eq!(entries[1].0.as_scalar(), Some("a"));
         assert_eq!(entries[2].0.codepoints().collect::<Vec<_>>(), [0xd800]);
-        assert_eq!(entries[2].1.to_scalar().unwrap(), json!(5));
+        assert_eq!(tree.node(entries[2].1), &JsonNode::Scalar(json!(5)));
     }
 
     #[test]
@@ -471,27 +539,40 @@ mod tests {
             ("-0.0", -0.0),
             ("-1e-400", -0.0),
         ] {
-            let LosslessJson::Float(value) = parse(token.as_bytes()).unwrap() else {
+            let tree = tree(token.as_bytes());
+            let JsonNode::Float(value) = tree.node(tree.root()) else {
                 panic!("{token}")
             };
             assert_eq!(value.to_bits(), expected.to_bits(), "{token}");
         }
-        let LosslessJson::Float(value) = parse(b"NaN").unwrap() else {
+        let tree = tree(b"NaN");
+        let JsonNode::Float(value) = tree.node(tree.root()) else {
             panic!("NaN")
         };
         assert!(value.is_nan());
     }
 
     #[test]
-    fn unqualified_depth_guard_retains_existing_candidate_limit() {
-        // This verifies regression protection, not the published interpreter's
-        // recursion boundary. That separate parity gate remains open.
-        for depth in [126, 127, 128, 129] {
-            let source = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
-            assert_eq!(
-                parse(source.as_bytes()).is_some(),
-                serde_json::from_str::<Value>(&source).is_ok()
-            );
-        }
+    fn deep_parse_clone_drop_and_strict_serialization_use_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                for depth in [126, 127, 128, 129, 255, 256, 1600, 2048] {
+                    for (open, close) in [("[", "]"), ("{\"nested\":", "}")] {
+                        let source = format!("{}0{}", open.repeat(depth), close.repeat(depth));
+                        let parsed = tree(source.as_bytes());
+                        assert_eq!(parsed.container_depth(), depth);
+                        let cloned = parsed.clone();
+                        assert_eq!(cloned.raw_json(false).unwrap().get(), source);
+                        assert_eq!(cloned.raw_json(true).unwrap().get(), source);
+                        drop(parsed);
+                        drop(cloned);
+                        assert!(parse(&source.as_bytes()[..source.len() - 1]).is_none());
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

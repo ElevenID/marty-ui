@@ -9,6 +9,9 @@
 #![forbid(unsafe_code)]
 
 pub mod lossless_json;
+pub mod lossless_json_tree;
+mod lossless_json_write;
+pub mod owned_json_value;
 mod python_json_diagnostic;
 pub mod python_text;
 mod python_value;

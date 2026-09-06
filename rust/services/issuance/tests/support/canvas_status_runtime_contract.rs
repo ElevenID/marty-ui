@@ -208,7 +208,7 @@ pub async fn run_utf7_body(pool: &PgPool) {
         "../../../../../contracts/canvas-utf7-consumer-oracle.json"
     ))
     .unwrap();
-    run_body(pool, &scenarios, &oracle, 12).await;
+    run_body(pool, &scenarios, &oracle, 12, false).await;
 }
 
 pub async fn run_json_body(pool: &PgPool) {
@@ -220,10 +220,22 @@ pub async fn run_json_body(pool: &PgPool) {
         "../../../../../contracts/canvas-json-consumer-oracle.json"
     ))
     .unwrap();
-    run_body(pool, &scenarios, &oracle, 66).await;
+    run_body(pool, &scenarios, &oracle, 66, false).await;
 }
 
-async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cases: usize) {
+pub async fn run_json_depth_body(pool: &PgPool) {
+    let scenarios = super::canvas_json_depth_replay::scenarios();
+    let oracle = super::canvas_json_depth_replay::oracle();
+    run_body(pool, &scenarios, &oracle, 64, true).await;
+}
+
+async fn run_body(
+    pool: &PgPool,
+    scenarios: &Value,
+    oracle: &Value,
+    expected_cases: usize,
+    depth: bool,
+) {
     use axum::{
         body::{to_bytes, Body},
         http::Request,
@@ -279,13 +291,13 @@ async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cas
             let credential_before = credential_row(pool).await;
             let delivery_before = delivery_row(pool).await;
             assert_eq!(
-                normalized(credential_before.clone(), &url),
+                normalized(credential_before.clone(), &url, depth),
                 expected["credential_before"],
                 "{} {action} credential input",
                 case["name"]
             );
             assert_eq!(
-                normalized(delivery_before.clone(), &url),
+                normalized(delivery_before.clone(), &url, depth),
                 *initial_delivery,
                 "{} {action} delivery input",
                 case["name"]
@@ -321,7 +333,11 @@ async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cas
             assert_eq!(content_type, expected["content_type"].as_str().unwrap());
             let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
             let body = if content_type.starts_with("application/json") {
-                normalized(serde_json::from_slice(&bytes).unwrap(), &url)
+                normalized(
+                    serde_json::from_slice::<Value>(&bytes).unwrap(),
+                    &url,
+                    depth,
+                )
             } else {
                 json!(std::str::from_utf8(&bytes).unwrap())
             };
@@ -338,7 +354,7 @@ async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cas
             changed.sort();
             assert_eq!(json!(changed), expected["credential_changed_columns"]);
             assert_eq!(
-                normalized(credential_after, &url),
+                normalized(credential_after, &url, depth),
                 expected["credential_after"]
             );
             assert_eq!(
@@ -346,7 +362,7 @@ async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cas
                 expected["delivery_row_unchanged"]
             );
             assert_eq!(
-                normalized(delivery_after, &url),
+                normalized(delivery_after, &url, depth),
                 expected["delivery_after"],
                 "{} {action} delivery",
                 case["name"]
@@ -364,7 +380,7 @@ async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cas
                 expected["credential_after"]["status"]
             );
             assert_eq!(
-                normalized(calls[1]["body"].clone(), &url),
+                normalized(calls[1]["body"].clone(), &url, depth),
                 expected["requests"][0]["body"]
             );
             assert_eq!(
@@ -389,6 +405,78 @@ async fn run_body(pool: &PgPool, scenarios: &Value, oracle: &Value, expected_cas
                 );
             }
             count += 1;
+            if depth && case["response_status"] == 200 && action == "suspend" {
+                // A later real consumer must read and retain the prior deep
+                // response when the provider refuses its next transition.
+                use marty_issuance_service::owned_json_value::OwnedJsonValue;
+                let retained = delivery_row(pool).await;
+                let response_before =
+                    OwnedJsonValue::copy(&retained["metadata"]["status_sync_response"]);
+                let expected_tree = super::canvas_json_depth_replay::witness_bytes(
+                    &serde_json::to_vec(&response_before).unwrap(),
+                );
+                let previous_attempts = retained["metadata"]["status_sync_attempts"]
+                    .as_u64()
+                    .unwrap();
+                let mut refusal = case.clone();
+                refusal["response_status"] = json!(403);
+                *state.response_override.lock().unwrap() = Some(refusal);
+                state.calls.lock().unwrap().clear();
+                state.events.lock().unwrap().clear();
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/issuance/credentials/credential-review/reinstate")
+                            .header("x-api-key", "synthetic-validation-key")
+                            .header("x-organization-id", "org-review")
+                            .header("content-type", "application/json")
+                            .body(Body::from(json!({"reason":"synthetic reason"}).to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    200,
+                    "later consumer {}",
+                    case["name"]
+                );
+                let body: Value = serde_json::from_slice(
+                    &to_bytes(response.into_body(), 64 * 1024).await.unwrap(),
+                )
+                .unwrap();
+                let reinstate = routes
+                    .iter()
+                    .find(|route| route["action"] == "reinstate")
+                    .unwrap();
+                assert_eq!(normalized(body, &url, depth), reinstate["body"]);
+                let after = delivery_row(pool).await;
+                let response_after =
+                    OwnedJsonValue::copy(&after["metadata"]["status_sync_response"]);
+                assert_eq!(
+                    super::canvas_json_depth_replay::witness_bytes(
+                        &serde_json::to_vec(&response_after).unwrap()
+                    ),
+                    expected_tree
+                );
+                assert_eq!(
+                    after["metadata"]["status_sync_attempts"],
+                    previous_attempts + 1
+                );
+                assert!(after["last_error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Canvas Credentials status sync failed (HTTP 403): "));
+                assert_eq!(*state.events.lock().unwrap(), vec!["reinstated"]);
+                let calls = state.calls.lock().unwrap().clone();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0]["port"], "publication");
+                assert_eq!(calls[0]["status"], "suspended");
+                assert_eq!(calls[1]["persisted_status"], "active");
+                *state.response_override.lock().unwrap() = Some(case.clone());
+            }
         }
     }
     assert_eq!(count, expected_cases * 3);
@@ -407,11 +495,28 @@ async fn credential_row(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT to_jsonb(c) FROM issuance_service.issued_credentials c WHERE id='credential-review'").fetch_one(pool).await.unwrap()
 }
 
-async fn delivery_row(pool: &PgPool) -> Value {
+async fn delivery_row(pool: &PgPool) -> marty_issuance_service::owned_json_value::OwnedJsonValue {
     sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE id='delivery-provider'").fetch_one(pool).await.unwrap()
 }
 
-fn normalized(mut value: Value, url: &str) -> Value {
+fn normalized(
+    value: impl Into<marty_issuance_service::owned_json_value::OwnedJsonValue>,
+    url: &str,
+    depth: bool,
+) -> Value {
+    let mut value = value.into();
+    if depth {
+        if let Some(metadata) = value.get_mut("metadata").and_then(Value::as_object_mut) {
+            if let Some(response) = metadata.remove("status_sync_response") {
+                let response =
+                    marty_issuance_service::owned_json_value::OwnedJsonValue::new(response);
+                let witness = super::canvas_json_depth_replay::witness_bytes(
+                    &serde_json::to_vec(&response).unwrap(),
+                );
+                metadata.insert("status_sync_response".into(), witness);
+            }
+        }
+    }
     fn substitute(value: &mut Value, url: &str) {
         match value {
             Value::String(text) if text == url => {

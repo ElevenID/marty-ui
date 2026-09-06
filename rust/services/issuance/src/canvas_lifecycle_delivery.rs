@@ -14,6 +14,7 @@ use crate::{
         ManagedCredential,
     },
     lossless_json::{LosslessJson, LosslessObject},
+    owned_json_value::OwnedJsonValue,
     python_text::PythonText,
     python_value::{python_string, python_truthy, strip},
 };
@@ -64,20 +65,22 @@ impl CanvasLifecycleDeliverySynchronizer {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<(), CanvasLifecycleSyncError> {
-        let context: Option<(String, Option<Value>)> = sqlx::query_as("SELECT c.transaction_id,to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
+        let context: Option<(String, Option<OwnedJsonValue>)> = sqlx::query_as("SELECT c.transaction_id,to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
             .bind(&credential.id).bind(&credential.organization_id).fetch_optional(&self.pool).await.map_err(error)?;
         let (transaction_id, application) = context.unwrap_or_default();
-        let records: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE credential_id=$1 AND organization_id=$2 AND delivery_target='canvas_credentials' AND status='delivered' ORDER BY created_at,delivery_target")
+        let records: Vec<OwnedJsonValue> = sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE credential_id=$1 AND organization_id=$2 AND delivery_target='canvas_credentials' AND status='delivered' ORDER BY created_at,delivery_target")
             .bind(&credential.id).bind(&credential.organization_id).fetch_all(&self.pool).await.map_err(error)?;
         for mut record in records {
             let now = crate::canvas_legacy_ingest::timestamp_string(chrono::Utc::now());
-            let mut metadata = match record.get("metadata").filter(|value| python_truthy(value)) {
-                None => Map::new(),
-                Some(value) => value
-                    .as_object()
-                    .cloned()
-                    .ok_or_else(|| error("Canvas delivery metadata is not an object"))?,
+            let mut metadata_owner = match record
+                .get("metadata")
+                .filter(|value| python_truthy(value))
+            {
+                None => OwnedJsonValue::new(json!({})),
+                Some(value) if value.is_object() => OwnedJsonValue::copy(value),
+                Some(_) => return Err(error("Canvas delivery metadata is not an object").into()),
             };
+            let metadata = metadata_owner.as_object_mut().unwrap();
             if !(metadata
                 .get("deployment_profile_id")
                 .is_some_and(python_truthy)
@@ -97,7 +100,8 @@ impl CanvasLifecycleDeliverySynchronizer {
                     ] {
                         if let Some(value) = canvas.get(source).filter(|value| python_truthy(value))
                         {
-                            metadata.insert(
+                            OwnedJsonValue::insert_map(
+                                metadata,
                                 destination.into(),
                                 json!(python_string(value).ok_or_else(|| error(
                                     "Canvas profile value cannot be projected"
@@ -107,7 +111,11 @@ impl CanvasLifecycleDeliverySynchronizer {
                     }
                     let flags = flags(canvas.get("feature_flags"));
                     if !flags.is_empty() {
-                        metadata.insert("canvas_feature_flags".into(), json!(flags));
+                        OwnedJsonValue::insert_map(
+                            metadata,
+                            "canvas_feature_flags".into(),
+                            json!(flags),
+                        );
                     }
                 }
             }
@@ -116,21 +124,21 @@ impl CanvasLifecycleDeliverySynchronizer {
                 && active_flags.get("enable_canvas_mirror_ops") != Some(&Value::Bool(true))
             {
                 let detail = "Canvas mirror operations are disabled by deployment profile";
-                metadata.extend(json!({"canvas_feature_gate_blocked":true,
+                OwnedJsonValue::extend_map(metadata, json!({"canvas_feature_gate_blocked":true,
                     "canvas_feature_gate":"enable_canvas_mirror_ops","canvas_feature_gate_blocked_at":now,
                     "retryable":false,"last_status_sync_error":detail,"last_status_sync_error_at":now}).as_object().unwrap().clone());
                 self.save(
                     &record,
-                    crate::lossless_json::object(metadata),
+                    crate::lossless_json::object(std::mem::take(metadata)),
                     Some(&detail.to_owned().into()),
                     &now,
                 )
                 .await?;
                 continue;
             }
-            let target = self.target(&mut record, &mut metadata).await?;
+            let target = self.target(&mut record, metadata).await?;
             let attempts = increment_attempts(metadata.get("status_sync_attempts"))?;
-            metadata.extend(json!({"status_sync_attempts":attempts,"last_status_sync_action":action.as_str(),
+            OwnedJsonValue::extend_map(metadata, json!({"status_sync_attempts":attempts,"last_status_sync_action":action.as_str(),
                 "last_status_sync_attempted_at":now,"last_synced_credential_status":credential.status.as_str()}).as_object().unwrap().clone());
             let outcome = match target {
                 Ok(platform) => {
@@ -153,7 +161,7 @@ impl CanvasLifecycleDeliverySynchronizer {
                     Err(error(format!("Canvas lifecycle sync skipped: {detail}")).into())
                 }
             };
-            let mut metadata = crate::lossless_json::object(metadata);
+            let mut metadata = crate::lossless_json::object(std::mem::take(metadata));
             match outcome {
                 Ok(result) => {
                     metadata.extend(result);
@@ -175,9 +183,9 @@ impl CanvasLifecycleDeliverySynchronizer {
 
     async fn target(
         &self,
-        record: &mut Value,
+        record: &mut OwnedJsonValue,
         metadata: &mut Map<String, Value>,
-    ) -> Result<Result<Value, String>, CredentialManagementPortError> {
+    ) -> Result<Result<OwnedJsonValue, String>, CredentialManagementPortError> {
         let id = metadata
             .get("canvas_program_binding_id")
             .filter(|value| !value.is_null())
@@ -189,7 +197,7 @@ impl CanvasLifecycleDeliverySynchronizer {
                 "Canvas mirror delivery record is missing canvas_program_binding_id".into(),
             ));
         };
-        let binding: Option<Value> = sqlx::query_scalar(
+        let binding: Option<OwnedJsonValue> = sqlx::query_scalar(
             "SELECT to_jsonb(b) FROM issuance_service.canvas_program_bindings b WHERE id=$1",
         )
         .bind(&id)
@@ -203,15 +211,16 @@ impl CanvasLifecycleDeliverySynchronizer {
             return Ok(Err(format!("Canvas program binding {id} is disabled")));
         }
         if python_truthy(&binding["canvas_credentials"]) {
-            metadata.insert(
+            OwnedJsonValue::insert_map(
+                metadata,
                 "canvas_credentials".into(),
-                binding["canvas_credentials"].clone(),
+                OwnedJsonValue::copy(&binding["canvas_credentials"]).take(),
             );
         }
         let platform_id = binding["platform_id"]
             .as_str()
             .ok_or_else(|| error("Canvas binding platform missing"))?;
-        let platform: Option<Value> = sqlx::query_scalar(
+        let platform: Option<OwnedJsonValue> = sqlx::query_scalar(
             "SELECT to_jsonb(p) FROM issuance_service.canvas_platforms p WHERE id=$1",
         )
         .bind(platform_id)
@@ -225,9 +234,17 @@ impl CanvasLifecycleDeliverySynchronizer {
             return Ok(Err(format!("Canvas platform {platform_id} is disabled")));
         }
         record["canvas_account_id"] = platform["canvas_account_id"].clone();
-        metadata.insert("canvas_platform_id".into(), platform["id"].clone());
-        metadata.insert("canvas_program_binding_id".into(), binding["id"].clone());
-        record["metadata"] = json!(metadata);
+        OwnedJsonValue::insert_map(
+            metadata,
+            "canvas_platform_id".into(),
+            platform["id"].clone(),
+        );
+        OwnedJsonValue::insert_map(
+            metadata,
+            "canvas_program_binding_id".into(),
+            binding["id"].clone(),
+        );
+        record.replace_field("metadata", OwnedJsonValue::copy_map(metadata));
         Ok(Ok(platform))
     }
 
@@ -240,7 +257,7 @@ impl CanvasLifecycleDeliverySynchronizer {
     ) -> Result<(), CanvasLifecycleSyncError> {
         // Encoding is deliberately checked here, after publication, canonical
         // persistence and provider completion, not while decoding response text.
-        let metadata = crate::lossless_json::postgres_object(&metadata)
+        let metadata = crate::lossless_json::postgres_object_raw(&metadata)
             .map_err(|_| CanvasLifecycleSyncError::TextEncoding)?;
         let last_error = last_error
             .map(|text| {
@@ -249,7 +266,7 @@ impl CanvasLifecycleDeliverySynchronizer {
             })
             .transpose()?;
         let rows = sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$3,last_error=$4,canvas_account_id=$5,updated_at=$6 WHERE id=$1 AND organization_id=$2")
-            .bind(record["id"].as_str()).bind(record["organization_id"].as_str()).bind(json!(metadata))
+            .bind(record["id"].as_str()).bind(record["organization_id"].as_str()).bind(sqlx::types::Json(metadata))
             .bind(last_error).bind(record["canvas_account_id"].as_str())
             .bind(chrono::DateTime::parse_from_rfc3339(now).map_err(error)?)
             .execute(&self.pool).await.map_err(error)?.rows_affected();

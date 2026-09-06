@@ -18,6 +18,7 @@ pub enum LosslessJson {
     /// into the same key. These are typed keys, never diagnostic marker objects.
     PythonObject(Vec<(PythonText, Self)>),
     Float(f64),
+    Parsed(std::sync::Arc<crate::lossless_json_tree::JsonTree>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -26,7 +27,16 @@ pub struct NonScalarJson;
 
 impl From<Value> for LosslessJson {
     fn from(value: Value) -> Self {
-        Self::Scalar(value)
+        if value.is_array() || value.is_object() {
+            let owned = crate::owned_json_value::OwnedJsonValue::new(value);
+            let raw = crate::lossless_json_write::scalar(&owned);
+            Self::Parsed(std::sync::Arc::new(
+                crate::lossless_json_tree::JsonTree::from_json_bytes(raw.get().as_bytes())
+                    .expect("valid scalar JSON"),
+            ))
+        } else {
+            Self::Scalar(value)
+        }
     }
 }
 
@@ -49,7 +59,8 @@ impl LosslessJson {
     /// Failure cannot replace, escape, truncate or destroy non-scalar text.
     pub fn to_scalar(&self) -> Result<Value, NonScalarJson> {
         Ok(match self {
-            Self::Scalar(value) => value.clone(),
+            Self::Parsed(tree) => tree.to_scalar(false, false)?,
+            Self::Scalar(value) => crate::owned_json_value::OwnedJsonValue::copy(value).take(),
             Self::Text(text) => Value::String(text.as_scalar().ok_or(NonScalarJson)?.to_owned()),
             Self::Object(value) => Value::Object(scalar_object(value)?),
             Self::Array(values) => Value::Array(
@@ -79,6 +90,97 @@ impl LosslessJson {
     /// nested arbitrary JSON values. Only this explicit HTTP-rendering boundary
     /// replaces top-level surrogate keys and projects non-finite floats to null.
     pub fn validation_value(&self, excerpt_root: bool) -> Result<Value, NonScalarJson> {
+        if self.exceeds_validation_depth() {
+            return Err(NonScalarJson);
+        }
+        self.validation_value_at(excerpt_root, 0)
+    }
+
+    fn exceeds_validation_depth(&self) -> bool {
+        enum Ref<'a> {
+            Lossless(&'a LosslessJson),
+            Scalar(&'a Value),
+        }
+        let mut pending = vec![(Ref::Lossless(self), 0)];
+        while let Some((value, parent)) = pending.pop() {
+            match value {
+                Ref::Lossless(Self::Parsed(tree)) if parent + tree.container_depth() > 255 => {
+                    return true
+                }
+                Ref::Lossless(Self::Scalar(value)) => pending.push((Ref::Scalar(value), parent)),
+                Ref::Lossless(Self::Array(values)) => {
+                    if parent >= 255 {
+                        return true;
+                    }
+                    pending.extend(
+                        values
+                            .iter()
+                            .map(|value| (Ref::Lossless(value), parent + 1)),
+                    );
+                }
+                Ref::Lossless(Self::Object(values)) => {
+                    if parent >= 255 {
+                        return true;
+                    }
+                    pending.extend(
+                        values
+                            .values()
+                            .map(|value| (Ref::Lossless(value), parent + 1)),
+                    );
+                }
+                Ref::Lossless(Self::PythonObject(values)) => {
+                    if parent >= 255 {
+                        return true;
+                    }
+                    pending.extend(
+                        values
+                            .iter()
+                            .map(|(_, value)| (Ref::Lossless(value), parent + 1)),
+                    );
+                }
+                Ref::Scalar(Value::Array(values)) => {
+                    if parent >= 255 {
+                        return true;
+                    }
+                    pending.extend(values.iter().map(|value| (Ref::Scalar(value), parent + 1)));
+                }
+                Ref::Scalar(Value::Object(values)) => {
+                    if parent >= 255 {
+                        return true;
+                    }
+                    pending.extend(
+                        values
+                            .values()
+                            .map(|value| (Ref::Scalar(value), parent + 1)),
+                    );
+                }
+                _ => (),
+            }
+        }
+        false
+    }
+
+    fn validation_value_at(
+        &self,
+        excerpt_root: bool,
+        parent_depth: usize,
+    ) -> Result<Value, NonScalarJson> {
+        // The published typed excerpt allows 255 container levels, including
+        // the payload wrapper. This is not a parser or persistence limit.
+        if let Self::Parsed(tree) = self {
+            if parent_depth + tree.container_depth() > 255 {
+                return Err(NonScalarJson);
+            }
+            return tree.to_scalar(true, excerpt_root);
+        }
+        if parent_depth >= 255
+            && matches!(
+                self,
+                Self::Object(_) | Self::PythonObject(_) | Self::Array(_)
+            )
+        {
+            return Err(NonScalarJson);
+        }
         Ok(match self {
             Self::Float(value) => serde_json::Number::from_f64(*value)
                 .map(Value::Number)
@@ -99,20 +201,25 @@ impl LosslessJson {
                     } else {
                         key.as_scalar().ok_or(NonScalarJson)?.to_owned()
                     };
-                    output.insert(key, value.validation_value(false)?);
+                    output.insert(key, value.validation_value_at(false, parent_depth + 1)?);
                 }
                 Value::Object(output)
             }
             Self::Object(entries) => Value::Object(
                 entries
                     .iter()
-                    .map(|(key, value)| Ok((key.clone(), value.validation_value(false)?)))
+                    .map(|(key, value)| {
+                        Ok((
+                            key.clone(),
+                            value.validation_value_at(false, parent_depth + 1)?,
+                        ))
+                    })
                     .collect::<Result<_, NonScalarJson>>()?,
             ),
             Self::Array(values) => Value::Array(
                 values
                     .iter()
-                    .map(|value| value.validation_value(false))
+                    .map(|value| value.validation_value_at(false, parent_depth + 1))
                     .collect::<Result<_, _>>()?,
             ),
             _ => self.to_scalar()?,
@@ -135,44 +242,23 @@ pub fn serialize_validation_excerpt<S: Serializer>(
 /// PostgreSQL JSONB also rejects U+0000, which is valid scalar JSON text.
 /// Keep this check at persistence, not at parsing or validation rendering.
 pub fn postgres_object(value: &LosslessObject) -> Result<Map<String, Value>, NonScalarJson> {
-    fn representable(value: &Value) -> bool {
-        match value {
-            Value::String(text) => !text.contains('\0'),
-            Value::Object(values) => values
-                .iter()
-                .all(|(key, value)| !key.contains('\0') && representable(value)),
-            Value::Array(values) => values.iter().all(representable),
-            _ => true,
-        }
-    }
-    let scalar = scalar_object(value)?;
-    if scalar
-        .iter()
-        .all(|(key, value)| !key.contains('\0') && representable(value))
-    {
-        Ok(scalar)
-    } else {
-        Err(NonScalarJson)
-    }
+    crate::lossless_json_write::lossless_map(value, true)?;
+    scalar_object(value)
+}
+
+pub fn postgres_object_raw(
+    value: &LosslessObject,
+) -> Result<Box<serde_json::value::RawValue>, NonScalarJson> {
+    crate::lossless_json_write::lossless_map(value, true)
 }
 
 // This owner deliberately renders JSON, unlike PythonText (which has no implicit
 // serializer or Display). Rendering non-scalar values fails without coercion.
 impl Serialize for LosslessJson {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Scalar(value) => value.serialize(serializer),
-            Self::Text(text) => text
-                .as_scalar()
-                .ok_or_else(|| S::Error::custom(NonScalarJson))?
-                .serialize(serializer),
-            Self::Object(value) => value.serialize(serializer),
-            Self::Array(value) => value.serialize(serializer),
-            Self::PythonObject(_) | Self::Float(_) => self
-                .to_scalar()
-                .map_err(S::Error::custom)?
-                .serialize(serializer),
-        }
+        crate::lossless_json_write::lossless(self, false)
+            .map_err(S::Error::custom)?
+            .serialize(serializer)
     }
 }
 

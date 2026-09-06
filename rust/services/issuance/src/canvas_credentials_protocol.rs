@@ -2,7 +2,7 @@
 use crate::canvas_response_text::{response_text, CanvasResponseTextError};
 use crate::lossless_json::{LosslessJson, LosslessObject};
 #[path = "canvas_response_json.rs"]
-mod response_json;
+pub(crate) mod response_json;
 use url::Url;
 
 pub(crate) const DEFAULT_API_BASE_URL: &str = "https://api.badgr.io";
@@ -56,6 +56,7 @@ pub(crate) fn response_excerpt(
 ) -> Result<LosslessJson, CanvasResponseTextError> {
     if let Some(payload) = response_json::parse(bytes) {
         return Ok(match payload {
+            LosslessJson::Parsed(ref tree) if tree.is_object() => payload,
             LosslessJson::PythonObject(_) => payload,
             payload => {
                 LosslessJson::Object(LosslessObject::from_iter([("payload".into(), payload)]))
@@ -165,8 +166,11 @@ mod tests {
         // It is the later selected renderer/persistence boundary that fails.
         let surrogate =
             super::response_json::parse(&[0xff, 0xfe, b'"', 0, 0, 0xd8, b'"', 0]).unwrap();
-        let LosslessJson::Text(text) = surrogate else {
+        let LosslessJson::Parsed(tree) = surrogate else {
             panic!("expected lossless text")
+        };
+        let crate::lossless_json_tree::JsonNode::Text(text) = tree.node(tree.root()) else {
+            panic!("expected text leaf")
         };
         assert_eq!(text.codepoints().collect::<Vec<_>>(), [0xd800]);
         assert!(text.as_scalar().is_none());

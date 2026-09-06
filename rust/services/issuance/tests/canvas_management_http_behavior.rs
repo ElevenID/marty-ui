@@ -56,6 +56,8 @@ use marty_oid4vci::{discovery::StaticDiscoveryDocuments, lti::CanvasLtiPlatformP
 use serde_json::{json, Map, Value};
 use tower::ServiceExt;
 
+#[path = "support/canvas_json_depth_replay.rs"]
+mod canvas_json_depth_replay;
 #[path = "support/canvas_observation_values.rs"]
 mod canvas_observation_values;
 

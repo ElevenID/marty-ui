@@ -115,7 +115,7 @@ pub async fn replay(expected: &Value) {
     .unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
     let observations = expected["observations"].as_array().unwrap();
-    replay_cases(cases, observations).await;
+    replay_cases(cases, observations, false).await;
 }
 
 pub async fn replay_utf7() {
@@ -127,7 +127,7 @@ pub async fn replay_utf7() {
         "../../../../../contracts/canvas-utf7-consumer-oracle.json"
     ))
     .unwrap();
-    replay_consumer(&scenarios, &mut oracle, 12).await;
+    replay_consumer(&scenarios, &mut oracle, 12, false).await;
 }
 
 pub async fn replay_json() {
@@ -139,10 +139,16 @@ pub async fn replay_json() {
         "../../../../../contracts/canvas-json-consumer-oracle.json"
     ))
     .unwrap();
-    replay_consumer(&scenarios, &mut oracle, 66).await;
+    replay_consumer(&scenarios, &mut oracle, 66, false).await;
 }
 
-async fn replay_consumer(scenarios: &Value, oracle: &mut Value, count: usize) {
+pub async fn replay_depth() {
+    let scenarios = super::canvas_json_depth_replay::scenarios();
+    let mut oracle = super::canvas_json_depth_replay::oracle();
+    replay_consumer(&scenarios, &mut oracle, 64, true).await;
+}
+
+async fn replay_consumer(scenarios: &Value, oracle: &mut Value, count: usize, depth: bool) {
     let observations = oracle["provider"]["observations"].as_array_mut().unwrap();
     assert_eq!(observations.len(), count);
     for observation in observations.iter_mut() {
@@ -157,10 +163,15 @@ async fn replay_consumer(scenarios: &Value, oracle: &mut Value, count: usize) {
         );
         object.insert("requests".into(), json!([requests[0].clone()]));
     }
-    replay_cases(scenarios["provider"].as_array().unwrap(), observations).await;
+    replay_cases(
+        scenarios["provider"].as_array().unwrap(),
+        observations,
+        depth,
+    )
+    .await;
 }
 
-async fn replay_cases(cases: &[Value], observations: &[Value]) {
+async fn replay_cases(cases: &[Value], observations: &[Value], depth: bool) {
     assert_eq!(cases.len(), observations.len());
     for (case, expected) in cases.iter().zip(observations) {
         assert_eq!(case["name"], expected["name"]);
@@ -288,7 +299,14 @@ async fn replay_cases(cases: &[Value], observations: &[Value]) {
             )
             .await;
         let mut actual = match outcome {
-            Ok(metadata) => {
+            Ok(mut metadata) => {
+                if depth {
+                    let response = metadata.remove("status_sync_response").unwrap();
+                    let witness = super::canvas_json_depth_replay::witness_bytes(
+                        &serde_json::to_vec(&response).unwrap(),
+                    );
+                    metadata.insert("status_sync_response".into(), witness.into());
+                }
                 json!({"metadata":observe_value(&marty_issuance_service::lossless_json::LosslessJson::Object(metadata))})
             }
             Err(error) => json!({"error_class":match &error {

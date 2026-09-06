@@ -1,9 +1,8 @@
 # Published JSON depth consumer boundaries
 
-This is independent reference evidence, not native depth qualification. No
-production parser, recursion setting, database driver or deployment changed in
-this checkpoint. The existing native 127-container guard remains a known open
-cutover gap; the observations below must guide its replacement.
+The reference was captured independently before native depth changes. Native
+adoption below replaces the incompatible 127-container guard and qualifies the
+recorded matrix; it does not authorize whole-worker cutover or deployment.
 
 ## Scope and provenance
 
@@ -80,7 +79,7 @@ so an observer error cannot be mislabeled as an application exception. Existing
 observers keep their default exception assertions and full-value representation;
 the new diagnostic options do not weaken their frozen reference gates.
 
-## Reproduction and next implementation
+## Reference reproduction
 
 Use `capture_canvas_published_oracle json-depth --output ABSOLUTE_NEW_FILE`.
 The capture utility exclusively creates a new file and refuses to overwrite
@@ -93,10 +92,51 @@ The required configured gate is
 `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`; an unset flag does not qualify it.
 It regenerates and compares the whole artifact, not just summary counts.
 
-Next, implement stack-safe native parsing/value traversal and persistence
-handling, with the independently observed typed-validation depth policy kept at
-its own boundary. Replay all 64 provider/validation cases and 192 full routes,
-including database reads of retained nested metadata. Do not just raise serde's
-parse limit and overlook serialization, cloning, dropping or database decoding.
-General grammar, remaining codec/transport boundaries, whole-worker/every-consumer
-cutover and Python deletion gates remain open. PR #814 stays draft and unrouted.
+## Native adoption — 2026-09-06
+
+The response parser now uses an explicit parse stack and a flat arena of nodes.
+Child links are indices, not recursively owned values; arena clones and drops do
+not depend on JSON depth. One iterative strict writer serves arena values, scalar
+JSON views and metadata. PostgreSQL's representability checks, including NUL, stay
+at delivery save. Validated RawValue construction is used without unsafe code,
+extra dependencies or a replacement arbitrary nesting cap.
+
+Typed validation enforces the observed 255-container excerpt policy separately
+from parsing and storage, including the payload wrapper and scalar-container
+representations. Root-key replacement/collision and non-finite rendering rules
+from the prior JSON matrix remain unchanged.
+
+OwnedJsonValue gives lifecycle consumers their existing serde Value view while
+providing iterative database decoding, copy, comparison, serialization and
+destruction. Lifecycle application, delivery, binding and platform reads use this
+owner. Metadata replacement drains old values safely. Database JSON numbers keep
+their exact literal representation; they do not inherit Python response float
+coercion or the 4,300-digit limit.
+
+Native replay passes all 64 provider observations, all 64 managed validation
+responses, and all 192 full credential routes with PostgreSQL. Native structural
+witnesses use the same documented typed tokens. The HTTP replay compares complete
+wire trees and rejects duplicate excerpt keys without recursively decoding them
+into an ordinary Value.
+
+An additional 32 native follow-up operations reinstate previously suspended
+credentials after a provider refusal. They read the retained response from the
+previous save, preserve its complete structural witness, increment attempt state,
+record the refusal, preserve canonical/publication ordering and emit the newer
+native reinstatement event. These are additional native retention invariants,
+not a claim that the reference captured a second operation.
+
+Small-stack tests (256 KiB) cover parsing, strict writing, arena clone/drop,
+malformed-input cleanup, retained database copies/comparisons/replacements and
+cleanup after a failed scalar conversion. Tests also preserve database integers
+beyond the response digit limit and arbitrary-precision numeric literals.
+
+CI requires `status_provider_matches_json_depth_reference` and the configured
+`status_runtime_matches_json_depth_full_credential_routes` gate in addition to
+reference regeneration. All prior JSON and UTF-7 references remain unchanged.
+
+Next, refresh the whole-worker/all-consumer readiness inventory against the actual
+code and close the remaining named integration gaps. General grammar and other
+codec/transport scopes are not proven merely by this finite depth matrix.
+Whole-worker/every-consumer cutover and Python deletion gates remain open;
+PR #814 stays draft and unrouted.

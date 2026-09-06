@@ -75,6 +75,7 @@ pub fn scalar(value: &Value) -> Value {
 
 pub fn lossless(value: &LosslessJson) -> Value {
     match value {
+        LosslessJson::Parsed(tree) => parsed(tree, tree.root()),
         LosslessJson::Scalar(value) => scalar(value),
         LosslessJson::Text(value) => text(value),
         LosslessJson::Object(values) => entries(
@@ -91,6 +92,24 @@ pub fn lossless(value: &LosslessJson) -> Value {
         ),
         LosslessJson::Array(values) => Value::Array(values.iter().map(lossless).collect()),
         LosslessJson::Float(value) => float(*value),
+    }
+}
+
+fn parsed(tree: &marty_issuance_service::lossless_json_tree::JsonTree, id: usize) -> Value {
+    use marty_issuance_service::lossless_json_tree::JsonNode;
+    match tree.node(id) {
+        JsonNode::Scalar(value) => scalar(value),
+        JsonNode::Text(value) => text(value),
+        JsonNode::Float(value) => float(*value),
+        JsonNode::Array(values) => {
+            Value::Array(values.iter().map(|id| parsed(tree, *id)).collect())
+        }
+        JsonNode::Object(values) => entries(
+            values
+                .iter()
+                .map(|(key, id)| (text(key), parsed(tree, *id)))
+                .collect(),
+        ),
     }
 }
 

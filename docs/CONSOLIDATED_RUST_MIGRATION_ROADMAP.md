@@ -33,19 +33,42 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Native depth adoption now matches all 64 provider, 64 managed validation and
+192 full credential-route observations. The 127-container guard is removed:
+one flat parsed arena and iterative writer preserve deep responses, while the
+255-container validation policy remains at its own boundary. Stack-safe database
+ownership covers lifecycle application/delivery/binding/platform reads, copies,
+replacement and destruction, with database literal numbers kept distinct from
+Python response-number policy. An additional 32 native follow-up operations read
+and retain prior deep responses after provider refusals and preserve newer
+success events. Small-stack and literal-number tests cover the ownership paths.
+The required native provider and full-route gates reuse the frozen depth
+reference; old JSON/UTF-7 artifacts remain unchanged.
+See [native depth scope and evidence](../contracts/canvas-json-depth.md).
+All 36 configured image/schema gates pass (308.32 seconds, none ignored or
+filtered), along with 325 library, 5 worker, 34 managed HTTP, 22 issuance behavior,
+102 affected Python and 104 native TLS cases. Strict Clippy, formatting and
+CI-runner syntax pass; the exact owned fixture inventory is empty. Reference
+head `2d8797be8` is hosted-green; this implementation needs fresh hosted checks.
+Whole-worker/all-consumer readiness is the next inventory to refresh, not a
+completion claim from this matrix. PR #814 remains draft and unrouted.
+
+The following reference checkpoint is historical and was completed before the
+native depth implementation above:
+
 Published depth behavior is now independently frozen across 64 validation,
 64 provider/helper and 192 full credential-route cases. Validation allows excerpt
 container depth 255 and fails at 256; array payload wrapping adds a level.
 Provider parsing and PostgreSQL saves succeed through every tested depth up to
-1,600. Therefore the current native 127-container guard is a confirmed cutover
+1,600. Therefore the then-current native 127-container guard was a confirmed cutover
 gap, not a compatibility policy. The fixture ceiling is not a runtime limit.
 Nonrecursive typed structural witnesses preserve deep response evidence without
 altering application recursion settings; complete validation wire bodies and
 full-route state evidence remain retained. Two raw captures agree byte-for-byte.
 The new required configured gate regenerates the entire reference.
 See [depth evidence and native next steps](../contracts/canvas-json-depth.md).
-This checkpoint changes test observation/capture infrastructure, not runtime
-behavior. Native stack-safe depth adoption and whole-worker cutover remain open.
+That reference checkpoint changed test observation/capture infrastructure, not
+runtime behavior. Native depth adoption is recorded above; worker cutover is open.
 All 33 configured image/schema tests pass (301.31 seconds, none ignored or
 filtered), including unchanged prior JSON/UTF-7 references and native replay.
 All 102 affected Python tests, the large exclusive-create capture test, strict
@@ -68,11 +91,12 @@ hosted CI and Rust CodeQL are now green. Local native gates pass 322 library,
 plus strict Clippy and formatting. All 32 configured image/schema tests pass
 (278.86 seconds, none ignored or filtered), regenerating the unchanged reference
 artifacts and exercising native routes. The exact owned fixture inventory is
-empty after cleanup. This implementation still requires its own hosted checks.
+empty after cleanup. That `52785f6ff` implementation subsequently passed its
+hosted checks; newer implementation heads require their own checks.
 
-General JSON grammar/depth parity remains open: the native parser temporarily
-retains the previous candidate's 127-container guard, not a qualified Python
-interpreter-depth policy. Whole-worker/runtime/every-consumer adoption and other
+The depth guard from that initial JSON checkpoint is replaced by the native
+adoption above. General grammar is not proven by the finite depth matrix.
+Whole-worker/runtime/every-consumer adoption and other
 exceptional codec/transport gates remain open. PR #814 stays draft and unrouted;
 no reachable Python deletion or deployment change is authorized by this matrix.
 

@@ -156,7 +156,9 @@ impl<'de> serde::Deserialize<'de> for UniqueExcerpt {
                 mut map: M,
             ) -> Result<Self::Value, M::Error> {
                 let mut keys = BTreeSet::new();
-                while let Some((key, _)) = map.next_entry::<String, Value>()? {
+                while let Some((key, _)) =
+                    map.next_entry::<String, Box<serde_json::value::RawValue>>()?
+                {
                     if !keys.insert(key) {
                         return Err(serde::de::Error::custom("duplicate rendered excerpt key"));
                     }
@@ -188,6 +190,24 @@ fn wire_excerpt_check_rejects_duplicate_keys_before_value_normalization() {
 }
 
 async fn replay(cases: &[Value], expected: &[Value]) {
+    replay_mode(cases, expected, false).await;
+}
+
+#[tokio::test]
+async fn native_validation_matches_published_depth_boundaries() {
+    let scenarios = super::canvas_json_depth_replay::scenarios();
+    let oracle = super::canvas_json_depth_replay::oracle();
+    let cases = scenarios["validation"].as_array().unwrap();
+    assert_eq!(cases.len(), 64);
+    replay_mode(
+        cases,
+        oracle["validation"]["observations"].as_array().unwrap(),
+        true,
+    )
+    .await;
+}
+
+async fn replay_mode(cases: &[Value], expected: &[Value], depth: bool) {
     assert_eq!(cases.len(), expected.len());
     for (case, expected) in cases.iter().zip(expected) {
         assert_eq!(case["name"], expected["name"]);
@@ -273,10 +293,33 @@ async fn replay(cases: &[Value], expected: &[Value]) {
         let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
             .unwrap();
+        let mut normalized_wire = std::str::from_utf8(&bytes).unwrap().to_owned();
         let body = if content_type.starts_with("application/json") {
-            let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+            let mut value: Value = if depth {
+                let fields: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>> =
+                    serde_json::from_slice(&bytes).unwrap();
+                Value::Object(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| {
+                            let value = if key == "response_excerpt" && value.get() != "null" {
+                                super::canvas_json_depth_replay::witness_bytes(
+                                    value.get().as_bytes(),
+                                )
+                            } else {
+                                serde_json::from_str(value.get()).unwrap()
+                            };
+                            (key, value)
+                        })
+                        .collect(),
+                )
+            } else {
+                serde_json::from_slice(&bytes).unwrap()
+            };
             if let Some(timestamp) = value.get("validated_at") {
                 chrono::DateTime::parse_from_rfc3339(timestamp.as_str().unwrap()).unwrap();
+                normalized_wire =
+                    normalized_wire.replace(timestamp.as_str().unwrap(), "$timestamp");
                 value["validated_at"] = json!("$timestamp");
             }
             value
@@ -295,12 +338,23 @@ async fn replay(cases: &[Value], expected: &[Value]) {
                 .unwrap();
             if content_type.starts_with("application/json") {
                 assert_eq!(exceptions, json!([]));
-                let wire_value: Value = serde_json::from_str(wire.as_str().unwrap()).unwrap();
-                assert_eq!(
-                    actual["body"], wire_value,
-                    "wire values, including numeric types: {}",
-                    case["name"]
-                );
+                if depth {
+                    assert_eq!(
+                        super::canvas_json_depth_replay::witness_bytes(normalized_wire.as_bytes()),
+                        super::canvas_json_depth_replay::witness_bytes(
+                            wire.as_str().unwrap().as_bytes()
+                        ),
+                        "complete wire tree {}",
+                        case["name"]
+                    );
+                } else {
+                    let wire_value: Value = serde_json::from_str(wire.as_str().unwrap()).unwrap();
+                    assert_eq!(
+                        actual["body"], wire_value,
+                        "wire values, including numeric types: {}",
+                        case["name"]
+                    );
+                }
                 let excerpt: WireExcerpt = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(
                     excerpt.response_excerpt.is_some(),
@@ -309,7 +363,14 @@ async fn replay(cases: &[Value], expected: &[Value]) {
                 actual["body"] = super::canvas_observation_values::scalar(&actual["body"]);
             } else {
                 assert_eq!(status, 500);
-                assert_eq!(exceptions, json!(["UnicodeEncodeError"]));
+                assert_eq!(
+                    exceptions,
+                    json!([if depth {
+                        "ValueError"
+                    } else {
+                        "UnicodeEncodeError"
+                    }])
+                );
                 assert_eq!(actual["body"], wire);
             }
         }
