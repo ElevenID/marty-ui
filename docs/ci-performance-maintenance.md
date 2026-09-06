@@ -68,3 +68,11 @@ Docker databases; the runtime suite uses the dedicated `marty_db_contracts_test`
 service database. Each suite retains `--test-threads=1`, all executable inventory
 checks, and its original assertions. The runner waits for both suites even on
 failure and emits separate logs before returning a failing status.
+
+Queue validation exposed a Canvas worker cancellation race: SQLx could start
+return-to-pool validation of a cancelled, lock-blocked query before asynchronous
+cleanup closed the pool. The worker owner now closes pool admission before
+dropping an unfinished operation, then still awaits complete disposal. A
+deterministic destruction-order regression and the existing real SIGINT/SIGTERM
+cases enforce this; the 10-second exit deadline and graceful-drain checks remain
+unchanged. Signal logs identify each case without exposing worker configuration.
