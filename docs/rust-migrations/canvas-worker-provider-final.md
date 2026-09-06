@@ -1,8 +1,8 @@
 # Final-attempt provider crash reference
 
 Status: two independent published-process captures agree and the mandatory
-regeneration gate passes locally; native final-attempt replay is implemented
-and awaiting Linux qualification.
+regeneration gate passes locally; native final-attempt replay qualified at
+`e959e113d` (CI34041341592 and RustCodeQL34041341506).
 This is not a cutover, Python deletion or deployment qualification.
 
 The existing renewal/recovery process owner, real HTTPS fixture, official schema
@@ -62,6 +62,11 @@ results and the existing changed-target repository fence remain strict.
 Local native validation: three exact-comparison tests and all 60 affected Python
 tests pass; the native executable compiles and strict Clippy passes. This does
 not replace mandatory Linux execution of the actual process and HTTPS scenario.
+
+Linux job 101508565579 at `e959e113d` explicitly records final-attempt recovery
+with one actual HTTPS request, retained renewal/recovery and all three signals,
+and all 56 configured tests passing in 841.38 seconds. The separate 0.25-second
+unconfigured run is not runtime proof. Later extensions require fresh checks.
 
 Concurrent reclaimers/schedulers, changed-target generation, owner-fence loss,
 completion races and full consumer deployment remain separate requirements in

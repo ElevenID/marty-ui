@@ -1,7 +1,7 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `d96a45ebe1f19e9c7bbda65604e639160627330c`,
-with newer native final-attempt replay awaiting qualification. PR #814 draft and
+Status: latest qualified composed checkpoint `e959e113d0a69e03eabcb2e64372034091157b91`,
+with newer native concurrent scheduler replay awaiting qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -85,8 +85,9 @@ The [final-attempt crash reference](canvas-worker-provider-final.md) now has two
 matching independent captures and a mandatory regeneration gate. It seeds
 historical attempts before worker startup, then observes actual attempt-eight
 renewal, crash, real expiry and dead-letter/target-disable without another read.
-Native final-attempt replay is implemented with exact generation-fence checks;
-Linux qualification and concurrent/changed-generation races remain open.
+Native final-attempt replay passed with exact generation-fence checks at
+`e959e113d` (CI34041341592, Rust34041341506; 56 configured tests in 841.38 seconds).
+Concurrent reclaimers and changed-generation races remain open.
 
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 
@@ -148,7 +149,7 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
    do not repeat the repaired LTI-identity requirement as an open runtime bug.
 2. Retain the qualified REST/facts/retry/signal/renewal and nonfinal recovery
    sequences on the pinned migrations with real native provider/OAuth adapters.
-   Qualify the newer final-attempt and concurrent scheduler replays, then extend
+   Retain final-attempt qualification and qualify the newer concurrent scheduler replay, then extend
    the same harness across the remaining crash-reclaimer, mutation, OAuth,
    failure and cleanup requirements above. Do not repeat completed boundaries
    as though their native adoption were still missing.

@@ -50,8 +50,9 @@ has two identical independent captures and a mandatory regeneration gate. After
 actual attempt-eight renewal and forced process loss, real lease expiry leads
 to dead-letter/target-disable with no second provider request. Earlier attempts
 are explicitly seeded history, not executed evidence. Native final-attempt
-replay is implemented using the shared recovery owner and strict generation
-checks; its Linux qualification, concurrency and changed-generation races remain open.
+replay passed with strict generation checks at `e959e113d` (CI34041341592,
+Rust34041341506), including one actual HTTPS request and all 56 configured tests
+in 841.38 seconds. Concurrent reclaimers and changed-generation races remain open.
 
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease
