@@ -1,7 +1,8 @@
 # Composed Canvas worker / REST reference
 
 Status: independent published reference frozen; native composed-worker replay
-is the next implementation step. This is not Rust cutover or deployment proof.
+is implemented and awaiting its required Linux execution result. This is not
+Rust cutover or deployment proof.
 
 ## Actual execution boundary
 
@@ -91,11 +92,22 @@ contracts, strict all-target Clippy, Rustfmt, Ruff and Bash syntax checks passed
 Fresh hosted checks are still required for this reference checkpoint.
 
 `worker_rest_reference_matches_published_process` regenerates the complete
-reference in the mandatory configured image/schema suite. Native replay must
-now use the actual Rust worker, HTTP provider and encrypted OAuth persistence on
-a separate fresh published-schema database, retaining these inputs and outcomes.
-Do not replace the provider with normalized responses to obtain a passing test.
-Preserve stronger native safety/event behavior where explicitly established.
+reference in the mandatory configured image/schema suite. The native
+`worker_rest_matches_frozen_published_process` gate now launches a child replay
+with the same frozen HTTPS bodies. Its Rust test launches the actual worker
+binary through the shared process owner, using native encrypted OAuth persistence
+and a separate fresh published-schema database. The Python parent checks every
+actual request; Rust compares each stage's durable jobs, facts, policy/review
+snapshot, OAuth state and idle heartbeat, plus unchanged full issued rows and
+ciphertext. No provider, worker cycle or outcome repository is substituted.
+
+The native HTTPS/process-signal gate requires Linux, matching the existing
+child-scoped trust harness. Windows compilation is not an execution pass for
+this gate. Its helper test returns without the parent fixture environment during
+normal test enumeration; the mandatory parent launches that exact helper with
+the real fixture. Both test names are checked by the configured CI runner.
+Keep the original reference immutable when diagnosing native differences and
+preserve stronger native safety/event behavior where explicitly established.
 
 The certificate helper's existing AGS/NRPS HTTPS gate remains mandatory on Linux.
 A direct Windows invocation failed at its trusted-child read with both the

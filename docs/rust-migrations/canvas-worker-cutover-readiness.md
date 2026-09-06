@@ -37,8 +37,10 @@ whole-worker pass. Reuse their owners and add the missing composed execution.
 The [composed REST reference](canvas-worker-rest-reference.md) now independently
 executes four nonempty published worker processes with real HTTPS, encrypted
 OAuth storage and the official schema. Positive, negative, duplicate and
-rate-limited outcomes are frozen twice. Native composed-worker replay remains
-the next step; the reference gate does not close that side of the boundary.
+rate-limited outcomes are frozen twice. Native composed-worker replay is now
+implemented using the real binary and native persistence; its mandatory Linux
+execution result remains pending. The reference gate alone does not close that
+side of the boundary.
 
 ## Normative legacy-gap reconciliation
 

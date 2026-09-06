@@ -2,6 +2,58 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_rest_replay.rs"]
+mod canvas_worker_rest_replay;
+
+#[test]
+fn worker_rest_matches_frozen_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!("Actual native HTTPS worker qualification requires the mandatory Linux gate");
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    let output = std::process::Command::new("python3")
+        .arg(root.join("scripts/test_canvas_worker_rest_https.py"))
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Native worker HTTPS gate failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
+#[tokio::test]
+async fn worker_rest_native_child() {
+    let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_REST_NATIVE_ORIGIN") else {
+        return;
+    };
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_rest_replay::replay(&pool, &owned.url, &origin).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[tokio::test]
 async fn worker_rest_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

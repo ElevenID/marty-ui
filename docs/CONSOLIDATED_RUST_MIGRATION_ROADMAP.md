@@ -40,8 +40,10 @@ evidence, duplicate reuse and a 429 retry honoring Retry-After37. Two finalized
 captures agree byte-for-byte. Issued credential/transaction rows and encrypted
 token bytes remain unchanged, with selected job/fact/review/heartbeat projections
 recorded. The published HTTPS constraint remains intact; fixture-specific trust
-is isolated to the test child. Native composed-worker replay is the next step,
-not a completion claim from the reference. Startup head `017c7e423` now has
+is isolated to the test child. Native composed-worker replay is now implemented
+with the actual binary and native OAuth storage, awaiting its mandatory Linux
+execution result; Windows compile/lint is not a runtime pass. This remains
+separate from complete worker qualification. Startup head `017c7e423` now has
 successful hosted CI and Rust analysis.
 
 The [actual worker startup gate](rust-migrations/canvas-worker-startup.md) now
