@@ -1,0 +1,12 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-fence-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-scenarios.json",
+  "scope": "Transfer the owned synthetic connection lease after actual DELETE receipt, before releasing success or rate-limit response; verify the stale worker cannot mutate replacement state or tokens",
+  "cases": [
+    {"name": "owner_replaced_success_200", "status": 200, "body": {}, "hold_response": true},
+    {"name": "owner_replaced_rate_limited_429", "status": 429, "headers": {"Retry-After": "37"}, "body": {}, "hold_response": true}
+  ],
+  "takeover_sql": "UPDATE issuance_service.canvas_oauth_connections SET refresh_lease_owner='synthetic-replacement-worker',refresh_lease_expires_at=clock_timestamp()+interval '1 hour',revoke_retry_count=7,revoke_retry_at=clock_timestamp()+interval '1 hour',revoke_last_error_code='synthetic_replacement_retry',updated_at=clock_timestamp() WHERE id='worker-rest-connection' AND organization_id='org-review' AND status='revocation_pending' AND refresh_lease_owner='worker-revocation' AND refresh_lease_expires_at>clock_timestamp()",
+  "row_sql": "SELECT to_jsonb(c) FROM issuance_service.canvas_oauth_connections c WHERE id='worker-rest-connection'",
+  "fence_sql": "SELECT jsonb_build_object('owner',refresh_lease_owner,'lease_unexpired',refresh_lease_expires_at>clock_timestamp(),'retry_count',revoke_retry_count,'retry_at_present',revoke_retry_at IS NOT NULL,'error_code',revoke_last_error_code) FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'"
+}

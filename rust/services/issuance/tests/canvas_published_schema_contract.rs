@@ -7,6 +7,15 @@ mod canvas_worker_oauth_revocation_replay;
 
 #[test]
 fn worker_oauth_revocation_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation");
+}
+
+#[test]
+fn worker_oauth_revocation_fence_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-fence");
+}
+
+fn assert_native_oauth_revocation_matrix(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
@@ -21,6 +30,7 @@ fn worker_oauth_revocation_matches_frozen_published_process() {
     let output = std::process::Command::new("python3")
         .arg(root.join("scripts/test_canvas_worker_oauth_revocation_https.py"))
         .arg(std::env::current_exe().unwrap())
+        .arg(kind)
         .output()
         .unwrap();
     assert!(
@@ -45,6 +55,7 @@ async fn worker_oauth_revocation_native_child() {
         Ok("1")
     );
     let name = std::env::var("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE").unwrap();
+    let kind = std::env::var("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_KIND").unwrap();
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
@@ -53,7 +64,7 @@ async fn worker_oauth_revocation_native_child() {
         .connect(&owned.url)
         .await
         .unwrap();
-    canvas_worker_oauth_revocation_replay::replay(&pool, &owned.url, &origin, &name).await;
+    canvas_worker_oauth_revocation_replay::replay(&pool, &owned.url, &origin, &name, &kind).await;
     pool.close().await;
     owned.close().unwrap();
 }
@@ -420,6 +431,11 @@ async fn worker_oauth_revocation_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_fence_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation-fence").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -498,6 +514,12 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-fence" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
+            ),
+            include_str!("../../../../contracts/canvas-worker-oauth-revocation-fence-oracle.json"),
+        ),
         "oauth-revocation" => (
             include_str!("../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-oauth-revocation-oracle.json"),
@@ -531,6 +553,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-fence" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_fence(name).await
+            }
             "oauth-revocation" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation(
                     name,

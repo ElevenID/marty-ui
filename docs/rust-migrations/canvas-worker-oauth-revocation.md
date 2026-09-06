@@ -114,3 +114,42 @@ consumer cutover, Python deletion and aggregate beta acceptance remain separate.
 These results do not qualify the seven complete native HTTPS/SQL cases on
 Windows. Their Linux parent, actual binary child and independent reference
 regeneration are mandatory in fresh exact-head hosted CI before adoption.
+
+## Held-response ownership transfer extension
+
+Two additional published-process observations are frozen separately in
+`contracts/canvas-worker-oauth-revocation-fence-oracle.json`, canonical LF SHA256
+`025a31983550db5a734c8aed38e0b0d8dbafe7309db5b4b64863a6beefc905e9`.
+Independent captures passed in 13.50 and 11.27 seconds; regeneration against
+the frozen artifact passed in 11.39 seconds. The original seven-case artifact
+is unchanged and regenerated successfully in 47.35 seconds.
+
+For remote 200 and 429, the shared HTTPS fixture holds the actual DELETE. After
+receipt, a scoped transaction transfers the synthetic connection from its
+observed, unexpired worker lease to a replacement owner and sets distinctive
+retry state. Only after commit does the harness release the response, within
+five seconds of receipt and before the ten-second provider timeout. The actual
+published worker returns to durable idle without changing the replacement row,
+platform configuration, issued rows, either token ciphertext or the unrelated
+tenant's ciphertext. Complete before/after row equality includes lease expiry,
+retry deadline, timestamps and token references; the frozen projection records
+the deterministic ownership/retry fields and the verified equality result.
+
+The native extension reuses the encrypted vault, seed, real worker binary,
+owned database and existing request/response marker protocol. It compares the
+same complete row and durable projections; the Python HTTPS owner compares
+the full request. This is an explicit competing-owner database transition, not
+a second worker scheduler implementation or a timing-based claim of concurrency.
+No production runtime, lease predicate, token transaction or feature is changed.
+
+The configured Linux gate now registers 75 top-level entries, including separate
+reference and native fence tests sharing the existing native child. Native
+qualification for this extension remains pending. Fixture integrity controls
+reject missing requests, missing transfer acknowledgements, slow transfers and
+child timeouts, and verify response release and bounded owned-child cleanup.
+The complete Python suite passed 926 tests with one existing opt-in skip in
+52.33 seconds; strict all-target Rust Clippy and integration compilation passed.
+
+This covers replacement-owner success/retry preservation only. Other fence
+dimensions, disconnect-patch failure, Retry-After edges and the remaining
+whole-worker cutover requirements are not declared complete by these captures.

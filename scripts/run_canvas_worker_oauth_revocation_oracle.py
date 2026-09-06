@@ -19,11 +19,17 @@ from run_canvas_worker_startup_oracle import (
 )
 
 
-def run(case_name):
+def run(case_name, kind="oauth-revocation"):
+    assert kind in {"oauth-revocation", "oauth-revocation-fence"}
     contracts = Path("/verification/contracts")
     matrix = json.loads(
-        (contracts / "canvas-worker-oauth-revocation-scenarios.json").read_text()
+        (contracts / f"canvas-worker-{kind}-scenarios.json").read_text()
     )
+    if "base_scenario" in matrix:
+        matrix = {
+            **json.loads((contracts / matrix["base_scenario"]).read_text()),
+            **matrix,
+        }
     cases = [case for case in matrix["cases"] if case["name"] == case_name]
     assert len(cases) == 1, "Unknown or duplicate revocation case"
     case = cases[0]
@@ -60,6 +66,34 @@ def run(case_name):
                 worker_case(https.origin, https.cert), "worker-revocation"
             )
             try:
+                fence = None
+                if kind == "oauth-revocation-fence":
+                    assert https.received.wait(15), "Actual DELETE was not received"
+                    received_at = time.monotonic()
+                    assert child.poll() is None and not https.release.is_set()
+                    with engine.begin() as connection:
+                        before_fence = connection.execute(
+                            text(matrix["fence_sql"])
+                        ).scalar_one()
+                        assert before_fence["owner"] == "worker-revocation"
+                        assert before_fence["lease_unexpired"] is True
+                        assert (
+                            connection.execute(text(matrix["takeover_sql"])).rowcount
+                            == 1
+                        )
+                        replacement = connection.execute(
+                            text(matrix["row_sql"])
+                        ).scalar_one()
+                        replacement_fence = connection.execute(
+                            text(matrix["fence_sql"])
+                        ).scalar_one()
+                    fence = {"before": before_fence, "replacement": replacement_fence}
+                    # Release only after the test's explicit competing-owner
+                    # transaction commits. The actual worker handles the reply.
+                    assert time.monotonic() - received_at < 5, (
+                        "Owner transfer exceeded the pre-timeout budget"
+                    )
+                    https.release.set()
                 deadline = time.monotonic() + 25
                 while True:
                     assert child.poll() is None, "Published worker exited before idle"
@@ -76,11 +110,17 @@ def run(case_name):
                         "Published revocation did not reach idle"
                     )
                     time.sleep(0.025)
-                if case.get("hold_response"):
+                if case.get("hold_response") and fence is None:
                     assert https.received.is_set() and not https.release.is_set()
                 child.send_signal(signal.SIGINT)
                 assert child.wait(timeout=10) == -signal.SIGINT
                 with engine.connect() as connection:
+                    if fence is not None:
+                        assert (
+                            connection.execute(text(matrix["row_sql"])).scalar_one()
+                            == replacement
+                        )
+                        fence["replacement_row_unchanged"] = True
                     connection_state = connection.execute(
                         text(matrix["connection_sql"])
                     ).scalar_one_or_none()
@@ -110,7 +150,10 @@ def run(case_name):
                     value == before_secrets[key] for key, value in secrets.items()
                 )
                 timing = None
-                if "delay_bounds" in case:
+                if fence is not None:
+                    assert secrets == before_secrets
+                    timing = {"kind": "preserved", "matches": True}
+                elif "delay_bounds" in case:
                     minimum, maximum = case["delay_bounds"]
                     assert delay is not None and minimum - 0.1 <= delay <= maximum + 0.1
                     timing = {"kind": "bounds", "matches": True}
@@ -131,8 +174,8 @@ def run(case_name):
                     .read_text(encoding="utf-8")
                     .encode()
                 ).hexdigest()
-                return {
-                    "schema": "marty.canvas-worker-oauth-revocation-oracle/v1",
+                observation = {
+                    "schema": f"marty.canvas-worker-{kind}-oracle/v1",
                     "name": case_name,
                     "requests": list(https.requests),
                     "connection": connection_state,
@@ -145,6 +188,9 @@ def run(case_name):
                     "retry_timing": timing,
                     "source_sha256": sources,
                 }
+                if fence is not None:
+                    observation["fence"] = fence
+                return observation
             finally:
                 finish_worker(child)
         finally:

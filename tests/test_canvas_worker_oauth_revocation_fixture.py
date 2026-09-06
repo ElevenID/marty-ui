@@ -4,6 +4,7 @@ import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Event
 
 import pytest
 
@@ -86,3 +87,96 @@ def test_native_owner_fails_closed_and_closes_https(monkeypatch, tmp_path, failu
     with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
         native.run("synthetic-not-executed")
     assert closed == [True]
+
+
+def test_owner_fence_extension_retains_closed_cases_and_base_reference():
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    matrix = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-fence-scenarios.json").read_text()
+    )
+    reference = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-fence-oracle.json").read_text()
+    )
+    assert matrix["base_scenario"] == "canvas-worker-oauth-revocation-scenarios.json"
+    assert len(matrix["cases"]) == len(reference) == 2
+    assert {case["status"] for case in matrix["cases"]} == {200, 429}
+    assert all(case["hold_response"] for case in matrix["cases"])
+    assert {case["name"] for case in matrix["cases"]} == set(reference)
+    for observation in reference.values():
+        assert observation["fence"]["before"]["owner"] == "worker-revocation"
+        assert (
+            observation["fence"]["replacement"]["owner"]
+            == "synthetic-replacement-worker"
+        )
+        assert observation["fence"]["replacement_row_unchanged"] is True
+        assert observation["connection"]["retry_count"] == 7
+        assert len(observation["retained_secret_ids"]) == 3
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [None, "request", "transfer", "slow_transfer", "child_wait", "cleanup_timeout"],
+)
+def test_fenced_child_requires_handshake_and_releases_owned_response(
+    monkeypatch, tmp_path, failure
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    https = SimpleNamespace(
+        certificates=SimpleNamespace(name=str(tmp_path)),
+        received=Event(),
+        release=Event(),
+    )
+    control = tmp_path / "native-control"
+    events = []
+
+    class Child:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, timeout):
+            assert https.release.is_set()
+            events.append(timeout)
+            if failure == "child_wait" and timeout == 90:
+                raise native.subprocess.TimeoutExpired("synthetic-child", timeout)
+            if failure == "cleanup_timeout" and timeout == 30:
+                raise native.subprocess.TimeoutExpired("synthetic-child", timeout)
+            self.returncode = 0
+            return "synthetic output", ""
+
+        def kill(self):
+            events.append("kill")
+            self.returncode = -9
+
+    child = Child()
+
+    def wait(_child, predicate, description, timeout=30):
+        assert _child is child and not https.release.is_set()
+        if description == "actual revocation DELETE":
+            assert not (control / "request-received").exists()
+            if failure in {"request", "cleanup_timeout"}:
+                raise AssertionError("No actual request")
+            https.received.set()
+        else:
+            assert (control / "request-received").is_file() and timeout == 5
+            if failure == "transfer":
+                raise AssertionError("No committed transfer")
+            (control / "release-response").touch(exist_ok=False)
+        assert predicate()
+
+    times = iter([0, 6 if failure == "slow_transfer" else 1])
+    monkeypatch.setattr(native.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(native, "wait_for", wait)
+    monkeypatch.setattr(native.subprocess, "Popen", lambda *_, **__: child)
+    if failure is None:
+        result = native.run_fenced_child(["synthetic-not-executed"], {}, https)
+        assert result.returncode == 0 and events == [90]
+    else:
+        with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
+            native.run_fenced_child(["synthetic-not-executed"], {}, https)
+        assert child.poll() is not None
+        if failure == "cleanup_timeout":
+            assert events == [30, "kill", 10]
+    assert https.release.is_set()

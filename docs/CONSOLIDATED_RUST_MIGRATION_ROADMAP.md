@@ -119,6 +119,17 @@ classification differences; a revocation-only Rust correction preserves the
 worker's general timeout mapping, exchange/refresh semantics and atomic cleanup.
 The full native HTTPS/SQL replay still requires Linux qualification.
 
+The separate two-case ownership-transfer extension now has actual published
+200/429 captures and unchanged regeneration. After receipt of a held DELETE,
+the synthetic connection is transferred to a replacement owner; the stale
+worker preserves the complete replacement row, platform and all three encrypted
+secrets. Native replay shares the existing vault/database/process/marker owners
+and is registered in the mandatory Linux gate (75 top-level entries); its
+qualification remains pending. The original seven-case artifact is unchanged.
+Local Python regressions pass 926 tests with one existing opt-in skip; strict
+Rust Clippy and integration compilation pass. No runtime or consumer is changed
+by this extension. Patch failure and Retry-After extensions remain separate.
+
 Latest qualified UI checkpoint `b02b77d13562db717d6e16cdf85ff430edbc2eeb` passed
 CI34064588338 and all applicable exact-head checks, including Rust CodeQL34064588330.
 Runtime job101571024242 passed 70 configured tests in 1449.26 seconds, retaining

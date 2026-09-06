@@ -5,17 +5,59 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 from canvas_worker_https_fixture import WorkerHttpsFixture
+from test_canvas_worker_provider_signals_https import wait_for
 
 
-def run(executable):
+def run_fenced_child(command, environment, https):
+    """Reuse the existing marker protocol; SQL and worker remain in the child."""
+    control = Path(https.certificates.name) / "native-control"
+    control.mkdir()
+    environment["MARTY_CANVAS_WORKER_SIGNAL_CONTROL"] = str(control)
+    child = subprocess.Popen(
+        command,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        wait_for(child, https.received.is_set, "actual revocation DELETE")
+        received_at = time.monotonic()
+        (control / "request-received").touch(exist_ok=False)
+        wait_for(
+            child,
+            (control / "release-response").is_file,
+            "committed owner transfer",
+            timeout=5,
+        )
+        assert time.monotonic() - received_at < 5, (
+            "Owner transfer exceeded the pre-timeout budget"
+        )
+        https.release.set()
+        stdout, stderr = child.communicate(timeout=90)
+        return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+    finally:
+        https.release.set()
+        if child.poll() is None:
+            try:
+                child.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.communicate(timeout=10)
+
+
+def run(executable, kind="oauth-revocation"):
+    assert kind in {"oauth-revocation", "oauth-revocation-fence"}
     root = Path(__file__).resolve().parents[1]
     matrix = json.loads(
-        (root / "contracts/canvas-worker-oauth-revocation-scenarios.json").read_text()
+        (root / f"contracts/canvas-worker-{kind}-scenarios.json").read_text()
     )
     reference = json.loads(
-        (root / "contracts/canvas-worker-oauth-revocation-oracle.json").read_text()
+        (root / f"contracts/canvas-worker-{kind}-oracle.json").read_text()
     )
     names = [case["name"] for case in matrix["cases"]]
     assert len(names) == len(set(names)) and set(names) == set(reference)
@@ -30,20 +72,26 @@ def run(executable):
                 MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1",
                 MARTY_CANVAS_WORKER_REVOCATION_NATIVE_ORIGIN=https.origin,
                 MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE=case["name"],
+                MARTY_CANVAS_WORKER_OAUTH_REVOCATION_KIND=kind,
                 SSL_CERT_FILE=str(https.cert),
                 SSL_CERT_DIR=str(empty_ca),
             )
-            child = subprocess.run(
-                [
-                    executable,
-                    "worker_oauth_revocation_native_child",
-                    "--exact",
-                    "--nocapture",
-                ],
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=240,
+            command = [
+                executable,
+                "worker_oauth_revocation_native_child",
+                "--exact",
+                "--nocapture",
+            ]
+            child = (
+                run_fenced_child(command, environment, https)
+                if kind == "oauth-revocation-fence"
+                else subprocess.run(
+                    command,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=240,
+                )
             )
             if child.returncode != 0:
                 failures.append(case["name"])
@@ -54,7 +102,8 @@ def run(executable):
                 continue
             assert https.requests == reference[case["name"]]["requests"]
             if case.get("hold_response"):
-                assert https.received.is_set() and not https.release.is_set()
+                assert https.received.is_set()
+                assert https.release.is_set() == (kind == "oauth-revocation-fence")
             print(
                 f"Native OAuth revocation {case['name']} PASS ({len(https.requests)} request)"
             )
@@ -62,9 +111,11 @@ def run(executable):
 
 
 if __name__ == "__main__":
-    assert len(sys.argv) == 2, "Expected the compiled published-schema test executable"
+    assert len(sys.argv) in {2, 3}, (
+        "Expected the compiled published-schema test executable [matrix]"
+    )
     if sys.platform != "linux":
         raise SystemExit(
             "Native HTTPS process qualification requires Linux platform trust; no host trust-store changes are allowed"
         )
-    run(sys.argv[1])
+    run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "oauth-revocation")
