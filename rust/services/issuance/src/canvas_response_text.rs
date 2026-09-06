@@ -25,11 +25,14 @@ pub enum CanvasResponseTextError {
     InternalCodec,
     #[error("pending buffer overflow")]
     PendingBufferOverflow,
+    #[error("Exceeds the limit (4300 digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit")]
+    ContinuationOrdinalLimit { digits: usize },
 }
 
 impl CanvasResponseTextError {
     pub const fn diagnostic_class(self) -> &'static str {
         match self {
+            Self::ContinuationOrdinalLimit { .. } => "ValueError",
             Self::InternalCodec => "RuntimeError",
             Self::Utf16MissingBom | Self::Utf32MissingBom | Self::PendingBufferOverflow => {
                 "UnicodeError"
@@ -400,34 +403,60 @@ mod tests {
         .unwrap();
         assert_eq!(frozen["cases"].as_array().unwrap().len(), 177);
         for case in frozen["cases"].as_array().unwrap() {
-            let content_type = case["content_type"].as_str();
-            let body = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
-            assert_eq!(
-                observation(
-                    content_type
-                        .map(charset_parameter)
-                        .transpose()
-                        .map(Option::flatten)
-                ),
-                case["charset"],
-                "charset {}",
-                case["name"]
+            assert_header_case(case, case["content_type"].as_str());
+        }
+    }
+
+    fn assert_header_case(case: &serde_json::Value, content_type: Option<&str>) {
+        let body = hex::decode(case["body_hex"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            observation(
+                content_type
+                    .map(charset_parameter)
+                    .transpose()
+                    .map(Option::flatten)
+            ),
+            case["charset"],
+            "charset {}",
+            case["name"]
+        );
+        assert_eq!(
+            observation(response_text(&body, content_type)),
+            case["text"],
+            "text {}",
+            case["name"]
+        );
+        assert_eq!(
+            observation(crate::canvas_credentials_protocol::response_excerpt(
+                &body,
+                content_type
+            )),
+            case["excerpt"],
+            "excerpt {}",
+            case["name"]
+        );
+    }
+
+    #[test]
+    fn continuation_ordinal_limits_match_published_parameter_and_consumer_behavior() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-charset-ordinal-oracle.json"
+        ))
+        .unwrap();
+        assert_eq!(frozen["int_max_str_digits"], 4300);
+        assert_eq!(frozen["cases"].as_array().unwrap().len(), 60);
+        for case in frozen["cases"].as_array().unwrap() {
+            let spec = &case["spec"];
+            let content_type = format!(
+                "text/plain; charset=latin1; {}*{}{}=latin1",
+                spec["base"].as_str().unwrap(),
+                spec["digit"]
+                    .as_str()
+                    .unwrap()
+                    .repeat(spec["digits"].as_u64().unwrap() as usize),
+                spec["suffix"].as_str().unwrap()
             );
-            assert_eq!(
-                observation(response_text(&body, content_type)),
-                case["text"],
-                "text {}",
-                case["name"]
-            );
-            assert_eq!(
-                observation(crate::canvas_credentials_protocol::response_excerpt(
-                    &body,
-                    content_type
-                )),
-                case["excerpt"],
-                "excerpt {}",
-                case["name"]
-            );
+            assert_header_case(case, Some(&content_type));
         }
     }
 

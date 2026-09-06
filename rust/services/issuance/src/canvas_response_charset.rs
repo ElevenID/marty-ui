@@ -53,25 +53,36 @@ fn parameters(mut remaining: &str) -> Vec<(String, String)> {
     parts
 }
 
-fn continuation(name: &str) -> Option<(&str, Option<String>, bool)> {
-    let (base, suffix) = name.split_once('*')?;
+type Continuation<'a> = (&'a str, Option<String>, bool);
+
+fn continuation(name: &str) -> Result<Option<Continuation<'_>>, CanvasResponseTextError> {
+    let Some((base, suffix)) = name.split_once('*') else {
+        return Ok(None);
+    };
     if base.is_empty() || !base.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return None;
+        return Ok(None);
     }
     if suffix.is_empty() {
-        return Some((base, None, true));
+        return Ok(Some((base, None, true)));
     }
     let digits = suffix.strip_suffix('*').unwrap_or(suffix);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
+        return Ok(None);
+    }
+    // The immutable published interpreter limits decimal conversions before
+    // removing leading zeroes. Keep arbitrary-size ordering below that limit.
+    if digits.len() > 4300 {
+        return Err(CanvasResponseTextError::ContinuationOrdinalLimit {
+            digits: digits.len(),
+        });
     }
     // Decimal length + lexical ordering avoids an invented machine-integer cap.
     let number = digits.trim_start_matches('0');
-    Some((
+    Ok(Some((
         base,
         Some(if number.is_empty() { "0" } else { number }.into()),
         name.ends_with('*'),
-    ))
+    )))
 }
 
 fn percent_octets(value: &str) -> String {
@@ -176,7 +187,7 @@ pub(super) fn charset_parameter(
     for (index, (name, raw)) in parameters(content_type).into_iter().enumerate() {
         let value = unquote(&raw);
         if index > 0 {
-            if let Some((base, number, encoded)) = continuation(&name) {
+            if let Some((base, number, encoded)) = continuation(&name)? {
                 let position = groups
                     .iter()
                     .position(|(name, _)| name == base)

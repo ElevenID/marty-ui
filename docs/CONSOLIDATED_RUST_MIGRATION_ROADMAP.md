@@ -33,6 +33,29 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+Continuation-ordinal parity now preserves the published interpreter's 4,300-digit
+limit without inventing a machine-integer cap. The previous implementation failed
+the independently captured regression; native checks now match all 60 new
+parameter/text/excerpt observations and the previous 177 header observations.
+The TLS corpus grows from 96 to 99 with old observations unchanged. Independent
+published captures expand managed validation from 37 to 41 and status-provider
+behavior from 86 to 90, also preserving every previous observation. Actual HTTP
+validation replays 21 response cases. The full configured image gate regenerates
+the new artifact and adds a required ordinal lifecycle persistence/recovery
+scenario, bringing the suite to 25 tests.
+All 25 configured image/schema tests pass (214.76 seconds, none ignored or
+filtered), alongside 306 library, 5 worker, 28 managed HTTP, 22 behavior and 70
+affected Python tests, 99 native TLS cases, strict Clippy and formatting checks.
+The preceding `da23f8b4f` head is hosted-green; the ordinal checkpoint still needs
+fresh hosted checks and does not authorize routing the draft candidate.
+
+UTF-7 investigation has established a lossless-text requirement, not completed
+that codec: 39 independent helper/rendering observations preserve lone surrogates
+as numeric codepoints. Fourteen renderings fail, while truncation can remove the
+surrogate before rendering and allow success. Rejecting or replacing it during
+decoding would lose behavior. Native representation/decoding and full consumer
+qualification remain open. See [text boundary evidence](../contracts/canvas-text-boundaries.md).
+
 Seven ISO-2022 variants now share a native stateful decoder, retaining ordinary
 text, multi-character mappings and the distinct internal-codec/pending-buffer
 errors. Independent image captures cover 134 active-state witnesses, 8,816,262

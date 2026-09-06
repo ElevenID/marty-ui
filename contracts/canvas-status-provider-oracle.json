@@ -2860,6 +2860,176 @@
         }
       ],
       "secrets": []
+    },
+    {
+      "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit",
+      "error_class": "ValueError",
+      "name": "ordinal_text_200",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "error": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit",
+      "error_class": "ValueError",
+      "name": "ordinal_json_403",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "accepted": true
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "ordinal_json_200",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "metadata": {
+        "status_sync_http_status": 200,
+        "status_sync_request_id": "synthetic-provider-request",
+        "status_sync_response": {
+          "body_excerpt": ""
+        },
+        "status_sync_url": "https://bridge.example.invalid/status",
+        "status_synced_at": "$timestamp"
+      },
+      "name": "ordinal_empty_200",
+      "requests": [
+        {
+          "body": {
+            "canvas_account_id": "account",
+            "canvas_platform_id": "platform-review",
+            "canvas_program_binding_id": "binding-review",
+            "credential": {
+              "external_credential_id": "external-assertion",
+              "external_issuer_id": null,
+              "id": "credential-review",
+              "issuer_did": null,
+              "reason": "synthetic reason",
+              "revoked_at": null,
+              "status": "suspended",
+              "status_updated_at": "$timestamp"
+            },
+            "issuer_id": "configured-issuer",
+            "lifecycle_action": "suspend",
+            "metadata": {
+              "credential_template_id": "credential-template",
+              "delivery_record_id": "delivery-provider",
+              "organization_id": "org-review"
+            }
+          },
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer $operator-token",
+            "content-type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://bridge.example.invalid/status"
+        }
+      ],
+      "secrets": []
     }
   ]
 }

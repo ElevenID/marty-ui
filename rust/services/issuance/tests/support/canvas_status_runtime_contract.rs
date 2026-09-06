@@ -42,6 +42,7 @@ enum Responses {
     Unicode,
     Charset,
     Iso2022,
+    Ordinal,
 }
 
 impl Responses {
@@ -57,6 +58,9 @@ impl Responses {
             (Self::Iso2022, "suspend") => "iso2022_internal_200",
             (Self::Iso2022, "reinstate") => "iso2022_pending_200",
             (Self::Iso2022, "revoke") => "iso2022_label_json_200",
+            (Self::Ordinal, "suspend") => "ordinal_text_200",
+            (Self::Ordinal, "reinstate") => "ordinal_json_403",
+            (Self::Ordinal, "revoke") => "ordinal_json_200",
             _ => panic!("unexpected synthetic lifecycle action"),
         })
     }
@@ -165,6 +169,10 @@ pub async fn run_charset(pool: &PgPool) {
 
 pub async fn run_iso2022(pool: &PgPool) {
     run_scenario(pool, Responses::Iso2022).await;
+}
+
+pub async fn run_ordinal(pool: &PgPool) {
+    run_scenario(pool, Responses::Ordinal).await;
 }
 
 async fn run_scenario(pool: &PgPool, responses: Responses) {
@@ -337,6 +345,7 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
                 match responses {
                     Responses::Unicode => "UnicodeError",
                     Responses::Charset => "TypeError",
+                    Responses::Ordinal => "ValueError",
                     Responses::Iso2022 if index == 0 => "RuntimeError",
                     Responses::Iso2022 => "UnicodeError",
                     Responses::Baseline => unreachable!(),

@@ -246,6 +246,32 @@ def unicode_text_codecs(response_source):
     }
 
 
+def observe_charset(header, payload, project):
+    response = httpx.Response(
+        403, content=payload, headers={} if header is None else {"content-type": header}
+    )
+    observed = {}
+    for projection, operation in (
+        ("charset", lambda: response.charset_encoding),
+        ("text", lambda: response.text),
+        ("excerpt", lambda: project(response)),
+    ):
+        try:
+            observed[projection] = {"value": operation()}
+        except (UnicodeError, TypeError, ValueError, RuntimeError) as failure:
+            assert type(failure) in (
+                UnicodeError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+            ), "unexpected header error"
+            observed[projection] = {
+                "error_class": type(failure).__name__,
+                "error": str(failure),
+            }
+    return observed
+
+
 def charset_headers(response_source):
     """Observe the actual HTTPX/email parameter reader, not an RFC approximation."""
     project = response_owner(response_source)
@@ -317,27 +343,7 @@ def charset_headers(response_source):
             ("json", b'{"accepted":true}'),
             ("empty", b""),
         ):
-            response = httpx.Response(
-                403,
-                content=payload,
-                headers={} if header is None else {"content-type": header},
-            )
-            observed = {}
-            for projection, operation in (
-                ("charset", lambda: response.charset_encoding),
-                ("text", lambda: response.text),
-                ("excerpt", lambda: project(response)),
-            ):
-                try:
-                    observed[projection] = {"value": operation()}
-                except (UnicodeError, TypeError) as failure:
-                    assert type(failure) in (UnicodeError, TypeError), (
-                        "unexpected header error"
-                    )
-                    observed[projection] = {
-                        "error_class": type(failure).__name__,
-                        "error": str(failure),
-                    }
+            observed = observe_charset(header, payload, project)
             cases.append(
                 {
                     "name": f"header_{index}_{payload_name}",
@@ -450,6 +456,15 @@ class Handler(BaseHTTPRequestHandler):
                     (
                         b"~{VP~}" + bytes(range(256)) + b"\x81\x40\x88\x62\x8f\xa2\xaf"
                     ).hex(),
+                )
+            for kind, payload in (
+                ("text", b"caf\xe9"),
+                ("json", b'{"accepted":true}'),
+                ("empty", b""),
+            ):
+                text_cases[f"/text_ordinal_{kind}"] = (
+                    "text/plain; charset=latin1; other*" + "0" * 4301 + "=latin1",
+                    payload.hex(),
                 )
             if self.path in text_cases:
                 content_type, hexadecimal = text_cases[self.path]
@@ -697,7 +712,7 @@ async def observe(source, response_source, cases, origin, trust):
                         result["body"] = None
             except httpx.HTTPError as failure:
                 result = {"error_class": type(failure).__name__}
-            except (UnicodeError, RuntimeError) as failure:
+            except (UnicodeError, RuntimeError, ValueError) as failure:
                 result = {"error_class": type(failure).__name__}
             except TimeoutError:
                 raise AssertionError("owned test watchdog expired") from None
@@ -745,6 +760,9 @@ def run(source=None, response_source=None):
         "single_byte_codecs": single_byte_codecs(response_source),
         "unicode_text_codecs": unicode_text_codecs(response_source),
         "charset_headers": charset_headers(response_source),
+        "charset_ordinals": codec_owner("canvas_charset_ordinal_oracle").observe(
+            response_source
+        ),
         "multibyte_codecs": multibyte_owner().run(),
         "gb18030_codec": codec_owner("canvas_gb18030_codec_oracle").observe(),
         "euc_kr_codec": codec_owner("canvas_euc_kr_codec_oracle").observe(),

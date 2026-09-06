@@ -616,6 +616,24 @@
       },
       "name": "text_iso2022_label_json",
       "status": 403
+    },
+    {
+      "error_class": "ValueError",
+      "name": "text_ordinal_text"
+    },
+    {
+      "body": {
+        "accepted": true
+      },
+      "name": "text_ordinal_json",
+      "status": 403
+    },
+    {
+      "body": {
+        "body_excerpt": ""
+      },
+      "name": "text_ordinal_empty",
+      "status": 403
     }
   ],
   "response_source_sha256": "24f5c0f22c075af3a11abbb48be52bcc6535e0d4fc31e446f7fb218bfe40d679",

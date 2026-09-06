@@ -589,6 +589,9 @@ mod tests {
                 | "text_iso2022_pending"
                 | "text_iso2022_label"
                 | "text_iso2022_label_json"
+                | "text_ordinal_text"
+                | "text_ordinal_json"
+                | "text_ordinal_empty"
         ));
         let config = crate::config::IssuanceServiceConfig::from_values([(
             "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),

@@ -96,6 +96,9 @@
 {"name":"text_iso2022_internal","seconds":"2","response":"text_iso2022_internal","projection":"excerpt"},
 {"name":"text_iso2022_pending","seconds":"2","response":"text_iso2022_pending","projection":"excerpt"},
 {"name":"text_iso2022_label","seconds":"2","response":"text_iso2022_label","projection":"excerpt"},
-{"name":"text_iso2022_label_json","seconds":"2","response":"text_iso2022_label_json","projection":"excerpt"}
+{"name":"text_iso2022_label_json","seconds":"2","response":"text_iso2022_label_json","projection":"excerpt"},
+{"name":"text_ordinal_text","seconds":"2","response":"text_ordinal_text","projection":"excerpt"},
+{"name":"text_ordinal_json","seconds":"2","response":"text_ordinal_json","projection":"excerpt"},
+{"name":"text_ordinal_empty","seconds":"2","response":"text_ordinal_empty","projection":"excerpt"}
   ]
 }
