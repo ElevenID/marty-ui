@@ -2,22 +2,18 @@
 
 import asyncio
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
 import os
 from pathlib import Path
 import signal
-import ssl
-import tempfile
-from threading import Thread
 import time
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from run_canvas_worker_startup_oracle import DATABASE, finish_worker, start_worker
-from test_canvas_lti_https import create_loopback_certificate
+from canvas_worker_https_fixture import WorkerHttpsFixture
 
 
 async def seed_oauth(origin, token):
@@ -70,75 +66,50 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
     shared = json.loads(
         (Path("/verification/contracts") / spec["shared_seed"]).read_text()
     )
-    stage = {}
-    requests = []
+    with WorkerHttpsFixture() as https:
+        return run_scenarios(spec, shared, https)
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_):
-            pass
 
-        def do_GET(self):
-            requests.append(
-                {
-                    "method": self.command,
-                    "path": self.path,
-                    "authorization": self.headers.get("Authorization"),
-                    "accept": self.headers.get("Accept"),
-                }
-            )
-            response = stage["responses"][self.path] if "responses" in stage else stage
-            body = json.dumps(response["body"], separators=(",", ":")).encode()
-            self.send_response(response["status"])
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            for key, value in response.get("headers", {}).items():
-                self.send_header(key, value)
-            self.end_headers()
-            self.wfile.write(body)
-
-    certificates = tempfile.TemporaryDirectory(prefix="canvas-worker-rest-")
-    cert, key = create_loopback_certificate(Path(certificates.name))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(cert, key)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    origin = f"https://127.0.0.1:{server.server_port}"
-    engine = create_engine(DATABASE, hide_parameters=True)
+def seed_worker_database(engine, origin, spec, shared):
     os.environ["INTEGRATION_SECRET_MASTER_KEY"] = (
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     )
-    observations = []
-    try:
-        with engine.begin() as connection:
-            for statement in shared["seed"]:
-                connection.exec_driver_sql(statement)
-            if "requirements" in spec:
-                connection.execute(
-                    text(
-                        "UPDATE issuance_service.canvas_program_bindings SET evidence_requirements=CAST(:requirements AS json) WHERE id='binding-review'"
-                    ),
-                    {"requirements": json.dumps(spec["requirements"])},
-                )
+    with engine.begin() as connection:
+        for statement in shared["seed"]:
+            connection.exec_driver_sql(statement)
+        if "requirements" in spec:
             connection.execute(
                 text(
-                    "UPDATE issuance_service.canvas_platforms SET canvas_base_url=:origin"
+                    "UPDATE issuance_service.canvas_program_bindings SET evidence_requirements=CAST(:requirements AS json) WHERE id='binding-review'"
                 ),
-                {"origin": origin},
+                {"requirements": json.dumps(spec["requirements"])},
             )
-        asyncio.run(seed_oauth(origin, spec["token"]))
-        with engine.connect() as connection:
-            preserved = connection.execute(
-                text(shared["preserved_rows_sql"])
-            ).scalar_one()
-            ciphertext = connection.execute(
-                text(
-                    "SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets WHERE id='worker-rest-token'"
-                )
-            ).scalar_one()
-        assert ciphertext != spec["token"]
+        connection.execute(
+            text(
+                "UPDATE issuance_service.canvas_platforms SET canvas_base_url=:origin"
+            ),
+            {"origin": origin},
+        )
+    asyncio.run(seed_oauth(origin, spec["token"]))
+    with engine.connect() as connection:
+        preserved = connection.execute(text(shared["preserved_rows_sql"])).scalar_one()
+        ciphertext = connection.execute(
+            text(
+                "SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets WHERE id='worker-rest-token'"
+            )
+        ).scalar_one()
+    assert ciphertext != spec["token"]
+    return preserved, ciphertext
+
+
+def run_scenarios(spec, shared, https):
+    origin, cert, requests = https.origin, https.cert, https.requests
+    engine = create_engine(DATABASE, hide_parameters=True)
+    observations = []
+    try:
+        preserved, ciphertext = seed_worker_database(engine, origin, spec, shared)
         for index, stage in enumerate(spec["stages"]):
+            https.stage = stage
             requests.clear()
             with engine.connect() as connection:
                 prior_job_ids = (
@@ -280,8 +251,3 @@ def run(scenario="canvas-worker-rest-scenarios.json"):
         }
     finally:
         engine.dispose()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-        assert not thread.is_alive()
-        certificates.cleanup()

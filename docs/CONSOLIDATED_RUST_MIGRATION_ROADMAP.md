@@ -33,10 +33,19 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [active-provider signal reference](rust-migrations/canvas-worker-provider-signals.md)
+now records SIGINT, SIGTERM and SIGKILL against actual published worker processes
+while a real HTTPS response is held. Each pair of independent captures agrees;
+the job remains leased and issuance/token ciphertext are preserved. Native
+adoption remains open, including Rust's intentional SIGTERM graceful drain.
+This is not crash/restart or cleanup-finally evidence.
+
 The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)
 now records real database eligibility and unchanged job identity across retry
 success, 503 failure and 401 token rejection. Two final captures agree; native
-adoption is implemented and awaiting Linux execution. No clocks, retry timestamps
+adoption passed Linux CI at `32ec09029`: CI34036161060 and Rust CodeQL34036161086
+are successful. The configured job explicitly exercised all five native retry
+stages and passed all 44 tests in 653.61 seconds. No clocks, retry timestamps
 or job outcomes are patched.
 
 The [all-four-fact worker reference](rust-migrations/canvas-worker-facts-reference.md)

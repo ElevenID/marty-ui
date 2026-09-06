@@ -104,6 +104,30 @@ async fn worker_facts_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_provider_signals_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-provider-signals-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(expected.as_object().unwrap().len(), 3);
+    for signal in ["SIGINT", "SIGTERM", "SIGKILL"] {
+        let owned =
+            canvas_published_database::PublishedDatabase::start_with_worker_provider_signal(signal)
+                .await
+                .unwrap();
+        assert_eq!(
+            owned.oracle.as_ref().unwrap(),
+            &expected[signal],
+            "{signal}"
+        );
+        owned.close().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn worker_retry_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

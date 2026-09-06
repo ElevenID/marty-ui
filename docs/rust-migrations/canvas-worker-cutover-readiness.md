@@ -53,8 +53,15 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 The [retry/rejection reference](canvas-worker-retry-reference.md) adds actual
 same-job retry eligibility, recovery and provider failure/OAuth rejection
-observations for gates 6/8. Native adoption awaits Linux execution; remote OAuth revocation,
+observations for gates 6/8. Native adoption passed Linux CI at `32ec09029`
+(CI34036161060, Rust34036161086), including five actual native HTTPS stages;
+remote OAuth revocation,
 all error/header variants and race/privacy requirements remain separate gates.
+
+The [active-provider signal reference](canvas-worker-provider-signals.md) now
+independently captures SIGINT/SIGTERM/SIGKILL with the real HTTPS response held.
+Native adoption and graceful drain, crash/restart, renewal and disposal remain
+open; raw process exit must not be substituted for those qualifications.
 
 Numbers below preserve the order of all 14 `migration_gates.legacy_oracle_gaps`.
 "Covered boundary" is deliberately narrower than "deletion gate closed".

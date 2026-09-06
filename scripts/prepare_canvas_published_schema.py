@@ -86,6 +86,17 @@ def prepare():
         }
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
+        provider_signal = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL")
+        if provider_signal is not None:
+            if provider_signal not in {"SIGINT", "SIGTERM", "SIGKILL"}:
+                raise ValueError("Unsupported owned worker signal")
+            from run_canvas_worker_provider_signals_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_provider_signals"] = run(provider_signal)
         if os.environ.get("MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE") == "1":
             import runpy
 

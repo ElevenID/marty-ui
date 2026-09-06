@@ -1,7 +1,11 @@
 # Actual worker retry and rejection reference
 
-Status: independent published reference frozen; native adoption implemented,
-awaiting its mandatory Linux execution result.
+Status: independent published reference frozen; native adoption qualified on
+Linux at `32ec0902969aec4d404a7d7d4b7b485a35f3a21f`. CI34036161060 and
+Rust CodeQL34036161086 passed. Configured job101494520922 explicitly records
+five native retry, sixteen all-fact and four original REST requests, with all
+44 tests passing in 653.61 seconds. Its earlier unconfigured 0.38-second run
+is not runtime evidence. Later changes still require fresh exact-head checks.
 The existing composed worker/HTTPS/OAuth/published-schema owners are reused.
 
 Five processes exercise three durable jobs:

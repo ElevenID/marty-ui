@@ -228,6 +228,23 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_provider_signal(signal: &str) -> Result<Self, String> {
+        if !matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL") {
+            return Err("unsupported owned worker signal".into());
+        }
+        let flag = format!("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL={signal}");
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_signals",
+                "worker-provider-signals",
+                "worker_provider_signals",
+                &flag,
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_retry() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -438,7 +455,11 @@ impl PublishedDatabase {
             root.join("contracts/fixtures/canvas_worker_test_trust.py")
                 .display()
         );
-        if matches!(script, "worker_rest" | "worker_facts" | "worker_retry") {
+        let worker_https = matches!(
+            script,
+            "worker_rest" | "worker_facts" | "worker_retry" | "worker_provider_signals"
+        );
+        if worker_https {
             let index = arguments.len() - 2;
             arguments.splice(
                 index..index,
@@ -491,10 +512,11 @@ impl PublishedDatabase {
                     )
                 })
                 .collect()
-            } else if matches!(script, "worker_rest" | "worker_facts" | "worker_retry") {
+            } else if worker_https {
                 [
                     "run_canvas_worker_startup_oracle.py",
                     "test_canvas_lti_https.py",
+                    "canvas_worker_https_fixture.py",
                 ]
                 .into_iter()
                 .map(|name| {
@@ -507,7 +529,10 @@ impl PublishedDatabase {
             } else {
                 Vec::new()
             };
-        if matches!(script, "worker_facts" | "worker_retry") {
+        if matches!(
+            script,
+            "worker_facts" | "worker_retry" | "worker_provider_signals"
+        ) {
             consumer_helpers.extend(
                 [
                     "scripts/run_canvas_worker_rest_oracle.py",
