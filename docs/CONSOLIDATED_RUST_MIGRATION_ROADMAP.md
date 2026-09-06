@@ -45,9 +45,10 @@ The [worker image launch contract](rust-migrations/canvas-worker-image-entrypoin
 adds explicit worker selection through the existing shared Rust entrypoint and
 an eight-case packaged preflight gate. The dedicated CI image preserves its API
 default and existing secret-loader path. All eight real-image cases and API health
-passed at `e424761f5` (image job101523616820 in CI34046951418); its runtime suite
-was still running at that observation. The newer 24-case extension remains
-pending. Compose/Kubernetes consumers and whole-worker cutover gates are unchanged.
+passed at `e424761f5` (image job101523616820 in CI34046951418). The same head's
+65 configured runtime tests passed in 1151.92 seconds, and Rust CodeQL34046951414
+passed. The newer 24-case extension passes locally but awaits hosted execution.
+Compose/Kubernetes consumers and whole-worker cutover gates are unchanged.
 
 The [retryable competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers-retry.md)
 has two matching independent captures and a passing local regeneration gate.

@@ -1,7 +1,8 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `507b0def6b8ec1a061e82768f82e9ba28f8b3456`,
-with newer image-entrypoint packaging awaiting qualification. PR #814 draft and
+Status: latest qualified composed checkpoint `e424761f532bcba72b3c352b203fba4c7bc381bb`,
+including eight image-preflight cases and 65 configured runtime tests; newer
+24-case packaged startup passes locally but awaits hosted qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain

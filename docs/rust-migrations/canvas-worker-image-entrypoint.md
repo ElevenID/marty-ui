@@ -53,6 +53,9 @@ CI's `PYTHONPATH=packages` plus an isolated copy of the hash-verified released
 issuance build-definition check pass; Docker reports no warnings. These results
 do not replace native worker gates. The subsequent image job verified all eight
 real-image cases and retained the API health smoke; Rust CodeQL34046951414 passed.
-At that observation, the same head's configured runtime suite was still running.
+The same head's configured runtime suite subsequently passed all 65 tests in
+1151.92 seconds (job101523616800), including the actual retry-reclaimer two-request
+case and all earlier concurrency/recovery/signal cases. Its separate 0.31-second
+unconfigured result is not runtime evidence.
 The newer [24-case database-startup extension](canvas-worker-image-startup.md)
 and its shared-helper extraction still require their own fresh image execution.
