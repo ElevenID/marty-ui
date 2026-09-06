@@ -33,6 +33,12 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The [worker image launch contract](rust-migrations/canvas-worker-image-entrypoint.md)
+adds explicit worker selection through the existing shared Rust entrypoint and
+an eight-case packaged preflight gate. The dedicated CI image preserves its API
+default and existing secret-loader path. Fresh image execution remains pending;
+Compose/Kubernetes consumers and all whole-worker cutover gates remain unchanged.
+
 The [retryable competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers-retry.md)
 has two matching independent captures and a passing local regeneration gate.
 Both replacement workers reach fresh idle at the durable retry

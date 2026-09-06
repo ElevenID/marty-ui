@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUST_SERVICES = {
     "applicant": "marty-applicant",
     "auth": "marty-auth",
+    "canvas_sync_worker": "marty-canvas-sync-worker",
     "compliance_profile": "marty-compliance-profile",
     "credential_template": "marty-credential-template",
     "deployment_profile": "marty-deployment-profile",
@@ -24,7 +25,6 @@ RUST_SERVICES = {
     "verification": "marty-verification-service",
 }
 UNROUTED_RUST_BINARIES = {
-    "marty-canvas-sync-worker",
     "marty-verifier-positive-gate",
 }
 ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
@@ -62,8 +62,7 @@ def test_every_allowlisted_binary_is_built_and_copied() -> None:
     for binary in ALL_RUST_BINARIES:
         assert f"--bin {binary}" in dockerfile
         assert (
-            f"/build/rust/target/release/{binary} /usr/local/bin/{binary}"
-            in dockerfile
+            f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile
         )
 
 
@@ -79,9 +78,9 @@ def test_registry_builder_separates_rust_services_from_python_migrations() -> No
     service_args = script.split('"services/Dockerfile"', maxsplit=1)[1].split(
         "done < <(catalog_services app)", maxsplit=1
     )[0]
-    migration_args = script.split('"services/Dockerfile.migrations"', maxsplit=1)[1].split(
-        '"docker/ui.Dockerfile"', maxsplit=1
-    )[0]
+    migration_args = script.split('"services/Dockerfile.migrations"', maxsplit=1)[
+        1
+    ].split('"docker/ui.Dockerfile"', maxsplit=1)[0]
 
     assert "MARTY_RS_URI" not in service_args
     assert "MARTY_COMMON_URI" not in service_args

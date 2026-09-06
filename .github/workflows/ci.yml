@@ -1143,6 +1143,8 @@ jobs:
           done
           docker logs "$container"
           exit 1
+      - name: Smoke-test Canvas worker image entrypoint and secret preflight
+        run: python3 scripts/test_canvas_worker_image_entrypoint.py marty-issuance:ci
       - name: Smoke-test organization image with PostgreSQL and Redis
         shell: bash
         run: |

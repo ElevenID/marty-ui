@@ -138,7 +138,7 @@ changing reference source; preserve the other worker's unrelated work.
 | Beta overlay | `docker-compose.beta.yml`: only adds worker environment; inherits the base command/image | Render the exact aggregate beta composition and verify native selection; an environment-only overlay is not a cutover. |
 | Self-host production definition | `docker-compose.selfhost.prod.yml`: shell secret loader followed by Python, with loader selection | Preserve file-secret and database-template handling, migration ordering and headless health semantics in source. Do not deploy to persistent self-host. |
 | Kubernetes | `k8s/oracle/07-microservices.yaml`: Python command/args; `01-configmap.yaml`: loader selection | Native image provenance/command, ConfigMap cleanup, all secret inputs, migration job ordering and termination policy in rendered artifacts. Do not apply to production. |
-| Shared Rust image | `services/Dockerfile.ci` contains the worker binary; `services/entrypoint.sh` has no worker service dispatch | Choose and test one explicit worker launch contract; copying a binary does not prove the consumer starts it. |
+| Shared Rust image | `services/Dockerfile` and `rust/services/Dockerfile.ci` contain the worker binary; the shared entrypoint now implements explicit worker selection | Qualify the [image launch gate](canvas-worker-image-entrypoint.md), then all consumer configuration/secrets, headless health and migration ordering; launch preflight alone does not prove worker-cycle acceptance. |
 
 The initial local debug-binary diagnostic confirmed a startup obstacle: with
 rollout disabled, synthetic keys, no LTI identity and an unavailable loopback

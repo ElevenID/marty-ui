@@ -687,6 +687,7 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
         "!rust/**",
         "!proto/**",
         "!contracts/**",
+        "!services/entrypoint.sh",
         "!scripts/load-secrets-env.sh",
         "!scripts/ci/verify-release-cache.sh",
         "rust/services/*/tests",
