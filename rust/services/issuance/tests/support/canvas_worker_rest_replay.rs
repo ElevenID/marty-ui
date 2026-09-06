@@ -13,7 +13,46 @@ use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
 
 const CIPHERTEXT_SQL: &str = "SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets WHERE id='worker-rest-token'";
 
-pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &str) {
+pub(super) struct WorkerFixture {
+    pub(super) spec: &'static Value,
+    pub(super) shared: &'static Value,
+    preserved: Value,
+    ciphertext: String,
+}
+
+impl WorkerFixture {
+    pub(super) async fn assert_preserved(&self, pool: &PgPool) {
+        let current: Value =
+            sqlx::query_scalar(self.shared["preserved_rows_sql"].as_str().unwrap())
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(current, self.preserved, "issued rows changed");
+        let current_ciphertext: String = sqlx::query_scalar(CIPHERTEXT_SQL)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(current_ciphertext, self.ciphertext);
+    }
+}
+
+pub(super) fn worker_environment(origin: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "true".into()),
+        ("CANVAS_PILOT_ORGANIZATION_IDS".into(), "org-review".into()),
+        ("CANVAS_PRIVATE_ORIGIN_ALLOWLIST".into(), origin.into()),
+        (
+            "SSL_CERT_FILE".into(),
+            std::env::var("SSL_CERT_FILE").unwrap(),
+        ),
+        (
+            "SSL_CERT_DIR".into(),
+            std::env::var("SSL_CERT_DIR").unwrap(),
+        ),
+    ])
+}
+
+pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> WorkerFixture {
     let origin_url = url::Url::parse(origin).unwrap();
     assert_eq!(origin_url.scheme(), "https");
     assert_eq!(origin_url.host_str(), Some("127.0.0.1"));
@@ -57,13 +96,6 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         ))
         .unwrap()
     });
-    let reference: Value = serde_json::from_str(match scenario {
-        "rest" => include_str!("../../../../../contracts/canvas-worker-rest-oracle.json"),
-        "facts" => include_str!("../../../../../contracts/canvas-worker-facts-oracle.json"),
-        "retry" => include_str!("../../../../../contracts/canvas-worker-retry-oracle.json"),
-        _ => unreachable!(),
-    })
-    .unwrap();
     for statement in shared["seed"].as_array().unwrap() {
         sqlx::raw_sql(statement.as_str().unwrap())
             .execute(pool)
@@ -126,6 +158,24 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         .await
         .unwrap();
     assert_ne!(ciphertext, spec["token"].as_str().unwrap());
+    WorkerFixture {
+        spec,
+        shared,
+        preserved,
+        ciphertext,
+    }
+}
+
+pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &str) {
+    let fixture = prepare(pool, origin, scenario).await;
+    let (spec, shared) = (fixture.spec, fixture.shared);
+    let reference: Value = serde_json::from_str(match scenario {
+        "rest" => include_str!("../../../../../contracts/canvas-worker-rest-oracle.json"),
+        "facts" => include_str!("../../../../../contracts/canvas-worker-facts-oracle.json"),
+        "retry" => include_str!("../../../../../contracts/canvas-worker-retry-oracle.json"),
+        _ => unreachable!(),
+    })
+    .unwrap();
     let stages = spec["stages"].as_array().unwrap();
     let observations = reference["observations"].as_array().unwrap();
     assert_eq!(stages.len(), if scenario == "retry" { 5 } else { 4 });
@@ -165,19 +215,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             .execute(pool)
             .await
             .unwrap();
-        let environment = BTreeMap::from([
-            ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "true".into()),
-            ("CANVAS_PILOT_ORGANIZATION_IDS".into(), "org-review".into()),
-            ("CANVAS_PRIVATE_ORIGIN_ALLOWLIST".into(), origin.into()),
-            (
-                "SSL_CERT_FILE".into(),
-                std::env::var("SSL_CERT_FILE").unwrap(),
-            ),
-            (
-                "SSL_CERT_DIR".into(),
-                std::env::var("SSL_CERT_DIR").unwrap(),
-            ),
-        ]);
+        let environment = worker_environment(origin);
         let mut worker =
             OwnedWorker::start_with_environment(database_url, "worker-rest", &environment);
         let (jobs, heartbeat) = tokio::time::timeout(Duration::from_secs(25), async {
@@ -230,19 +268,6 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             let observed: Value = sqlx::query_scalar(query).fetch_one(pool).await.unwrap();
             assert_eq!(observed, expected[key], "{key} in {}", stage["name"]);
         }
-        let current: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            current, preserved,
-            "issued rows changed in {}",
-            stage["name"]
-        );
-        let current_ciphertext: String = sqlx::query_scalar(CIPHERTEXT_SQL)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        assert_eq!(current_ciphertext, ciphertext);
+        fixture.assert_preserved(pool).await;
     }
 }

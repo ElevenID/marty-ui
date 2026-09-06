@@ -2,8 +2,61 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_provider_signals_replay.rs"]
+mod canvas_worker_provider_signals_replay;
 #[path = "support/canvas_worker_rest_replay.rs"]
 mod canvas_worker_rest_replay;
+
+#[test]
+fn worker_provider_signals_match_frozen_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!("Actual active-provider signal qualification requires the mandatory Linux gate");
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    let output = std::process::Command::new("python3")
+        .arg(root.join("scripts/test_canvas_worker_provider_signals_https.py"))
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Native provider signal gate failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
+#[tokio::test]
+async fn worker_provider_signals_native_child() {
+    let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NATIVE_ORIGIN") else {
+        return;
+    };
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    let signal = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NAME").unwrap();
+    canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
 
 #[test]
 fn worker_rest_matches_frozen_published_process() {

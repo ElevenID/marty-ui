@@ -1,6 +1,7 @@
 # Actual provider-I/O signal reference
 
-Status: independent published reference frozen; native adoption remains open.
+Status: independent published reference frozen at `e46f42f26`; native replay
+implemented and awaiting mandatory Linux execution.
 No worker cutover, deployment or reachable Python deletion follows from this gate.
 
 The actual pinned Python worker starts on a fresh official PostgreSQL schema for
@@ -45,14 +46,25 @@ CI remains required. Local Python tests used the installed Git OpenSSL toolchain
 because Strawberry OpenSSL points to an absent configuration directory; neither
 certificate policy nor machine trust was changed.
 
-## Native adoption requirements
+## Native adoption and remaining qualification
 
-Compare SIGINT and SIGKILL against the independently recorded abandoned state,
-with explicit native exit-code/signal normalization. Preserve the documented
-Rust improvement: SIGTERM drains in-flight work and exits 0. Prove it remains
-alive with the response held, then release the response and compare the complete
-positive durable outcome against the original REST reference. Do not change Rust
-to emulate the published process's abrupt SIGTERM behavior.
+The mandatory `worker_provider_signals_match_frozen_published_process` Linux
+parent runs three fresh-schema native children. The same Rust seed, OAuth vault,
+connection publication, process owner and issued-row/ciphertext assertions are
+shared with the qualified REST/facts/retry replay; all frozen artifacts are retained.
+
+SIGINT and SIGKILL compare the independently recorded before/after state, with
+explicit native exit-code/signal normalization. SIGTERM preserves the documented
+Rust improvement: drain in-flight work and exit 0. The test requires the process
+to remain alive and its state unchanged while the response is held, then releases
+the response and compares every recorded durable-state field against the original
+positive REST observation. It does not emulate Python's abrupt TERM exit.
+
+Exclusive marker files in the owned temporary certificate directory synchronize
+only the test parent and child; no worker, provider adapter, database, outcome or
+clock is mocked. The parent verifies the exact authenticated HTTPS request. These
+new native cases compile and pass strict lint, with 57 affected Python tests;
+Linux runtime behavior and all prior native replays require fresh hosted CI.
 
 These cases do not yet qualify lease renewal during long requests, owner-fence
 loss, host crash, reclaim/restart, or finally/disposal execution. Those remain

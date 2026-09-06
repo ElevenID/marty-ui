@@ -36,8 +36,9 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 The [active-provider signal reference](rust-migrations/canvas-worker-provider-signals.md)
 now records SIGINT, SIGTERM and SIGKILL against actual published worker processes
 while a real HTTPS response is held. Each pair of independent captures agrees;
-the job remains leased and issuance/token ciphertext are preserved. Native
-adoption remains open, including Rust's intentional SIGTERM graceful drain.
+the job remains leased and issuance/token ciphertext are preserved. Native replay
+is implemented and awaits mandatory Linux execution, including Rust's intentional
+SIGTERM graceful drain and unchanged original REST/facts/retry regression gates.
 This is not crash/restart or cleanup-finally evidence.
 
 The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)

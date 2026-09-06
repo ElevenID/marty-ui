@@ -78,7 +78,7 @@ impl OwnedWorker {
     }
 
     pub(super) fn signal(&mut self, signal: &str) {
-        assert!(matches!(signal, "SIGINT" | "SIGTERM"));
+        assert!(matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL"));
         assert!(
             self.0.try_wait().unwrap().is_none(),
             "worker exited before signal"
