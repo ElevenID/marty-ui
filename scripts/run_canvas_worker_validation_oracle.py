@@ -1,4 +1,4 @@
-"""Actual worker validation outcomes from pre-start fixture configuration."""
+"""Actual worker validation/processor failures and owned reference-removal races."""
 
 import json
 from pathlib import Path

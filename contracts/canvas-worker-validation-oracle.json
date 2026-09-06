@@ -1,4 +1,272 @@
 {
+  "invalid_evidence_requirements": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": true,
+            "last_error_code": "canvas_requirements_invalid",
+            "last_error_summary": "Canvas evidence requirements are invalid",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 1,
+            "result": {},
+            "retry_delay_matches_37_seconds": null,
+            "retry_scheduled": null,
+            "started": true,
+            "status": "dead_letter"
+          }
+        ],
+        "name": "invalid_evidence_requirements",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": false,
+          "status": "connected"
+        },
+        "requests": [],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": null,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "schema": "marty.canvas-worker-validation-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    },
+    "target": {
+      "config_version": 1,
+      "enabled": false
+    }
+  },
+  "missing_lti_subject": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": true,
+            "last_error_code": "canvas_lti_identity_missing",
+            "last_error_summary": "Canvas application has no verified LTI subject",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 1,
+            "result": {},
+            "retry_delay_matches_37_seconds": null,
+            "retry_scheduled": null,
+            "started": true,
+            "status": "dead_letter"
+          }
+        ],
+        "name": "missing_lti_subject",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": false,
+          "status": "connected"
+        },
+        "requests": [],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": null,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "schema": "marty.canvas-worker-validation-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    },
+    "target": {
+      "config_version": 1,
+      "enabled": false
+    }
+  },
+  "unsupported_award_candidate": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": true,
+            "last_error_code": "canvas_sync_target_type_unsupported",
+            "last_error_summary": "Canvas target type has no authoritative processor",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 1,
+            "result": {},
+            "retry_delay_matches_37_seconds": null,
+            "retry_scheduled": null,
+            "started": true,
+            "status": "dead_letter"
+          }
+        ],
+        "name": "unsupported_award_candidate",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": false,
+          "status": "connected"
+        },
+        "requests": [],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": null,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "schema": "marty.canvas-worker-validation-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    },
+    "target": {
+      "config_version": 1,
+      "enabled": false
+    }
+  },
+  "template_removed_after_application_read": {
+    "observations": [
+      {
+        "exit_code_after_interrupt": -2,
+        "facts": [],
+        "heartbeat": {
+          "metadata": {
+            "leased_jobs": 0,
+            "phase": "idle",
+            "process": "standalone",
+            "processor_configured": true
+          },
+          "role": "canvas_sync"
+        },
+        "jobs": [
+          {
+            "attempt_count": 1,
+            "completed": true,
+            "last_error_code": "canvas_application_template_unavailable",
+            "last_error_summary": "Canvas application template is unavailable",
+            "lease_expires_present": false,
+            "lease_owner_present": false,
+            "max_attempts": 1,
+            "result": {},
+            "retry_delay_matches_37_seconds": null,
+            "retry_scheduled": null,
+            "started": true,
+            "status": "dead_letter"
+          }
+        ],
+        "name": "template_removed_after_application_read",
+        "oauth": {
+          "reauthorization_required": false,
+          "refresh_lease_owner_present": false,
+          "secret_enabled": true,
+          "secret_used": false,
+          "status": "connected"
+        },
+        "reference_race": {
+          "blocked_before_release": true,
+          "referenced_row_absent": true
+        },
+        "requests": [],
+        "snapshot": {
+          "application": {
+            "credential_id": "credential-review",
+            "policy_allowed": null,
+            "status": "approved"
+          },
+          "credential": {
+            "active": true,
+            "count": 1
+          },
+          "events": {},
+          "facts": 0,
+          "head_scores": null,
+          "reviews": []
+        }
+      }
+    ],
+    "schema": "marty.canvas-worker-validation-oracle/v1",
+    "source_sha256": {
+      "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+      "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943"
+    },
+    "target": {
+      "config_version": 1,
+      "enabled": false
+    }
+  },
   "application_removed_after_target_read": {
     "observations": [
       {

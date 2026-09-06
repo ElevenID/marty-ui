@@ -1,10 +1,11 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `a6826de39d2d34a6163a11e78761353191337815`,
+Status: latest qualified composed checkpoint `56f4658e1ac9a3d0d8fed8cb9638352b35065879`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 67 configured runtime tests (CI34051487770 and Rust CodeQL34051487785).
-All seven actual native Retry-After cases passed; the newer validation replay
-still awaits its own Linux qualification. PR #814 draft and
+and 70 configured runtime tests (CI34053145533 and Rust CodeQL34053145588).
+All eleven initial native validation cases passed, retaining the earlier
+Retry-After/worker gates. The newer reference-removal races and four processor
+failures still await their own Linux qualification. PR #814 draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
@@ -55,15 +56,18 @@ requirements and fresh exact-head checks for later extensions remain required.
 
 ## Normative legacy-gap reconciliation
 
-The [target-validation reference](canvas-worker-validation.md) captures thirteen
+The [validation/failure reference](canvas-worker-validation.md) captures seventeen
 actual published-worker cases with identical independent results. It covers
 nine terminal codes (including five inactive variants), no Canvas reads and
 preserved issued rows/token ciphertext. Native replay is implemented; focused
 published-schema tests demonstrated and verified the shared Rust error-summary
 correction. The two previously uncovered invalid-reference paths now have actual
 published-process removal races, with matching independent captures and native
-replay implemented through the shared database barrier. Full exact-head Linux
-qualification and broader processor failures remain pending; gate 9 is open.
+replay implemented through the shared database barrier. Four further cases cover
+invalid requirements, missing LTI identity, unsupported candidate processing and
+template removal after application read. The thirteen processor outcomes outside
+this corpus are tracked separately. Full exact-head Linux qualification and
+broader processor failures remain pending; gate 9 is open.
 
 The [Retry-After deadline reference](canvas-worker-retry-after.md) freezes seven
 actual published-worker scheduling cases, including HTTP dates and oversized

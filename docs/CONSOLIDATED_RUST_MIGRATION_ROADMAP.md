@@ -34,16 +34,22 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ### Current transport integration and merge gates
 
 The [target-validation reference](rust-migrations/canvas-worker-validation.md)
-freezes thirteen actual published-worker cases with matching independent captures:
+freezes seventeen actual published-worker cases with matching independent captures:
 no Canvas reads, exact terminal errors, disabled targets and preserved issued
 rows/token ciphertext. Native replay is now implemented using the shared process
 fixture. Two actual reference-removal races now account for the previously
 uncovered application/candidate-invalid errors without disabling foreign keys;
-all eleven original observations remain unchanged. Rust terminal summaries now
-match all nine captured codes. Local regressions pass (407 Rust tests, strict
-Clippy and 906 Python tests with one existing opt-in skip). Fresh Linux process
-qualification and broader processor failures remain open; this does not close
-gate 9.
+all earlier observations remain unchanged. Four processor-failure cases now
+cover invalid requirements, missing LTI identity, unsupported candidate processing
+and template removal after application read, without a new production code path.
+Coverage accounting separates validation from processor outcomes. Rust terminal
+summaries match all nine captured validation codes. The race checkpoint passed
+407 Rust tests and strict Clippy; the expanded corpus passes 907 Python tests
+with one existing opt-in skip. The initial eleven native validation cases passed
+at `56f4658e1` (CI34053145533, Rust CodeQL34053145588): all 70 configured tests
+passed in 1399.33 seconds, with eight image-preflight and 24 packaged startup
+cases. Newer races/processor cases require fresh exact-head Linux qualification;
+broader processor failures remain open, so gate 9 is not closed.
 
 The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
 now freezes seven actual published-worker cases across HTTP dates, malformed,

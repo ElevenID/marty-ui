@@ -4,6 +4,7 @@ import json
 import importlib
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,7 +17,7 @@ def test_native_validation_matrix_uses_separate_children_and_no_expected_reads(
     calls = []
     monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
     native.run("synthetic-native-executable", "validation")
-    assert len(calls) == len({call[4]["name"] for call in calls}) == 13
+    assert len(calls) == len({call[4]["name"] for call in calls}) == 17
     for executable, scenario, spec, reference, case in calls:
         assert executable == "synthetic-native-executable" and scenario == "validation"
         assert len(spec["stages"]) == len(reference["observations"]) == 1
@@ -38,34 +39,38 @@ def test_native_validation_matrix_uses_separate_children_and_no_expected_reads(
             }
 
 
-def test_every_validation_error_is_covered_or_explicitly_remaining():
+@pytest.mark.parametrize(
+    ("boundary", "remaining_key", "errors_key"),
+    [
+        ("target_validation", "remaining_validation_errors", "errors"),
+        ("processor_dispatch", "remaining_processor_errors", "stable_outcomes"),
+    ],
+)
+def test_every_error_is_covered_or_explicitly_remaining(
+    boundary, remaining_key, errors_key
+):
     spec = json.loads(
         (ROOT / "contracts/canvas-worker-validation-scenarios.json").read_text()
     )
     contract = json.loads(
         (ROOT / "contracts/issuance-canvas-sync-worker.json").read_text()
     )
-    # Find the normative validation block rather than maintain a second code list.
-    blocks = [
-        value
-        for value in contract.values()
-        if isinstance(value, dict) and "errors" in value
-    ]
-    validation = next(
-        block
-        for block in blocks
-        if any(
-            error.get("code") == "canvas_sync_target_incomplete"
-            for error in block["errors"]
-        )
-    )
-    required = {error["code"] for error in validation["errors"]}
-    covered = {case["code"] for case in spec["cases"]}
-    remaining = set(spec["remaining_validation_errors"])
+    required = {error["code"] for error in contract[boundary][errors_key]}
+    covered = {
+        case["code"]
+        for case in spec["cases"]
+        if case.get("boundary", "target_validation") == boundary
+    }
+    remaining = set(spec[remaining_key])
     assert not covered & remaining
     assert covered | remaining == required
-    assert len(spec["cases"]) == len({case["name"] for case in spec["cases"]}) == 13
-    assert remaining == set()
+    assert len(spec["cases"]) == len({case["name"] for case in spec["cases"]}) == 17
+    assert len(remaining) == (0 if boundary == "target_validation" else 13)
+    assert all(
+        case.get("boundary", "target_validation")
+        in {"target_validation", "processor_dispatch"}
+        for case in spec["cases"]
+    )
     assert (
         sum(case["code"] == "canvas_sync_target_inactive" for case in spec["cases"])
         == 5
@@ -91,12 +96,16 @@ def test_reference_races_remove_only_exact_fixture_rows_without_weakening_constr
         (ROOT / "contracts/canvas-worker-validation-scenarios.json").read_text()
     )
     races = [case for case in spec["cases"] if "reference_race" in case]
-    assert len(races) == 2
-    for case, table, column, identity in zip(
+    assert len(races) == 3
+    for case, table, update, identity in zip(
         races,
-        ["applications", "canvas_award_candidates"],
-        ["application_id", "candidate_id"],
-        ["application-race", "candidate-race"],
+        ["application_templates", "applications", "canvas_award_candidates"],
+        [
+            "UPDATE issuance_service.applications SET application_template_id='template-review' WHERE id='application-review'",
+            "UPDATE issuance_service.canvas_evidence_sync_targets SET application_id=NULL WHERE id='target-review'",
+            "UPDATE issuance_service.canvas_evidence_sync_targets SET candidate_id=NULL WHERE id='target-review'",
+        ],
+        ["template-race", "application-race", "candidate-race"],
         strict=True,
     ):
         race = case["reference_race"]
@@ -107,7 +116,7 @@ def test_reference_races_remove_only_exact_fixture_rows_without_weakening_constr
         assert "wait_event_type='Lock'" in race["blocked_sql"]
         assert f"%SELECT%FROM issuance_service.{table}%" in race["blocked_sql"]
         assert race["release_sql"] == [
-            f"UPDATE issuance_service.canvas_evidence_sync_targets SET {column}=NULL WHERE id='target-review'",
+            update,
             f"DELETE FROM issuance_service.{table} WHERE id='{identity}' AND organization_id='org-review'",
         ]
         assert (

@@ -374,6 +374,8 @@ async fn worker_validation_repository_matches_frozen_errors() {
     for case in canvas_worker_rest_replay::validation_scenarios()["cases"]
         .as_array()
         .unwrap()
+        .iter()
+        .filter(|case| case["boundary"] != "processor_dispatch")
     {
         let name = case["name"].as_str().unwrap();
         let owned = canvas_published_database::PublishedDatabase::start()

@@ -1,10 +1,13 @@
-# Actual worker target-validation reference
+# Actual worker validation and processor-failure reference
 
-Status: thirteen published-worker cases captured independently twice and frozen;
-native replay is implemented and awaits Linux qualification. This is selected
+Status: seventeen published-worker cases captured independently twice and frozen;
+native replay is implemented. The initial eleven cases passed Linux at
+`56f4658e1`; newer races/processor failures await exact-head qualification. This is selected
 gate-9 evidence, not a completed
 worker/consumer cutover. All nine normative validation errors now have captured
 actual-process outcomes, including the two reference-removal races below.
+Four processor-failure outcomes are also captured; their remaining outcome
+inventory is tracked separately rather than treated as validation coverage.
 
 The reference reuses the existing actual REST process, HTTPS, official-schema,
 OAuth and issued-row preservation fixtures. Each case owns a fresh database.
@@ -99,6 +102,16 @@ eleven actual-schema repository comparisons. Its Linux-only parent returned on
 Windows; native process qualification is still pending. Bash syntax, Rustfmt
 and diff checks passed, and no labelled fixture containers remained afterward.
 
+The initial eleven-case native replay subsequently passed at
+`56f4658e1ac9a3d0d8fed8cb9638352b35065879`: CI34053145533 and
+Rust CodeQL34053145588 succeeded. Runtime job101540240382 recorded all eleven
+actual native validation cases with zero HTTPS requests, and all 70 configured
+tests passed in 1399.33 seconds at 19:24:28 UTC. Its separate unconfigured
+70-test run in 0.34 seconds is not process evidence. Image job101540240397
+passed eight entrypoint cases and all 24 packaged startup cases, retaining the
+original issuance API health gate. This qualification does not cover the newer
+reference-removal races or the processor-failure additions below.
+
 ## Reference-removal races
 
 Each race creates a dedicated synthetic application or candidate with no issued
@@ -138,6 +151,54 @@ regenerating every earlier worker reference and all thirteen validation cases,
 and passing all thirteen actual-schema repository comparisons. Linux-only
 parent/helper returns on Windows are not process execution; fresh exact-head
 native Linux replay remains required.
+
+## Processor failures after successful target validation
+
+Four additional actual-process cases extend the same matrix and native replay:
+
+| Fixture input/event | Terminal processor code |
+| --- | --- |
+| Unsupported evidence fact type in the binding | `canvas_requirements_invalid` |
+| Application Canvas context without an LTI subject | `canvas_lti_identity_missing` |
+| Existing tenant-owned award candidate with no authoritative processor | `canvas_sync_target_type_unsupported` |
+| Dedicated template removed after the worker reads its application | `canvas_application_template_unavailable` |
+
+The template race uses the same reference-table barrier as the application and
+candidate races. Once the actual template SELECT is observed blocked, the
+lock-owning transaction restores the application's original template reference
+and deletes only the dedicated synthetic template. No foreign key, job, lease,
+clock, generation fence or issued row is changed. Every case observes one
+attempt-one dead-letter, exact code/summary, disabled target, zero Canvas
+requests, idle heartbeat and preserved issued rows/transactions/token ciphertext.
+
+Independent seventeen-case captures A/B match byte-for-byte with SHA-256
+`eb18fc2970f60f08766c1b4bc01735544685cdf1434d4d2870fec307969d41e0`.
+All thirteen earlier observations are unchanged. New expectations retain their
+exact captured scalar tokens with whitespace-only formatting. No Rust outcome
+supplied expectations, and this extension changes no production implementation.
+
+The existing native parent dispatches all seventeen cases in separate children.
+The focused repository-only test explicitly selects the thirteen validation
+cases: processor errors cannot be inferred from a repository validator. The
+coverage guard separately accounts for all nine normative validation codes and
+all seventeen normative processor outcomes, rejects unknown boundaries, and
+tracks the thirteen processor codes outside this four-case corpus explicitly.
+That remaining list is corpus-specific: earlier retry/provider evidence remains
+valid in its own named gates. Dynamic Python processor shapes must be reconciled
+with typed Rust dispatch, not reintroduced as a production Python loader.
+
+The full local Python regression passed 907 tests in 42.37 seconds with the
+same existing opt-in verifier skip. All seventeen frozen observations were
+compared to the independent capture after token-preserving formatting. Fresh
+configured native Linux execution must include all seventeen actual worker
+cases; the existing three exact validation test names remain mandatory in CI.
+The configured local subset passed all three entries in 134.08 seconds
+(67 filtered out), regenerating seventeen published cases and verifying the
+thirteen native repository comparisons. Its Linux-only parent returned on
+Windows, not native process execution. Strict all-target Clippy, Ruff, Rustfmt
+and diff checks passed. The earlier 34-entry worker regression remains recorded
+above for the shared barrier implementation; this corpus extension adds no
+new process/barrier implementation.
 
 Broader processor failures,
 missing-target races, signing effects and privacy remain in the
