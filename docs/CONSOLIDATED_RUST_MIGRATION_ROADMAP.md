@@ -350,6 +350,15 @@ completion reference still matches after sharing the implementation (36.03s).
 Expiry during in-flight provider effects remains separate. No consumer or feature
 has been removed; the existing 103-entry head's live CI is not superseded or cancelled.
 
+The deployment-wiring audit also found and repaired a concrete Rust compatibility
+gap: [the worker ignored deployed LOG_LEVEL](rust-migrations/canvas-worker-logging-configuration.md).
+Sixteen independently captured logging-configuration inputs now replay through
+the native subscriber, retaining explicit RUST_LOG directives and static errors
+for invalid operator settings. Seven actual child-process rejection cases and all
+existing executable smoke tests pass locally. The packaged preflight grows from
+eight to nine cases; fresh exact-head image/CI qualification remains pending.
+This does not switch any deployment consumer or replace the remaining worker gates.
+
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease
 and both heartbeat renewal without generation change. After forced process loss,

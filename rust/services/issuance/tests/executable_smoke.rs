@@ -15,6 +15,9 @@ use marty_issuance_service::issuance_proto::{
 
 struct ChildGuard(Child);
 
+#[path = "support/canvas_worker_logging_contract.rs"]
+mod canvas_worker_logging_contract;
+
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.0.kill();

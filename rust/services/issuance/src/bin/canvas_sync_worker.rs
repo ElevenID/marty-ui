@@ -29,9 +29,10 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(worker_log_filter(
+            env::var("RUST_LOG").ok().as_deref(),
+            env::var("LOG_LEVEL").ok().as_deref(),
+        )?)
         .init();
     let config = CanvasSyncWorkerConfig::from_env().inspect_err(|_error| {
         error!(
@@ -241,6 +242,29 @@ fn env_bool(name: &str) -> bool {
     })
 }
 
+fn worker_log_filter(
+    rust_log: Option<&str>,
+    log_level: Option<&str>,
+) -> Result<EnvFilter, &'static str> {
+    if let Some(filter) = rust_log.and_then(|value| EnvFilter::try_new(value).ok()) {
+        return Ok(filter);
+    }
+    // Preserve the published, case-sensitive operator setting. Rust directives
+    // remain an explicit override; invalid directives retain fallback behavior.
+    let level = match log_level.unwrap_or("INFO") {
+        "NOTSET" => "trace",
+        "DEBUG" => "debug",
+        "INFO" => "info",
+        "WARNING" | "WARN" => "warn",
+        "ERROR" => "error",
+        // The worker emits no CRITICAL/FATAL events and tracing has no such
+        // severity. These thresholds suppress all of its ordinary events.
+        "CRITICAL" | "FATAL" => "off",
+        _ => return Err("invalid Canvas worker LOG_LEVEL"),
+    };
+    Ok(EnvFilter::new(level))
+}
+
 #[cfg(unix)]
 fn shutdown_signal() -> impl std::future::Future<Output = WorkerShutdown> {
     use tokio::signal::unix::{signal, SignalKind};
@@ -308,6 +332,78 @@ fn comma_values(name: &str) -> Vec<String> {
 mod tests {
     use super::{completion_result, first_present_or_else, ExitCode};
     use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
+
+    #[test]
+    fn deployed_log_level_matches_frozen_published_thresholds() {
+        let reference: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-logging-oracle.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            reference["source_sha256"],
+            "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a"
+        );
+        for case in reference["cases"].as_array().unwrap() {
+            let filter = super::worker_log_filter(None, case["input"].as_str());
+            let observed = match filter {
+                Err(error) => {
+                    assert_eq!(error, "invalid Canvas worker LOG_LEVEL");
+                    serde_json::json!({"error_class": "ValueError"})
+                }
+                Ok(filter) => {
+                    let subscriber = tracing_subscriber::fmt()
+                        .with_env_filter(filter)
+                        .with_writer(std::io::sink)
+                        .finish();
+                    let enabled: Vec<_> = tracing::subscriber::with_default(subscriber, || {
+                        [
+                            ("debug", tracing::enabled!(tracing::Level::DEBUG)),
+                            ("info", tracing::enabled!(tracing::Level::INFO)),
+                            ("warn", tracing::enabled!(tracing::Level::WARN)),
+                            ("error", tracing::enabled!(tracing::Level::ERROR)),
+                        ]
+                        .into_iter()
+                        .filter_map(|(name, enabled)| enabled.then_some(name))
+                        .collect()
+                    });
+                    serde_json::json!({"enabled": enabled})
+                }
+            };
+            assert_eq!(observed, case["observed"], "LOG_LEVEL={:?}", case["input"]);
+        }
+    }
+
+    #[test]
+    fn rust_log_override_and_invalid_directive_fallback_are_retained() {
+        assert_eq!(
+            super::worker_log_filter(Some("warn"), Some("invalid"))
+                .unwrap()
+                .to_string(),
+            "warn"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("marty_canvas_sync_worker=debug"), Some("ERROR"))
+                .unwrap()
+                .to_string(),
+            "marty_canvas_sync_worker=debug"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("["), Some("ERROR"))
+                .unwrap()
+                .to_string(),
+            "error"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("["), None)
+                .unwrap()
+                .to_string(),
+            "info"
+        );
+        assert_eq!(
+            super::worker_log_filter(Some("["), Some("invalid")).unwrap_err(),
+            "invalid Canvas worker LOG_LEVEL"
+        );
+    }
 
     #[test]
     fn cancelled_process_matches_published_python_sigint_exit_code() {

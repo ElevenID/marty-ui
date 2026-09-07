@@ -1,0 +1,5 @@
+{
+  "schema": "marty.canvas-worker-logging-scenarios/v1",
+  "levels": [null, "DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL", "NOTSET", "", "debug", "info", " INFO ", "20", "TRACE", "synthetic-invalid-operator-value"],
+  "scope": "Execute the exact published startup logging expression in isolation and observe the four severities emitted by the worker. This is configuration behavior, not whole-process or log-content qualification. Rust has no CRITICAL/FATAL event level; those Python thresholds suppress all four worker severities. Native RUST_LOG directives remain an explicit higher-priority extension."
+}

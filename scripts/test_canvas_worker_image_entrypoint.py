@@ -34,6 +34,14 @@ CASES = (
         True,
     ),
     Case(
+        "invalid_logging",
+        "canvas-sync-worker",
+        ("LOG_LEVEL=synthetic-invalid-operator-value",),
+        1,
+        "invalid Canvas worker LOG_LEVEL",
+        True,
+    ),
+    Case(
         "underscore",
         "canvas_sync_worker",
         (),
@@ -142,6 +150,7 @@ def exercise_case(image, case, directory):
         logs = docker("logs", container)
         # Logs for these fixed synthetic cases must never expose the key.
         assert MASTER_KEY not in logs, f"{case.name}: synthetic key appeared in logs"
+        assert "synthetic-invalid-operator-value" not in logs
         assert status == case.exit_code, f"{case.name}: unexpected exit {status}"
         assert case.message in logs, (
             f"{case.name}: expected preflight diagnostic missing"

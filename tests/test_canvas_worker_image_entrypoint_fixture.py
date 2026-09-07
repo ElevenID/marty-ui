@@ -133,9 +133,10 @@ def test_ci_executes_packaged_worker_and_preserves_api_default():
 
 
 def test_preflight_matrix_retains_aliases_and_secret_conflicts(entrypoint):
-    assert len(entrypoint.CASES) == 8
+    assert len(entrypoint.CASES) == 9
     assert {case.name for case in entrypoint.CASES} == {
         "hyphen",
+        "invalid_logging",
         "underscore",
         "direct_key",
         "file_key",
