@@ -1,15 +1,15 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `d0a09792b7866d60bc20284570d395e0b252477b`,
+Status: latest qualified composed checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 77 configured runtime tests in 1668.72 seconds (CI34068063872; all applicable
-exact-head checks, including Rust CodeQL34068063928, passed). The native validation/failure cases remain covered,
+and 81 configured runtime tests in 1726.05 seconds (CI34069978028; all applicable
+exact-head checks, including Rust CodeQL34069978088, passed). The native validation/failure cases remain covered,
 including deferred roster configuration and all three reference-removal barriers.
 The configured PostgreSQL worker contract, including the typed-processor
-signing guard and twelve-case privacy checkpoint, passed all four entries in 96.66
-seconds. All seven transport, two replacement-owner and one marker-failure native
-revocation PASS markers were verified. Later Retry-After, backoff, queue
-and [acquired-lease](canvas-worker-oauth-revocation-lease.md) extensions still need
+signing guard and twelve-case privacy checkpoint, passed all four entries in 104.35
+seconds. All 23 native revocation PASS markers were verified: seven transport,
+two replacement-owner, one marker-failure, eight Retry-After and five backoff cases.
+Later queue and [acquired-lease](canvas-worker-oauth-revocation-lease.md) extensions still need
 fresh hosted checks. Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a

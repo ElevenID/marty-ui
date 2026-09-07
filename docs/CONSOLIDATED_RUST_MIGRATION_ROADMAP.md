@@ -177,15 +177,15 @@ overflow disappeared. Existing queue/reference values remain unchanged. Shared
 matrix/fixture/process owners are reused. Native replay is implemented and the
 86-entry gate awaits exact-head hosted qualification. No runtime or feature changed.
 
-Latest qualified UI checkpoint `d0a09792b7866d60bc20284570d395e0b252477b` passed
-CI34068063872 and all applicable exact-head checks, including Rust CodeQL34068063928.
-Runtime job101580260455 passed 77 configured tests in 1668.72 seconds, retaining
+Latest qualified UI checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87` passed
+CI34069978028 and all applicable exact-head checks, including Rust CodeQL34069978088.
+Runtime job101585424129 passed 81 configured tests in 1726.05 seconds, retaining
 the actual native validation/failure cases, and all four configured PostgreSQL
-worker-contract entries in 96.66 seconds. Its image job also passed. All seven
-transport, two replacement-owner and one marker-failure native OAuth revocation
-PASS markers were verified in the configured runtime log. This retains the
-twelve-case privacy checkpoint and qualifies those scoped revocation boundaries.
-Later Retry-After, backoff and queue changes require fresh hosted qualification;
+worker-contract entries in 104.35 seconds. Its image job also passed. All 23 native
+OAuth revocation PASS markers were verified: seven transport, two replacement-owner,
+one marker-failure, eight Retry-After and five later-history backoff cases. This
+retains the twelve-case privacy checkpoint and qualifies those scoped boundaries.
+Later queue and acquired-lease changes require fresh hosted qualification;
 no unconfigured early-return group is counted as parity evidence.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.

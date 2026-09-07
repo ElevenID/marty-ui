@@ -1,5 +1,15 @@
 # Whole-worker OAuth revocation qualification
 
+Latest qualification: exact head `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87`
+passed CI34069978028 and all applicable checks, including Rust CodeQL34069978088.
+Runtime101585424129 passed all 81 configured tests in 1726.05 seconds and the
+separate four-entry worker DB group in 104.35 seconds. All 23 actual native
+revocation markers were verified, qualifying eight Retry-After and five backoff
+cases alongside the ten earlier transport/ownership/marker-failure cases.
+This supersedes their initial pending status in the historical sections below.
+Queue and acquired-lease follow-ups still require their own hosted qualification;
+gate 10, consumer cutover and aggregate beta acceptance remain open.
+
 Gate 10 remains open. Seven actual published-worker observations are now frozen,
 with two identical independent captures and native replay now qualified on
 Linux at `31355d24a1ef5d87d2da98a121f73863ca8bcf7e`. Existing repository/provider tests and the native

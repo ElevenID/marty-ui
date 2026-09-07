@@ -8,8 +8,8 @@ This is not a completion claim for the worker or the wider migration goal.
 | Requirement | Evidence inspected | Remaining qualification or gap |
 | --- | --- | --- |
 | Remote success, rejection, timeout and rate-limit classification | Seven published-process captures and actual native Linux PASS markers at31355; scoped real adapter regression | Qualified for the captured transport cases, not arbitrary provider failures |
-| First retry, stored deadline and token retention | Seven transport cases and eight separately frozen Retry-After cases | Eight-case native extension still awaits its exact-head hosted run |
-| Later-attempt exponential backoff and cap | Five independently captured published-process histories at counts1,9,10,11,999; native replay and bounded-helper checks implemented | Fresh native Linux qualification remains pending; first-attempt evidence is not substituted |
+| First retry, stored deadline and token retention | Seven transport cases and eight separately frozen Retry-After cases | All eight native timing markers qualified at75d82, CI34069978028 |
+| Later-attempt exponential backoff and cap | Five independently captured published-process histories at counts1,9,10,11,999; native replay and bounded-helper checks | All five native history markers qualified at75d82, CI34069978028; first-attempt evidence is not substituted |
 | Owner-fenced success and retry writes | Two held-response replacement-owner process captures; full replacement-row and ciphertext equality | Both native PASS markers verified at d0a09792, CI34068063872 |
 | Failed disconnected projection still cleans up tokens | Actual platform UPDATE barrier and synthetic write-failure capture; separate qualified privacy/counter replay | Native whole-process PASS marker verified at d0a09792, CI34068063872 |
 | Stronger native tenant-atomic cleanup | Existing real PostgreSQL OAuth contract, shared transaction implementation; token and unrelated-tenant checks in every process capture | Retain improvement; do not require Python's weaker intermediate transaction order |
