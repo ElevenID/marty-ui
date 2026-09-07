@@ -95,14 +95,43 @@ waiting for stage markers. Failure reports retain bounded diagnostic tails.
 Thirty-two driver tests include a real failing child that writes 256 KiB to each
 stream; failure remains prompt, cleanup completes, and no stage advances.
 
-Source review identified possible native token-reuse and target-metadata
-differences. They remain hypotheses until the Linux replay produces actual
-evidence. Neither the frozen traces nor runtime guards have been relaxed to
-anticipate those results. This batch changes test infrastructure, not provider
-or signing implementations.
+CI `34098106567` supplied actual native evidence at `8e7f66d46`: stage 0
+`tail_positive_wrap` failed target equality because `worker_id` remained
+`worker-rest` instead of the frozen null projection. The configured suite passed
+118 tests and failed this one in 2761.77s. Token-reuse drift is still a source
+hypothesis: the child stopped before the driver's transport comparison.
 
-Final local checks: 1,201 Python tests passed with one existing skip in 62.16s;
+The narrow repair reconciles only the pre-touch snapshot's two heartbeat keys
+while retaining unrelated current metadata and all lease/generation fences.
+Ten configured fresh-database regression cases passed in 104.27s, including
+natural lease expiry before the write and during a blocked UPDATE. Extra
+preexisting/explicit-null snapshot cases are focused reconciliation coverage,
+not additional frozen published observations. Whole-worker replay remains open.
+Independent read-only inspection of the exact frozen issuance image confirmed
+the source semantics: `canvas_worker.py` fetches the target at line 432, touches
+the database heartbeat at 448–452, and passes the same snapshot at 474.
+`infrastructure/api/canvas_routes.py` lines 6225–6238 spread that snapshot's
+metadata into the roster result. In `infrastructure/adapters/postgres_repository.py`,
+`touch_canvas_sync_target_worker_heartbeat` lines 3615–3654 changes the persisted
+heartbeat keys; `save_canvas_sync_target` lines 3539–3577 replaces metadata from
+the supplied target. Thus absent, null and preexisting heartbeat values follow
+the snapshot, while Python's unrelated stale-map overwrite is deliberately not
+reproduced by Rust's current-map reconciliation.
+
+All three inspected files were under `/app/services/issuance/` in immutable image
+`sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176`.
+Worker SHA-256 `c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a`
+and routes SHA-256 `f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943`
+match the frozen corpus. Repository SHA-256
+`34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb`
+is newly observed source evidence from that image, not a new corpus observation.
+
+Count-only stage diagnostics now expose ledger lengths without payloads, while
+preserving original exceptions and bounded cleanup; 34 focused driver tests
+passed. No frozen equality or provider/signing implementation was changed.
+
+Historical reference-batch local checks: 1,201 Python tests passed with one existing skip in 62.16s;
 strict all-target Rust Clippy passed in 6.97s; Rustfmt, changed-file Ruff and
-shell syntax checks passed. Registration now contains 119 entries, not 119
+shell syntax checks passed. That registration contained 119 entries, not 119
 qualified runtime passes. The last hosted checkpoint remains the recorded
 115-entry head until the new exact-head Linux run completes successfully.

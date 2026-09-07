@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
+# A narrow early diagnostic gate supplements, never replaces, the full suite.
+# Validate before any image/network work; arbitrary test filters are forbidden.
+mode="${1-full}"
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != mixed-roster-preflight ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|mixed-roster-preflight]" >&2
+  exit 2
+fi
 # Reuse the frozen oracle pins, not mutable release tags. The test
 # owns a separate tmpfs database; it never receives a deployment URL.
 mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' ../contracts/canvas-worker-consumer-range-oracle.json)
@@ -16,6 +23,11 @@ mapfile -t executables < <(jq -r '
   | select(.executable != null) | .executable
 ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
 [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+if [[ "$mode" == mixed-roster-preflight ]]; then
+  "${executables[0]}" --list | grep -Fx 'worker_mixed_roster_matches_frozen_published_process: test'
+  "${executables[0]}" worker_mixed_roster_matches_frozen_published_process --exact --nocapture --test-threads=1
+  exit 0
+fi
 "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'
 "${executables[0]}" --list | grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'
 "${executables[0]}" --list | grep -Fx 'worker_rest_reference_matches_published_process: test'
@@ -52,6 +64,7 @@ mapfile -t executables < <(jq -r '
 "${executables[0]}" --list | grep -Fx 'worker_provider_resource_race_native_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_resource_race_repository_preserves_stale_write_fences: test'
 "${executables[0]}" --list | grep -Fx 'worker_effect_transaction_obeys_real_database_lease_expiry: test'
+"${executables[0]}" --list | grep -Fx 'worker_roster_metadata_reconciliation_preserves_current_fields_and_fences: test'
 "${executables[0]}" --list | grep -Fx 'worker_mixed_roster_reference_matches_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_dispatch_reference_matches_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_mixed_roster_matches_frozen_published_process: test'

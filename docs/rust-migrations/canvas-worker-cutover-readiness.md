@@ -11,6 +11,26 @@ markers (`platform_reconfigured`, `application_removed`) made one HTTPS request;
 the post-validation resources-unavailable marker made zero. All five native
 roster markers remain (0, 0, 1, 1, 1 requests), as does one-HTTPS recovery-first.
 
+Newer attempted checkpoint `8e7f66d46` is **not qualified**: CI `34098106567`
+finished with 118 configured published-schema tests passing and one failing in
+2761.77s (runtime job `101666175141`). The mixed-roster native replay failed at
+stage 0, `tail_positive_wrap`: persisted `worker_id` was `worker-rest`, while the
+frozen published target expected null. The reference regeneration and controlled
+transaction effect-expiry controls passed. Transport-count drift has not yet been
+observed; the target assertion stopped the child before ledger comparison.
+The narrow pending repair reconciles only pre-touch heartbeat metadata, retaining
+current unrelated fields and generation/lease fences. Exact-head Linux replay
+and complete checks remain required. An early mixed-roster CI preflight now
+supplements, rather than replaces, the mandatory full configured suite.
+
+Local repair-batch verification: 1,331 Python tests passed with one existing skip
+in 134.91s; 339 issuance unit tests passed in 27.63s; strict all-target issuance
+Clippy passed. Ten configured metadata database cases passed in 104.27s. Both
+Compose versions independently passed 21 config-only rollback merges. The 121
+registered schema entries are not 121 hosted qualified passes. No worker routing,
+Python deletion, deployment, restore or cryptographic implementation change
+occurred in this repair batch.
+
 The preceding `5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19` roster checkpoint passed
 109 configured tests in 2361.53s and four worker/PostgreSQL tests in 96.28s
 (CI34085691302). Those historical results are retained, not substituted for

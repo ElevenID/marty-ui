@@ -37,6 +37,40 @@ async fn worker_dispatch_reference_matches_published_process() {
 #[path = "support/canvas_worker_effect_expiry.rs"]
 mod canvas_worker_effect_expiry;
 
+#[path = "support/canvas_worker_roster_metadata.rs"]
+mod canvas_worker_roster_metadata;
+
+#[tokio::test]
+async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fences() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    for case in [
+        "absent",
+        "preexisting",
+        "explicit_null",
+        "worker_only",
+        "heartbeat_only",
+        "stale_target_generation",
+        "wrong_owner",
+        "wrong_attempt",
+        "expired_before_write",
+        "expired_during_lock",
+    ] {
+        let owned = canvas_published_database::PublishedDatabase::start()
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&owned.url)
+            .await
+            .unwrap();
+        canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
+        pool.close().await;
+        owned.close().unwrap();
+    }
+}
+
 #[path = "support/canvas_worker_mixed_roster_replay.rs"]
 mod canvas_worker_mixed_roster_replay;
 

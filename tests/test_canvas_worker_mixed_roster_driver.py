@@ -124,6 +124,8 @@ def test_transport_comparison_requires_all_four_exact_frozen_traces(
         "wrong-trace",
         "late-between-stages",
         "child-exit",
+        "early-child-exit-counts",
+        "early-child-exit-diagnostic-failure",
         "marker-timeout",
         "final-exit",
         "final-timeout",
@@ -139,6 +141,8 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
     events, fixtures, children, captures = [], [], [], []
     actual_touch = Path.touch
     actual_compare = native.assert_transport
+    early_error = AssertionError("synthetic child failed before durable comparison")
+    private_payload = "synthetic-private-token-signer-payload-must-not-be-printed"
 
     class Fixture:
         def __init__(self, actual_matrix):
@@ -276,6 +280,15 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
         assert path.name == f"stage-done-{index}"
         assert (path.parent / f"stage-ready-{index}").is_file()
         assert not (path.parent / f"stage-ack-{index}").exists()
+        if index == 0 and failure in {
+            "early-child-exit-counts",
+            "early-child-exit-diagnostic-failure",
+        }:
+            for count, field in enumerate(TRACES, start=1):
+                setattr(fixtures[0], field, [private_payload] * count)
+            fixtures[0].failures.append(private_payload)
+            child.returncode = 1
+            raise early_error
         if index == 1 and failure in {
             "child-exit",
             "marker-timeout",
@@ -307,6 +320,12 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
     monkeypatch.setattr(native, "wait_marker", wait)
     monkeypatch.setattr(native, "assert_transport", compare)
     monkeypatch.setattr(Path, "touch", touch)
+    if failure == "early-child-exit-diagnostic-failure":
+
+        def broken_diagnostic(*_):
+            raise RuntimeError(private_payload)
+
+        monkeypatch.setattr(native, "diagnostic_transport_counts", broken_diagnostic)
     args = ("synthetic-worker", matrix, matrix["cases"][0], reference)
     if failure is None:
         snapshots = native.run_case(*args)
@@ -319,8 +338,28 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             range(7)
         )
     else:
-        with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
+        with pytest.raises(
+            (AssertionError, native.subprocess.TimeoutExpired)
+        ) as caught:
             native.run_case(*args)
+        if failure == "early-child-exit-counts":
+            assert caught.value is early_error
+            diagnostics = "\n".join(caught.value.__notes__)
+            assert "stage 0; diagnostic only" in diagnostics
+            for count, field in enumerate(TRACES, start=1):
+                expected = len(reference["observations"][0][field])
+                assert f"{field} observed={count} expected={expected}" in diagnostics
+            assert "fixture_failures=1" in diagnostics
+            assert private_payload not in diagnostics
+            assert events == [("stage", 0), ("stage-ready", 0), ("close", 0)]
+        if failure == "late-between-stages":
+            assert "stage 0; diagnostic only" in "\n".join(caught.value.__notes__)
+        if failure == "early-child-exit-diagnostic-failure":
+            assert caught.value is early_error
+            diagnostics = "\n".join(caught.value.__notes__)
+            assert "Mixed-roster transport counts unavailable" in diagnostics
+            assert private_payload not in diagnostics
+            assert events == [("stage", 0), ("stage-ready", 0), ("close", 0)]
     assert fixtures[0].closed
     assert len(captures) == 2 and all(capture.closed for capture in captures)
     assert not Path(fixtures[0].certificates.name).exists()

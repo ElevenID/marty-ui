@@ -629,6 +629,10 @@ jobs:
           # The Canvas PostgreSQL contract launches this actual binary and sends
           # POSIX signals. A test-harness executable is not a substitute.
           test -x target/debug/marty-canvas-sync-worker
+      - name: Preflight mixed-roster published worker parity
+        working-directory: rust
+        shell: bash
+        run: bash ../scripts/ci/run-published-canvas-contracts.sh mixed-roster-preflight
       - name: Create isolated Rust contract databases
         shell: bash
         run: |
@@ -855,6 +859,8 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
+      - name: Verify captured worker rollback launch configuration
+        run: python3 scripts/test_beta_worker_launch_compose.py
       - name: Expose compiler cache credentials to BuildKit secrets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:

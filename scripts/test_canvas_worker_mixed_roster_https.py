@@ -85,6 +85,27 @@ def diagnostic_tail(output):
     return prefix + tail
 
 
+def diagnostic_transport_counts(fixture, observations, stage_index):
+    # Inspect lengths only: never render request paths, scopes, tokens, signer
+    # payloads or failure contents. This snapshot is not a parity assertion.
+    expected = observations[stage_index] if stage_index is not None else {}
+    with (
+        fixture.server.RequestHandlerClass.request_observation_lock,
+        fixture.signer_server.RequestHandlerClass.request_observation_lock,
+    ):
+        counts = [
+            f"{field} observed={len(getattr(fixture, field))} "
+            f"expected={len(expected.get(field, []))}"
+            for field in TRANSPORT_FIELDS
+        ]
+        counts.append(f"fixture_failures={len(fixture.failures)}")
+    stage = str(stage_index) if stage_index is not None else "not-installed"
+    return (
+        f"Mixed-roster transport count snapshot (stage {stage}; diagnostic only): "
+        + "; ".join(counts)
+    )
+
+
 def remaining_timeout(deadline, maximum):
     remaining = deadline - time.monotonic()
     assert remaining > 0, "Mixed-roster native replay exceeded its total bound"
@@ -131,6 +152,7 @@ def run_case(executable, matrix, case, reference):
             text=True,
         )
         failure = None
+        installed_stage_index = None
         try:
             for index, (stage, observation) in enumerate(
                 zip(case["stages"], observations, strict=True)
@@ -153,6 +175,7 @@ def run_case(executable, matrix, case, reference):
                             not getattr(fixture, field) for field in TRANSPORT_FIELDS
                         )
                     fixture.set_stage(stage)
+                    installed_stage_index = index
                     (control / f"stage-ready-{index}").touch(exist_ok=False)
                 wait_marker(
                     child,
@@ -188,6 +211,16 @@ def run_case(executable, matrix, case, reference):
                         child.communicate(timeout=10)
             finally:
                 if failure is not None:
+                    try:
+                        failure.add_note(
+                            diagnostic_transport_counts(
+                                fixture, observations, installed_stage_index
+                            )
+                        )
+                    except Exception:
+                        # Diagnostic collection must not replace the original
+                        # failure or affect cleanup/marker progression.
+                        failure.add_note("Mixed-roster transport counts unavailable")
                     failure.add_note(
                         "Owned synthetic child stdout tail:\n"
                         + diagnostic_tail(stdout_file)

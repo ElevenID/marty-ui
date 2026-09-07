@@ -70,7 +70,11 @@ New local work, deliberately separate from that hosted checkpoint:
   [the compatible repair](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
   preserves all 17 Rust models and the issuance family on both Compose 2.38.2
   and 5.4.0. Local commit `5aa086a1e` is not yet hosted image qualification.
-  Rust CodeQL `34098106562` passed; the runtime job remains independently tracked.
+  Rust CodeQL `34098106562` passed. The runtime job is now terminal: 118 configured
+  published-schema tests passed and one failed in 2761.77s. Mixed-roster stage 0
+  exposed a persisted worker-heartbeat metadata mismatch. Its narrow Rust repair
+  and ten database regression cases are under verification; no oracle assertions
+  were relaxed. Early mixed-roster CI feedback supplements the full suite.
 
 - The [effect-expiry regression](rust-migrations/canvas-worker-effect-expiry.md)
   passed its real-database-time rollback and successful-before-expiry controls
@@ -83,11 +87,18 @@ New local work, deliberately separate from that hosted checkpoint:
   evidence, outage preservation, duplicate observations and recovery. The
   reference is frozen, and the permanent comparison passed in 366.31s. Native
   replay is implemented with mandatory Linux registration; actual native
-  execution and qualification remain pending.
+  execution found the stage-0 metadata mismatch above; successful native replay
+  and qualification remain pending. Payload-free ledger counts improve the next
+  failure diagnosis without claiming a transport mismatch has been observed.
 - The [self-host bundle repairs](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
   preserve the unqualified issuance family and select the existing Rust
   signing-keys binary. Read-only rendering compares all 17 converted service
   definitions without changing crypto implementation or deploying anything.
+- [Worker rollback hardening](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md)
+  now captures exact worker launch vectors and both runtime selectors without
+  secrets, validates all data targets before stopping beta, and passes 21
+  synthetic configuration merges on each tested Compose version. This is local
+  config-only verification, not an actual deployment or restore qualification.
 
 The final full local Python suite passed 1,201 tests with one existing skip in
 62.16s after the frozen corpus, numeric-token and driver-failure tests. These results do not grant native-worker
