@@ -428,18 +428,25 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             assert_eq!(target, reference["target"], "validation target state");
         }
         if scenario == "retry-after" {
-            let (available_at, updated_at): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
-                sqlx::query_as("SELECT available_at,updated_at FROM issuance_service.canvas_evidence_sync_jobs")
-                    .fetch_one(pool).await.unwrap();
-            // Transient synthetic timing evidence only. The HTTPS parent checks
-            // this actual deadline against its emitted header, never a mock clock.
-            println!(
-                "\nCANVAS_WORKER_RETRY_TIMING={}",
-                json!({
-                    "available_at": available_at.to_rfc3339(),
-                    "updated_at": updated_at.to_rfc3339(),
-                })
-            );
+            print_retry_timing(
+                pool,
+                "SELECT available_at,updated_at FROM issuance_service.canvas_evidence_sync_jobs",
+            )
+            .await;
         }
     }
+}
+
+pub(super) async fn print_retry_timing(pool: &PgPool, query: &'static str) {
+    let (available_at, updated_at): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
+        sqlx::query_as(query).fetch_one(pool).await.unwrap();
+    // One transient actual deadline record, shared by job and OAuth retries.
+    // The HTTPS parent compares it to its emitted header, never a mock clock.
+    println!(
+        "\nCANVAS_WORKER_RETRY_TIMING={}",
+        json!({
+            "available_at": available_at.to_rfc3339(),
+            "updated_at": updated_at.to_rfc3339(),
+        })
+    );
 }

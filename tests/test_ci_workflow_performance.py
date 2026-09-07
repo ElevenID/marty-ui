@@ -298,6 +298,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_oauth_revocation_fence_matches_frozen_published_process",
         "worker_oauth_revocation_patch_reference_matches_published_process",
         "worker_oauth_revocation_patch_matches_frozen_published_process",
+        "worker_oauth_revocation_retry_after_reference_matches_published_process",
+        "worker_oauth_revocation_retry_after_matches_frozen_published_process",
     ]:
         assert f"grep -Fx '{name}: test'" in published
     assert (

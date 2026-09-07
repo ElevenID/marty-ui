@@ -110,6 +110,12 @@ def prepare():
                 (revocation_case, "oauth-revocation"),
                 (revocation_fence_case, "oauth-revocation-fence"),
                 (revocation_patch_case, "oauth-revocation-patch"),
+                (
+                    os.environ.get(
+                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_RETRY_AFTER_CASE"
+                    ),
+                    "oauth-revocation-retry-after",
+                ),
             ]
             if name is not None
         ]

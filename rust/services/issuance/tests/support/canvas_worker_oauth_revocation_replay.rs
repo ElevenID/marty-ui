@@ -15,11 +15,15 @@ use std::{sync::OnceLock, time::Duration};
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str, kind: &str) {
     assert!(matches!(
         kind,
-        "oauth-revocation" | "oauth-revocation-fence" | "oauth-revocation-patch"
+        "oauth-revocation"
+            | "oauth-revocation-fence"
+            | "oauth-revocation-patch"
+            | "oauth-revocation-retry-after"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
     static PATCH_MATRIX: OnceLock<Value> = OnceLock::new();
+    static RETRY_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
@@ -27,6 +31,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         .unwrap()
     });
     let extension = match kind {
+        "oauth-revocation-retry-after" => Some((
+            &RETRY_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"),
+        )),
         "oauth-revocation-fence" => Some((
             &FENCE_MATRIX,
             include_str!(
@@ -52,6 +60,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         base
     };
     let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-retry-after" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-retry-after-oracle.json"
+        ),
         "oauth-revocation-fence" => include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-fence-oracle.json"
         ),
@@ -217,7 +228,16 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     for (id, ciphertext) in secrets.as_object().unwrap() {
         assert_eq!(ciphertext, &before[id]);
     }
-    let timing = if fence.is_some() {
+    let timing = if kind == "oauth-revocation-retry-after" {
+        assert_eq!(secrets, before);
+        // Explicit storage mapping: OAuth revoke_retry_at is the shared
+        // comparator's available_at. The parent owns the emitted HTTP date
+        // and verifies all actual timing evidence, including bounded cases.
+        canvas_worker_rest_replay::print_retry_timing(pool,
+            "SELECT revoke_retry_at,updated_at FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'"
+        ).await;
+        Value::Null
+    } else if fence.is_some() {
         assert_eq!(secrets, before);
         json!({"kind": "preserved", "matches": true})
     } else if let Some(bounds) = case.get("delay_bounds") {
@@ -266,6 +286,16 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     // Published source hashes are verified by independent reference regeneration.
     assert!(expected.remove("requests").is_some());
     assert!(expected.remove("source_sha256").is_some());
+    if kind == "oauth-revocation-retry-after" {
+        // No invented success flag: the HTTPS parent compares the actual
+        // durable timestamps to this frozen timing expectation in full.
+        assert!(expected.remove("retry_timing").is_some());
+        assert!(actual
+            .as_object_mut()
+            .unwrap()
+            .remove("retry_timing")
+            .is_some());
+    }
     assert_eq!(
         actual,
         Value::Object(expected),

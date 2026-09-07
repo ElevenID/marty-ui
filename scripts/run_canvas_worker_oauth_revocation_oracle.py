@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import signal
 import time
+from email.utils import parsedate_to_datetime
 
 from sqlalchemy import create_engine, text
 
@@ -25,6 +26,7 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation",
         "oauth-revocation-fence",
         "oauth-revocation-patch",
+        "oauth-revocation-retry-after",
     }
     contracts = Path("/verification/contracts")
     matrix = json.loads(
@@ -157,6 +159,19 @@ def run(case_name, kind="oauth-revocation"):
                     delay = connection.execute(
                         text(matrix["retry_delay_sql"])
                     ).scalar_one_or_none()
+                    date_matches = None
+                    if case.get("timing") == "http_date":
+                        assert len(https.retry_after_dates) == 1
+                        date_matches = connection.execute(
+                            text(
+                                "SELECT abs(extract(epoch FROM revoke_retry_at-:retry_at))<=1.1 FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'"
+                            ),
+                            {
+                                "retry_at": parsedate_to_datetime(
+                                    https.retry_after_dates[0]
+                                )
+                            },
+                        ).scalar_one()
                     current = connection.execute(
                         text(shared["preserved_rows_sql"])
                     ).scalar_one()
@@ -177,9 +192,18 @@ def run(case_name, kind="oauth-revocation"):
                 if fence is not None:
                     assert secrets == before_secrets
                     timing = {"kind": "preserved", "matches": True}
+                elif case.get("timing") == "http_date":
+                    assert date_matches, (
+                        f"Published HTTP-date deadline differs: {case_name}, actual delay={delay}"
+                    )
+                    timing = {"kind": "http_date", "matches": True}
                 elif "delay_bounds" in case:
                     minimum, maximum = case["delay_bounds"]
-                    assert delay is not None and minimum - 0.1 <= delay <= maximum + 0.1
+                    assert (
+                        delay is not None and minimum - 0.1 <= delay <= maximum + 0.1
+                    ), (
+                        f"Published retry deadline differs: {case_name}, actual delay={delay}"
+                    )
                     timing = {"kind": "bounds", "matches": True}
                 else:
                     assert delay is None

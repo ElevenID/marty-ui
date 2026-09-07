@@ -204,3 +204,40 @@ and its scoped adapter correction. It does not qualify the subsequent ownership
 or marker-failure extensions, which require the fresh 77-entry Linux gate.
 Remaining Retry-After/fence and whole-worker consumer cutover requirements keep
 gate 10 and PR814 open; no live Python deletion or beta acceptance is claimed.
+
+## Remote revocation Retry-After extension
+
+Eight actual published-worker timing observations are frozen separately in
+`contracts/canvas-worker-oauth-revocation-retry-after-oracle.json`, canonical LF
+SHA256 `a3e6b63b50230d30823b98d3399d24d1819472476ab48af169b259bf1b03b0b0`.
+Independent captures matched exactly in 41.85 and 41.74 seconds. Final frozen
+regeneration passed in 41.29 seconds; the original seven-case transport reference
+also regenerated unchanged in 50.14 seconds.
+
+Each case executes a fresh published worker and actual DELETE429, then observes
+the stored revocation retry deadline, rate-limit code, one retry, released lease,
+unchanged token ciphertexts, connected platform, unchanged issued rows and idle
+heartbeat. Missing, malformed, negative, zero and past-date headers preserve
+the first-attempt 30–37-second backoff. A future HTTP date is generated at actual
+response time and compared to the stored deadline within 1.1 seconds. Both an
+over-cap integer and an integer larger than u64 retain the one-day cap. No clock,
+retry timestamp, runtime scheduler or old reference value is modified to pass.
+
+Native replay reuses the existing encrypted vault, process and HTTPS owners.
+The existing Rust timestamp producer is shared with ordinary worker retries;
+OAuth `revoke_retry_at` maps explicitly to the comparator's neutral `available_at`
+field. The HTTPS parent uses the existing deadline comparator to check every
+actual native timestamp record against the emitted date or frozen bounds.
+Rust does not manufacture a timing-success flag: only this field is delegated
+to the parent alongside its full request comparison, while Rust checks all other
+durable projections. Missing/duplicate records, naive timestamps, wrong dates,
+missing dates and incorrect bounds fail the parent and retain owned cleanup.
+
+The complete local Python suite passed 948 tests with one existing opt-in skip
+in 45.22 seconds. Strict all-target Clippy and integration compilation passed;
+79 top-level configured entries are now registered. Full native Linux timing
+qualification remains pending, as does the preceding ownership/marker extension's
+hosted result. No production runtime, consumer or feature is changed here.
+Gate 10 still needs those exact-head qualifications and a requirement-by-requirement
+audit against the normative OAuth selection, retry and ownership contract before
+closure; this extension alone is not whole-worker cutover acceptance.

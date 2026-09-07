@@ -20,6 +20,11 @@ fn worker_oauth_revocation_patch_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation-patch");
 }
 
+#[test]
+fn worker_oauth_revocation_retry_after_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-retry-after");
+}
+
 fn assert_native_oauth_revocation_matrix(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -446,6 +451,11 @@ async fn worker_oauth_revocation_patch_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_retry_after_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation-retry-after").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -524,6 +534,14 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-retry-after" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"
+            ),
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-retry-after-oracle.json"
+            ),
+        ),
         "oauth-revocation-patch" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
@@ -569,6 +587,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-retry-after" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_retry_after(name).await
+            }
             "oauth-revocation-patch" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_patch(name).await
             }

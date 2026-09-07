@@ -140,6 +140,16 @@ atomic native cleanup; its Linux qualification is pending (77 top-level entries
 now registered). Transport and ownership artifacts remain unchanged. Retry-After
 edges and the remaining whole-worker gates are not declared complete.
 
+The remote-revocation Retry-After extension now separately freezes eight actual
+published-worker cases: missing/malformed/negative/zero headers, past/future HTTP
+dates, capped and oversized integers. Independent captures and regeneration
+match; all failures retain encrypted secrets and use the observed durable retry
+deadline. Native replay shares the existing timestamp producer and HTTPS-owned
+deadline comparator, with explicit OAuth storage-field mapping and fail-closed
+evidence controls. Local Python948PASS/1opt-inSKIP and strict Rust Clippy pass;
+79 configured entries are registered. Native timing qualification is pending.
+No runtime, consumer or feature is changed by this acceptance extension.
+
 Latest qualified UI checkpoint `31355d24a1ef5d87d2da98a121f73863ca8bcf7e` passed
 CI34066329798 and all applicable exact-head checks, including Rust CodeQL34066329814.
 Runtime job101575640066 passed 73 configured tests in 1632.34 seconds, retaining

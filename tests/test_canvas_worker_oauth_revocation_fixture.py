@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from threading import Event
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import pytest
 
@@ -29,7 +31,13 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
 
 @pytest.mark.parametrize("names,reference", [(["a", "a"], {"a": {}}), (["a"], {})])
 @pytest.mark.parametrize(
-    "kind", ["oauth-revocation", "oauth-revocation-fence", "oauth-revocation-patch"]
+    "kind",
+    [
+        "oauth-revocation",
+        "oauth-revocation-fence",
+        "oauth-revocation-patch",
+        "oauth-revocation-retry-after",
+    ],
 )
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
     monkeypatch, names, reference, kind
@@ -53,7 +61,10 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
 
 
 @pytest.mark.parametrize("failure", ["child_exit", "timeout", "wrong_requests"])
-@pytest.mark.parametrize("kind", ["oauth-revocation", "oauth-revocation-patch"])
+@pytest.mark.parametrize(
+    "kind",
+    ["oauth-revocation", "oauth-revocation-patch", "oauth-revocation-retry-after"],
+)
 def test_native_owner_fails_closed_and_closes_https(
     monkeypatch, tmp_path, failure, kind
 ):
@@ -92,6 +103,125 @@ def test_native_owner_fails_closed_and_closes_https(
     monkeypatch.setattr(native.subprocess, "run", child)
     with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
         native.run("synthetic-not-executed", kind)
+    assert closed == [True]
+
+
+def test_revocation_retry_matrix_retains_all_eight_rate_limit_shapes():
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    matrix = json.loads(
+        (
+            contracts / "canvas-worker-oauth-revocation-retry-after-scenarios.json"
+        ).read_text()
+    )
+    reference = json.loads(
+        (
+            contracts / "canvas-worker-oauth-revocation-retry-after-oracle.json"
+        ).read_text()
+    )
+    assert matrix["base_scenario"] == "canvas-worker-oauth-revocation-scenarios.json"
+    assert len(matrix["cases"]) == len(reference) == 8
+    assert {case["name"] for case in matrix["cases"]} == set(reference)
+    for case in matrix["cases"]:
+        assert case["status"] == 429
+        observed = reference[case["name"]]
+        assert (
+            observed["connection"]["error_code"] == "canvas_oauth_revoke_rate_limited"
+        )
+        assert observed["connection"]["retry_count"] == 1
+        assert observed["connection"]["lease_owner_present"] is False
+        assert len(observed["retained_secret_ids"]) == 3
+        assert observed["retry_timing"] == {"kind": case["timing"], "matches": True}
+
+
+@pytest.mark.parametrize(
+    "case_name",
+    [
+        "bounds",
+        "date",
+        "missing",
+        "duplicate",
+        "wrong_bound",
+        "wrong_date",
+        "missing_date",
+        "naive",
+    ],
+)
+def test_retry_parent_checks_real_deadline_record_and_closes_fixture(
+    monkeypatch, tmp_path, case_name
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    is_date = "date" in case_name
+    timing = "http_date" if is_date else "bounds"
+    case = {"name": "synthetic", "timing": timing, "delay_bounds": [30, 37]}
+    requests = [{"method": "DELETE"}]
+    inputs = iter(
+        [
+            json.dumps({"cases": [case]}),
+            json.dumps(
+                {
+                    "synthetic": {
+                        "requests": requests,
+                        "retry_timing": {"kind": timing, "matches": True},
+                    }
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(Path, "read_text", lambda *_: next(inputs))
+    updated = datetime(2026, 9, 6, tzinfo=timezone.utc)
+    delay = (
+        65
+        if case_name == "wrong_date"
+        else 20
+        if case_name == "wrong_bound"
+        else 60
+        if is_date
+        else 35
+    )
+    record = "CANVAS_WORKER_RETRY_TIMING=" + json.dumps(
+        {
+            "available_at": (updated + timedelta(seconds=delay)).isoformat(),
+            "updated_at": updated.isoformat(),
+        }
+    )
+    if case_name == "missing":
+        record = ""
+    elif case_name == "duplicate":
+        record += "\n" + record
+    elif case_name == "naive":
+        record = record.replace("+00:00", "")
+    dates = (
+        [format_datetime(updated + timedelta(seconds=60), usegmt=True)]
+        if is_date and case_name != "missing_date"
+        else []
+    )
+    closed = []
+
+    class Fixture:
+        def __enter__(self):
+            return SimpleNamespace(
+                certificates=SimpleNamespace(name=str(tmp_path)),
+                cert=tmp_path / "synthetic-cert",
+                origin="https://127.0.0.1:1",
+                requests=requests,
+                retry_after_dates=dates,
+            )
+
+        def __exit__(self, *_):
+            closed.append(True)
+
+    monkeypatch.setattr(native, "WorkerHttpsFixture", Fixture)
+    monkeypatch.setattr(
+        native.subprocess,
+        "run",
+        lambda *_, **__: SimpleNamespace(returncode=0, stdout=record, stderr=""),
+    )
+    if case_name in {"bounds", "date"}:
+        native.run("synthetic-not-executed", "oauth-revocation-retry-after")
+    else:
+        with pytest.raises(AssertionError):
+            native.run("synthetic-not-executed", "oauth-revocation-retry-after")
     assert closed == [True]
 
 

@@ -9,6 +9,7 @@ import time
 
 from canvas_worker_https_fixture import WorkerHttpsFixture
 from test_canvas_worker_provider_signals_https import wait_for
+from test_canvas_worker_rest_https import assert_retry_timing
 
 
 def run_fenced_child(command, environment, https):
@@ -55,6 +56,7 @@ def run(executable, kind="oauth-revocation"):
         "oauth-revocation",
         "oauth-revocation-fence",
         "oauth-revocation-patch",
+        "oauth-revocation-retry-after",
     }
     root = Path(__file__).resolve().parents[1]
     matrix = json.loads(
@@ -105,6 +107,13 @@ def run(executable, kind="oauth-revocation"):
                 print(child.stdout, child.stderr)
                 continue
             assert https.requests == reference[case["name"]]["requests"]
+            if kind == "oauth-revocation-retry-after":
+                assert_retry_timing(
+                    child.stdout,
+                    case,
+                    https.retry_after_dates,
+                    reference[case["name"]]["retry_timing"],
+                )
             if case.get("hold_response"):
                 assert https.received.is_set()
                 assert https.release.is_set() == (kind == "oauth-revocation-fence")
