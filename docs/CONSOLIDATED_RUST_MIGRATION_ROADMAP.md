@@ -62,17 +62,32 @@ New local work, deliberately separate from that hosted checkpoint:
 - Latest attempt `f8670830b`, CI `34104771356`, failed the early mixed-roster
   preflight in 25.79s: the metadata fix passed its stage-0 assertions, then exact
   transport comparison observed 12 versus 10 requests and four versus two token
-  exchanges. Per-invocation token reuse is being repaired from the exact Python
-  source; no cross-job/tenant cache or frozen-trace normalization is allowed.
+  exchanges. Per-invocation token reuse is repaired locally from the exact Python
+  source, with no cross-job/tenant cache or frozen-trace normalization.
   Image configuration gates passed, but a compiler documentation file was missing
   from the deliberately test-free image context. Its five examples were moved
   unchanged into packaged source; fresh image/runtime qualification remains.
+- Exact clean-worktree repair checkpoint `30292f4b8` passed 1,390 Python tests
+  with one existing skip in 113.98s, 347 Rust issuance unit tests in 16.49s and
+  all five compiler examples in 0.41s. These local checks do not qualify the
+  previously failing mixed-roster HTTPS replay. Independent review additionally
+  identified and repaired compiler-input Markdown gate selection and strict
+  release-Compose source parsing. The focused gate suite passed 156 tests;
+  all 15 real Linux consumer-source renders passed after parser hardening.
+- Source inspection found separate request-timeout parity gaps: application
+  REST/AGS uses 15s in Python versus 20s natively, while roster uses 20s; OAuth
+  refresh uses 15s versus 10s. Python inactivity limits also differ from the
+  native total-request deadline. Actual worker captures are still required;
+  a blanket timeout change would lose roster behavior. The ongoing three-read
+  job-deadline experiment does not qualify these operation-level boundaries.
 - A repository-scoped [worktree inventory](rust-migrations/marty-ui-worktree-cleanup-inventory-2026-09-07.md)
   preserves the separate crypto worker's unmerged branches and ignored release
   evidence/recordings. Clean Git status alone does not authorize their deletion.
   Configuration-only consumer coverage now includes 15 conformance/catalog/beta
   compositions using a checksum-pinned standalone Compose 5.4 renderer; existing
-  Compose 2.38 bundle qualification remains separate and unchanged.
+  Compose 2.38 bundle qualification remains separate and unchanged. The beta
+  source matrix covers the seven tracked layers, not the runner's later generated
+  release-image and verification-image overrides or an actual deployed model.
 
 - The [typed dispatch reconciliation](rust-migrations/canvas-worker-dispatch-reconciliation.md)
   now preserves all three legacy dispatch failures and two controls through
@@ -88,7 +103,7 @@ New local work, deliberately separate from that hosted checkpoint:
   Rust CodeQL `34098106562` passed. The runtime job is now terminal: 118 configured
   published-schema tests passed and one failed in 2761.77s. Mixed-roster stage 0
   exposed a persisted worker-heartbeat metadata mismatch. Its narrow Rust repair
-  and ten database regression cases are under verification; no oracle assertions
+  and ten database regression cases passed locally; no oracle assertions
   were relaxed. Early mixed-roster CI feedback supplements the full suite.
 
 - The [effect-expiry regression](rust-migrations/canvas-worker-effect-expiry.md)
@@ -102,9 +117,9 @@ New local work, deliberately separate from that hosted checkpoint:
   evidence, outage preservation, duplicate observations and recovery. The
   reference is frozen, and the permanent comparison passed in 366.31s. Native
   replay is implemented with mandatory Linux registration; actual native
-  execution found the stage-0 metadata mismatch above; successful native replay
-  and qualification remain pending. Payload-free ledger counts improve the next
-  failure diagnosis without claiming a transport mismatch has been observed.
+  execution found the stage-0 metadata mismatch and then the independently
+  observed transport mismatch above; successful native replay and qualification
+  remain pending. Payload-free ledger counts preserve the exact frozen trace.
 - The [self-host bundle repairs](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
   preserve the unqualified issuance family and select the existing Rust
   signing-keys binary. Read-only rendering compares all 17 converted service
@@ -115,7 +130,7 @@ New local work, deliberately separate from that hosted checkpoint:
   synthetic configuration merges on each tested Compose version. This is local
   config-only verification, not an actual deployment or restore qualification.
 
-The final full local Python suite passed 1,201 tests with one existing skip in
+An earlier full local Python suite passed 1,201 tests with one existing skip in
 62.16s after the frozen corpus, numeric-token and driver-failure tests. These results do not grant native-worker
 cutover, Python deletion, production promotion or aggregate acceptance.
 

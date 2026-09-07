@@ -266,13 +266,30 @@ def catalog_cases():
 
 
 def beta_release_source_files():
-    """Read the real runner's literal file list without executing PowerShell."""
+    """Read only the runner's initial tracked layers, without executing PowerShell.
+
+    This is not a PowerShell interpreter or a deployment-artifact gate. The
+    runner's later generated release/image override appends are intentionally
+    outside this source-only matrix; artifact and rollback gates own those.
+    """
     source = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text(
         encoding="utf-8"
     )
     match = re.search(r"\$script:ComposeFiles = @\(\n(.*?)\n\)", source, re.DOTALL)
     assert match, "Missing beta runner Compose source list"
-    files = re.findall(r'Join-Path \$script:RepoRoot "([^"]+)"', match[1])
+    files = []
+    for line in match[1].splitlines():
+        if not line.strip():
+            continue
+        entry = re.fullmatch(
+            r'\s*\(Join-Path \$script:RepoRoot "(docker-compose[\w.-]*\.yml)"\)\s*,?\s*',
+            line,
+        )
+        assert entry, (
+            "Unsupported beta Compose source entry; review the renderer's literal "
+            "source grammar before changing the runner's launch layers"
+        )
+        files.append(entry[1])
     assert files and files[0] == DEVELOPMENT_BASE and "docker-compose.beta.yml" in files
     return files
 

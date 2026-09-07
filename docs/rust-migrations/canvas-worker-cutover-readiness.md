@@ -16,13 +16,21 @@ early mixed-roster preflight in 25.79s (job `101687206847`). Stage-0 metadata
 assertions now pass, but transport parity fails: 12 requests versus 10, four
 token exchanges versus two, and eight synthetic signer requests/operations
 versus four. Fixture failure count is zero. The full configured suite was not
-run after this early failure. A reviewed per-run token-reuse repair is under
-local test; no frozen expectation is weakened.
+run after this early failure. A reviewed per-run token-reuse repair passed
+local tests; no frozen expectation is weakened.
 
 The token-session repair passed 347 issuance unit tests, including eight new
 session/isolation/error/cancellation regressions, and strict all-target Clippy.
 All five relocated compiler examples passed. These tests do not replace the
 seven-stage native HTTPS replay or establish full-worker qualification.
+
+Exact clean-worktree repair checkpoint `30292f4b8` passed 1,390 Python tests
+with one existing skip in 113.98s, 347 Rust issuance unit tests in 16.49s and
+five documentation tests in 0.41s. Independent review also repaired two gate
+gaps: compiler-consumed Markdown now triggers Rust checks, and unsupported
+release Compose array expressions fail validation instead of disappearing from
+the tested model. The focused gate suite passed 156 tests in 5.03s; all 15 real
+Linux consumer-source renders passed after hardening. Fresh exact-head CI remains.
 
 Image job `101687206897` passed both configuration gates, then failed because
 compiler-consumed documentation was under the intentionally excluded integration
@@ -42,7 +50,7 @@ current unrelated fields and generation/lease fences. Exact-head Linux replay
 and complete checks remain required. An early mixed-roster CI preflight now
 supplements, rather than replaces, the mandatory full configured suite.
 
-Local repair-batch verification: 1,331 Python tests passed with one existing skip
+Earlier repair-batch verification: 1,331 Python tests passed with one existing skip
 in 134.91s; 339 issuance unit tests passed in 27.63s; strict all-target issuance
 Clippy passed. Ten configured metadata database cases passed in 104.27s. Both
 Compose versions independently passed 21 config-only rollback merges. The 121

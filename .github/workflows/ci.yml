@@ -65,6 +65,10 @@ jobs:
             mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" HEAD)
             for path in "${changed_files[@]}"; do
               case "$path" in
+                rust/services/issuance/src/canvas_sync_processor_contract.md)
+                  # include_str! makes this documentation a compiler input.
+                  rust=true
+                  ;;
                 *.md|docs/*|.github/ISSUE_TEMPLATE/*)
                   ;;
                 ui/*|demo-apps/*)

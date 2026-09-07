@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tomllib
 from types import SimpleNamespace
@@ -151,6 +152,74 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     assert gate_needs == conditional_jobs | {"changes", "lint"}
     assert '[[ "$result" == success || "$result" == skipped ]]' in source
     assert 'test "$result" = success' in source
+
+
+@pytest.mark.parametrize(
+    "changed_path,rust_selected,all_selected",
+    [
+        ("rust/services/issuance/src/canvas_sync_processor_contract.md", True, False),
+        ("rust/services/issuance/src/canvas_sync_worker.rs", True, False),
+        ("docs/rust-migrations/canvas-worker-dispatch-reconciliation.md", False, False),
+        ("README.md", False, False),
+        ("rust/services/issuance/README.md", False, False),
+        ("scripts/test_canvas_worker_compose_render.py", True, True),
+        ("unclassified-synthetic-input", True, True),
+    ],
+)
+def test_actual_classifier_runs_compiler_consumed_markdown_through_rust_gates(
+    changed_path: str, rust_selected: bool, all_selected: bool, tmp_path: Path
+) -> None:
+    _, document = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in document["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    script = classifier["run"].replace("${{ github.event_name }}", "pull_request")
+    assert "${{" not in script
+    # Run the actual Bash classifier, not a Python copy of its path patterns.
+    # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
+    # repository or network. Results go to an owned synthetic output file, not
+    # the real Actions output file (/dev/stdout is unavailable in Git Bash).
+    prelude = """
+git() {
+  case "$1" in
+    fetch) return 0 ;;
+    diff) printf '%s\\n' "$SYNTHETIC_CHANGED_PATH" ;;
+    *) return 99 ;;
+  esac
+}
+export BASE_SHA=synthetic-base
+"""
+    # Windows' system bash launcher may point at an unconfigured WSL distro;
+    # use the Git Bash already required for this checkout's shell workflows.
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    assert bash, "Bash is required to execute the workflow classifier regression"
+    environment = dict(os.environ)
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    environment["SYNTHETIC_CHANGED_PATH"] = changed_path
+    output = tmp_path / "synthetic-actions-output"
+    environment["GITHUB_OUTPUT"] = output.as_posix()
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input=prelude + script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    actual = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    expected = {
+        key: str(all_selected).lower()
+        for key in ("all", "ui", "python", "rust", "release", "verification", "security")
+    }
+    expected["rust"] = str(rust_selected).lower()
+    assert actual == expected
 
 
 def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:

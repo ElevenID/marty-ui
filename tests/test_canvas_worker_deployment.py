@@ -518,6 +518,61 @@ def test_beta_tracked_matrix_reads_all_seven_release_source_layers(compose_worke
 
 
 @pytest.mark.parametrize(
+    "extra",
+    [
+        '    $AdditionalComposeFile',
+        '    "docker-compose.extra.yml"',
+        '    (Join-Path $script:RepoRoot $AdditionalComposeFile)',
+        '    (Join-Path $script:RepoRoot "docker-compose.$Profile.yml")',
+        '    (Join-Path $script:RepoRoot "../docker-compose.extra.yml")',
+        '    (Join-Path $script:RepoRoot "docker-compose.extra.yml"); Invoke-Extra',
+        '    ,',
+        '    (Join-Path $script:RepoRoot "docker-compose.extra.yml"),,',
+    ],
+)
+def test_beta_source_reader_rejects_any_unparsed_array_entry(
+    compose_worker_gate, monkeypatch, tmp_path, extra
+):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/deploy-local-beta-release.ps1").write_text(
+        '$script:ComposeFiles = @(\n'
+        '    (Join-Path $script:RepoRoot "docker-compose.base.yml"),\n'
+        '    (Join-Path $script:RepoRoot "docker-compose.beta.yml"),\n'
+        + extra
+        + '\n)\n',
+        encoding="utf-8",
+    )
+    namespace = compose_worker_gate["beta_release_source_files"].__globals__
+    monkeypatch.setitem(namespace, "ROOT", tmp_path)
+    with pytest.raises(AssertionError, match="Unsupported beta Compose source entry"):
+        compose_worker_gate["beta_release_source_files"]()
+
+
+@pytest.mark.parametrize("trailing_comma", ["", ","])
+def test_beta_source_reader_preserves_order_blank_lines_and_optional_trailing_comma(
+    compose_worker_gate, monkeypatch, tmp_path, trailing_comma
+):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/deploy-local-beta-release.ps1").write_text(
+        '$script:ComposeFiles = @(\n\n'
+        '    (Join-Path $script:RepoRoot "docker-compose.base.yml"),\n'
+        '   \n'
+        '    (Join-Path $script:RepoRoot "docker-compose.beta.yml"),\n'
+        '    (Join-Path $script:RepoRoot "docker-compose.extra.yml")'
+        + trailing_comma
+        + '\n\n)\n',
+        encoding="utf-8",
+    )
+    namespace = compose_worker_gate["beta_release_source_files"].__globals__
+    monkeypatch.setitem(namespace, "ROOT", tmp_path)
+    assert compose_worker_gate["beta_release_source_files"]() == [
+        "docker-compose.base.yml",
+        "docker-compose.beta.yml",
+        "docker-compose.extra.yml",
+    ]
+
+
+@pytest.mark.parametrize(
     "changed",
     [None, "container_name", "ports", "network", "bridge", "volume", "missing_profile"],
 )
