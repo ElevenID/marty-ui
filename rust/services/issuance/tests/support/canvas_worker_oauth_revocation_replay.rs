@@ -280,10 +280,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         .fetch_one(pool)
         .await
         .unwrap();
-    let delay: Option<f64> = sqlx::query_scalar(matrix["retry_delay_sql"].as_str().unwrap())
-        .fetch_optional(pool)
-        .await
-        .unwrap();
+    let delay = read_retry_delay(pool, matrix["retry_delay_sql"].as_str().unwrap()).await;
     let jobs: i64 =
         sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
             .fetch_one(pool)
@@ -384,6 +381,14 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         Value::Object(expected),
         "actual native revocation {name}"
     );
+}
+
+async fn read_retry_delay(pool: &PgPool, statement: &'static str) -> Option<f64> {
+    sqlx::query_scalar::<_, Option<f64>>(statement)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+        .flatten()
 }
 
 fn start_counter_cycle(
@@ -659,5 +664,19 @@ pub async fn assert_queue_repository_selection(pool: &PgPool) {
             "real repository selection must match actual published acquisition order"
         );
     }
+    // The limited batch leaves this existing connection undated. SQL NULL
+    // differs from no row; both must be observable without a decoder panic.
+    assert_eq!(
+        read_retry_delay(pool, matrix["retry_delay_sql"].as_str().unwrap()).await,
+        None
+    );
+    assert_eq!(
+        read_retry_delay(pool, "SELECT 37::float8").await,
+        Some(37.0)
+    );
+    assert_eq!(
+        read_retry_delay(pool, "SELECT 37::float8 WHERE false").await,
+        None
+    );
     fixture.assert_issued_rows_preserved(pool).await;
 }

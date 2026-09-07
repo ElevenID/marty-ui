@@ -5,6 +5,20 @@ Scope: gate 10 of the whole-worker cutover, checked against
 `retry_and_backoff.oauth_revocation`, and the explicit legacy-oracle gap.
 This is not a completion claim for the worker or the wider migration goal.
 
+CI34072045954 at3e9b401f6 finished with 84/86 configured entries passing in
+1871.63s. The limited queue case and all four lease cases failed in the test
+observer: a retained, unselected connection has a SQL NULL retry deadline, but
+the scalar decoder handled only absence of a row. All23 prior native revocation
+markers and the all-eligible queue case passed; separate worker DB4/4 passed in
+96.79s. This failed run does not qualify the composed checkpoint.
+
+The decoder now distinguishes nullable column decoding from optional row lookup,
+then maps either absent deadline to the existing optional observation. A real
+published-schema regression reproduced the exact UnexpectedNullError before the
+fix and covers SQL NULL, a numeric deadline and no row. No runtime, frozen oracle,
+assertion tolerance or case was changed or removed. Fresh native qualification
+is still required for the corrected queue/lease and new selection/counter entries.
+
 | Requirement | Evidence inspected | Remaining qualification or gap |
 | --- | --- | --- |
 | Remote success, rejection, timeout and rate-limit classification | Seven published-process captures and actual native Linux PASS markers at31355; scoped real adapter regression | Qualified for the captured transport cases, not arbitrary provider failures |

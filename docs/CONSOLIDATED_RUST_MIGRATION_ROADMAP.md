@@ -197,6 +197,14 @@ The mandatory gate now registers 90 entries; native Linux qualification is pendi
 This is not standalone-loop or active-job processor acceptance, and no deployed
 consumer or feature was removed.
 
+The earlier 86-entry run CI34072045954 at3e9b401f6 finished84PASS/2FAIL: limited
+queue and lease replay hit a nullable retry-deadline decoder error in the test
+observer. The exact failure was reproduced against the real published schema;
+the observer is corrected without changing worker behavior or frozen expectations.
+All23 earlier native revocation markers and separate4workerDB cases passed.
+The failed run is not a newly qualified composed checkpoint; the90-entry followup
+must pass with the correction before claiming those new boundaries qualified.
+
 Latest qualified UI checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87` passed
 CI34069978028 and all applicable exact-head checks, including Rust CodeQL34069978088.
 Runtime job101585424129 passed 81 configured tests in 1726.05 seconds, retaining
