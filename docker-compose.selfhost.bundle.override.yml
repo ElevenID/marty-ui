@@ -71,10 +71,9 @@ services:
     environment:
       SERVICE_NAME: issuance
 
-  canvas-sync-worker:
-    <<: *selfhost-service-image
-    environment:
-      SERVICE_NAME: issuance
+  # The standalone Canvas worker is not cutover-qualified yet. Inherit its
+  # immutable MARTY_ISSUANCE_IMAGE and complete Python/secret-loader definition
+  # from the self-host base; the shared services image contains Rust, not Python.
 
   applicant:
     <<: *selfhost-service-image

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import json
+import os
 from pathlib import Path
 import runpy
+import subprocess
 import tomllib
 
 import pytest
@@ -11,8 +15,7 @@ from marty_devops import DeploymentCatalog
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCESSOR = (
-    "issuance.infrastructure.api.canvas_routes:"
-    "process_authoritative_canvas_sync_target"
+    "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target"
 )
 
 
@@ -30,7 +33,10 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert "issuance.canvas_worker" in str(worker["command"])
         assert worker["healthcheck"] == {"disable": True}
         assert "ports" not in worker
-        assert worker["depends_on"]["db-migrate"]["condition"] == "service_completed_successfully"
+        assert (
+            worker["depends_on"]["db-migrate"]["condition"]
+            == "service_completed_successfully"
+        )
         assert (
             worker["depends_on"]["issuance-migrations"]["condition"]
             == "service_completed_successfully"
@@ -53,8 +59,14 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert environment["CANVAS_BACKGROUND_ROSTER_BATCH_SIZE"].endswith(":-500}")
         assert environment["CANVAS_BACKGROUND_ROSTER_MAX_SIZE"].endswith(":-5000}")
         assert environment["CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS"].endswith(":-600}")
-        assert environment["SIGNING_KEYS_INTERNAL_URL"] == "http://gateway:8000/internal/signing-keys"
-        assert {"SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"}.intersection(environment)
+        assert (
+            environment["SIGNING_KEYS_INTERNAL_URL"]
+            == "http://gateway:8000/internal/signing-keys"
+        )
+        assert {
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+            "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
+        }.intersection(environment)
         for key in (
             "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
             "CANVAS_LTI_TOOL_ISSUER_DID",
@@ -96,7 +108,9 @@ def test_unrouted_rust_candidate_is_packaged_without_changing_consumers() -> Non
         for target in tomllib.loads(cargo)["bin"]
         if target["name"] == "marty-canvas-sync-worker"
     )
-    assert worker_target.get("test", True), "workspace tests must execute worker binary tests"
+    assert worker_target.get("test", True), (
+        "workspace tests must execute worker binary tests"
+    )
     assert "NativeCanvasSyncProcessor::new" in worker
     assert "canvas_sync_processor_unavailable" not in worker
     for dockerfile in (service_image, ci_image):
@@ -137,11 +151,13 @@ def test_deployments_migrate_issuance_from_the_released_credentials_image() -> N
     container = kubernetes["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}"
     assert container["command"] == ["python", "manage_migrations.py", "upgrade"]
-    assert container["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
+    assert (
+        container["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
+    )
 
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     ui_wait = deploy.index("condition=complete job/db-migrate")
-    issuance_apply = deploy.index('06a-issuance-migrations.yaml')
+    issuance_apply = deploy.index("06a-issuance-migrations.yaml")
     issuance_wait = deploy.index("condition=complete job/issuance-migrations")
     assert ui_wait < issuance_apply < issuance_wait
 
@@ -175,21 +191,138 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
         "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",
     }
-    assert next(item for item in container["env"] if item["name"] == "SIGNING_KEYS_INTERNAL_URL")["value"] == (
-        "http://gateway:8000/internal/signing-keys"
+    assert next(
+        item for item in container["env"] if item["name"] == "SIGNING_KEYS_INTERNAL_URL"
+    )["value"] == ("http://gateway:8000/internal/signing-keys")
+
+
+def test_selfhost_bundle_does_not_override_the_unqualified_worker() -> None:
+    # Parse nodes rather than pretending Compose's !reset is ordinary YAML.
+    # The executable rendering gate separately tests actual Compose merging.
+    override = yaml.compose(
+        (ROOT / "docker-compose.selfhost.bundle.override.yml").read_text(
+            encoding="utf-8"
+        )
     )
+    assert isinstance(override, yaml.MappingNode)
+    services = next(value for key, value in override.value if key.value == "services")
+    assert isinstance(services, yaml.MappingNode)
+    assert "canvas-sync-worker" not in {key.value for key, _ in services.value}
 
 
-def test_selfhost_bundle_reuses_the_published_services_image_for_worker() -> None:
-    override = (ROOT / "docker-compose.selfhost.bundle.override.yml").read_text(
-        encoding="utf-8"
+@pytest.fixture
+def compose_worker_gate():
+    return runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+
+
+def test_ci_executes_real_compose_worker_merge_gate() -> None:
+    workflow = _yaml(".github/workflows/ci.yml")
+    steps = workflow["jobs"]["test-rust-service-images"]["steps"]
+    gate = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify merged Canvas worker deployment configuration"
     )
-    worker_block = override.split("  canvas-sync-worker:", 1)[1].split(
-        "\n  applicant:", 1
-    )[0]
+    assert gate["run"] == "python3 scripts/test_canvas_worker_compose_render.py"
+    assert "if" not in gate and "continue-on-error" not in gate
 
-    assert "*selfhost-service-image" in worker_block
-    assert "SERVICE_NAME: issuance" in worker_block
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        None,
+        "image",
+        "entrypoint",
+        "command",
+        "environment",
+        "secrets",
+        "depends_on",
+        "healthcheck",
+        "restart",
+        "ports",
+        "future_field",
+    ],
+)
+def test_bundle_worker_comparison_preserves_every_field(compose_worker_gate, field):
+    base = _yaml("docker-compose.selfhost.prod.yml")
+    bundle = deepcopy(base)
+    worker = bundle["services"]["canvas-sync-worker"]
+    if field == "image":
+        worker[field] = "synthetic-rust-services-image"
+    elif field == "environment":
+        worker[field]["SERVICE_NAME"] = "issuance_native"
+    elif field == "secrets":
+        worker[field].remove("integration_secret_master_key")
+    elif field == "depends_on":
+        worker[field]["issuance-migrations"]["condition"] = "service_started"
+    elif field is not None:
+        worker[field] = "synthetic-unexpected-change"
+    compare = compose_worker_gate["assert_worker_preserved"]
+    if field is None:
+        compare(base, bundle)
+    else:
+        with pytest.raises(AssertionError, match="complete unqualified Python"):
+            compare(base, bundle)
+
+
+def test_compose_renderer_only_reads_fixed_sources_without_secret_resolution(
+    compose_worker_gate, monkeypatch
+):
+    expected = {"services": {"canvas-sync-worker": {"synthetic": True}}}
+    calls = []
+
+    def execute(command, **options):
+        calls.append((command, options))
+        return subprocess.CompletedProcess(command, 0, json.dumps(expected), "")
+
+    monkeypatch.setattr(compose_worker_gate["subprocess"], "run", execute)
+    files = [compose_worker_gate["BASE"], compose_worker_gate["BUNDLE"]]
+    assert compose_worker_gate["render"](*files) == expected
+    assert calls == [
+        (
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                os.devnull,
+                "-f",
+                files[0],
+                "-f",
+                files[1],
+                "config",
+                "--no-interpolate",
+                "--no-env-resolution",
+                "--no-path-resolution",
+                "--no-consistency",
+                "--format",
+                "json",
+            ],
+            {
+                "cwd": ROOT,
+                "check": True,
+                "capture_output": True,
+                "text": True,
+                "stdin": subprocess.DEVNULL,
+                "timeout": 30,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize("failure", ["command", "timeout", "invalid_json"])
+def test_compose_renderer_fails_closed(compose_worker_gate, monkeypatch, failure):
+    def execute(command, **options):
+        if failure == "command":
+            raise subprocess.CalledProcessError(1, command)
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, options["timeout"])
+        return subprocess.CompletedProcess(command, 0, "not-json", "")
+
+    monkeypatch.setattr(compose_worker_gate["subprocess"], "run", execute)
+    with pytest.raises(
+        (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError)
+    ):
+        compose_worker_gate["render"](compose_worker_gate["BASE"])
 
 
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:
@@ -278,39 +411,49 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
     assert "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS" in result
 
     with pytest.raises(check_error, match="CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS"):
-        validate({
-            **enabled,
-            "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "601",
-        })
+        validate(
+            {
+                **enabled,
+                "CANVAS_SYNC_PROCESSOR": PROCESSOR,
+                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "601",
+            }
+        )
 
     private_jwks = enabled["CANVAS_LTI_TOOL_PUBLIC_JWKS"].replace(
         '"e":"AQAB"',
         '"e":"AQAB","d":"private-material"',
     )
     with pytest.raises(check_error, match="private RSA parameters"):
-        validate({
-            **enabled,
-            "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_LTI_TOOL_PUBLIC_JWKS": private_jwks,
-        })
+        validate(
+            {
+                **enabled,
+                "CANVAS_SYNC_PROCESSOR": PROCESSOR,
+                "CANVAS_LTI_TOOL_PUBLIC_JWKS": private_jwks,
+            }
+        )
 
     with pytest.raises(check_error, match="must be a DID"):
-        validate({
-            **enabled,
-            "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_LTI_TOOL_ISSUER_DID": "kms://canvas-lti-key",
-        })
+        validate(
+            {
+                **enabled,
+                "CANVAS_SYNC_PROCESSOR": PROCESSOR,
+                "CANVAS_LTI_TOOL_ISSUER_DID": "kms://canvas-lti-key",
+            }
+        )
 
     with pytest.raises(check_error, match="verification method"):
-        validate({
+        validate(
+            {
+                **enabled,
+                "CANVAS_SYNC_PROCESSOR": PROCESSOR,
+                "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:other.example#key-1",
+            }
+        )
+
+    configured = validate(
+        {
             **enabled,
             "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:other.example#key-1",
-        })
-
-    configured = validate({
-        **enabled,
-        "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-    })
+        }
+    )
     assert "CANVAS_LTI_TOOL_ISSUER_DID" in configured
