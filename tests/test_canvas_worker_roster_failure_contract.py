@@ -87,11 +87,9 @@ def test_roster_qualification_is_exact_head_and_keeps_unrelated_gates_open():
     assert roster["additional_worker_code"] in codes
     assert len(codes - {roster["additional_worker_code"]}) == 4
     assert not codes & set(audit["remaining_composed_outcomes"])
-    assert set(audit["remaining_composed_outcomes"]) == {
-        "canvas_platform_reconfigured",
-        "canvas_application_unavailable",
-        "canvas_sync_resources_unavailable",
-    }
+    # Later resource corpora may close their own outcomes; roster evidence must
+    # never silently waive the distinct legacy typed-dispatch requirements.
+    assert len(audit["typed_dispatch_reconciliation"]) == 2
 
 
 def test_native_roster_matrix_retains_declared_responses_and_separate_children(

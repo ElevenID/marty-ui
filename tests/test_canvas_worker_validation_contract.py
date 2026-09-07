@@ -90,11 +90,34 @@ def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed(
     assert additional == [roster["additional_worker_code"]]
     assert len(observed) == 11
 
+    for corpus, expected_count, expected_requests in [
+        ("resource_race", 2, 1),
+        ("resources_unavailable", 1, 0),
+    ]:
+        source = audit["actual_process"][corpus]
+        cases = read(source["scenarios"])["cases"]
+        reference = read(source["reference"])
+        assert len(cases) == len(reference) == expected_count
+        assert {case["name"] for case in cases} == set(reference)
+        for case in cases:
+            result = reference[case["name"]]
+            state, requests = result["after"], result["requests"]
+            assert result["case"] == case["name"]
+            assert len(requests) == expected_requests
+            assert len(state["jobs"]) == 1
+            record(
+                state["jobs"][0],
+                corpus=corpus,
+                code=case["code"],
+                retryable=case.get("retryable", required[case["code"]]),
+            )
+    assert len(observed) == 14
+
     groups = [set(observed)]
     for name, count in [
         ("controlled_worker_cycle", 1),
         ("typed_dispatch_reconciliation", 2),
-        ("remaining_composed_outcomes", 3),
+        ("remaining_composed_outcomes", 0),
     ]:
         group = set(audit[name])
         assert len(group) == len(audit[name]) == count
@@ -106,6 +129,7 @@ def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed(
         "canvas_sync_processor_unavailable",
         "canvas_sync_processor_contract_invalid",
     ]
+    assert audit["pending_process_qualification"] == {}
     # This only protects test registration; hosted execution is separate evidence.
     registered = (
         ROOT / "rust/services/issuance/tests/canvas_sync_worker_postgres_contract.rs"
@@ -113,6 +137,25 @@ def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed(
     assert (
         "canvas_worker_signing_guard::assert_signing_guard(&pool).await;" in registered
     )
+
+
+def test_latest_processor_qualification_pins_configured_execution_not_registration():
+    audit = json.loads(
+        (ROOT / "contracts/canvas-worker-processor-coverage.json").read_text()
+    )
+    # This checks the evidence record, not runtime execution in this Python test.
+    assert audit["latest_qualification"] == {
+        "commit": "6914387e563d1043948aaea7a5cc514be6055038",
+        "ci_run_id": 34089906961,
+        "runtime_job_id": 101641133956,
+        "configured_tests": 115,
+        "configured_duration_seconds": 2444.37,
+        "configured_result_timestamp_utc": "2026-09-07T07:01:57.0655556Z",
+        "worker_postgres_tests": 4,
+        "worker_postgres_duration_seconds": 95.63,
+        "image_job_id": 101641134087,
+        "rust_codeql_run_id": 34089906881,
+    }
 
 
 def test_native_validation_matrix_uses_separate_children_and_no_expected_reads(

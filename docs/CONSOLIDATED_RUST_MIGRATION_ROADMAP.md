@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: its shared lossless configuration and native PostgreSQL consumer-range replay now pass locally, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: exact head `6914387e5` passed 115 configured Linux runtime tests, including native resource-race and resources-unavailable replay, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-07
 
 ## Objective
 
@@ -29,9 +29,33 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-06
+## Current execution snapshot — 2026-09-07
 
 ### Current transport integration and merge gates
+
+Latest qualified composed worker checkpoint:
+`6914387e563d1043948aaea7a5cc514be6055038`,
+[CI34089906961](https://github.com/ElevenID/marty-ui/actions/runs/34089906961).
+Runtime job `101641133956` passed **115 configured tests in 2444.37s** at
+`2026-09-07T07:01:57.0655556Z`; the unconfigured 115-test result in 0.36s is not
+qualification. Four worker/PostgreSQL tests passed in 95.63s. Independently
+inspected native resource-race markers (`platform_reconfigured` and
+`application_removed`) each made one HTTPS request; post-validation binding
+removal made zero. All five roster markers (0, 0, 1, 1, 1 requests) and
+one-HTTPS recovery-first remain. Image job `101641134087` passed nine preflight,
+24 packaged startup and 16 logging-reference cases; Rust CodeQL `34089906881`
+passed. Every exact-head check succeeded except the expected skipped scorecard.
+
+The [processor coverage inventory](rust-migrations/canvas-worker-processor-coverage.md)
+now accounts for fourteen actual-process outcomes, one controlled signing-result
+guard and two open typed-dispatch reconciliations. The three resource-related
+codes are qualified, not waived. An empty remaining-composed-code list does not
+close gate 9, lease expiry during provider effects, populated mixed-roster
+behavior, all-consumer routing or beta acceptance. Later local effect-expiry
+and mixed-roster work and the subsequent issuance-bundle inheritance repair do
+not inherit the 115-entry head's qualification. PR #814 remains open, draft and
+unrouted; production is unchanged. Earlier checkpoint narratives below retain
+historical evidence and do not supersede this latest qualification boundary.
 
 The [target-validation reference](rust-migrations/canvas-worker-validation.md)
 freezes twenty actual published-worker cases with matching independent captures:

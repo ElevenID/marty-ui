@@ -2,16 +2,20 @@
 
 Status: two published-worker scenarios captured in 11.76s and independently
 regenerated against the complete frozen reference in 11.13s and 10.57s. The configured
-twelve-case native Rust repository regression passes in 47.22s. Native Linux
-full-worker replay remains unqualified. The suite registers 113 entries; that
-registration is not evidence that all 113 have passed. PR #814 remains draft
-and unrouted.
+twelve-case native Rust repository regression passes in 47.22s. Both actual
+native Linux worker scenarios are now qualified in the 115-entry composed run
+at `6914387e563d1043948aaea7a5cc514be6055038`. PR #814 remains draft and unrouted.
 
 The last fully qualified composed checkpoint is
-`5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19`: 109 configured integration tests passed
-in 2361.53s, with four worker/PostgreSQL entries in 96.28s (CI `34085691302`,
-runtime `101629197299`). All exact-head checks passed, including Rust CodeQL.
-That qualifies the preceding roster work, not this later resource-race extension.
+`6914387e563d1043948aaea7a5cc514be6055038`:
+[CI34089906961](https://github.com/ElevenID/marty-ui/actions/runs/34089906961)
+passed 115 configured integration tests in 2444.37s, with four worker/PostgreSQL
+entries in 95.63s. Runtime job `101641133956` records the configured result at
+`2026-09-07T07:01:57.0655556Z`; ignore the unconfigured 115-test result in 0.36s.
+The inspected `platform_reconfigured` and `application_removed` native markers
+each report one actual HTTPS request. All exact-head checks succeeded or were
+skipped, including successful Rust CodeQL `34089906881` and image job
+`101641134087`. This qualifies these error-path races, not whole-worker cutover.
 
 ## Captured behavior
 
@@ -62,8 +66,8 @@ requiring byte equality between language-specific processing-state storage.
 Only after the actual durable outcome and idle heartbeat does the owner send
 SIGINT. The observable snapshot, full raw job row and resource state must then
 remain unchanged. Published Python exits with signal return code `-2`; native
-Rust is expected to exit with code `130`. The native expectation is implemented
-but has not yet passed the configured Linux full-worker replay.
+Rust exits with code `130`. Both exit conventions and post-exit comparisons are
+now verified by the configured native Linux scenario replay.
 
 ## Rust repair and regression scope
 
@@ -105,8 +109,8 @@ The complete Python regression suite passes 1,051 tests with one existing skip
 (45.68s), including the delegated harness controls.
 
 The independent published regeneration is covered by
-`worker_resource_race_reference_matches_published_process`. Native full-worker
-qualification remains assigned to
+`worker_resource_race_reference_matches_published_process`. Native scenario
+qualification passed through
 `worker_provider_resource_race_matches_frozen_published_process` and its native
 child, using the existing HTTPS parent and real request/release markers.
 
@@ -114,9 +118,10 @@ child, using the existing HTTPS parent and real request/release markers.
 
 These two error-path races do not qualify successful in-flight fact writes,
 lease expiry during provider effects, populated mixed-roster processing, all
-resource-unavailable cases, or the complete worker cutover. The native Linux
-two-case replay and the retained aggregate gates must pass before these cases
-are counted as full Rust process parity.
+resource-unavailable cases, or the complete worker cutover. The two cases now
+count as actual-process parity in the seventeen-code processor inventory.
+Later local effect-expiry and mixed-roster tests do not inherit qualification
+from this 115-entry checkpoint; full provider-effects and consumer gates remain.
 
 No Python feature, production consumer or frozen reference was removed. There
 was no candidate dispatch, deployment, signing implementation change or

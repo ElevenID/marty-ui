@@ -1,6 +1,18 @@
 {
   "schema": "marty.canvas-worker-processor-coverage/v1",
   "normative_contract": "issuance-canvas-sync-worker.json",
+  "latest_qualification": {
+    "commit": "6914387e563d1043948aaea7a5cc514be6055038",
+    "ci_run_id": 34089906961,
+    "runtime_job_id": 101641133956,
+    "configured_tests": 115,
+    "configured_duration_seconds": 2444.37,
+    "configured_result_timestamp_utc": "2026-09-07T07:01:57.0655556Z",
+    "worker_postgres_tests": 4,
+    "worker_postgres_duration_seconds": 95.63,
+    "image_job_id": 101641134087,
+    "rust_codeql_run_id": 34089906881
+  },
   "actual_process": {
     "validation": {
       "scenarios": "canvas-worker-validation-scenarios.json",
@@ -25,29 +37,22 @@
         "worker_postgres_tests": 4,
         "worker_postgres_duration_seconds": 96.28
       }
-    }
-  },
-  "controlled_worker_cycle": ["canvas_background_signing_forbidden"],
-  "pending_process_qualification": {
+    },
     "resource_race": {
       "scenarios": "canvas-worker-resource-race-scenarios.json",
-      "reference": "canvas-worker-resource-race-oracle.json",
-      "status": "published_capture_regenerated_native_linux_pending"
+      "reference": "canvas-worker-resource-race-oracle.json"
     },
     "resources_unavailable": {
       "scenarios": "canvas-worker-resources-unavailable-scenarios.json",
-      "reference": "canvas-worker-resources-unavailable-oracle.json",
-      "status": "published_capture_regenerated_native_linux_pending"
+      "reference": "canvas-worker-resources-unavailable-oracle.json"
     }
   },
+  "controlled_worker_cycle": ["canvas_background_signing_forbidden"],
+  "pending_process_qualification": {},
   "typed_dispatch_reconciliation": [
     "canvas_sync_processor_unavailable",
     "canvas_sync_processor_contract_invalid"
   ],
-  "remaining_composed_outcomes": [
-    "canvas_platform_reconfigured",
-    "canvas_application_unavailable",
-    "canvas_sync_resources_unavailable"
-  ],
-  "scope": "Exhaustive accounting of seventeen normative processor outcomes across existing corpora. Controlled-cycle evidence is not actual-provider process evidence. Typed dispatch reconciliation and remaining composed outcomes stay open; no entry is waived or removed from the normative contract. Runtime qualification is recorded separately against an exact commit."
+  "remaining_composed_outcomes": [],
+  "scope": "Exhaustive accounting of seventeen normative processor outcomes: fourteen actual-process, one controlled-cycle guard and two open typed-dispatch reconciliations. Controlled-cycle evidence is not actual-provider process evidence. No entry is waived or removed from the normative contract. Empty remaining_composed_outcomes does not close lease-effects, populated-roster, full worker, consumer or acceptance gates. Runtime qualification is recorded against an exact commit; later local extensions do not inherit it."
 }

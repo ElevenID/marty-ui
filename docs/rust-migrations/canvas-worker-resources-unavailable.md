@@ -1,10 +1,10 @@
 # Post-validation unavailable-resource reference
 
 Status: actual published-worker capture passed in 5.77s, followed by exact
-independent regenerations in 6.03s and 6.36s. Native replay is implemented and
-passes compilation/strict all-target Clippy; Linux process qualification remains
-pending. This reference does not close `canvas_sync_resources_unavailable` or
-authorize worker cutover, deployment or Python deletion.
+independent regenerations in 6.03s and 6.36s. Actual native Linux process replay
+is now qualified at `6914387e563d1043948aaea7a5cc514be6055038`, closing this
+specific `canvas_sync_resources_unavailable` outcome in the processor inventory.
+It does not authorize whole-worker cutover, deployment or Python deletion.
 
 ## Observed behavior
 
@@ -47,18 +47,31 @@ internal steps. Python's `observed_barriers` is reference instrumentation, not a
 language-neutral requirement for identical query counts. Full external snapshots,
 resource edits, zero requests and durable/post-exit behavior must still agree.
 
-Existing Rust code already classifies an absent resource snapshot as terminal;
-source inspection is not execution proof. The native replay and fresh aggregate
-Linux checks must pass before that code is counted as qualified. Lease expiry
+Existing Rust code already classified an absent resource snapshot as terminal;
+the configured native replay now supplies execution evidence in addition to
+source inspection. Lease expiry
 during provider effects, populated roster processing, signing/privacy integration,
 all deployment consumers and beta acceptance remain separate requirements.
 
 ## Retained gates and harness review
 
-The new reference and native parent bring registration to 115 entries, not 115
-qualified passes. The last qualified head remains `5dde6b69a` with 109 configured
-Linux entries. The three remaining processor outcomes stay open in the exhaustive
-coverage inventory, alongside two typed-dispatch reconciliations.
+At `6914387e563d1043948aaea7a5cc514be6055038`,
+[CI34089906961](https://github.com/ElevenID/marty-ui/actions/runs/34089906961)
+passed 115 configured entries in 2444.37s and four worker/PostgreSQL tests in
+95.63s. Runtime job `101641133956` logs the configured result at
+`2026-09-07T07:01:57.0655556Z`; the unconfigured 115-test result in 0.36s is not
+evidence. The independently inspected native
+`resources-unavailable/binding_removed_after_hook_validation` marker reports
+one frozen stage and zero requests. Both resource-race markers also passed
+with one HTTPS request each. All exact-head checks succeeded or were skipped,
+including successful Rust CodeQL `34089906881` and image job `101641134087`;
+the latter retained all 24 packaged startup cases.
+
+The three resource-related codes now have native process qualification,
+bringing actual-process coverage to fourteen. Two typed-dispatch reconciliations
+remain open, and the separate controlled signing-result guard is not upgraded
+to actual-provider evidence. Later local effect-expiry/mixed-roster work remains
+unqualified by this checkpoint regardless of current registration counts.
 
 Independent harness tests reproduced an observer gap: an unsupported POST returned
 HTTP 501 but was absent from the request list. A shared request-parser observer now

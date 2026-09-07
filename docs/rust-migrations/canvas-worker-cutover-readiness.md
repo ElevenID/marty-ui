@@ -1,11 +1,21 @@
 # Canvas worker cutover readiness — 2026-09-07
 
-Status: latest qualified composed checkpoint `5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19`:
-109 configured runtime tests passed in 2361.53s (CI34085691302,
-runtime101629197299), with four configured worker/PostgreSQL entries in 96.28s.
-All applicable exact-head checks passed, including Rust CodeQL34085691297 and
-image101629197264. All five native roster markers were inspected (requests
-0, 0, 1, 1, 1); the actual one-HTTPS recovery-first marker is retained.
+Status: latest qualified composed checkpoint `6914387e563d1043948aaea7a5cc514be6055038`:
+115 configured runtime tests passed in 2444.37s (CI34089906961,
+runtime101641133956), with four configured worker/PostgreSQL entries in 95.63s.
+The configured result is logged at `2026-09-07T07:01:57.0655556Z`; ignore the
+earlier unconfigured 115-test result in 0.36s. All applicable exact-head checks
+passed, including Rust CodeQL34089906881 and image101641134087 (nine preflight,
+24 packaged startup and 16 logging-reference cases). Both native resource-race
+markers (`platform_reconfigured`, `application_removed`) made one HTTPS request;
+the post-validation resources-unavailable marker made zero. All five native
+roster markers remain (0, 0, 1, 1, 1 requests), as does one-HTTPS recovery-first.
+
+The preceding `5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19` roster checkpoint passed
+109 configured tests in 2361.53s and four worker/PostgreSQL tests in 96.28s
+(CI34085691302). Those historical results are retained, not substituted for
+the current resource composition. Later local effect-expiry and mixed-roster
+work is not qualified by the 115-entry head or by increased test registration.
 
 The prior qualified checkpoint `c3e51a4d58083625aabd50de7fba37ef1ff53d4e` had
 107 configured runtime tests passed in 2327.12s (CI34082559053, runtime101620519590).
@@ -32,24 +42,26 @@ by this inventory. The normative requirements remain
 
 The [roster-failure extension](canvas-worker-roster-failures.md) adds five
 published process captures and narrow Rust parity repairs, now qualified by the
-109-entry Linux run. Four more normative processor codes have actual-process
-evidence, leaving three composed outcomes and two typed-dispatch reconciliations
-open. The frozen HTTP 503 outcome is an additional generic worker error, not the
+109-entry Linux run and retained in the 115-entry composition. Four more
+normative processor codes have actual-process evidence. The frozen HTTP 503
+outcome is an additional generic worker error, not the
 singular authoritative-read processor error or another normative processor code.
 
 The subsequent [resource-race extension](canvas-worker-resource-races.md) freezes
 two real published-worker outcomes: platform reconfiguration and application
 removal during a held provider read. It adds a shared native replay and narrow
 Rust error-classification repairs while retaining lease, row-lock and update
-guards. That extension registers 113 entries, not 113 qualified passes. Its native
-Linux process qualification is pending; neither code leaves the three-code
-remaining inventory on the strength of reference or repository tests alone.
+guards. Both cases now have actual native Linux process qualification at the
+115-entry checkpoint; their two codes leave the remaining inventory on that
+evidence, not on reference or repository tests alone.
 
 The [resources-unavailable reference](canvas-worker-resources-unavailable.md)
-captures the third remaining outcome after completed validation and before
-resource reload. It has independent published regeneration and compiled native
-replay, bringing registration to 115 entries; native Linux process qualification
-is separate and pending. No remaining outcome is waived.
+captures the last previously unqualified composed outcome after completed
+validation and before resource reload. Independent published regeneration and
+the zero-request native process replay passed in the 115-entry run. The
+seventeen-code inventory now has fourteen actual-process outcomes, one
+controlled signing guard and two open typed-dispatch reconciliations. An empty
+remaining-composed list does not close gate 9 or any broader effect/consumer gate.
 
 ## What the latest evidence does and does not prove
 
@@ -111,8 +123,9 @@ binary's eager integer parsing has been replaced by deferred, lossless bounded
 configuration in the shared processor. The twelve processor outcomes outside
 this corpus are tracked separately. All twenty cases passed actual native Linux
 replay at `f195ad484`, each with zero requests, including the three roster cases.
-Broader processor failures remain pending;
-gate 9 is open.
+The latest cross-corpus accounting above supersedes that original partial
+coverage: fourteen processor codes now have qualified process evidence. Gate 9
+remains open for its two typed-dispatch reconciliations and broader requirements.
 
 The existing PostgreSQL worker contract now also exercises the normative
 no-signing guard through real `run_cycle` calls and durable repositories, using
@@ -228,7 +241,7 @@ in-flight provider effects remains separate.
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Seven actual native HTTPS/deadline cases and shared parser correction qualified at a6826de39 and retained at 29bf8c226; existing parser vectors remain | Retain date, malformed, negative, zero, clamp and huge-integer durable scheduling evidence in fresh exact-head CI. Full-worker acceptance remains separate. |
-| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): eleven processor codes have process evidence and one has a controlled-processor worker/PG guard | Three composed processor outcomes and two typed-dispatch reconciliations remain open. Keep the no-signing guard; do not emulate Python imports or mistake corpus-local remaining lists for global gaps. |
+| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): fourteen processor codes have process evidence and one has a controlled-processor worker/PG guard | Two typed-dispatch reconciliations remain open; none of the seventeen codes is waived. Keep the no-signing guard; do not emulate Python imports or mistake an empty composed-code inventory for full worker/provider qualification. |
 | 10. OAuth revocation failure and owner fences | 39 native process/cycle observations plus selection/order, schema-rejection and empty-token regressions qualified at df3ed290b | Retain the scoped [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md) and stronger atomic cleanup in future exact-head runs. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
@@ -271,8 +284,10 @@ error event; cleanup behavior already matched. The final six cases use payload-f
 unexpected processor categories and preserve known classified error behavior;
 they verify all durable outcomes and complete producer/formatter log fields.
 The corrections pass locally without removing the private SQL generation fence.
-All signing observations and composed driver/provider failures remain pending;
-fresh exact-head hosted checks are required.
+Signing diagnostic adoption and broader complete worker/driver behavior remain
+separate gates; do not confuse those requirements with the now-empty remaining
+composed processor-code inventory. Fresh exact-head hosted checks are required
+for extensions beyond the qualified checkpoint above.
 
 Native adoption must not hide source-inspection differences by changing that
 artifact: the resolver currently omits diagnostic detail on non-success, while
@@ -327,6 +342,16 @@ the unqualified native API. The expanded real Compose renderer failed before
 this repair and passed afterward. All 48 focused deployment tests passed
 locally, including mutation tests for both complete API/migration definitions.
 This preserves existing functionality while API and worker cutover remain open.
+
+The subsequent [shared-image audit](selfhost-bundle-image-audit-2026-09-07.md)
+also found a packaging-only omission for `signing-keys`. The local repair selects
+the existing shared image and `SERVICE_NAME=signing_keys`; the read-only merged
+renderer now derives all seventeen converted services from base build targets
+and compares their complete runtime definitions after the intended packaging
+changes. The renderer failed on the omission and passed after repair. This is
+source/render evidence, not deployed or exact-head hosted qualification, and
+changes no cryptographic implementation. Coordinate any signing implementation
+work with its existing crypto owner.
 
 The initial local debug-binary diagnostic confirmed a startup obstacle: with
 rollout disabled, synthetic keys, no LTI identity and an unavailable loopback

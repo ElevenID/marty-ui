@@ -11,10 +11,10 @@ partition. It is accounting, not runtime evidence or a cutover waiver.
 
 | Evidence category | Count | Scope |
 | --- | ---: | --- |
-| Actual published/native worker processes | 11 | Five processor codes in the twenty-case validation corpus; two in the five-stage retry corpus; four in the five-case roster-failure corpus. |
+| Actual published/native worker processes | 14 | Five validation-corpus codes, two retry-corpus codes, four roster-failure codes, two resource-race codes and one post-validation resources-unavailable code. |
 | Real worker cycle and PostgreSQL, controlled typed processor | 1 | `canvas_background_signing_forbidden`: all four forbidden keys across seven values, plus two successful controls. Not actual-provider process evidence. |
 | Typed-dispatch reconciliation still open | 2 | Missing processor and non-mapping processor result. The native executable directly links a typed processor; do not reintroduce Python imports or silently waive these legacy outcomes. |
-| Composed outcomes still open | 3 | Listed below; published captures and library/repository tests alone do not close them. |
+| Composed outcomes still open in this seventeen-code inventory | 0 | The last three now have actual native process evidence; this does not close broader worker/provider effects or the two typed-dispatch reconciliations. |
 
 The five actual validation-corpus processor codes are
 `canvas_roster_configuration_invalid`, `canvas_requirements_invalid`,
@@ -26,6 +26,9 @@ are now qualified in the roster-failure corpus: `canvas_roster_oauth_unavailable
 `canvas_authoritative_read_failed`. The fifth roster case's
 `canvas_sync_unexpected_error` is an additional worker outcome, not an eighteenth
 member of the unchanged seventeen-code processor partition.
+The two resource-race codes are `canvas_platform_reconfigured` and
+`canvas_application_unavailable`; the post-validation resource-removal code is
+`canvas_sync_resources_unavailable`.
 
 Separately, **all nine target-validation codes** have actual-process outcomes
 across thirteen validation scenarios; these are not processor-dispatch codes.
@@ -70,11 +73,25 @@ Image job `101629197264` passed with all 24 startup markers, Rust CodeQL run
 The machine-readable roster entry records this exact checkpoint. These results
 do not close all of gate 9 or authorize worker routing or deletion.
 
-## Remaining composed processor outcomes
+## Latest qualified composition and remaining gates
 
-- `canvas_platform_reconfigured`
-- `canvas_application_unavailable`
-- `canvas_sync_resources_unavailable`
+At `6914387e563d1043948aaea7a5cc514be6055038`,
+[CI34089906961](https://github.com/ElevenID/marty-ui/actions/runs/34089906961)
+passed **115 configured tests in 2444.37s**. Runtime job `101641133956` records
+that result at `2026-09-07T07:01:57.0655556Z`; the earlier unconfigured 115-test
+result in 0.36s is not qualification. Four configured worker/PostgreSQL tests
+passed in 95.63s. Independently inspected native markers show
+`platform_reconfigured` and `application_removed` made one HTTPS request each,
+and `binding_removed_after_hook_validation` made zero requests. Both resource
+reference regenerations and native comparisons passed within the configured run.
+
+All five roster markers remain (0, 0, 1, 1, 1 requests), as does recovery-first
+(one HTTPS request). Image job `101641134087` passed all nine entrypoint/preflight,
+24 packaged startup and 16 published logging-reference cases. Rust CodeQL run
+`34089906881` passed; all 24 exact-head checks completed successfully except the
+expected skipped scorecard. PR #814 remains open, draft and unrouted. The common
+`latest_qualification` record anchors the retained composed evidence without
+duplicating it across resource corpora; the earlier roster checkpoint is retained.
 
 The qualified [five-case roster failure corpus](canvas-worker-roster-failures.md)
 preserves an existing cursor and empty candidate table, not populated candidate
@@ -84,13 +101,15 @@ library tests alone. The separate lease-expiry-during-effects and signing
 diagnostic requirements remain in their named gates. No norm, frozen observation,
 runtime feature, production consumer or deployment has been removed by this audit.
 
-The [two-case resource-race corpus](canvas-worker-resource-races.md) now also
-captures `canvas_platform_reconfigured` and `canvas_application_unavailable`
-through actual published-worker HTTPS runs, with independent regeneration and
-Rust repository repairs. Native process replay is implemented but not qualified.
-These two codes remain in the three-code inventory until actual Linux replay
-passes. Changed application rows still retry, and lease loss still takes
-precedence; a missing application is not a waiver of either write guard.
-The resources-unavailable work likewise has no qualified native process result
-at this checkpoint and remains open. Neither those extensions nor their local
-reference/repository evidence inherit qualification from the roster head.
+The [two-case resource-race corpus](canvas-worker-resource-races.md) and
+[post-validation resource-removal corpus](canvas-worker-resources-unavailable.md)
+now close their three codes on that actual native Linux evidence, not on
+reference/repository results alone. Changed application rows still retry, and
+lease loss still takes precedence; a missing application waives neither guard.
+
+The empty remaining-composed list does not close gate 9: the two typed-dispatch
+reconciliations remain open and the signing-result guard retains its controlled
+processor classification. Later local effect-expiry and mixed-roster work is not
+qualified by this 115-entry head or by an increased registration count. Actual
+lease expiry during provider effects, populated roster behavior, all-consumer
+adoption and beta acceptance remain separate gates. No norm or feature is waived.

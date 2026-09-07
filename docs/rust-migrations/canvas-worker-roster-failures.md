@@ -80,14 +80,18 @@ remain part of the replay, not just the request count.
 
 The retained recovery-first marker made one HTTPS request. Image job
 `101629197264` passed with all 24 startup markers, Rust CodeQL run `34085691297`
-passed, and every exact-head check was successful or skipped. This evidence
-moves four normative processor codes into actual-process coverage (11 total),
-leaving three composed outcomes and two typed-dispatch reconciliations open.
+passed, and every exact-head check was successful or skipped. At that checkpoint,
+this evidence moved four normative processor codes into actual-process coverage
+(11 total), leaving three composed outcomes and two typed-dispatch reconciliations open.
 The HTTP 503 generic worker code is additional to that seventeen-code partition.
 
-The later two resource-race cases and resources-unavailable work are not
-qualified by this head; their native Linux process gates remain open regardless
-of published reference or local repository results.
+The later resource composition passed independently at
+`6914387e563d1043948aaea7a5cc514be6055038` (CI `34089906961`): 115 configured
+tests in 2444.37s, four worker/PostgreSQL tests in 95.63s, with all five roster
+markers retained. That evidence qualifies the two resource-race cases and the
+post-validation resources-unavailable case, bringing processor actual-process
+coverage to fourteen. Two typed-dispatch reconciliations remain open. Later
+local effect-expiry and mixed-roster work is not qualified by either checkpoint.
 No previous frozen reference, normative requirement, production consumer or
 Python feature was deleted. No candidate dispatch, deployment or cryptographic
 signing implementation changed. Further roster pagination, successful/mixed
