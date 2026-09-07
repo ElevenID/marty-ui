@@ -1,6 +1,10 @@
 //! Bounded, redirect-free Canvas REST, AGS, and NRPS provider adapter.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -65,7 +69,7 @@ impl CollectionProtocol {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum LtiCollectionKind {
     AgsResult,
     NrpsMembership,
@@ -87,6 +91,75 @@ impl LtiCollectionKind {
     }
 }
 
+// Owned, non-secret identity for a successful grant within ONE processor run.
+// Include the complete platform/trust identity, not just the requested scope.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct LtiTokenKey {
+    organization_id: String,
+    platform_id: String,
+    config_version: i32,
+    canvas_base_url: String,
+    trust_profile: String,
+    issuer: String,
+    client_id: String,
+    deployment_id: String,
+    token_endpoint: String,
+    kind: LtiCollectionKind,
+}
+
+impl LtiTokenKey {
+    fn new(resources: &CanvasSyncResources, endpoint: &str, kind: LtiCollectionKind) -> Self {
+        let platform = &resources.platform;
+        Self {
+            organization_id: platform.organization_id.clone(),
+            platform_id: platform.id.clone(),
+            config_version: platform.config_version,
+            canvas_base_url: platform.canvas_base_url.clone(),
+            trust_profile: platform.lti_trust_profile.clone(),
+            issuer: platform.lti_issuer.clone(),
+            client_id: platform.lti_client_id.clone(),
+            deployment_id: platform.lti_deployment_id.clone(),
+            token_endpoint: endpoint.to_owned(),
+            kind,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RunLtiTokens {
+    tokens: tokio::sync::Mutex<BTreeMap<LtiTokenKey, String>>,
+}
+
+impl std::fmt::Debug for RunLtiTokens {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunLtiTokens")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RunLtiTokens {
+    async fn get_or_request<F, Fut>(
+        &self,
+        key: LtiTokenKey,
+        request: F,
+    ) -> Result<String, CanvasProviderReadError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<String, CanvasProviderReadError>>,
+    {
+        // The async guard coalesces identical concurrent reads within this run.
+        // Cancellation/errors release it without caching a partial acquisition.
+        let mut tokens = self.tokens.lock().await;
+        if let Some(token) = tokens.get(&key) {
+            return Ok(token.clone());
+        }
+        let token = request().await?;
+        tokens.insert(key, token.clone());
+        Ok(token)
+    }
+}
+
 #[derive(Clone)]
 pub struct HttpCanvasAuthoritativeProvider {
     oauth: Arc<CanvasOAuthService>,
@@ -94,6 +167,7 @@ pub struct HttpCanvasAuthoritativeProvider {
     signer: Arc<dyn CanvasLtiToolJwtSigner>,
     policy: CanvasHttpClientPolicy,
     self_managed_origin_allowlist: Vec<String>,
+    run_tokens: Option<Arc<RunLtiTokens>>,
 }
 
 impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
@@ -102,6 +176,7 @@ impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
             .debug_struct("HttpCanvasAuthoritativeProvider")
             .field("policy", &self.policy)
             .field("oauth_api_key_configured", &!self.oauth_api_key.is_empty())
+            .field("run_scoped", &self.run_tokens.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -121,6 +196,14 @@ impl HttpCanvasAuthoritativeProvider {
             signer,
             policy,
             self_managed_origin_allowlist,
+            run_tokens: None,
+        }
+    }
+
+    fn fresh_run(&self) -> Self {
+        Self {
+            run_tokens: Some(Arc::new(RunLtiTokens::default())),
+            ..self.clone()
         }
     }
 
@@ -211,7 +294,7 @@ impl HttpCanvasAuthoritativeProvider {
     async fn lti_access_token(
         &self,
         resources: &CanvasSyncResources,
-        scope: &str,
+        kind: LtiCollectionKind,
     ) -> Result<String, CanvasProviderReadError> {
         let expected = self.expected_lti_trust(resources)?;
         let endpoint = validate_canvas_lti_service_url(
@@ -223,6 +306,27 @@ impl HttpCanvasAuthoritativeProvider {
         if resources.platform.lti_client_id.trim().is_empty() {
             return Err(CanvasProviderReadError::InvalidConfiguration);
         }
+        // Preserve trust/endpoint/client checks even on a cache hit. Published
+        // application/roster processors keep successful token.value for their
+        // whole invocation; they do not inspect expires_in or evict on a later
+        // collection error. The next invocation always receives a fresh cache.
+        if let Some(tokens) = &self.run_tokens {
+            return tokens
+                .get_or_request(LtiTokenKey::new(resources, &endpoint, kind), || {
+                    self.acquire_lti_token(resources, &endpoint, kind.scope())
+                })
+                .await;
+        }
+        self.acquire_lti_token(resources, &endpoint, kind.scope())
+            .await
+    }
+
+    async fn acquire_lti_token(
+        &self,
+        resources: &CanvasSyncResources,
+        endpoint: &str,
+        scope: &str,
+    ) -> Result<String, CanvasProviderReadError> {
         let now = Utc::now().timestamp();
         let assertion = self
             .signer
@@ -237,7 +341,7 @@ impl HttpCanvasAuthoritativeProvider {
             .await
             .map_err(|_| CanvasProviderReadError::Unavailable)?;
         let endpoint_url =
-            Url::parse(&endpoint).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            Url::parse(endpoint).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         let origin = origin_url(&endpoint_url)?;
         let (client, _) = client_for_canvas_origin(origin.as_str(), &self.policy)
             .await
@@ -265,7 +369,7 @@ impl HttpCanvasAuthoritativeProvider {
             .await
             .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         self.enforce_lti_service_trust(resources, &validated)?;
-        let token = self.lti_access_token(resources, kind.scope()).await?;
+        let token = self.lti_access_token(resources, kind).await?;
         let mut next =
             Url::parse(&validated).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         if let Some(user_id) = user_id {
@@ -335,6 +439,10 @@ impl HttpCanvasAuthoritativeProvider {
 
 #[async_trait]
 impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
+    fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
+        Arc::new(self.fresh_run())
+    }
+
     async fn read_requirement(
         &self,
         resources: &CanvasSyncResources,
@@ -1056,6 +1164,438 @@ fn map_oauth_error(error: CanvasOAuthError) -> CanvasProviderReadError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Exercise the unchanged token/collection HTTP adapters on synthetic local
+    // transport. Public-provider HTTPS/trust parity remains a separate gate.
+    #[derive(Default)]
+    struct RunTokenTraffic {
+        grants: usize,
+        fail_next_grant: bool,
+        collection_status: u16,
+        authorizations: Vec<String>,
+    }
+
+    struct RunTokenServer {
+        traffic: Arc<std::sync::Mutex<RunTokenTraffic>>,
+        client: reqwest::Client,
+        origin: String,
+        task: tokio::task::JoinHandle<std::io::Result<()>>,
+    }
+
+    impl Drop for RunTokenServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl RunTokenServer {
+        async fn start() -> Self {
+            use axum::{
+                extract::State,
+                http::{HeaderMap, StatusCode},
+                response::IntoResponse,
+                routing::{get, post},
+                Json, Router,
+            };
+
+            async fn grant(
+                State(traffic): State<Arc<std::sync::Mutex<RunTokenTraffic>>>,
+            ) -> axum::response::Response {
+                let mut traffic = traffic.lock().unwrap();
+                traffic.grants += 1;
+                if std::mem::take(&mut traffic.fail_next_grant) {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                }
+                Json(json!({
+                    "access_token": format!(" synthetic-run-token-{} ", traffic.grants),
+                    // Published callers retain token.value, without TTL refresh.
+                    "expires_in": 0,
+                }))
+                .into_response()
+            }
+
+            async fn collection(
+                State(traffic): State<Arc<std::sync::Mutex<RunTokenTraffic>>>,
+                headers: HeaderMap,
+            ) -> axum::response::Response {
+                let mut traffic = traffic.lock().unwrap();
+                traffic.authorizations.push(
+                    headers
+                        .get("authorization")
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+                if traffic.collection_status != 0 {
+                    return StatusCode::from_u16(traffic.collection_status)
+                        .unwrap()
+                        .into_response();
+                }
+                Json(json!([])).into_response()
+            }
+
+            let traffic = Arc::new(std::sync::Mutex::new(RunTokenTraffic::default()));
+            let app = Router::new()
+                .route("/token", post(grant))
+                .route("/collection", get(collection))
+                .with_state(traffic.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move { axum::serve(listener, app).await });
+            Self {
+                traffic,
+                client: reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .unwrap(),
+                origin,
+                task,
+            }
+        }
+
+        async fn token(
+            &self,
+            run: &RunLtiTokens,
+            key: LtiTokenKey,
+        ) -> Result<String, CanvasProviderReadError> {
+            let client_id = key.client_id.clone();
+            let scope = key.kind.scope();
+            run.get_or_request(key, || {
+                request_lti_token(
+                    &self.client,
+                    Url::parse(&format!("{}/token", self.origin)).unwrap(),
+                    &client_id,
+                    "synthetic-assertion",
+                    scope,
+                )
+            })
+            .await
+        }
+
+        async fn collection(&self, token: &str) -> Result<Value, CanvasProviderReadError> {
+            request_collection_page(
+                &self.client,
+                Url::parse(&format!("{}/collection", self.origin)).unwrap(),
+                token,
+                AGS_RESULT_ACCEPT,
+                CollectionProtocol::Lti,
+            )
+            .await
+            .map(|(payload, _)| payload)
+        }
+    }
+
+    fn run_token_resources() -> CanvasSyncResources {
+        use crate::canvas_sync_processor::CanvasSyncPlatformSnapshot;
+
+        CanvasSyncResources {
+            platform: CanvasSyncPlatformSnapshot {
+                id: "synthetic-platform".into(),
+                organization_id: "synthetic-tenant".into(),
+                config_version: 1,
+                canvas_base_url: "https://canvas.example.invalid".into(),
+                lti_trust_profile: CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN.into(),
+                lti_issuer: "https://canvas.example.invalid".into(),
+                lti_client_id: "synthetic-client".into(),
+                lti_deployment_id: "synthetic-deployment".into(),
+                lti_auth_token_url: "https://canvas.example.invalid/login/oauth2/token".into(),
+            },
+            binding: Map::new(),
+            application: None,
+            application_template: None,
+        }
+    }
+
+    fn run_token_key() -> LtiTokenKey {
+        let resources = run_token_resources();
+        LtiTokenKey::new(
+            &resources,
+            &resources.platform.lti_auth_token_url,
+            LtiCollectionKind::AgsResult,
+        )
+    }
+
+    fn run_provider_without_database_io() -> (HttpCanvasAuthoritativeProvider, sqlx::PgPool) {
+        use crate::{
+            canvas_lti_tool_signing::CanvasLtiToolSigningError,
+            canvas_oauth::CanvasOAuthServiceConfig,
+            canvas_oauth_http::HttpCanvasOAuthProvider,
+            canvas_oauth_postgres::{
+                PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault,
+            },
+            integration_secret::IntegrationSecretCipher,
+        };
+
+        struct UnusedSigner;
+        #[async_trait]
+        impl CanvasLtiToolJwtSigner for UnusedSigner {
+            async fn sign_jwt(&self, _: &Value) -> Result<String, CanvasLtiToolSigningError> {
+                panic!("factory and rejected-trust tests must not sign")
+            }
+
+            async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError> {
+                panic!("factory tests must not resolve signing keys")
+            }
+        }
+
+        // Lazy, zero-minimum pool: constructing this adapter performs no DB I/O.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .min_connections(0)
+            .connect_lazy("postgres://synthetic:synthetic@127.0.0.1:1/synthetic")
+            .unwrap();
+        let oauth = CanvasOAuthService::new(
+            Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
+            Arc::new(PostgresIntegrationSecretVault::new(
+                pool.clone(),
+                IntegrationSecretCipher::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                )
+                .unwrap(),
+            )),
+            Arc::new(HttpCanvasOAuthProvider::new_with_policy(
+                std::time::Duration::from_secs(2),
+                Vec::new(),
+                false,
+                false,
+            )),
+            Some("synthetic-management-key"),
+            CanvasOAuthServiceConfig {
+                issuer_base_url: "https://issuer.example.invalid".into(),
+                completion_base_url: "https://ui.example.invalid".into(),
+                portable_enabled: true,
+                pilot_organizations: BTreeSet::new(),
+                allow_private_networks: false,
+                allow_http_localhost: false,
+            },
+        )
+        .unwrap();
+        (
+            HttpCanvasAuthoritativeProvider::new(
+                Arc::new(oauth),
+                "synthetic-private-oauth-key",
+                Arc::new(UnusedSigner),
+                CanvasHttpClientPolicy {
+                    timeout: std::time::Duration::from_secs(2),
+                    private_origin_allowlist: Vec::new(),
+                    allow_private_networks: false,
+                    allow_http_localhost: false,
+                },
+                vec!["https://canvas.example.invalid".into()],
+            ),
+            pool,
+        )
+    }
+
+    #[tokio::test]
+    async fn run_provider_factory_resets_scoped_instances_and_keeps_templates_uncached() {
+        let (template, pool) = run_provider_without_database_io();
+        assert!(template.run_tokens.is_none());
+        let first = template.fresh_run();
+        let first_cache = first.run_tokens.as_ref().unwrap();
+        first_cache
+            .get_or_request(run_token_key(), || async {
+                Ok("synthetic-private-access-token".into())
+            })
+            .await
+            .unwrap();
+        // A caller cannot extend a previous job's token lifetime by scoping an
+        // already-scoped instance. Cloning the stateless template also stays uncached.
+        let second = first.fresh_run();
+        let second_cache = second.run_tokens.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(first_cache, second_cache));
+        assert!(second_cache.tokens.lock().await.is_empty());
+        assert!(template.clone().run_tokens.is_none());
+        let object: Arc<dyn CanvasAuthoritativeProvider> = Arc::new(first.clone());
+        let left = object.clone().for_run();
+        let right = object.clone().for_run();
+        let nested = left.clone().for_run();
+        assert!(!Arc::ptr_eq(&object, &left));
+        assert!(!Arc::ptr_eq(&left, &right));
+        assert!(!Arc::ptr_eq(&left, &nested));
+        for debug in [format!("{first:?}"), format!("{first_cache:?}")] {
+            for private in [
+                "synthetic-private-access-token",
+                "synthetic-private-oauth-key",
+            ] {
+                assert!(!debug.contains(private));
+            }
+        }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn run_provider_rechecks_trust_before_considering_a_cached_grant() {
+        let (template, pool) = run_provider_without_database_io();
+        let run = template.fresh_run();
+        let mut resources = run_token_resources();
+        let key = run_token_key();
+        run.run_tokens
+            .as_ref()
+            .unwrap()
+            .get_or_request(key, || async { Ok("synthetic-cached-token".into()) })
+            .await
+            .unwrap();
+        // The token cache key uses the validated endpoint, not this untrusted
+        // input. Corrupting it must reject before any network/signing or cache hit.
+        resources.platform.lti_auth_token_url = "https://untrusted.example.invalid/token".into();
+        assert_eq!(
+            run.lti_access_token(&resources, LtiCollectionKind::AgsResult)
+                .await,
+            Err(CanvasProviderReadError::InvalidConfiguration)
+        );
+        assert_eq!(
+            run.run_tokens.as_ref().unwrap().tokens.lock().await.len(),
+            1
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn run_tokens_reuse_success_without_ttl_refresh_and_coalesce_concurrent_reads() {
+        let server = RunTokenServer::start().await;
+        let run = RunLtiTokens::default();
+        let (first, concurrent) = tokio::join!(
+            server.token(&run, run_token_key()),
+            server.token(&run, run_token_key())
+        );
+        assert_eq!(first.unwrap(), "synthetic-run-token-1");
+        assert_eq!(concurrent.unwrap(), "synthetic-run-token-1");
+        assert_eq!(
+            server.token(&run, run_token_key()).await.unwrap(),
+            "synthetic-run-token-1"
+        );
+        assert_eq!(server.traffic.lock().unwrap().grants, 1);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_never_share_grants_between_concurrent_or_subsequent_runs() {
+        let server = RunTokenServer::start().await;
+        let first = RunLtiTokens::default();
+        let second = RunLtiTokens::default();
+        let (left, right) = tokio::join!(
+            server.token(&first, run_token_key()),
+            server.token(&second, run_token_key())
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_ne!(left, right);
+        assert_eq!(server.token(&first, run_token_key()).await.unwrap(), left);
+        assert_eq!(server.token(&second, run_token_key()).await.unwrap(), right);
+        let next = RunLtiTokens::default();
+        assert_eq!(
+            server.token(&next, run_token_key()).await.unwrap(),
+            "synthetic-run-token-3"
+        );
+        assert_eq!(server.traffic.lock().unwrap().grants, 3);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_separate_every_resource_identity_dimension_and_scope() {
+        let server = RunTokenServer::start().await;
+        let run = RunLtiTokens::default();
+        let baseline = run_token_resources();
+        let mut keys = vec![run_token_key()];
+        for dimension in 0..8 {
+            let mut resources = baseline.clone();
+            let platform = &mut resources.platform;
+            match dimension {
+                0 => platform.organization_id.push_str("-other"),
+                1 => platform.id.push_str("-other"),
+                2 => platform.config_version += 1,
+                3 => platform.canvas_base_url.push_str("/other"),
+                4 => platform.lti_trust_profile.push_str("-other"),
+                5 => platform.lti_issuer.push_str("/other"),
+                6 => platform.lti_client_id.push_str("-other"),
+                7 => platform.lti_deployment_id.push_str("-other"),
+                _ => unreachable!(),
+            }
+            keys.push(LtiTokenKey::new(
+                &resources,
+                &baseline.platform.lti_auth_token_url,
+                LtiCollectionKind::AgsResult,
+            ));
+        }
+        keys.push(LtiTokenKey::new(
+            &baseline,
+            "https://canvas.example.invalid/other-token",
+            LtiCollectionKind::AgsResult,
+        ));
+        keys.push(LtiTokenKey::new(
+            &baseline,
+            &baseline.platform.lti_auth_token_url,
+            LtiCollectionKind::NrpsMembership,
+        ));
+        assert_eq!(keys.iter().collect::<BTreeSet<_>>().len(), 11);
+        let mut acquired = BTreeSet::new();
+        for key in keys {
+            let token = server.token(&run, key.clone()).await.unwrap();
+            assert!(acquired.insert(token.clone()));
+            assert_eq!(server.token(&run, key).await.unwrap(), token);
+        }
+        assert_eq!(server.traffic.lock().unwrap().grants, 11);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_retry_failed_acquisition_but_retain_success_after_collection_errors() {
+        let server = RunTokenServer::start().await;
+        let run = RunLtiTokens::default();
+        server.traffic.lock().unwrap().fail_next_grant = true;
+        assert_eq!(
+            server.token(&run, run_token_key()).await,
+            Err(CanvasProviderReadError::Unavailable)
+        );
+        let token = server.token(&run, run_token_key()).await.unwrap();
+        for status in [503, 401] {
+            server.traffic.lock().unwrap().collection_status = status;
+            assert!(server.collection(&token).await.is_err());
+            assert_eq!(server.token(&run, run_token_key()).await.unwrap(), token);
+        }
+        server.traffic.lock().unwrap().collection_status = 0;
+        assert_eq!(server.collection(&token).await.unwrap(), json!([]));
+        let traffic = server.traffic.lock().unwrap();
+        assert_eq!(traffic.grants, 2);
+        assert_eq!(traffic.authorizations, vec![format!("Bearer {token}"); 3]);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_cancelled_acquisition_releases_lock_without_caching_partial_token() {
+        let run = Arc::new(RunLtiTokens::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let task = {
+            let run = run.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                run.get_or_request(run_token_key(), || async {
+                    started.notify_one();
+                    std::future::pending::<Result<String, CanvasProviderReadError>>().await
+                })
+                .await
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                run.get_or_request(run_token_key(), || async { Ok("synthetic-retry".into()) })
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            "synthetic-retry"
+        );
+        assert_eq!(run.tokens.lock().await.len(), 1);
+        let debug = format!("{run:?}");
+        for private in ["synthetic-retry", "synthetic-client", "synthetic-tenant"] {
+            assert!(!debug.contains(private));
+        }
+    }
 
     #[test]
     fn pagination_accepts_standard_next_relation_forms_across_all_headers() {

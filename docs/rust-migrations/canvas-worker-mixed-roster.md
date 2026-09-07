@@ -98,8 +98,21 @@ stream; failure remains prompt, cleanup completes, and no stage advances.
 CI `34098106567` supplied actual native evidence at `8e7f66d46`: stage 0
 `tail_positive_wrap` failed target equality because `worker_id` remained
 `worker-rest` instead of the frozen null projection. The configured suite passed
-118 tests and failed this one in 2761.77s. Token-reuse drift is still a source
+118 tests and failed this one in 2761.77s. Token-reuse drift was then only a source
 hypothesis: the child stopped before the driver's transport comparison.
+
+The next head `f8670830b` passed stage-0 metadata assertions, then failed the
+early preflight in 25.79s (CI `34104771356`, job `101687206847`). Exact transport
+now proves the next difference: 12 requests versus 10, four token exchanges
+versus two, and eight synthetic signer calls versus four, with no fixture failures.
+The frozen Python roster creates one invocation-local AGS token slot and reuses
+successful acquisition across learners (`canvas_routes.py` lines 6041, 6115–6135);
+application synchronization has the same invocation-local behavior at 5643–5675.
+The worker retains token values without expiry refresh within that invocation.
+The native repair therefore binds a fresh provider session per processor run,
+preserves owner/scope separation and trust checks, and memoizes successful grants
+without sharing tokens across jobs. Focused testing and the unchanged seven-stage
+Linux replay remain required; the transport ledgers are not normalized away.
 
 The narrow repair reconciles only the pre-touch snapshot's two heartbeat keys
 while retaining unrelated current metadata and all lease/generation fences.

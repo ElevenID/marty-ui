@@ -11,13 +11,32 @@ markers (`platform_reconfigured`, `application_removed`) made one HTTPS request;
 the post-validation resources-unavailable marker made zero. All five native
 roster markers remain (0, 0, 1, 1, 1 requests), as does one-HTTPS recovery-first.
 
-Newer attempted checkpoint `8e7f66d46` is **not qualified**: CI `34098106567`
+Latest attempt `f8670830b` is **not qualified**: CI `34104771356` failed its new
+early mixed-roster preflight in 25.79s (job `101687206847`). Stage-0 metadata
+assertions now pass, but transport parity fails: 12 requests versus 10, four
+token exchanges versus two, and eight synthetic signer requests/operations
+versus four. Fixture failure count is zero. The full configured suite was not
+run after this early failure. A reviewed per-run token-reuse repair is under
+local test; no frozen expectation is weakened.
+
+The token-session repair passed 347 issuance unit tests, including eight new
+session/isolation/error/cancellation regressions, and strict all-target Clippy.
+All five relocated compiler examples passed. These tests do not replace the
+seven-stage native HTTPS replay or establish full-worker qualification.
+
+Image job `101687206897` passed both configuration gates, then failed because
+compiler-consumed documentation was under the intentionally excluded integration
+test directory. The unchanged five compiler examples now live in the packaged
+source tree. Fresh image qualification remains required.
+
+Earlier attempted checkpoint `8e7f66d46` is **not qualified**: CI `34098106567`
 finished with 118 configured published-schema tests passing and one failing in
 2761.77s (runtime job `101666175141`). The mixed-roster native replay failed at
 stage 0, `tail_positive_wrap`: persisted `worker_id` was `worker-rest`, while the
 frozen published target expected null. The reference regeneration and controlled
-transaction effect-expiry controls passed. Transport-count drift has not yet been
-observed; the target assertion stopped the child before ledger comparison.
+transaction effect-expiry controls passed. Transport-count drift was not observed
+in that earlier run; the target assertion stopped the child before ledger
+comparison. The newer preflight supplies that evidence above.
 The narrow pending repair reconciles only pre-touch heartbeat metadata, retaining
 current unrelated fields and generation/lease fences. Exact-head Linux replay
 and complete checks remain required. An early mixed-roster CI preflight now

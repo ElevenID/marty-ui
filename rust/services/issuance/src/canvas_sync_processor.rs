@@ -126,6 +126,10 @@ pub enum CanvasProviderReadError {
 
 #[async_trait]
 pub trait CanvasAuthoritativeProvider: Send + Sync {
+    /// Start one processor invocation. Stateful providers must return fresh
+    /// run-local state; a shared provider must never retain another job's tokens.
+    fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider>;
+
     async fn read_requirement(
         &self,
         resources: &CanvasSyncResources,
@@ -755,6 +759,7 @@ impl CanvasSyncProcessor for NativeCanvasSyncProcessor {
         }
         let scoped = Self {
             repository: self.repository.clone().for_lease(lease.clone()),
+            provider: self.provider.clone().for_run(),
             ..self.clone()
         };
         canvas_sync_result(scoped.process_fields(target).await?)
@@ -1362,6 +1367,10 @@ mod tests {
 
     #[async_trait]
     impl CanvasAuthoritativeProvider for SimulatorProvider {
+        fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
         async fn read_requirement(
             &self,
             _: &CanvasSyncResources,
@@ -1511,6 +1520,117 @@ mod tests {
             portable_enabled: true,
             pilot_organizations: ["org-1".to_owned()].into_iter().collect(),
         }
+    }
+
+    #[derive(Default)]
+    struct RunCountingProvider {
+        runs: Arc<std::sync::atomic::AtomicUsize>,
+        calls: Arc<Mutex<Vec<usize>>>,
+        run_id: Option<usize>,
+    }
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for RunCountingProvider {
+        fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
+            let run_id = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Arc::new(Self {
+                runs: self.runs.clone(),
+                calls: self.calls.clone(),
+                run_id: Some(run_id),
+            })
+        }
+
+        async fn read_requirement(
+            &self,
+            resources: &CanvasSyncResources,
+            requirement: &Value,
+            canvas_user_id: Option<&str>,
+            lti_subject: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            self.calls.lock().unwrap().push(
+                self.run_id
+                    .expect("processor must use the returned run provider"),
+            );
+            SimulatorProvider
+                .read_requirement(resources, requirement, canvas_user_id, lti_subject)
+                .await
+        }
+
+        async fn roster(
+            &self,
+            target: &CanvasSyncTarget,
+            resources: &CanvasSyncResources,
+            requirements: &[Value],
+            limit: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            assert!(
+                self.run_id.is_some(),
+                "roster must also use the run provider"
+            );
+            SimulatorProvider
+                .roster(target, resources, requirements, limit)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn processor_scopes_trait_object_provider_once_per_valid_invocation() {
+        let repository = Arc::new(SimulatorRepository {
+            resources: simulator_resources(vec![requirement(
+                "quiz",
+                "ags_result",
+                "canvas.quiz_score",
+                json!({"course_id":"1","line_item_url":"https://canvas.test/lineitems/2"}),
+                json!({"min_score_percent":70}),
+            )]),
+            facts: Mutex::new(Vec::new()),
+            candidates: Mutex::new(BTreeMap::new()),
+            observations: Mutex::new(BTreeMap::new()),
+            cursor: Mutex::new(None),
+            disabled: Mutex::new(false),
+        });
+        let provider = Arc::new(RunCountingProvider::default());
+        let processor = NativeCanvasSyncProcessor::new(
+            repository,
+            provider.clone(),
+            enabled_config(),
+            500,
+            5000,
+        );
+        let (first, concurrent) = tokio::join!(
+            run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication)),
+            run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication))
+        );
+        for result in [first, concurrent] {
+            assert_eq!(
+                result
+                    .unwrap()
+                    .get("requirements_checked")
+                    .map(|value| value.get().to_owned()),
+                Some("1".to_owned())
+            );
+        }
+        let invalid_lease = CanvasSyncLease {
+            job_id: "synthetic-job".into(),
+            organization_id: "wrong-tenant".into(),
+            target_id: "target-1".into(),
+            worker_id: "sim".into(),
+            attempt_count: 1,
+        };
+        assert_eq!(
+            processor
+                .process(
+                    &target(CanvasSyncTargetType::LearnerApplication),
+                    &invalid_lease
+                )
+                .await
+                .unwrap_err(),
+            lease_lost()
+        );
+        assert_eq!(provider.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let mut calls = provider.calls.lock().unwrap().clone();
+        calls.sort_unstable();
+        assert_eq!(calls, vec![0, 1]);
     }
 
     #[tokio::test]

@@ -55,6 +55,10 @@ struct Provider {
 
 #[async_trait]
 impl CanvasAuthoritativeProvider for Provider {
+    fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
+        self
+    }
+
     async fn read_requirement(
         &self,
         resources: &CanvasSyncResources,
