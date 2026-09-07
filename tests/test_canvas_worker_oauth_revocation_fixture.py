@@ -161,6 +161,7 @@ def test_acquired_lease_observation_rejects_incomplete_or_wrong_evidence(
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
         "oauth-revocation-lease",
+        "oauth-revocation-counters",
     ],
 )
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
@@ -194,6 +195,7 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
         "oauth-revocation-lease",
+        "oauth-revocation-counters",
     ],
 )
 def test_native_owner_fails_closed_and_closes_https(
@@ -235,6 +237,137 @@ def test_native_owner_fails_closed_and_closes_https(
     with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
         native.run("synthetic-not-executed", kind)
     assert closed == [True]
+
+
+def test_cycle_reference_counts_return_values_not_durable_retry_count(monkeypatch):
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    monkeypatch.syspath_prepend(str(contracts.parent / "scripts"))
+    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    matrix = oracle.load_matrix(
+        contracts, "canvas-worker-oauth-revocation-counters-scenarios.json"
+    )
+    reference = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-counters-oracle.json").read_text()
+    )
+    assert len(matrix["cases"]) == len(reference) == 4
+    assert {case["name"] for case in matrix["cases"]} == set(reference)
+    assert "takeover_sql" in matrix and len(matrix["additional_secrets"]) == 2
+    for case in matrix["cases"]:
+        observed = reference[case["name"]]
+        expected = dict.fromkeys(
+            [
+                "scheduled",
+                "leased",
+                "succeeded",
+                "retried",
+                "dead_lettered",
+                "oauth_revocations_succeeded",
+                "oauth_revocations_retried",
+            ],
+            0,
+        )
+        if case.get("replace_owner"):
+            assert case["hold_response"] is True
+            assert observed["fence"]["replacement_row_unchanged"] is True
+            assert observed["connection"]["retry_count"] == 7
+        else:
+            expected[
+                "oauth_revocations_succeeded"
+                if case["status"] == 200
+                else "oauth_revocations_retried"
+            ] = 1
+        assert observed["cycle_result"] == expected
+        assert observed["retained_ciphertexts_unchanged"] is True
+        assert observed["issued_rows_unchanged"] is True
+        assert observed["job_count"] == 0 and len(observed["requests"]) == 1
+
+
+@pytest.mark.parametrize("observe", [None, False, True, "true", 1])
+def test_only_explicit_cycle_observer_changes_owned_child_command(monkeypatch, observe):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    startup = importlib.import_module("run_canvas_worker_startup_oracle")
+    seen = []
+    child = object()
+
+    def spawn(command, **kwargs):
+        seen.append(command)
+        assert kwargs["env"]["CANVAS_SYNC_WORKER_ID"] == "synthetic-observer"
+        assert kwargs["stdout"] == kwargs["stderr"] == startup.subprocess.DEVNULL
+        assert kwargs["env"]["DATABASE_URL"].endswith("/canvas_published_schema_test")
+        return child
+
+    monkeypatch.setattr(startup.subprocess, "Popen", spawn)
+    assert (
+        startup.start_worker(
+            {
+                "database_scheme": "postgresql+asyncpg",
+                "environment": {},
+                "observe_cycle_result": observe,
+            },
+            "synthetic-observer",
+        )
+        is child
+    )
+    assert seen == [
+        [
+            startup.sys.executable,
+            "/verification/scripts/run_canvas_worker_single_cycle.py",
+        ]
+        if observe is True
+        else [startup.sys.executable, "-m", "issuance.canvas_worker"]
+    ]
+
+
+@pytest.mark.parametrize("released", [False, True])
+def test_counter_owner_loss_uses_fenced_child_and_requires_release(
+    monkeypatch, tmp_path, released
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    case = {"name": "synthetic", "replace_owner": True, "hold_response": True}
+    requests = [{"method": "DELETE"}]
+    inputs = iter(
+        [
+            json.dumps({"cases": [case]}),
+            json.dumps({"synthetic": {"requests": requests}}),
+        ]
+    )
+    monkeypatch.setattr(Path, "read_text", lambda *_: next(inputs))
+    closed, calls = [], []
+    received, release = Event(), Event()
+    received.set()
+    if released:
+        release.set()
+
+    class Fixture:
+        def __enter__(self):
+            return SimpleNamespace(
+                certificates=SimpleNamespace(name=str(tmp_path)),
+                cert=tmp_path / "synthetic-cert",
+                origin="https://127.0.0.1:1",
+                requests=requests,
+                received=received,
+                release=release,
+            )
+
+        def __exit__(self, *_):
+            closed.append(True)
+
+    def fenced(command, environment, https):
+        calls.append(environment["MARTY_CANVAS_WORKER_OAUTH_REVOCATION_KIND"])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(native, "WorkerHttpsFixture", Fixture)
+    monkeypatch.setattr(native, "run_fenced_child", fenced)
+    monkeypatch.setattr(
+        native.subprocess, "run", lambda *_, **__: pytest.fail("fence bypassed")
+    )
+    if released:
+        native.run("synthetic-not-executed", "oauth-revocation-counters")
+    else:
+        with pytest.raises(AssertionError):
+            native.run("synthetic-not-executed", "oauth-revocation-counters")
+    assert calls == ["oauth-revocation-counters"] and closed == [True]
 
 
 def test_revocation_retry_matrix_retains_all_eight_rate_limit_shapes():

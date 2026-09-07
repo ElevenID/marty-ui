@@ -60,6 +60,7 @@ def run(executable, kind="oauth-revocation"):
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
         "oauth-revocation-lease",
+        "oauth-revocation-counters",
     }
     root = Path(__file__).resolve().parents[1]
     matrix = json.loads(
@@ -93,7 +94,7 @@ def run(executable, kind="oauth-revocation"):
             ]
             child = (
                 run_fenced_child(command, environment, https)
-                if kind == "oauth-revocation-fence"
+                if kind == "oauth-revocation-fence" or case.get("replace_owner")
                 else subprocess.run(
                     command,
                     env=environment,
@@ -119,7 +120,9 @@ def run(executable, kind="oauth-revocation"):
                 )
             if case.get("hold_response"):
                 assert https.received.is_set()
-                assert https.release.is_set() == (kind == "oauth-revocation-fence")
+                assert https.release.is_set() == (
+                    kind == "oauth-revocation-fence" or bool(case.get("replace_owner"))
+                )
             print(
                 f"Native OAuth revocation {case['name']} PASS ({len(https.requests)} request)"
             )

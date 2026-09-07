@@ -187,13 +187,18 @@ pub(super) async fn await_marker(
     marker: &str,
     worker: &mut OwnedWorker,
 ) {
+    await_marker_while(control, marker, || worker.0.try_wait().unwrap().is_none()).await;
+}
+
+pub(super) async fn await_marker_while(
+    control: &std::path::Path,
+    marker: &str,
+    mut alive: impl FnMut() -> bool,
+) {
     assert!(matches!(marker, "request-received" | "reclaimer-observed"));
     tokio::time::timeout(Duration::from_secs(20), async {
         while !control.join(marker).is_file() {
-            assert!(
-                worker.0.try_wait().unwrap().is_none(),
-                "worker exited before parent observation"
-            );
+            assert!(alive(), "worker exited before parent observation");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })

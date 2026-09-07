@@ -15,13 +15,13 @@ This is not a completion claim for the worker or the wider migration goal.
 | Stronger native tenant-atomic cleanup | Existing real PostgreSQL OAuth contract, shared transaction implementation; token and unrelated-tenant checks in every process capture | Retain improvement; do not require Python's weaker intermediate transaction order |
 | Due selection, status/lease eligibility and order | [Two actual multi-row queue captures](canvas-worker-oauth-revocation-queue.md), exact unchanged excluded rows, actual acquisition journal, and real repository differential regression | Rust null-order discrepancy corrected; native whole-process queue qualification pending |
 | Batch cap and lease duration | Frozen configuration/range corpora, [four actual acquired-lease captures](canvas-worker-oauth-revocation-lease.md), and [matched real-repository selections](canvas-worker-oauth-revocation-selection.md) from 509 rows at limits around 500 | Nonempty cap matches locally; exact-head hosted repository and acquired-lease process qualification pending. Repository selection is not 500 remote requests |
-| Returned revocation success/retry counters, including owner-fence loss | Qualified privacy replay checks successful cleanup despite marker error; process heartbeat does not expose cycle counters | Add direct real-cycle observations for retry and fence-loss counters; do not infer them from idle alone |
+| Returned revocation success/retry counters, including owner-fence loss | [Four actual cycle-return captures](canvas-worker-oauth-revocation-counters.md), exact regeneration, real Rust cycle replay implemented; separate qualified privacy marker-error counter replay retained | Native Linux cycle replay awaits exact-head qualification; no counters inferred from heartbeat or stored retry count |
 | Exact tenant-scoped secret references | Shared reference parser unit tests reject foreign tenant and nested paths; valid encrypted-secret process cases | Worker composition for unavailable/malformed/foreign references needs explicit observation before claiming the whole branch |
 | Logging privacy | Independently captured twelve-case hardened worker corpus, actual native replay and known-error controls | Retain this separate provenance; do not claim the older transport image is the hardened privacy source |
 
 The remaining sequence is finite: qualify the queue/lease process extensions
-and nonempty cap repository differential; then address returned cycle counters
-and secret-resolution branches. Each addition must close a named
+and nonempty cap repository differential; qualify the implemented cycle-counter
+replay and observe remaining secret-resolution branches. Each addition must close a named
 contract requirement rather than introduce an unspecified new acceptance gate.
 Repository/unit evidence remains useful but is not relabeled as whole-process
 differential parity. All consumer/readiness/deletion/beta gates remain separate.

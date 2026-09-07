@@ -184,7 +184,18 @@ now compares actual published and Rust repositories on 509 rows at limits
 ciphertexts and issued records remain unchanged. Both real-repository gates pass
 locally. This is repository-boundary evidence, not 500 remote calls or whole-worker
 completion. Existing process evidence is retained. The 88-entry gate awaits hosted
-qualification; cycle-counter and secret-resolution composition gaps remain.
+qualification; cycle-counter qualification and secret-resolution composition gaps remain.
+
+The [cycle-counter reference](rust-migrations/canvas-worker-oauth-revocation-counters.md)
+now freezes actual cycle API return values for success, retry and both owner-loss
+outcomes. Permanent published-image regeneration passes all four cases; native
+Rust cycle replay is implemented with real database/vault/HTTPS dependencies and
+all seven returned fields compared. It preserves the original durable/HTTP checks
+and reuses the existing fixture and ownership-transfer protocol. Local strict
+Clippy, 24 Rust behavior tests and 991 Python tests pass (one existing opt-in skip).
+The mandatory gate now registers 90 entries; native Linux qualification is pending.
+This is not standalone-loop or active-job processor acceptance, and no deployed
+consumer or feature was removed.
 
 Latest qualified UI checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87` passed
 CI34069978028 and all applicable exact-head checks, including Rust CodeQL34069978088.

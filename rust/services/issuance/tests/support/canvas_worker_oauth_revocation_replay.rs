@@ -2,7 +2,9 @@
 use super::{
     canvas_worker_concurrent_replay::{start_workers_at_barrier, WorkerBarrier},
     canvas_worker_process_signals::OwnedWorker,
-    canvas_worker_provider_signals_replay::{await_marker, control_directory, mark},
+    canvas_worker_provider_signals_replay::{
+        await_marker, await_marker_while, control_directory, mark,
+    },
     canvas_worker_rest_replay,
 };
 use marty_issuance_service::{
@@ -12,6 +14,9 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::{sync::OnceLock, time::Duration};
 
+#[path = "canvas_worker_no_jobs.rs"]
+mod no_jobs;
+
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str, kind: &str) {
     assert_ne!(
         kind, "oauth-revocation-selection",
@@ -19,6 +24,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     );
     let matrix = matrix_for(kind);
     let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-counters" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-counters-oracle.json"
+        ),
         "oauth-revocation-lease" => include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-lease-oracle.json"
         ),
@@ -70,31 +78,47 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         }
     }
     let mut patch_attempt_observed = false;
-    let mut worker = if kind == "oauth-revocation-patch" {
-        start_workers_at_barrier(
-            pool,
-            database_url,
-            &environment,
-            WorkerBarrier {
-                worker_ids: &["worker-revocation"],
-                barrier_sql: matrix["barrier_sql"].as_str().unwrap(),
-                blocked_sql: matrix["blocked_sql"].as_str().unwrap(),
-                expected_jobs: 0,
-                release_sql: &[],
-            },
-            || {
-                patch_attempt_observed = true;
-            },
-        )
-        .await
-        .pop()
-        .unwrap()
+    let cycle = if kind == "oauth-revocation-counters" {
+        Some(start_counter_cycle(pool, &fixture, origin, &environment))
     } else {
-        OwnedWorker::start_with_environment(database_url, "worker-revocation", &environment)
+        None
     };
-    let fence = if kind == "oauth-revocation-fence" {
+    let mut worker = if cycle.is_some() {
+        None
+    } else {
+        Some(if kind == "oauth-revocation-patch" {
+            start_workers_at_barrier(
+                pool,
+                database_url,
+                &environment,
+                WorkerBarrier {
+                    worker_ids: &["worker-revocation"],
+                    barrier_sql: matrix["barrier_sql"].as_str().unwrap(),
+                    blocked_sql: matrix["blocked_sql"].as_str().unwrap(),
+                    expected_jobs: 0,
+                    release_sql: &[],
+                },
+                || {
+                    patch_attempt_observed = true;
+                },
+            )
+            .await
+            .pop()
+            .unwrap()
+        } else {
+            OwnedWorker::start_with_environment(database_url, "worker-revocation", &environment)
+        })
+    };
+    let fence = if kind == "oauth-revocation-fence" || case["replace_owner"] == true {
         let control = control_directory();
-        await_marker(&control, "request-received", &mut worker).await;
+        if let Some(worker) = worker.as_mut() {
+            await_marker(&control, "request-received", worker).await;
+        } else {
+            await_marker_while(&control, "request-received", || {
+                !cycle.as_ref().unwrap().is_finished()
+            })
+            .await;
+        }
         let mut transaction = pool.begin().await.unwrap();
         let before_fence: Value = sqlx::query_scalar(matrix["fence_sql"].as_str().unwrap())
             .fetch_one(&mut *transaction)
@@ -124,12 +148,24 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     } else {
         None
     };
+    let cycle_result = if let Some(cycle) = cycle {
+        Some(
+            tokio::time::timeout(Duration::from_secs(25), cycle)
+                .await
+                .expect("actual cycle must return")
+                .unwrap(),
+        )
+    } else {
+        None
+    };
     let heartbeat = tokio::time::timeout(Duration::from_secs(25), async {
         loop {
-            assert!(
-                worker.0.try_wait().unwrap().is_none(),
-                "native revocation worker exited before durable completion"
-            );
+            if let Some(worker) = worker.as_mut() {
+                assert!(
+                    worker.0.try_wait().unwrap().is_none(),
+                    "native revocation worker exited before durable completion"
+                );
+            }
             let heartbeat: Option<Value> =
                 sqlx::query_scalar(matrix["heartbeat_sql"].as_str().unwrap())
                     .fetch_optional(pool)
@@ -161,8 +197,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     .expect("actual native revocation must reach the expected durable phase");
     // SIGINT behavior has a separate qualified process gate. Here stop only
     // this owned child after the observed cycle, before reading durable state.
-    worker.signal("SIGINT");
-    assert_eq!(worker.wait().await.code(), Some(130));
+    if let Some(worker) = worker.as_mut() {
+        worker.signal("SIGINT");
+        assert_eq!(worker.wait().await.code(), Some(130));
+    }
     let queue = if let Some(before_queue) = before_queue {
         let order: Vec<String> =
             sqlx::query_scalar::<_, Value>(matrix["queue_order_sql"].as_str().unwrap())
@@ -317,6 +355,15 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     if let Some(queue) = queue {
         actual["queue"] = queue;
     }
+    if let Some(result) = cycle_result {
+        actual["cycle_result"] = json!({
+            "scheduled": result.scheduled, "leased": result.leased,
+            "succeeded": result.succeeded, "retried": result.retried,
+            "dead_lettered": result.dead_lettered,
+            "oauth_revocations_succeeded": result.oauth_revocations_succeeded,
+            "oauth_revocations_retried": result.oauth_revocations_retried,
+        });
+    }
     let mut expected = reference[name].as_object().unwrap().clone();
     // HTTP observations are compared in full by the actual HTTPS owner.
     // Published source hashes are verified by independent reference regeneration.
@@ -339,6 +386,37 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     );
 }
 
+fn start_counter_cycle(
+    pool: &PgPool,
+    fixture: &canvas_worker_rest_replay::WorkerFixture,
+    origin: &str,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> tokio::task::JoinHandle<marty_issuance_service::canvas_sync_worker::CanvasSyncWorkerCycleResult>
+{
+    use marty_issuance_service::{
+        canvas_oauth_http::HttpCanvasOAuthProvider,
+        canvas_oauth_postgres::PostgresCanvasOAuthRepository,
+        canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
+        canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
+    };
+    use std::sync::Arc;
+    let mut values = environment.clone();
+    values.insert("CANVAS_SYNC_WORKER_ID".into(), "worker-revocation".into());
+    let worker = CanvasSyncWorker::new(
+        Arc::new(PostgresCanvasSyncWorkerRepository::new(pool.clone())),
+        Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
+        Arc::new(fixture.vault.clone()),
+        Arc::new(HttpCanvasOAuthProvider::new(
+            Duration::from_secs(10),
+            vec![origin.into()],
+            false,
+        )),
+        Arc::new(no_jobs::NoJobsExpected(true)),
+        CanvasSyncWorkerConfig::from_values(&values).unwrap(),
+    );
+    tokio::spawn(async move { worker.run_cycle().await.unwrap() })
+}
+
 fn matrix_for(kind: &str) -> &'static Value {
     assert!(matches!(
         kind,
@@ -350,6 +428,7 @@ fn matrix_for(kind: &str) -> &'static Value {
             | "oauth-revocation-queue"
             | "oauth-revocation-lease"
             | "oauth-revocation-selection"
+            | "oauth-revocation-counters"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
@@ -359,13 +438,16 @@ fn matrix_for(kind: &str) -> &'static Value {
     static QUEUE_MATRIX: OnceLock<Value> = OnceLock::new();
     static LEASE_MATRIX: OnceLock<Value> = OnceLock::new();
     static SELECTION_MATRIX: OnceLock<Value> = OnceLock::new();
+    static COUNTERS_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
         ))
         .unwrap()
     });
-    let base = if matches!(
+    let base = if kind == "oauth-revocation-counters" {
+        matrix_for("oauth-revocation-fence")
+    } else if matches!(
         kind,
         "oauth-revocation-lease" | "oauth-revocation-selection"
     ) {
@@ -374,6 +456,10 @@ fn matrix_for(kind: &str) -> &'static Value {
         base
     };
     let extension = match kind {
+        "oauth-revocation-counters" => Some((
+            &COUNTERS_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"),
+        )),
         "oauth-revocation-selection" => Some((
             &SELECTION_MATRIX,
             include_str!("../../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"),

@@ -10,7 +10,10 @@ signing guard and twelve-case privacy checkpoint, passed all four entries in 104
 seconds. All 23 native revocation PASS markers were verified: seven transport,
 two replacement-owner, one marker-failure, eight Retry-After and five backoff cases.
 Later queue and [acquired-lease](canvas-worker-oauth-revocation-lease.md) extensions still need
-fresh hosted checks. Earlier worker gates
+fresh hosted checks. The later selection-cap repository and
+[cycle-return counter](canvas-worker-oauth-revocation-counters.md) comparisons are
+implemented and locally checked; the 90-entry gate still requires exact-head
+native qualification. Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized

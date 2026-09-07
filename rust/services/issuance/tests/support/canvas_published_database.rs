@@ -328,6 +328,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_oauth_revocation_counters(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
+            ),
+            "worker_oauth_revocation",
+            "worker-oauth-revocation-counters",
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_oauth_revocation_selection(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -811,6 +824,11 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_oauth_revocation" if scenario == "worker-oauth-revocation-counters" => &[
+                "contracts/canvas-worker-oauth-revocation-scenarios.json",
+                "contracts/canvas-worker-oauth-revocation-fence-scenarios.json",
+                "scripts/run_canvas_worker_single_cycle.py",
+            ],
             "worker_oauth_revocation"
                 if matches!(
                     scenario,

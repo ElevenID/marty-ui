@@ -40,7 +40,9 @@ def start_worker(case, worker_id):
     )
     environment.update(case["environment"])
     return subprocess.Popen(
-        [sys.executable, "-m", "issuance.canvas_worker"],
+        [sys.executable, "/verification/scripts/run_canvas_worker_single_cycle.py"]
+        if case.get("observe_cycle_result") is True
+        else [sys.executable, "-m", "issuance.canvas_worker"],
         env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

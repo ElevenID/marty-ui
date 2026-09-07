@@ -89,6 +89,7 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation-queue",
         "oauth-revocation-lease",
         "oauth-revocation-selection",
+        "oauth-revocation-counters",
     }
     contracts = Path("/verification/contracts")
     matrix = load_matrix(contracts, f"canvas-worker-{kind}-scenarios.json")
@@ -192,6 +193,8 @@ def run(case_name, kind="oauth-revocation"):
             worker_input = worker_case(
                 https.origin, https.cert, case.get("environment", {})
             )
+            if kind == "oauth-revocation-counters":
+                worker_input["observe_cycle_result"] = True
             patch_attempt_observed = False
 
             def observe_patch_attempt():
@@ -213,7 +216,7 @@ def run(case_name, kind="oauth-revocation"):
             )
             try:
                 fence = None
-                if kind == "oauth-revocation-fence":
+                if kind == "oauth-revocation-fence" or case.get("replace_owner"):
                     assert https.received.wait(15), "Actual DELETE was not received"
                     received_at = time.monotonic()
                     assert child.poll() is None and not https.release.is_set()
@@ -241,10 +244,11 @@ def run(case_name, kind="oauth-revocation"):
                     )
                     https.release.set()
                 deadline = time.monotonic() + 25
+                cycle_result = None
                 while True:
-                    assert child.poll() is None, (
-                        "Published worker exited before durable completion"
-                    )
+                    assert child.poll() is None or (
+                        kind == "oauth-revocation-counters" and child.returncode == 0
+                    ), "Published worker exited before durable completion"
                     with engine.connect() as connection:
                         heartbeat = connection.execute(
                             text(matrix["heartbeat_sql"])
@@ -256,6 +260,11 @@ def run(case_name, kind="oauth-revocation"):
                             if "completion_sql" in case
                             else True
                         )
+                        if kind == "oauth-revocation-counters":
+                            cycle_result = connection.execute(
+                                text(matrix["cycle_result_sql"])
+                            ).scalar_one_or_none()
+                            completed = cycle_result is not None
                     if (
                         heartbeat is not None
                         and heartbeat["metadata"]["phase"]
@@ -269,8 +278,11 @@ def run(case_name, kind="oauth-revocation"):
                     time.sleep(0.025)
                 if case.get("hold_response") and fence is None:
                     assert https.received.is_set() and not https.release.is_set()
-                child.send_signal(signal.SIGINT)
-                assert child.wait(timeout=10) == -signal.SIGINT
+                if kind == "oauth-revocation-counters":
+                    assert child.wait(timeout=10) == 0
+                else:
+                    child.send_signal(signal.SIGINT)
+                    assert child.wait(timeout=10) == -signal.SIGINT
                 with engine.connect() as connection:
                     queue = None
                     if before_queue is not None:
@@ -408,6 +420,8 @@ def run(case_name, kind="oauth-revocation"):
                     observation["disconnect_marker_update_observed"] = True
                 if queue is not None:
                     observation["queue"] = queue
+                if cycle_result is not None:
+                    observation["cycle_result"] = cycle_result
                 return observation
             finally:
                 finish_worker(child)

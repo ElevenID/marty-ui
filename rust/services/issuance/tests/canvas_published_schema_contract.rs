@@ -2,6 +2,16 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[tokio::test]
+async fn worker_oauth_revocation_counters_reference_matches_published_cycle() {
+    assert_worker_matrix_reference("oauth-revocation-counters").await;
+}
+
+#[test]
+fn worker_oauth_revocation_counters_matches_frozen_published_cycle() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-counters");
+}
+
 #[path = "support/canvas_worker_oauth_revocation_replay.rs"]
 mod canvas_worker_oauth_revocation_replay;
 
@@ -605,6 +615,14 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-counters" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
+            ),
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-counters-oracle.json"
+            ),
+        ),
         "oauth-revocation-selection" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"
@@ -686,6 +704,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-counters" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_counters(name).await
+            }
             "oauth-revocation-selection" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_selection(name).await
             }

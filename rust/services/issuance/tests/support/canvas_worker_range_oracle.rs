@@ -201,22 +201,9 @@ oauth_repository! {
     fn complete_revocation(organization_id: &str, platform_id: &str, lease_owner: &str, secret_ids: &[String]) -> Result<bool, CanvasOAuthError>;
 }
 
-struct NoJobsExpected;
-
-#[async_trait]
-impl CanvasSyncProcessor for NoJobsExpected {
-    fn configured(&self) -> bool {
-        false
-    }
-
-    async fn process(
-        &self,
-        _: &CanvasSyncTarget,
-        _: &marty_issuance_service::canvas_sync_lease::CanvasSyncLease,
-    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
-        panic!("empty-queue corpus must never invoke a job processor");
-    }
-}
+#[path = "canvas_worker_no_jobs.rs"]
+mod no_jobs;
+use no_jobs::NoJobsExpected;
 
 fn expected_events(outcome: &Value) -> Vec<Value> {
     outcome["events"]
@@ -281,7 +268,7 @@ fn worker(
         ),
     ]))
     .expect("frozen accepted configuration");
-    observed_worker(pool, config, Arc::new(NoJobsExpected), stop)
+    observed_worker(pool, config, Arc::new(NoJobsExpected(false)), stop)
 }
 
 pub(super) fn observed_worker(
