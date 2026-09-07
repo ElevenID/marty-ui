@@ -79,6 +79,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_canvas_operation_candidate_retains_legacy_routing_until_cutover() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-operations.json"
+        ))
+        .unwrap();
+        let routes = contract["routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 8);
+        for route in routes {
+            let method: HttpMethod = serde_json::from_value(route["method"].clone()).unwrap();
+            let path = format!(
+                "{}{}",
+                contract["route_prefix"].as_str().unwrap(),
+                route["path"].as_str().unwrap()
+            )
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "synthetic"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+            assert_eq!(
+                upstream_service(method, &path),
+                LEGACY_SERVICE,
+                "{method:?} {path}"
+            );
+        }
+    }
+
+    #[test]
     fn every_frozen_canvas_management_route_is_native() {
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-canvas-management.json"

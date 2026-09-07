@@ -909,6 +909,75 @@ impl IntoResponse for OperationsError {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn every_frozen_operation_is_mounted_and_rejects_unauthenticated_access() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-operations.json"
+        ))
+        .unwrap();
+        let routes = contract["routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 8);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let router = candidate_router(CanvasOperationsService::new(
+            pool.clone(),
+            Some("synthetic-operations-key"),
+        ));
+        for route in routes {
+            let path = format!(
+                "{}{}",
+                contract["route_prefix"].as_str().unwrap(),
+                route["path"].as_str().unwrap()
+            )
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "synthetic"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+            for key in [None, Some("synthetic-wrong-key")] {
+                let mut request = Request::builder()
+                    .method(route["method"].as_str().unwrap())
+                    .uri(&path)
+                    .header("content-type", "application/json");
+                if let Some(key) = key {
+                    request = request.header("x-api-key", key);
+                }
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    router
+                        .clone()
+                        .oneshot(request.body(Body::from("{}")).unwrap()),
+                )
+                .await
+                .expect("management rejection must not wait for database access")
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            }
+        }
+        // Negative route control: a missing registration must not look like a
+        // successful management-authentication barrier.
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/not-a-canvas-operation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        pool.close().await;
+    }
+
     #[test]
     fn public_job_projection_retains_only_legacy_scalar_fields() {
         assert_eq!(

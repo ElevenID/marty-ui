@@ -92,7 +92,7 @@
     "Timestamp presence/ISO validation, not exact temporal parity",
     "Only router mounted in ASGI fixture, not deployed middleware",
     "46 cases are not an exhaustive input/status/filtering/failure/race matrix",
-    "Four native read candidates only; write implementation, live routing and deployment remain pending"
+    "All eight native read/write operations are implemented candidates; registered runtime/lifecycle integration, live routing and deployment remain pending"
   ],
   "deletion_requires": [
     "Complete Rust operations and shared repository/lifecycle integration",
