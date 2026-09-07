@@ -1,0 +1,18 @@
+{
+  "schema": "marty.canvas-worker-dispatch-scenarios/v1",
+  "normative_contract": "issuance-canvas-sync-worker.json",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "queued_job_scenario": "canvas-worker-validation-scenarios.json",
+  "scope": "Actual unchanged published worker and PostgreSQL dispatch, with explicitly selected synthetic processor hooks. Not actual-provider or signing qualification. Seed one valid target and queued job before startup; never edit running jobs, schedules, clocks, leases or application code. Python loader syntax is legacy-only: native compiler-boundary proof is separate.",
+  "hook_module": "canvas_worker_dispatch_hooks",
+  "target_sql": "SELECT jsonb_build_object('enabled',enabled,'config_version',config_version,'last_success_present',last_succeeded_at IS NOT NULL,'worker_id',metadata->'worker_id') FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review' AND organization_id='org-review'",
+  "job_row_sql": "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j WHERE id='worker-validation-job'",
+  "target_row_sql": "SELECT to_jsonb(t) FROM issuance_service.canvas_evidence_sync_targets t WHERE id='target-review' AND organization_id='org-review'",
+  "cases": [
+    {"name":"missing_processor","hook":null,"rollout_enabled":true,"processor_configured":false,"status":"retry","code":"canvas_sync_processor_unavailable","summary":"Authoritative Canvas synchronization processor is not configured","retryable":true,"result":{}},
+    {"name":"nonawaitable_result","hook":"nonawaitable_result","rollout_enabled":true,"processor_configured":true,"status":"dead_letter","code":"canvas_sync_processor_contract_invalid","summary":"Canvas synchronization processor must be asynchronous","retryable":false,"result":{}},
+    {"name":"nonmapping_result","hook":"nonmapping_result","rollout_enabled":true,"processor_configured":true,"status":"dead_letter","code":"canvas_sync_processor_contract_invalid","summary":"Canvas synchronization processor returned an invalid result","retryable":false,"result":{}},
+    {"name":"valid_mapping","hook":"valid_mapping","rollout_enabled":true,"processor_configured":true,"status":"succeeded","code":null,"summary":null,"retryable":null,"result":{"facts_changed":1,"no_change":false}},
+    {"name":"rollout_closed_missing","hook":null,"rollout_enabled":false,"processor_configured":false,"status":"succeeded","code":null,"summary":null,"retryable":null,"result":{"no_change":true}}
+  ]
+}

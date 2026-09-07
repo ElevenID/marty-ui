@@ -241,7 +241,7 @@ in-flight provider effects remains separate.
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Seven actual native HTTPS/deadline cases and shared parser correction qualified at a6826de39 and retained at 29bf8c226; existing parser vectors remain | Retain date, malformed, negative, zero, clamp and huge-integer durable scheduling evidence in fresh exact-head CI. Full-worker acceptance remains separate. |
-| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): fourteen processor codes have process evidence and one has a controlled-processor worker/PG guard | Two typed-dispatch reconciliations remain open; none of the seventeen codes is waived. Keep the no-signing guard; do not emulate Python imports or mistake an empty composed-code inventory for full worker/provider qualification. |
+| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): fourteen processor codes have process evidence and one has a controlled-processor worker/PG guard. [Typed dispatch proof](canvas-worker-dispatch-reconciliation.md) now has five published-worker observations and five compiler tests passing locally | Hosted qualification and all-consumer reconciliation remain for the two typed-dispatch codes; none of the seventeen codes is waived. Keep the no-signing guard; do not emulate Python imports or mistake an empty composed-code inventory for full worker/provider qualification. |
 | 10. OAuth revocation failure and owner fences | 39 native process/cycle observations plus selection/order, schema-rejection and empty-token regressions qualified at df3ed290b | Retain the scoped [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md) and stronger atomic cleanup in future exact-head runs. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native direct-processor replay remains; new [seven-stage complete published-worker reference](canvas-worker-mixed-roster.md) captures twice-identical natural scheduling, one idle restart, resume/wrap, terminal preservation and mixed REST/AGS/NRPS behavior | Replay the frozen seven-stage corpus through a continuously running native worker and exact transport traces. The new published captures and fixture tests are not native process qualification. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
@@ -307,6 +307,13 @@ canonical Rust release/artifact qualification before aggregate adoption;
 neither the global installed package nor another worker's crypto branch changed.
 
 ## Deployment consumer inventory
+
+The [source consumer audit](canvas-worker-consumer-audit-2026-09-07.md) additionally
+tracks conformance and generated/local image overlays, the eight still-Python
+operations, and the cross-runtime rollback launch gap. Image-only restoration
+from a current checkout does not prove compatibility with an earlier Python
+worker. The discovered rollback repair requires synthetic round-trip tests and
+review before any deployment or restore action.
 
 | Consumer | Current source selection | Required cutover proof |
 | --- | --- | --- |

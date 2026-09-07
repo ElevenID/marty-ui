@@ -326,6 +326,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_dispatch(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-dispatch-scenarios.json"),
+            "worker_dispatch",
+            "worker-dispatch",
+            "MARTY_CANVAS_WORKER_DISPATCH_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_mixed_roster(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -793,6 +804,7 @@ impl PublishedDatabase {
                 | "worker_resource_race"
                 | "worker_resources_unavailable"
                 | "worker_mixed_roster"
+                | "worker_dispatch"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -884,6 +896,7 @@ impl PublishedDatabase {
                 | "worker_resource_race"
                 | "worker_resources_unavailable"
                 | "worker_mixed_roster"
+                | "worker_dispatch"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -942,6 +955,12 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_dispatch" => &[
+                "scripts/canvas_worker_dispatch_hooks.py",
+                "contracts/canvas-worker-validation-scenarios.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
             "worker_mixed_roster" => &[
                 "scripts/canvas_worker_mixed_roster_https_fixture.py",
                 "contracts/canvas-mixed-roster-scenarios.json",

@@ -86,6 +86,15 @@ def prepare():
         }
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
+        dispatch_case = os.environ.get("MARTY_CANVAS_WORKER_DISPATCH_CASE")
+        if dispatch_case is not None:
+            from run_canvas_worker_dispatch_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_dispatch"] = run(dispatch_case)
         provider_signal = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL")
         mixed_roster_case = os.environ.get("MARTY_CANVAS_WORKER_MIXED_ROSTER_CASE")
         if mixed_roster_case is not None:

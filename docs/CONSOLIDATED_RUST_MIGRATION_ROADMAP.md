@@ -59,6 +59,19 @@ historical evidence and do not supersede this latest qualification boundary.
 
 New local work, deliberately separate from that hosted checkpoint:
 
+- The [typed dispatch reconciliation](rust-migrations/canvas-worker-dispatch-reconciliation.md)
+  now preserves all three legacy dispatch failures and two controls through
+  twice-identical published-worker captures, plus a third frozen-equality pass
+  in 25.13s. Five actual compiler tests prove Rust's non-optional, asynchronous,
+  object-result boundary. The local Python suite passes 1,234 tests with one
+  existing skip; 120 registered published-schema entries are not 120 qualified
+  runtime passes. Consumer loader removal and whole-worker qualification remain.
+- CI `34098106567` at `8e7f66d46` exposed a Compose 2.38.2 bundle-reset defect;
+  [the compatible repair](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
+  preserves all 17 Rust models and the issuance family on both Compose 2.38.2
+  and 5.4.0. Local commit `5aa086a1e` is not yet hosted image qualification.
+  Rust CodeQL `34098106562` passed; the runtime job remains independently tracked.
+
 - The [effect-expiry regression](rust-migrations/canvas-worker-effect-expiry.md)
   passed its real-database-time rollback and successful-before-expiry controls
   in 38.14s after independent review. It uses a controlled provider, not a

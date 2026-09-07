@@ -2,6 +2,38 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[tokio::test]
+async fn worker_dispatch_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let matrix: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-dispatch-scenarios.json"
+    ))
+    .unwrap();
+    let mut observations = Vec::new();
+    for case in matrix["cases"].as_array().unwrap() {
+        let owned = canvas_published_database::PublishedDatabase::start_with_worker_dispatch(
+            case["name"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        observations.push(owned.oracle.as_ref().unwrap().clone());
+        owned.close().unwrap();
+    }
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-dispatch-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::json!({
+            "schema": "marty.canvas-worker-dispatch-corpus/v1",
+            "observations": observations,
+        }),
+        reference
+    );
+}
+
 #[path = "support/canvas_worker_effect_expiry.rs"]
 mod canvas_worker_effect_expiry;
 

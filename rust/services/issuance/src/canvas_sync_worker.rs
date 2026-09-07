@@ -431,6 +431,7 @@ impl CanvasSyncProcessingError {
     }
 }
 
+#[doc = include_str!("../tests/compile/canvas_sync_processor.md")]
 #[async_trait]
 pub trait CanvasSyncProcessor: Send + Sync {
     fn configured(&self) -> bool;
