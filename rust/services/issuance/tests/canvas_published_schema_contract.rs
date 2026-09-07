@@ -6,6 +6,24 @@ use tracing::instrument::WithSubscriber;
 mod canvas_worker_oauth_revocation_replay;
 
 #[tokio::test]
+async fn worker_oauth_revocation_selection_repository_matches_published() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_oauth_revocation_replay::assert_capped_repository_selection(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
 async fn worker_oauth_revocation_repository_selection_matches_published_order() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -504,6 +522,11 @@ async fn worker_oauth_revocation_lease_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_selection_reference_matches_published_repository() {
+    assert_worker_matrix_reference("oauth-revocation-selection").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -582,6 +605,14 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-selection" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"
+            ),
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-selection-oracle.json"
+            ),
+        ),
         "oauth-revocation-lease" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"
@@ -655,6 +686,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-selection" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_selection(name).await
+            }
             "oauth-revocation-lease" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_lease(name).await
             }

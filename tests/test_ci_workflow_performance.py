@@ -307,6 +307,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_oauth_revocation_repository_selection_matches_published_order",
         "worker_oauth_revocation_lease_reference_matches_published_process",
         "worker_oauth_revocation_lease_matches_frozen_published_process",
+        "worker_oauth_revocation_selection_reference_matches_published_repository",
+        "worker_oauth_revocation_selection_repository_matches_published",
     ]:
         assert f"grep -Fx '{name}: test'" in published
     assert (

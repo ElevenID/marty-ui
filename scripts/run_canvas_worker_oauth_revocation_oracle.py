@@ -1,6 +1,7 @@
 """Observe remote revocation through the actual published worker and owned SQL."""
 
 import hashlib
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -38,6 +39,43 @@ def observe_acquired_leases(durations, seconds, count):
     return {"count": count, "seconds": seconds, "all_within_tolerance": True}
 
 
+def ordered_selection_digest(ids):
+    # Language-neutral encoding: compact UTF-8 JSON array, original order.
+    assert all(isinstance(value, str) for value in ids)
+    return hashlib.sha256(
+        json.dumps(ids, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+async def observe_repository_selection(limits):
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from issuance.infrastructure.adapters.postgres_repository import (
+        PostgresIssuanceRepository,
+    )
+
+    engine = create_async_engine(
+        DATABASE.replace("postgresql:", "postgresql+asyncpg:", 1)
+    )
+    try:
+        repository = PostgresIssuanceRepository(
+            async_sessionmaker(engine, expire_on_commit=False)
+        )
+        observations = []
+        for limit in limits:
+            rows = await repository.list_canvas_oauth_revocation_retries(limit=limit)
+            ids = [row.id for row in rows]
+            observations.append(
+                {
+                    "limit": limit,
+                    "count": len(ids),
+                    "ordered_ids_sha256": ordered_selection_digest(ids),
+                }
+            )
+        return observations
+    finally:
+        await engine.dispose()
+
+
 def run(case_name, kind="oauth-revocation"):
     from sqlalchemy import create_engine, text
     from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
@@ -50,6 +88,7 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
         "oauth-revocation-lease",
+        "oauth-revocation-selection",
     }
     contracts = Path("/verification/contracts")
     matrix = load_matrix(contracts, f"canvas-worker-{kind}-scenarios.json")
@@ -100,6 +139,55 @@ def run(case_name, kind="oauth-revocation"):
             for secret_id, _, plaintext in matrix["additional_secrets"]:
                 assert before_secrets[secret_id] != plaintext
             assert before_secrets["worker-rest-token"] != spec["token"]
+            if kind == "oauth-revocation-selection":
+                selections = asyncio.run(observe_repository_selection(case["limits"]))
+                with engine.connect() as connection:
+                    assert (
+                        connection.execute(text(matrix["queue_rows_sql"])).scalar_one()
+                        == before_queue
+                    )
+                    assert (
+                        connection.execute(text(matrix["secret_sql"])).scalar_one()
+                        == before_secrets
+                    )
+                    assert (
+                        connection.execute(
+                            text(shared["preserved_rows_sql"])
+                        ).scalar_one()
+                        == preserved
+                    )
+                    assert (
+                        connection.execute(text(matrix["queue_order_sql"])).scalar_one()
+                        == []
+                    )
+                    assert (
+                        connection.execute(
+                            text(
+                                "SELECT count(*) FROM issuance_service.canvas_worker_heartbeats"
+                            )
+                        ).scalar_one()
+                        == 0
+                    )
+                assert https.requests == []
+                source = Path(
+                    importlib.util.find_spec(
+                        "issuance.infrastructure.adapters.postgres_repository"
+                    ).origin
+                )
+                return {
+                    "schema": "marty.canvas-worker-oauth-revocation-selection-oracle/v1",
+                    "name": case_name,
+                    "selections": selections,
+                    "connection_count": len(before_queue),
+                    "connection_rows_unchanged": True,
+                    "ciphertexts_unchanged": True,
+                    "issued_rows_unchanged": True,
+                    "lease_acquisition_count": 0,
+                    "http_request_count": 0,
+                    "repository_source_sha256": hashlib.sha256(
+                        source.read_text(encoding="utf-8").encode()
+                    ).hexdigest(),
+                }
             https.stage = case
             worker_input = worker_case(
                 https.origin, https.cert, case.get("environment", {})

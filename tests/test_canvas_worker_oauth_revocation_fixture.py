@@ -60,6 +60,57 @@ def test_nested_lease_matrix_inherits_queue_and_original_seed(monkeypatch):
     assert "completion_sql" in matrix["cases"][-1]
 
 
+def test_nonempty_selection_reference_preserves_exact_cap_and_order(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    matrix = oracle.load_matrix(
+        root / "contracts", "canvas-worker-oauth-revocation-selection-scenarios.json"
+    )
+    assert matrix["cases"][0]["limits"] == [0, 499, 500, 501, 2147483648]
+    reference = json.loads(
+        (
+            root / "contracts/canvas-worker-oauth-revocation-selection-oracle.json"
+        ).read_text()
+    )["selection_limits"]
+    assert reference["connection_count"] == 509
+    assert [item["count"] for item in reference["selections"]] == [
+        1,
+        499,
+        500,
+        500,
+        500,
+    ]
+    for item in reference["selections"]:
+        ids = [f"cap-{n:04d}" for n in range(1, item["count"] + 1)]
+        assert item["ordered_ids_sha256"] == oracle.ordered_selection_digest(ids)
+        assert item["ordered_ids_sha256"] != oracle.ordered_selection_digest(
+            ids + [ids[-1]]
+        )
+        if len(ids) > 1:
+            assert item["ordered_ids_sha256"] != oracle.ordered_selection_digest(
+                list(reversed(ids))
+            )
+    assert reference["lease_acquisition_count"] == reference["http_request_count"] == 0
+    assert (
+        reference["connection_rows_unchanged"]
+        and reference["ciphertexts_unchanged"]
+        and reference["issued_rows_unchanged"]
+    )
+
+
+def test_repository_only_corpus_cannot_claim_native_https_replay(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    monkeypatch.setattr(
+        native,
+        "WorkerHttpsFixture",
+        lambda: pytest.fail("repository-only corpus must not create HTTPS replay"),
+    )
+    with pytest.raises(AssertionError):
+        native.run("synthetic-not-executed", "oauth-revocation-selection")
+
+
 @pytest.mark.parametrize("filename", ["a.json", "../outside.json"])
 def test_reference_matrix_rejects_cycles_and_external_paths(
     monkeypatch, tmp_path, filename

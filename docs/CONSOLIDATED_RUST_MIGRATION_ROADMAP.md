@@ -147,7 +147,8 @@ match; all failures retain encrypted secrets and use the observed durable retry
 deadline. Native replay shares the existing timestamp producer and HTTPS-owned
 deadline comparator, with explicit OAuth storage-field mapping and fail-closed
 evidence controls. Local Python948PASS/1opt-inSKIP and strict Rust Clippy pass;
-79 configured entries are registered. Native timing qualification is pending.
+79 configured entries were registered at introduction. Native timing qualification
+has now passed at75d82 below.
 No runtime, consumer or feature is changed by this acceptance extension.
 
 The [OAuth contract coverage audit](rust-migrations/canvas-worker-oauth-revocation-coverage-audit.md)
@@ -157,7 +158,7 @@ five independently matched published-process captures and implemented native
 replay at retry counts1,9,10,11,999. Stored deadlines, counter increments and
 token retention are checked without modifying running state. Local24behavior
 and954Python tests pass (one existing opt-in skip); strict Clippy passes. The
-81-entry native Linux gate remains pending. No runtime or feature was removed.
+81-entry native Linux gate has now passed at75d82 below. No runtime or feature was removed.
 
 The [queue parity extension](rust-migrations/canvas-worker-oauth-revocation-queue.md)
 now freezes two actual nonempty selection observations with batch limits 3 and 25.
@@ -176,6 +177,14 @@ completed revocation writes; it does not claim the later ordinary job-leasing
 overflow disappeared. Existing queue/reference values remain unchanged. Shared
 matrix/fixture/process owners are reused. Native replay is implemented and the
 86-entry gate awaits exact-head hosted qualification. No runtime or feature changed.
+
+The [nonempty selection-cap reference](rust-migrations/canvas-worker-oauth-revocation-selection.md)
+now compares actual published and Rust repositories on 509 rows at limits
+0/499/500/501/2147483648. Counts and every ordered selected ID match; all rows,
+ciphertexts and issued records remain unchanged. Both real-repository gates pass
+locally. This is repository-boundary evidence, not 500 remote calls or whole-worker
+completion. Existing process evidence is retained. The 88-entry gate awaits hosted
+qualification; cycle-counter and secret-resolution composition gaps remain.
 
 Latest qualified UI checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87` passed
 CI34069978028 and all applicable exact-head checks, including Rust CodeQL34069978088.

@@ -1,0 +1,10 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-selection-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-queue-scenarios.json",
+  "scope": "Actual published repository selection from a nonempty queue beyond the 500-row cap; does not claim 500 remote calls or whole-worker completion",
+  "cases": [{"name": "selection_limits", "limits": [0, 499, 500, 501, 2147483648]}],
+  "case_before_start_sql": [
+    "INSERT INTO issuance_service.canvas_platforms SELECT (jsonb_populate_record(NULL::issuance_service.canvas_platforms,to_jsonb(p)||jsonb_build_object('id','cap-platform-'||lpad(n::text,4,'0'),'canvas_account_id','cap-account-'||n,'lti_deployment_id','cap-deployment-'||n))).* FROM issuance_service.canvas_platforms p CROSS JOIN generate_series(1,501) n WHERE p.id='platform-review'",
+    "INSERT INTO issuance_service.canvas_oauth_connections SELECT (jsonb_populate_record(NULL::issuance_service.canvas_oauth_connections,to_jsonb(c)||jsonb_build_object('id','cap-'||lpad(n::text,4,'0'),'platform_id','cap-platform-'||lpad(n::text,4,'0'),'revoke_retry_at',clock_timestamp()-interval '1 year'+make_interval(secs=>n)))).* FROM issuance_service.canvas_oauth_connections c CROSS JOIN generate_series(1,501) n WHERE c.id='worker-rest-connection'"
+  ]
+}

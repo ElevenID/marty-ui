@@ -13,6 +13,10 @@ use sqlx::PgPool;
 use std::{sync::OnceLock, time::Duration};
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str, kind: &str) {
+    assert_ne!(
+        kind, "oauth-revocation-selection",
+        "selection corpus is repository-only"
+    );
     let matrix = matrix_for(kind);
     let reference: Value = serde_json::from_str(match kind {
         "oauth-revocation-lease" => include_str!(
@@ -345,6 +349,7 @@ fn matrix_for(kind: &str) -> &'static Value {
             | "oauth-revocation-backoff"
             | "oauth-revocation-queue"
             | "oauth-revocation-lease"
+            | "oauth-revocation-selection"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
@@ -353,18 +358,26 @@ fn matrix_for(kind: &str) -> &'static Value {
     static BACKOFF_MATRIX: OnceLock<Value> = OnceLock::new();
     static QUEUE_MATRIX: OnceLock<Value> = OnceLock::new();
     static LEASE_MATRIX: OnceLock<Value> = OnceLock::new();
+    static SELECTION_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
         ))
         .unwrap()
     });
-    let base = if kind == "oauth-revocation-lease" {
+    let base = if matches!(
+        kind,
+        "oauth-revocation-lease" | "oauth-revocation-selection"
+    ) {
         matrix_for("oauth-revocation-queue")
     } else {
         base
     };
     let extension = match kind {
+        "oauth-revocation-selection" => Some((
+            &SELECTION_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"),
+        )),
         "oauth-revocation-lease" => Some((
             &LEASE_MATRIX,
             include_str!("../../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"),
@@ -469,6 +482,64 @@ async fn prepare_fixture(
         }
     }
     (fixture, before)
+}
+
+pub async fn assert_capped_repository_selection(pool: &PgPool) {
+    use marty_issuance_service::{
+        canvas_oauth::CanvasOAuthRepository, canvas_oauth_postgres::PostgresCanvasOAuthRepository,
+    };
+    use sha2::{Digest, Sha256};
+    let matrix = matrix_for("oauth-revocation-selection");
+    let case = &matrix["cases"][0];
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-oauth-revocation-selection-oracle.json"
+    ))
+    .unwrap();
+    let (fixture, before_secrets) =
+        prepare_fixture(pool, "https://127.0.0.1:1", matrix, case).await;
+    let before_rows: Value = sqlx::query_scalar(matrix["queue_rows_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let repository = PostgresCanvasOAuthRepository::new(pool.clone());
+    let mut selections = Vec::new();
+    for limit in case["limits"].as_array().unwrap() {
+        let rows = repository
+            .due_revocations(usize::try_from(limit.as_u64().unwrap()).unwrap())
+            .await
+            .unwrap();
+        let ids = rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+        let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&ids).unwrap()));
+        selections.push(json!({"limit": limit, "count": ids.len(), "ordered_ids_sha256": digest}));
+    }
+    let after_rows: Value = sqlx::query_scalar(matrix["queue_rows_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(after_rows, before_rows);
+    let after_secrets: Value = sqlx::query_scalar(matrix["secret_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(after_secrets, before_secrets);
+    fixture.assert_issued_rows_preserved(pool).await;
+    let acquisitions: Value = sqlx::query_scalar(matrix["queue_order_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(acquisitions, json!([]));
+    let heartbeats: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_worker_heartbeats")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(heartbeats, 0);
+    let actual = json!({"schema": "marty.canvas-worker-oauth-revocation-selection-oracle/v1", "name": "selection_limits", "selections": selections,
+        "connection_count": before_rows.as_object().unwrap().len(), "connection_rows_unchanged": true,
+        "ciphertexts_unchanged": true, "issued_rows_unchanged": true, "lease_acquisition_count": 0, "http_request_count": 0});
+    let mut expected = reference["selection_limits"].as_object().unwrap().clone();
+    assert!(expected.remove("repository_source_sha256").is_some());
+    assert_eq!(actual, Value::Object(expected));
 }
 
 pub async fn assert_queue_repository_selection(pool: &PgPool) {
