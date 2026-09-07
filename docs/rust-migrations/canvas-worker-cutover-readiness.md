@@ -1,6 +1,13 @@
-# Canvas worker cutover readiness — 2026-09-06
+# Canvas worker cutover readiness — 2026-09-07
 
-Status: latest qualified composed checkpoint `c3e51a4d58083625aabd50de7fba37ef1ff53d4e`:
+Status: latest qualified composed checkpoint `5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19`:
+109 configured runtime tests passed in 2361.53s (CI34085691302,
+runtime101629197299), with four configured worker/PostgreSQL entries in 96.28s.
+All applicable exact-head checks passed, including Rust CodeQL34085691297 and
+image101629197264. All five native roster markers were inspected (requests
+0, 0, 1, 1, 1); the actual one-HTTPS recovery-first marker is retained.
+
+The prior qualified checkpoint `c3e51a4d58083625aabd50de7fba37ef1ff53d4e` had
 107 configured runtime tests passed in 2327.12s (CI34082559053, runtime101620519590).
 All applicable exact-head checks passed, including Rust CodeQL34082559034. Image
 job101620519633 passed nine preflight, 24 packaged startup and 16 logging-reference
@@ -15,7 +22,7 @@ atomicity and recovery-first process fencing now pass, including the exact
 one-HTTPS-request native markers. Earlier
 validation, privacy and startup boundaries remain retained. This qualifies those
 scoped boundaries, including recovery-first and the LOG_LEVEL/image-default
-repair, not the local 109-entry roster extension or whole-worker cutover.
+repair, not whole-worker cutover.
 Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
@@ -23,19 +30,26 @@ whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
 [`issuance-canvas-sync-worker.json`](../../contracts/issuance-canvas-sync-worker.json).
 
-The local [roster-failure extension](canvas-worker-roster-failures.md) adds five
-published process captures and narrow Rust parity repairs, bringing registration
-to 109 entries. Its native Linux qualification is pending; do not count its four
-processor codes as closed or mistake the frozen 503 outcome for an authoritative
-read error. The seven-code remaining composed inventory is deliberately retained.
+The [roster-failure extension](canvas-worker-roster-failures.md) adds five
+published process captures and narrow Rust parity repairs, now qualified by the
+109-entry Linux run. Four more normative processor codes have actual-process
+evidence, leaving three composed outcomes and two typed-dispatch reconciliations
+open. The frozen HTTP 503 outcome is an additional generic worker error, not the
+singular authoritative-read processor error or another normative processor code.
 
 The subsequent [resource-race extension](canvas-worker-resource-races.md) freezes
 two real published-worker outcomes: platform reconfiguration and application
 removal during a held provider read. It adds a shared native replay and narrow
 Rust error-classification repairs while retaining lease, row-lock and update
-guards. Registration is now 113 entries, not 113 qualified passes. Its native
-Linux process qualification is pending; neither code leaves the seven-code
+guards. That extension registers 113 entries, not 113 qualified passes. Its native
+Linux process qualification is pending; neither code leaves the three-code
 remaining inventory on the strength of reference or repository tests alone.
+
+The [resources-unavailable reference](canvas-worker-resources-unavailable.md)
+captures the third remaining outcome after completed validation and before
+resource reload. It has independent published regeneration and compiled native
+replay, bringing registration to 115 entries; native Linux process qualification
+is separate and pending. No remaining outcome is waived.
 
 ## What the latest evidence does and does not prove
 
@@ -214,7 +228,7 @@ in-flight provider effects remains separate.
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Seven actual native HTTPS/deadline cases and shared parser correction qualified at a6826de39 and retained at 29bf8c226; existing parser vectors remain | Retain date, malformed, negative, zero, clamp and huge-integer durable scheduling evidence in fresh exact-head CI. Full-worker acceptance remains separate. |
-| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): seven processor codes have process evidence and one has a controlled-processor worker/PG guard | Seven composed processor outcomes and two typed-dispatch reconciliations remain open. Keep the no-signing guard; do not emulate Python imports or mistake corpus-local remaining lists for global gaps. |
+| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): eleven processor codes have process evidence and one has a controlled-processor worker/PG guard | Three composed processor outcomes and two typed-dispatch reconciliations remain open. Keep the no-signing guard; do not emulate Python imports or mistake corpus-local remaining lists for global gaps. |
 | 10. OAuth revocation failure and owner fences | 39 native process/cycle observations plus selection/order, schema-rejection and empty-token regressions qualified at df3ed290b | Retain the scoped [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md) and stronger atomic cleanup in future exact-head runs. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
@@ -284,9 +298,26 @@ neither the global installed package nor another worker's crypto branch changed.
 | Base Compose | `docker-compose.base.yml`: immutable issuance image, `python -m issuance.canvas_worker`, `CANVAS_SYNC_PROCESSOR` | Native image/command, equivalent configuration and secrets, both migration dependencies, no ports, database heartbeat and restart behavior. |
 | Beta overlay | `docker-compose.beta.yml`: only adds worker environment; inherits the base command/image | Render the exact aggregate beta composition and verify native selection; an environment-only overlay is not a cutover. |
 | Self-host production definition | `docker-compose.selfhost.prod.yml`: shell secret loader followed by Python, with loader selection | Preserve file-secret and database-template handling, migration ordering and headless health semantics in source. Do not deploy to persistent self-host. |
-| Self-host bundle override | `docker-compose.selfhost.bundle.override.yml`: shared service image and `SERVICE_NAME: issuance`, inheriting the self-host shell command | Render together with the self-host definition; select the native worker rather than the API while preserving the secret loader. The base-file change alone does not verify this overlay. |
+| Self-host bundle override | `docker-compose.selfhost.bundle.override.yml` now inherits the base worker unchanged: immutable Python issuance image and shell secret loader. Its incompatible Rust-only-image/Python-command override was removed | Mandatory read-only Compose merge gate compares the entire worker model. At qualified cutover, render both image families and explicitly select the worker rather than the API while preserving the secret loader. Current inheritance is not Rust acceptance. |
 | Kubernetes | `k8s/oracle/07-microservices.yaml`: Python command/args; `01-configmap.yaml`: loader selection | Native image provenance/command, ConfigMap cleanup, all secret inputs, migration job ordering and termination policy in rendered artifacts. Do not apply to production. |
 | Shared Rust image | `services/Dockerfile` and `rust/services/Dockerfile.ci` contain the worker binary; the shared entrypoint now implements explicit worker selection | Qualify the [image launch gate](canvas-worker-image-entrypoint.md) and [24-case packaged startup gate](canvas-worker-image-startup.md), then remaining consumer configuration/secrets, headless health and migration ordering; startup alone does not prove active worker-cycle acceptance. |
+
+Operational consumers must migrate with these definitions: the local beta release
+and rollback runner (`scripts/deploy-local-beta-release.ps1`), beta capability and
+OSS evidence checkers (`check_canvas_beta_capabilities.py`,
+`check_canvas_oss_portability.py`), self-host preflight
+(`check-selfhost-production.py`), deployment catalog and Kubernetes image-update
+loop. They still rely on Python processor selection and/or issuance/worker image
+identity. Preserve their digest, pilot, signer, timeout and key checks while
+introducing reviewed runtime selection; changing manifests alone is insufficient.
+
+The self-host bundle repair is source/render evidence, not an inspection of a
+deployed release. `scripts/test_canvas_worker_compose_render.py` rejects the old
+merged combination and passes the inherited definition, comparing all worker
+fields, including secrets, URL template, migration dependencies, headless health
+and restart policy. CI now runs this real read-only rendering check before image
+builds. It disables interpolation, environment-file and path resolution; it does
+not prove resolved secret values, image startup or the exact beta composition.
 
 The initial local debug-binary diagnostic confirmed a startup obstacle: with
 rollout disabled, synthetic keys, no LTI identity and an unavailable loopback
@@ -331,3 +362,8 @@ The full goal also retains the broader issuance inventory, feature-preserving
 branch/worktree cleanup, CSCA lifecycle-manager/monitor follow-up, all demo and
 device/wallet evidence, release-pin reconciliation, and aggregate beta-only
 acceptance/soak. Production and persistent self-host remain unchanged.
+
+The [local-work inventory](post-wave3-local-work-inventory-2026-09-07.md) records
+dirty dependency/wallet work, divergent branches, unregistered demo source and
+equivalence candidates. Its cached-ref snapshots are preservation leads, not
+authority to delete branches or evidence that all work is merged.

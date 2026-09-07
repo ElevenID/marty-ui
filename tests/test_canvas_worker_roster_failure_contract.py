@@ -63,19 +63,35 @@ def test_frozen_roster_failures_keep_distinct_side_effects():
     )
 
 
-def test_roster_capture_is_not_counted_as_native_qualification():
+def test_roster_qualification_is_exact_head_and_keeps_unrelated_gates_open():
     audit = json.loads(
         (ROOT / "contracts/canvas-worker-processor-coverage.json").read_text()
     )
-    pending = audit["pending_process_qualification"]["roster_failure"]
-    assert pending["status"] == "published_capture_regenerated_native_linux_pending"
-    assert pending["scenarios"] == "canvas-worker-roster-failure-scenarios.json"
-    assert pending["reference"] == "canvas-worker-roster-failure-oracle.json"
+    roster = audit["actual_process"]["roster_failure"]
+    assert "roster_failure" not in audit["pending_process_qualification"]
+    assert roster["scenarios"] == "canvas-worker-roster-failure-scenarios.json"
+    assert roster["reference"] == "canvas-worker-roster-failure-oracle.json"
+    # Protect the recorded hosted evidence, not a claim of runtime execution here.
+    assert roster["qualification"] == {
+        "commit": "5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19",
+        "ci_run_id": 34085691302,
+        "runtime_job_id": 101629197299,
+        "configured_tests": 109,
+        "configured_duration_seconds": 2361.53,
+        "configured_result_timestamp_utc": "2026-09-07T05:56:08Z",
+        "worker_postgres_tests": 4,
+        "worker_postgres_duration_seconds": 96.28,
+    }
     codes = {case["code"] for case in read("scenarios")["cases"]}
-    assert codes - {pending["additional_worker_code"]} <= set(
-        audit["remaining_composed_outcomes"]
-    )
-    assert len(codes - {pending["additional_worker_code"]}) == 4
+    assert roster["additional_worker_code"] == "canvas_sync_unexpected_error"
+    assert roster["additional_worker_code"] in codes
+    assert len(codes - {roster["additional_worker_code"]}) == 4
+    assert not codes & set(audit["remaining_composed_outcomes"])
+    assert set(audit["remaining_composed_outcomes"]) == {
+        "canvas_platform_reconfigured",
+        "canvas_application_unavailable",
+        "canvas_sync_resources_unavailable",
+    }
 
 
 def test_native_roster_matrix_retains_declared_responses_and_separate_children(

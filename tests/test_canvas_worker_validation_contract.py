@@ -21,6 +21,20 @@ def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed(
     }
     assert len(required) == 17
     observed = {}
+    owners = {}
+
+    def record(job, *, corpus, code, retryable):
+        assert job["last_error_code"] == code
+        # A corpus can exercise several inputs for the same outcome; categories
+        # must remain disjoint and every repeated outcome must agree on status.
+        assert owners.get(code, corpus) == corpus
+        assert observed.get(code, job["status"]) == job["status"]
+        assert isinstance(retryable, bool)
+        assert required[code] in (retryable, "provider-defined")
+        assert job["status"] == ("retry" if retryable else "dead_letter")
+        observed[code] = job["status"]
+        owners[code] = corpus
+
     validation = audit["actual_process"]["validation"]
     reference = read(validation["reference"])
     for case in read(validation["scenarios"])["cases"]:
@@ -31,8 +45,12 @@ def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed(
         assert observation["requests"] == []
         assert len(observation["jobs"]) == 1
         job = observation["jobs"][0]
-        assert job["last_error_code"] == case["code"]
-        observed[job["last_error_code"]] = job["status"]
+        record(
+            job,
+            corpus="validation",
+            code=case["code"],
+            retryable=required[case["code"]],
+        )
     assert len(observed) == 5
 
     retry = audit["actual_process"]["retry"]
@@ -42,16 +60,41 @@ def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed(
         stage = stages[name]
         assert stage["requests"]
         job = stage["jobs"][-1]
-        observed[job["last_error_code"]] = job["status"]
+        code = job["last_error_code"]
+        record(job, corpus="retry", code=code, retryable=required[code])
     assert len(observed) == 7
-    for code, status in observed.items():
-        assert status == ("retry" if required[code] else "dead_letter")
+
+    roster = audit["actual_process"]["roster_failure"]
+    reference = read(roster["reference"])
+    additional = []
+    for case in read(roster["scenarios"])["cases"]:
+        result = reference[case["name"]]
+        assert len(result["observations"]) == 1
+        observation = result["observations"][0]
+        assert observation["name"] == case["name"]
+        assert len(observation["requests"]) == case["expected_requests"]
+        assert len(observation["jobs"]) == 1
+        job = observation["jobs"][0]
+        if case["code"] == roster["additional_worker_code"]:
+            assert case["code"] not in required
+            assert job["last_error_code"] == case["code"]
+            assert job["status"] == "retry" and case["retryable"] is True
+            additional.append(case["code"])
+        else:
+            record(
+                job,
+                corpus="roster_failure",
+                code=case["code"],
+                retryable=case["retryable"],
+            )
+    assert additional == [roster["additional_worker_code"]]
+    assert len(observed) == 11
 
     groups = [set(observed)]
     for name, count in [
         ("controlled_worker_cycle", 1),
         ("typed_dispatch_reconciliation", 2),
-        ("remaining_composed_outcomes", 7),
+        ("remaining_composed_outcomes", 3),
     ]:
         group = set(audit[name])
         assert len(group) == len(audit[name]) == count

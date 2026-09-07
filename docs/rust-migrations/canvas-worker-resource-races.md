@@ -7,10 +7,11 @@ full-worker replay remains unqualified. The suite registers 113 entries; that
 registration is not evidence that all 113 have passed. PR #814 remains draft
 and unrouted.
 
-The last fully qualified composed checkpoint is `c3e51a4d58083625aabd50de7fba37ef1ff53d4e`
-(107 configured integration tests, CI `34082559053`). The later roster head
-`5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19` is not qualified by this document;
-its CI `34085691302` was still running at the latest observation.
+The last fully qualified composed checkpoint is
+`5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19`: 109 configured integration tests passed
+in 2361.53s, with four worker/PostgreSQL entries in 96.28s (CI `34085691302`,
+runtime `101629197299`). All exact-head checks passed, including Rust CodeQL.
+That qualifies the preceding roster work, not this later resource-race extension.
 
 ## Captured behavior
 

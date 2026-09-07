@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import ssl
 import tempfile
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 import time
 
 from test_canvas_lti_https import create_loopback_certificate
@@ -22,6 +22,33 @@ def response_headers(response, now=None):
             (time.time() if now is None else now) + offset, usegmt=True
         )
     return headers
+
+
+class ObservedRequestHandler(BaseHTTPRequestHandler):
+    """Observe parsed requests before dispatch, including unsupported methods.
+
+    Subclasses supply an observation list and lock. Recording does not install
+    method handlers or change BaseHTTPRequestHandler's unsupported responses.
+    """
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        with self.request_observation_lock:
+            self.observed_request_index = len(self.observed_requests)
+            self.observed_requests.append(
+                {
+                    "method": self.command,
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization"),
+                    "accept": self.headers.get("Accept"),
+                }
+            )
+            self.on_request_observed()
+        return True
+
+    def on_request_observed(self):
+        """Optional notification after atomic append, before method dispatch."""
 
 
 class WorkerHttpsFixture:
@@ -45,21 +72,21 @@ class WorkerHttpsFixture:
                 # headers, response bodies or a background-thread traceback.
                 owner.failures.append("Owned HTTPS request handler failed")
 
-        class Handler(BaseHTTPRequestHandler):
+        class Handler(ObservedRequestHandler):
+            observed_requests = owner.requests
+            request_observation_lock = Lock()
+
             def log_message(self, *_):
                 pass
 
-            def do_GET(self):
-                owner.requests.append(
-                    {
-                        "method": self.command,
-                        "path": self.path,
-                        "authorization": self.headers.get("Authorization"),
-                        "accept": self.headers.get("Accept"),
-                    }
-                )
-                stage = owner.stage
+            def on_request_observed(self):
+                # Preserve stage-before-notification ordering for held GET and
+                # DELETE responses. Unsupported methods are only observed.
+                self.observed_stage = owner.stage
                 owner.received.set()
+
+            def do_GET(self):
+                stage = self.observed_stage
                 if stage.get("hold_response"):
                     assert owner.release.wait(30), "Owned response was never released"
                 response = (

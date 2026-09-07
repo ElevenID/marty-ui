@@ -1,0 +1,75 @@
+# Post-validation unavailable-resource reference
+
+Status: actual published-worker capture passed in 5.77s, followed by exact
+independent regenerations in 6.03s and 6.36s. Native replay is implemented and
+passes compilation/strict all-target Clippy; Linux process qualification remains
+pending. This reference does not close `canvas_sync_resources_unavailable` or
+authorize worker cutover, deployment or Python deletion.
+
+## Observed behavior
+
+The [scenario](../../contracts/canvas-worker-resources-unavailable-scenarios.json)
+uses a fresh official-schema database and the immutable published worker. It
+seeds one disposable binding used only by the synthetic target, then starts a
+normally queued job. Table-lock barriers observe both completed validation passes
+and hold the processor's fresh resource lookup. While that lookup is held, the
+fixture restores the target's retained binding and deletes the disposable one.
+
+The [frozen result](../../contracts/canvas-worker-resources-unavailable-oracle.json)
+records one attempt, terminal `canvas_sync_resources_unavailable`, exact summary
+`Canvas synchronization resources are unavailable`, maximum attempts reduced to
+one, an empty result, cleared lease and disabled target. The application stays
+approved and its credential active. There are no facts, events, provider requests
+or OAuth secret use. The target remains attached to the retained original binding.
+
+The raw job row is unchanged by the fixture mutation; the worker produces the
+terminal outcome on that same job. Complete platform, retained binding and
+application rows, issued credentials, transactions and OAuth ciphertext remain
+unchanged. After SIGINT, all observed state, resources and the raw terminal job
+remain unchanged. The published process exits with signal code -2.
+
+## Barrier fidelity and native adaptation
+
+The Python worker validates in its wrapper and again in the authoritative hook,
+then reloads application, platform and binding independently. Five observed table
+barriers select the final lookup boundary. Pre-start deletion would test an earlier
+validation error; waiting for provider HTTPS would be too late.
+
+The first experiment timed out because its observer searched SQL text that can
+be truncated in `pg_stat_activity`. The repaired observer uses ungranted relation
+locks and each fixture lock owner's PID, without assuming worker connection reuse.
+Static phase-specific exception classes preserve diagnostic privacy. No worker
+functions, job/lease state, clocks or schema constraints are patched.
+
+Rust validates once and reloads platform/binding atomically. Its replay therefore
+needs two barriers at the equivalent external boundary, not five fabricated
+internal steps. Python's `observed_barriers` is reference instrumentation, not a
+language-neutral requirement for identical query counts. Full external snapshots,
+resource edits, zero requests and durable/post-exit behavior must still agree.
+
+Existing Rust code already classifies an absent resource snapshot as terminal;
+source inspection is not execution proof. The native replay and fresh aggregate
+Linux checks must pass before that code is counted as qualified. Lease expiry
+during provider effects, populated roster processing, signing/privacy integration,
+all deployment consumers and beta acceptance remain separate requirements.
+
+## Retained gates and harness review
+
+The new reference and native parent bring registration to 115 entries, not 115
+qualified passes. The last qualified head remains `5dde6b69a` with 109 configured
+Linux entries. The three remaining processor outcomes stay open in the exhaustive
+coverage inventory, alongside two typed-dispatch reconciliations.
+
+Independent harness tests reproduced an observer gap: an unsupported POST returned
+HTTP 501 but was absent from the request list. A shared request-parser observer now
+records every successfully parsed method before dispatch under a fixture lock.
+Unsupported verbs still return 501; existing GET/DELETE behavior and observation
+fields are unchanged. Actual loopback HTTPS tests with simulated children verify
+that unexpected requests cannot pass a zero-request gate. These tests do not
+substitute for executing the native worker.
+
+After that repair, exact published regeneration retained REST (10.58s), all five
+roster failures (31.13s), both resource races (12.36s) and this case (6.36s), without
+changing frozen results. The complete Python suite passed 1,083 tests with one
+existing skip in 67.39s. Strict all-target Rust Clippy passed in 18.10s. The
+reference test and native parent are mandatory in the configured Linux suite.

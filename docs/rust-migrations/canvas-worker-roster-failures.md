@@ -1,9 +1,11 @@
 # Actual worker roster failure parity
 
 Status: five published-worker scenarios captured in 25.39s and independently
-regenerated against the complete frozen reference in 31.08s. Native replay is
-implemented and compiled; configured Linux process qualification remains open.
-The mandatory suite now registers 109 entries. PR #814 stays draft and unrouted.
+regenerated against the complete frozen reference in 31.08s. All five cases now
+pass actual native Linux process replay at
+`5dde6b69adbca467d7fefaa1b43bc2b77ac4aa19`. Its configured suite passed 109
+entries; this does not qualify later local extensions. PR #814 stays draft
+and unrouted.
 
 ## Captured behavior
 
@@ -64,8 +66,28 @@ The first full Python attempt used Strawberry Perl's OpenSSL and failed ten
 certificate-generation tests. With Git OpenSSL on this process's PATH, all 26
 HTTPS-fixture tests and the full suite passed. No global configuration changed.
 
-These local results do not replace the five-case native Linux worker replay.
-The four processor codes stay in the remaining-work inventory until that passes.
+## Exact native Linux qualification
+
+[CI34085691302](https://github.com/ElevenID/marty-ui/actions/runs/34085691302)
+completed successfully at the exact head above. Runtime job `101629197299`
+logged 109 configured tests passing in 2361.53s at `2026-09-07T05:56:08Z`.
+Ignore the separate unconfigured 109-test result in 0.37s: it is not runtime
+qualification. The configured worker/PostgreSQL suite passed four tests in
+96.28s. All five actual native roster markers were inspected and matched the
+table's request counts: 0, 0, 1, 1 and 1. Complete frozen-state comparisons,
+secret-use distinctions, preserved cursor/issued rows and post-exit checks
+remain part of the replay, not just the request count.
+
+The retained recovery-first marker made one HTTPS request. Image job
+`101629197264` passed with all 24 startup markers, Rust CodeQL run `34085691297`
+passed, and every exact-head check was successful or skipped. This evidence
+moves four normative processor codes into actual-process coverage (11 total),
+leaving three composed outcomes and two typed-dispatch reconciliations open.
+The HTTP 503 generic worker code is additional to that seventeen-code partition.
+
+The later two resource-race cases and resources-unavailable work are not
+qualified by this head; their native Linux process gates remain open regardless
+of published reference or local repository results.
 No previous frozen reference, normative requirement, production consumer or
 Python feature was deleted. No candidate dispatch, deployment or cryptographic
 signing implementation changed. Further roster pagination, successful/mixed

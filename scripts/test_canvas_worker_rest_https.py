@@ -1,6 +1,6 @@
 """Supply frozen HTTPS responses to actual native worker processes on Linux."""
 
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 import json
@@ -10,10 +10,10 @@ import ssl
 import subprocess
 import sys
 import tempfile
-from threading import Thread
+from threading import Lock, Thread
 
 from test_canvas_lti_https import create_loopback_certificate
-from canvas_worker_https_fixture import response_headers
+from canvas_worker_https_fixture import ObservedRequestHandler, response_headers
 
 
 def run(executable, scenario="rest"):
@@ -24,6 +24,7 @@ def run(executable, scenario="rest"):
         "retry-after",
         "validation",
         "roster-failure",
+        "resources-unavailable",
     }
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
@@ -35,8 +36,14 @@ def run(executable, scenario="rest"):
     reference = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-oracle.json").read_text()
     )
-    if scenario in {"retry-after", "validation", "roster-failure"}:
+    if scenario in {
+        "retry-after",
+        "validation",
+        "roster-failure",
+        "resources-unavailable",
+    }:
         names = [case["name"] for case in spec["cases"]]
+        assert names, "Worker scenario matrix must not be empty"
         assert len(set(names)) == len(names)
         assert set(names) == set(reference)
         for case in spec["cases"]:
@@ -95,20 +102,15 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
     requests = []
     dates = []
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(ObservedRequestHandler):
+        observed_requests = requests
+        request_observation_lock = Lock()
+
         def log_message(self, *_):
             pass
 
         def do_GET(self):
-            index = len(requests)
-            requests.append(
-                {
-                    "method": self.command,
-                    "path": self.path,
-                    "authorization": self.headers.get("Authorization"),
-                    "accept": self.headers.get("Accept"),
-                }
-            )
+            index = self.observed_request_index
             # Unexpected extra reads fail the request-count check, never wrap.
             stage = (
                 responses[index]
@@ -152,6 +154,7 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
                     "retry-after": "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
                     "validation": "MARTY_CANVAS_WORKER_VALIDATION_CASE",
                     "roster-failure": "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
+                    "resources-unavailable": "MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE",
                 }[scenario]
                 environment[flag] = matrix_case["name"]
             child = subprocess.run(
@@ -164,11 +167,19 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
             assert child.returncode == 0, (
                 f"Native worker replay failed: {child.stdout} {child.stderr}"
             )
-            expected = [
-                request
-                for observation in reference["observations"]
-                for request in observation["requests"]
-            ]
+            expected = (
+                reference["requests"]
+                if scenario == "resources-unavailable"
+                else [
+                    request
+                    for observation in reference["observations"]
+                    for request in observation["requests"]
+                ]
+            )
+            if scenario == "resources-unavailable":
+                assert expected == [], (
+                    "Resource lookup failure must precede provider I/O"
+                )
             assert requests == expected, "Actual worker HTTPS requests differ"
             if scenario == "retry-after":
                 assert matrix_case is not None
@@ -192,6 +203,6 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [rest|facts|retry|retry-after|validation|roster-failure]"
+            "Expected the exact compiled published-schema executable [rest|facts|retry|retry-after|validation|roster-failure|resources-unavailable]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "rest")

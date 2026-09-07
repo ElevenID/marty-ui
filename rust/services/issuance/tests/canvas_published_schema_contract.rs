@@ -505,6 +505,14 @@ fn worker_roster_failure_matches_frozen_published_process() {
     assert_worker_https("roster-failure");
 }
 
+#[path = "support/canvas_worker_resources_unavailable_replay.rs"]
+mod canvas_worker_resources_unavailable_replay;
+
+#[test]
+fn worker_resources_unavailable_matches_frozen_published_process() {
+    assert_worker_https("resources-unavailable");
+}
+
 #[test]
 fn worker_retry_after_matches_frozen_published_process() {
     assert_worker_https("retry-after");
@@ -562,9 +570,20 @@ async fn worker_rest_native_child() {
     let scenario = std::env::var("MARTY_CANVAS_WORKER_REST_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),
-        "rest" | "facts" | "retry" | "retry-after" | "validation" | "roster-failure"
+        "rest"
+            | "facts"
+            | "retry"
+            | "retry-after"
+            | "validation"
+            | "roster-failure"
+            | "resources-unavailable"
     ));
-    canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, &scenario).await;
+    if scenario == "resources-unavailable" {
+        let name = std::env::var("MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE").unwrap();
+        canvas_worker_resources_unavailable_replay::replay(&pool, &owned.url, &origin, &name).await;
+    } else {
+        canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, &scenario).await;
+    }
     pool.close().await;
     owned.close().unwrap();
 }
@@ -838,6 +857,11 @@ async fn worker_resource_race_reference_matches_published_process() {
     assert_worker_matrix_reference("resource-race").await;
 }
 
+#[tokio::test]
+async fn worker_resources_unavailable_reference_matches_published_process() {
+    assert_worker_matrix_reference("resources-unavailable").await;
+}
+
 async fn assert_worker_matrix_reference(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -923,6 +947,12 @@ async fn assert_worker_matrix_reference(kind: &str) {
             include_str!("../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-roster-failure-oracle.json"),
         ),
+        "resources-unavailable" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-resources-unavailable-scenarios.json"
+            ),
+            include_str!("../../../../contracts/canvas-worker-resources-unavailable-oracle.json"),
+        ),
         "resource-race" => (
             include_str!("../../../../contracts/canvas-worker-resource-race-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-resource-race-oracle.json"),
@@ -932,6 +962,10 @@ async fn assert_worker_matrix_reference(kind: &str) {
     let scenarios: serde_json::Value = serde_json::from_str(scenario_source).unwrap();
     let expected: serde_json::Value = serde_json::from_str(oracle_source).unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
+    assert!(
+        !cases.is_empty(),
+        "worker matrix must execute at least one case"
+    );
     let names = cases
         .iter()
         .map(|case| case["name"].as_str().unwrap())
@@ -992,6 +1026,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
             "roster-failure" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_roster_failure(name)
                     .await
+            }
+            "resources-unavailable" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_resources_unavailable(name).await
             }
             "resource-race" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_resource_race(name)
