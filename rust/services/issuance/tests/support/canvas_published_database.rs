@@ -315,6 +315,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_roster_failure(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
+            "worker_roster_failure",
+            "worker-roster-failure",
+            "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_oauth_revocation_queue(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -743,6 +754,7 @@ impl PublishedDatabase {
                 | "worker_retry"
                 | "worker_retry_after"
                 | "worker_validation"
+                | "worker_roster_failure"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -830,6 +842,7 @@ impl PublishedDatabase {
                 | "worker_oauth_revocation"
                 | "worker_retry_after"
                 | "worker_validation"
+                | "worker_roster_failure"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -888,6 +901,7 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_roster_failure" => &["contracts/canvas-worker-retry-scenarios.json"],
             "worker_provider_recovery_first" => &[
                 "contracts/canvas-worker-provider-completion-scenarios.json",
                 "contracts/canvas-worker-provider-final-scenarios.json",

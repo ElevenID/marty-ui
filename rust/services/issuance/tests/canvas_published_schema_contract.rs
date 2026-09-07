@@ -452,6 +452,11 @@ fn worker_validation_matches_frozen_published_process() {
 }
 
 #[test]
+fn worker_roster_failure_matches_frozen_published_process() {
+    assert_worker_https("roster-failure");
+}
+
+#[test]
 fn worker_retry_after_matches_frozen_published_process() {
     assert_worker_https("retry-after");
 }
@@ -508,7 +513,7 @@ async fn worker_rest_native_child() {
     let scenario = std::env::var("MARTY_CANVAS_WORKER_REST_SCENARIO").unwrap();
     assert!(matches!(
         scenario.as_str(),
-        "rest" | "facts" | "retry" | "retry-after" | "validation"
+        "rest" | "facts" | "retry" | "retry-after" | "validation" | "roster-failure"
     ));
     canvas_worker_rest_replay::replay(&pool, &owned.url, &origin, &scenario).await;
     pool.close().await;
@@ -774,6 +779,11 @@ async fn worker_validation_reference_matches_published_process() {
     assert_worker_matrix_reference("validation").await;
 }
 
+#[tokio::test]
+async fn worker_roster_failure_reference_matches_published_process() {
+    assert_worker_matrix_reference("roster-failure").await;
+}
+
 async fn assert_worker_matrix_reference(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -855,6 +865,10 @@ async fn assert_worker_matrix_reference(kind: &str) {
             include_str!("../../../../contracts/canvas-worker-validation-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-validation-oracle.json"),
         ),
+        "roster-failure" => (
+            include_str!("../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
+            include_str!("../../../../contracts/canvas-worker-roster-failure-oracle.json"),
+        ),
         _ => panic!("unknown static worker matrix"),
     };
     let scenarios: serde_json::Value = serde_json::from_str(scenario_source).unwrap();
@@ -915,6 +929,10 @@ async fn assert_worker_matrix_reference(kind: &str) {
             }
             "validation" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_validation(name)
+                    .await
+            }
+            "roster-failure" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_roster_failure(name)
                     .await
             }
             _ => unreachable!(),

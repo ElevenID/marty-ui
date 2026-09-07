@@ -69,13 +69,7 @@ pub(super) fn validation_scenarios() -> &'static Value {
 
 pub(super) async fn seed_validation_case(pool: &PgPool, name: &str) -> &'static Value {
     let matrix = validation_scenarios();
-    let cases = matrix["cases"].as_array().unwrap();
-    let matching = cases
-        .iter()
-        .filter(|case| case["name"] == name)
-        .collect::<Vec<_>>();
-    assert_eq!(matching.len(), 1, "unknown or duplicate validation case");
-    let case = matching[0];
+    let case = matrix_case(matrix, name);
     for statement in case["seed"]
         .as_array()
         .unwrap()
@@ -88,6 +82,26 @@ pub(super) async fn seed_validation_case(pool: &PgPool, name: &str) -> &'static 
         sqlx::raw_sql(statement).execute(pool).await.unwrap();
     }
     case
+}
+
+fn matrix_case(matrix: &'static Value, name: &str) -> &'static Value {
+    let cases = matrix["cases"].as_array().unwrap();
+    let matching = cases
+        .iter()
+        .filter(|case| case["name"] == name)
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1, "unknown or duplicate worker case");
+    matching[0]
+}
+
+fn roster_failure_scenarios() -> &'static Value {
+    static SCENARIOS: OnceLock<Value> = OnceLock::new();
+    SCENARIOS.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-roster-failure-scenarios.json"
+        ))
+        .unwrap()
+    })
 }
 
 pub(super) fn validation_release_statements(race: &'static Value) -> Vec<&'static str> {
@@ -218,10 +232,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
     let fixture = prepare(
         pool,
         origin,
-        if matches!(scenario, "retry-after" | "validation") {
-            "rest"
-        } else {
-            scenario
+        match scenario {
+            "retry-after" | "validation" => "rest",
+            "roster-failure" => "retry",
+            _ => scenario,
         },
     )
     .await;
@@ -238,19 +252,39 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         "validation" => {
             include_str!("../../../../../contracts/canvas-worker-validation-oracle.json")
         }
+        "roster-failure" => {
+            include_str!("../../../../../contracts/canvas-worker-roster-failure-oracle.json")
+        }
         _ => unreachable!(),
     })
     .unwrap();
-    if matches!(scenario, "retry-after" | "validation") {
-        let flag = if scenario == "validation" {
-            "MARTY_CANVAS_WORKER_VALIDATION_CASE"
-        } else {
-            "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE"
+    if matches!(scenario, "retry-after" | "validation" | "roster-failure") {
+        let flag = match scenario {
+            "validation" => "MARTY_CANVAS_WORKER_VALIDATION_CASE",
+            "roster-failure" => "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
+            _ => "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
         };
         let name = std::env::var(flag).unwrap();
         let stage = if scenario == "validation" {
             let case = seed_validation_case(pool, &name).await;
             validation_case = Some(case);
+            case.clone()
+        } else if scenario == "roster-failure" {
+            let matrix = roster_failure_scenarios();
+            let case = matrix_case(matrix, &name);
+            // Same exact fixture SQL as the published owner, after OAuth seed
+            // and before starting the worker. No running-state edits.
+            for statement in matrix["seed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(case["seed"].as_array().unwrap())
+            {
+                sqlx::raw_sql(statement.as_str().unwrap())
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
             case.clone()
         } else {
             let matrix: Value = serde_json::from_str(include_str!(
@@ -268,7 +302,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         matrix_stages = json!([stage]);
         reference = reference[&name].clone();
     }
-    let stages = if matches!(scenario, "retry-after" | "validation") {
+    let stages = if matches!(scenario, "retry-after" | "validation" | "roster-failure") {
         &matrix_stages
     } else {
         &spec["stages"]
@@ -280,7 +314,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         stages.len(),
         match scenario {
             "retry" => 5,
-            "retry-after" | "validation" => 1,
+            "retry-after" | "validation" | "roster-failure" => 1,
             _ => 4,
         }
     );
@@ -373,7 +407,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
         let status = worker.wait().await;
         assert_eq!(expected["exit_code_after_interrupt"], -2);
         assert_eq!(status.code(), Some(130));
-        if retry_existing || scenario == "validation" {
+        if retry_existing || matches!(scenario, "validation" | "roster-failure") {
             let current_job_ids: Vec<String> = sqlx::query_scalar(
                 "SELECT id FROM issuance_service.canvas_evidence_sync_jobs ORDER BY created_at,id",
             )
@@ -426,6 +460,15 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             let target: Value = sqlx::query_scalar("SELECT jsonb_build_object('enabled',enabled,'config_version',config_version) FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'")
                 .fetch_one(pool).await.unwrap();
             assert_eq!(target, reference["target"], "validation target state");
+        }
+        if scenario == "roster-failure" {
+            assert_eq!(prior_job_ids, ["worker-roster-failure-job"]);
+            let target: Value =
+                sqlx::query_scalar(roster_failure_scenarios()["target_sql"].as_str().unwrap())
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            assert_eq!(target, reference["target"], "roster failure target state");
         }
         if scenario == "retry-after" {
             print_retry_timing(

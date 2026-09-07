@@ -17,7 +17,14 @@ from canvas_worker_https_fixture import response_headers
 
 
 def run(executable, scenario="rest"):
-    assert scenario in {"rest", "facts", "retry", "retry-after", "validation"}
+    assert scenario in {
+        "rest",
+        "facts",
+        "retry",
+        "retry-after",
+        "validation",
+        "roster-failure",
+    }
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-scenarios.json").read_text()
@@ -28,7 +35,7 @@ def run(executable, scenario="rest"):
     reference = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-oracle.json").read_text()
     )
-    if scenario in {"retry-after", "validation"}:
+    if scenario in {"retry-after", "validation", "roster-failure"}:
         names = [case["name"] for case in spec["cases"]]
         assert len(set(names)) == len(names)
         assert set(names) == set(reference)
@@ -40,6 +47,8 @@ def run(executable, scenario="rest"):
                 if scenario == "retry-after"
                 else {},
             }
+            if scenario == "roster-failure":
+                stage = dict(case)
             run_scenario(
                 executable, scenario, {"stages": [stage]}, reference[case["name"]], case
             )
@@ -142,6 +151,7 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
                 flag = {
                     "retry-after": "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
                     "validation": "MARTY_CANVAS_WORKER_VALIDATION_CASE",
+                    "roster-failure": "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
                 }[scenario]
                 environment[flag] = matrix_case["name"]
             child = subprocess.run(
@@ -182,6 +192,6 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [rest|facts|retry|retry-after|validation]"
+            "Expected the exact compiled published-schema executable [rest|facts|retry|retry-after|validation|roster-failure]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "rest")

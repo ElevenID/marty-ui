@@ -1,25 +1,33 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `29bf8c226e13df1a708355538cc913adcbfa987f`:
-103 configured runtime tests passed in 2245.41s (CI34079614572, runtime101612295594).
-All applicable exact-head checks passed, including Rust CodeQL34079614417. Image
-job101612295627 passed eight preflight and 24 packaged startup cases. The separate
-configured PostgreSQL worker contract passed four entries in 96.22s. All 39 native
+Status: latest qualified composed checkpoint `c3e51a4d58083625aabd50de7fba37ef1ff53d4e`:
+107 configured runtime tests passed in 2327.12s (CI34082559053, runtime101620519590).
+All applicable exact-head checks passed, including Rust CodeQL34082559034. Image
+job101620519633 passed nine preflight, 24 packaged startup and 16 logging-reference
+cases. The separate configured PostgreSQL worker contract passed four entries in
+96.94s. All 39 native
 OAuth process/cycle markers were inspected: the prior33 plus six zero-request
 secret-resolution cases. Real schema rejections, the native empty-token regression,
 and both repository comparisons passed. Actual newer-target recovery also passed
 with one HTTPS request and Rust's stronger complete-row generation preservation.
-Both final-attempt repository race winners and actual completion-first process
-atomicity now pass, including the exact one-HTTPS-request native marker. Earlier
+Both final-attempt repository race winners, actual completion-first process
+atomicity and recovery-first process fencing now pass, including the exact
+one-HTTPS-request native markers. Earlier
 validation, privacy and startup boundaries remain retained. This qualifies those
-scoped boundaries, not the local 107-entry recovery-first extension, subsequent
-LOG_LEVEL/image-default repair and nine-case preflight, or whole-worker cutover.
+scoped boundaries, including recovery-first and the LOG_LEVEL/image-default
+repair, not the local 109-entry roster extension or whole-worker cutover.
 Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
 by this inventory. The normative requirements remain
 [`issuance-canvas-sync-worker.json`](../../contracts/issuance-canvas-sync-worker.json).
+
+The local [roster-failure extension](canvas-worker-roster-failures.md) adds five
+published process captures and narrow Rust parity repairs, bringing registration
+to 109 entries. Its native Linux qualification is pending; do not count its four
+processor codes as closed or mistake the frozen 503 outcome for an authoritative
+read error. The seven-code remaining composed inventory is deliberately retained.
 
 ## What the latest evidence does and does not prove
 
@@ -165,7 +173,7 @@ Native final-attempt replay passed with exact generation-fence checks at
 Final-attempt and retryable concurrent reclaimers are qualified above;
 Newer-target recovery after final-attempt crash is now implemented in the
 [generation reference](canvas-worker-provider-generation.md), qualified at df3ed290b.
-Final-attempt completion versus recovery remains open.
+The subsequent final-attempt completion/recovery milestones are recorded below.
 
 The [final completion/recovery repository boundary](canvas-worker-final-completion-race.md)
 now executes both lock winners on the published schema with real expiry, observed
@@ -182,18 +190,19 @@ qualified on Linux at 29bf8c226. The [recovery-first process extension](canvas-w
 now has an actual capture and independent matching regeneration. Its native replay
 requires fresh-clock rejection of stale completion while recovery owns the row,
 one dead-letter terminal journal and preservation of valid pre-expiry provider
-effects. This local 107-entry extension awaits Linux qualification. Expiry during
+effects. This 107-entry extension is now qualified on Linux at c3e51a4d5, including
+the actual one-request recovery_first marker. Expiry during
 in-flight provider effects remains separate.
 
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 
 | Gate | Inspected evidence | Remaining qualification |
 | --- | --- | --- |
-| 1. Environment parsing, bounds, malformed startup | 133 startup vectors and PostgreSQL consumer cycles; [LOG_LEVEL repair](canvas-worker-logging-configuration.md) has 16 frozen threshold cases and seven actual invalid-process checks. Image101620519633 at c3e51a4d5 passed nine preflight, 24 startup and the 16-case reference gate | Complete combined exact-head runtime qualification; execute remaining deployed entrypoint/configuration shapes, not only configuration factories. |
+| 1. Environment parsing, bounds, malformed startup | 133 startup vectors and PostgreSQL consumer cycles; [LOG_LEVEL repair](canvas-worker-logging-configuration.md) has 16 frozen threshold cases and seven actual invalid-process checks. Combined runtime and image qualification passed at c3e51a4d5 | Execute remaining deployed entrypoint/configuration shapes, not only configuration factories; retain these gates in the new exact-head run. |
 | 2. Legacy processor loader and removal | Python `test_canvas_worker_loader_oracle.py` exists; native binary constructs its processor directly | Remove the loader selection from all three consumer definitions only at qualified cutover; retain the frozen Python loader evidence. |
 | 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites | Compose the actual processor/provider with the loop; prove active I/O cancellation, recovery and cleanup on the published schema. |
 | 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests | Carry the same fences and outcome/error ordering through authoritative provider and business effects. |
-| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer, newer-target recovery, both repository lock winners and completion-first process atomicity qualified above; [recovery-first process reference](canvas-worker-provider-recovery-first.md) independently matches with stronger native replay implemented | Qualify recovery-first process extension on Linux; cover expiry during in-flight provider effects separately. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
+| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer, newer-target recovery, both repository lock winners, completion-first atomicity and [recovery-first process fencing](canvas-worker-provider-recovery-first.md) qualified above | Cover expiry during in-flight provider effects separately. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Seven actual native HTTPS/deadline cases and shared parser correction qualified at a6826de39 and retained at 29bf8c226; existing parser vectors remain | Retain date, malformed, negative, zero, clamp and huge-integer durable scheduling evidence in fresh exact-head CI. Full-worker acceptance remains separate. |

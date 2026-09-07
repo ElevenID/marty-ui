@@ -13,6 +13,14 @@
     }
   },
   "controlled_worker_cycle": ["canvas_background_signing_forbidden"],
+  "pending_process_qualification": {
+    "roster_failure": {
+      "scenarios": "canvas-worker-roster-failure-scenarios.json",
+      "reference": "canvas-worker-roster-failure-oracle.json",
+      "additional_worker_code": "canvas_sync_unexpected_error",
+      "status": "published_capture_regenerated_native_linux_pending"
+    }
+  },
   "typed_dispatch_reconciliation": [
     "canvas_sync_processor_unavailable",
     "canvas_sync_processor_contract_invalid"

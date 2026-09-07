@@ -1,9 +1,11 @@
 # Actual recovery-first worker/completion race
 
-Status: published-process capture passed in 36.44s; independent permanent
-regeneration matched the complete frozen reference in 36.20s. Native replay is
-implemented and compiled, but awaits configured Linux execution. The mandatory
-gate has 107 entries. PR #814 remains draft and unrouted; no consumer switch,
+Status: qualified at `c3e51a4d58083625aabd50de7fba37ef1ff53d4e`.
+CI34082559053/runtime101620519590 passed all 107 configured entries in 2327.12s.
+The actual `Native worker active-provider recovery_first passed (1 actual HTTPS requests)`
+marker and retained completion-first/generation/reclaimer gates were inspected.
+Published capture passed in 36.44s and independent regeneration in 36.20s.
+PR #814 remains draft and unrouted; no consumer switch,
 feature deletion or whole-worker acceptance is implied.
 
 ## Exact boundary
@@ -58,6 +60,6 @@ qualification. The frozen reference retains immutable image-source provenance.
 Canonical LF reference SHA256:
 `28d537769ef77b1fd249fe6bb652196c56aeb7431ef112e80d41bb972d6110ff`.
 
-Next: finish the existing 103-entry head's CI without cancelling it, publish this
-reviewed extension, and inspect the exact new native recovery-first HTTPS marker
-and all retained gates before claiming qualification.
+Next: retain this qualified boundary in the new roster-failure extension and
+exercise expiry during in-flight provider effects separately. This test commits
+valid provider effects before expiry; it does not qualify the latter ordering.

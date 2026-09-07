@@ -44,8 +44,12 @@ durable repository. Its processor is controlled: this is not evidence of a live
 signing service or complete provider execution. The runtime evidence, not merely
 the source registration assertion, supports this scoped result.
 
-This evidence does not qualify the newer recovery-first/logging head currently
-under CI, nor does it close all of gate 9 or authorize Python deletion.
+The same actual-process corpus markers were retained at
+`c3e51a4d58083625aabd50de7fba37ef1ff53d4e`, where
+[CI34082559053](https://github.com/ElevenID/marty-ui/actions/runs/34082559053)
+passed 107 configured entries in 2327.12s and four worker/PostgreSQL entries in
+96.94s. Recovery-first and logging are now qualified at that checkpoint. This
+does not close all of gate 9, qualify the local roster extension or authorize deletion.
 
 ## Remaining composed processor outcomes
 
@@ -57,9 +61,12 @@ under CI, nor does it close all of gate 9 or authorize Python deletion.
 - `canvas_sync_resources_unavailable`
 - `canvas_authoritative_read_failed`
 
-The next provider-corpus work should exercise actual roster failure paths using
-the existing process, HTTPS and published-schema owners, retaining candidate and
-cursor state. Configuration/dispatch failures must remain distinguishable from
-remote-provider failures. The separate lease-expiry-during-effects and signing
+The [five-case roster failure corpus](canvas-worker-roster-failures.md) now has
+an actual published capture and independent regeneration, plus native replay and
+targeted Rust repairs. Four codes above and one additional generic worker error
+are exercised. They remain open until the composed native Linux replay passes;
+published capture and library tests alone are not qualification. These cases
+preserve an existing cursor and empty candidate table, not populated candidate
+lifecycle behavior. The separate lease-expiry-during-effects and signing
 diagnostic requirements remain in their named gates. No norm, frozen observation,
 runtime feature, production consumer or deployment has been removed by this audit.

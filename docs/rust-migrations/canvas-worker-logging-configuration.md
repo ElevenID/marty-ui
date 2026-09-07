@@ -4,8 +4,10 @@ Image checkpoint: at `c3e51a4d58083625aabd50de7fba37ef1ff53d4e`, image job
 101620519633 passed all nine preflight cases at 04:30:19 UTC, the sixteen-case
 published logging reference at 04:30:31 UTC, and all 24 packaged startup cases at
 04:30:55 UTC on 2026-09-07. The actual `invalid_logging` image marker was inspected.
-Full combined runtime CI34082559053 remains in progress; image success alone is
-not whole-head, recovery-first process, consumer-cutover or beta acceptance.
+Combined runtime CI34082559053 now passes on the same commit: 107 configured
+entries in 2327.12s and four separate worker/PostgreSQL entries in 96.94s.
+The executable invalid-log-level privacy check also passes. This is scoped
+runtime/image qualification, not consumer-cutover or beta acceptance.
 
 The consumer audit found a feature-preservation gap: Base Compose and self-host
 pass `LOG_LEVEL`, and the immutable Python worker uses it in `logging.basicConfig`.
@@ -51,5 +53,5 @@ An inventory assertion prevents reintroducing the hidden override; the shared
 production Dockerfile has no such override. Native filtering is exercised by the real tracing
 subscriber; neither Windows unit checks nor the reference-expression capture is
 claimed as complete Linux worker execution. The nine-case image gate now passes
-at the exact checkpoint above; combined runtime qualification remains required.
+at the exact checkpoint above, alongside the completed combined runtime gate.
 No deployment definition or persistent service changed.

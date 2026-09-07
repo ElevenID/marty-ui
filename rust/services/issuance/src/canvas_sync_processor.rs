@@ -21,6 +21,7 @@ use crate::{
     canvas_sync_worker::{
         canvas_sync_result, CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult,
         CanvasSyncTarget, CanvasSyncTargetType, CanvasSyncWorkerConfig,
+        UnexpectedCanvasSyncFailure,
     },
 };
 
@@ -120,6 +121,7 @@ pub enum CanvasProviderReadError {
     RosterOAuthUnavailable,
     NrpsRosterUnavailable,
     RosterCollectionTooLarge,
+    RosterHttpStatusFailure,
 }
 
 #[async_trait]
@@ -408,6 +410,9 @@ impl NativeCanvasSyncProcessor {
                     continue;
                 }
                 Err(CanvasProviderReadError::Unavailable) => continue,
+                Err(error @ CanvasProviderReadError::RosterHttpStatusFailure) => {
+                    return Err(provider_processing_error(error));
+                }
                 Err(CanvasProviderReadError::InvalidConfiguration) => {
                     return Err(CanvasSyncProcessingError::terminal(
                         "canvas_requirements_invalid",
@@ -863,7 +868,10 @@ fn provider_processing_error(error: CanvasProviderReadError) -> CanvasSyncProces
         ),
         CanvasProviderReadError::RosterCollectionTooLarge => CanvasSyncProcessingError::terminal(
             "canvas_roster_collection_too_large",
-            "Canvas roster collection exceeds the configured bound",
+            "Canvas roster exceeds the configured complete-read limit",
+        ),
+        CanvasProviderReadError::RosterHttpStatusFailure => CanvasSyncProcessingError::unexpected(
+            UnexpectedCanvasSyncFailure::ProviderHttpException,
         ),
         CanvasProviderReadError::Unavailable | CanvasProviderReadError::ReauthorizationRequired => {
             CanvasSyncProcessingError::retryable(
@@ -1660,6 +1668,42 @@ mod tests {
         );
         assert!(*repository.disabled.lock().unwrap());
         assert!(repository.facts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn roster_failure_summaries_match_published_process() {
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-roster-failure-oracle.json"
+        ))
+        .unwrap();
+        for (name, provider) in [
+            (
+                "roster_oauth_unavailable",
+                CanvasProviderReadError::RosterOAuthUnavailable,
+            ),
+            (
+                "nrps_context_unavailable",
+                CanvasProviderReadError::NrpsRosterUnavailable,
+            ),
+            (
+                "roster_collection_too_large",
+                CanvasProviderReadError::RosterCollectionTooLarge,
+            ),
+            (
+                "roster_authoritative_read_failed",
+                CanvasProviderReadError::Unavailable,
+            ),
+            (
+                "roster_http_status_failed",
+                CanvasProviderReadError::RosterHttpStatusFailure,
+            ),
+        ] {
+            let actual = provider_processing_error(provider);
+            let job = &reference[name]["observations"][0]["jobs"][0];
+            assert_eq!(actual.code, job["last_error_code"], "{name}");
+            assert_eq!(actual.summary, job["last_error_summary"], "{name}");
+            assert_eq!(actual.retryable, job["status"] == "retry", "{name}");
+        }
     }
 
     #[test]

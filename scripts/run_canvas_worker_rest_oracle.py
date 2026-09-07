@@ -106,6 +106,10 @@ def seed_worker_database(engine, origin, spec, shared, additional_secrets=()):
             {"origin": origin},
         )
     asyncio.run(seed_oauth(origin, spec["token"], additional_secrets))
+    # Exact fixture configuration only, before any worker process starts.
+    with engine.begin() as connection:
+        for statement in spec.get("post_oauth_seed", []):
+            connection.exec_driver_sql(statement)
     with engine.connect() as connection:
         preserved = connection.execute(text(shared["preserved_rows_sql"])).scalar_one()
         ciphertext = connection.execute(

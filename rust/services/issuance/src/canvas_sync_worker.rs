@@ -334,6 +334,8 @@ pub enum CanvasSyncRepositoryError {
 pub enum UnexpectedCanvasSyncFailure {
     Runtime,
     HttpStatus(http::StatusCode),
+    /// Published REST collection status errors cross the worker as HTTPException.
+    ProviderHttpException,
 }
 
 impl UnexpectedCanvasSyncFailure {
@@ -341,6 +343,7 @@ impl UnexpectedCanvasSyncFailure {
         match self {
             Self::Runtime => "CanvasSyncUnexpectedError",
             Self::HttpStatus(_) => "CanvasSyncHttpStatusError",
+            Self::ProviderHttpException => "HTTPException",
         }
     }
 }
@@ -394,6 +397,9 @@ impl CanvasSyncProcessingError {
             }
             UnexpectedCanvasSyncFailure::HttpStatus(_) => {
                 "Canvas synchronization failed (CanvasSyncHttpStatusError)"
+            }
+            UnexpectedCanvasSyncFailure::ProviderHttpException => {
+                "Canvas synchronization failed (HTTPException)"
             }
         };
         Self {
@@ -1436,6 +1442,25 @@ mod processing_error_tests {
         let known = CanvasSyncProcessingError::retryable("known_code", "Known diagnostic")
             .with_retry_after(45);
         assert_eq!(known.clone().canonicalize_unexpected(), known);
+    }
+
+    #[test]
+    fn provider_http_exception_uses_static_published_diagnostic() {
+        let mut failure = CanvasSyncProcessingError::unexpected(
+            UnexpectedCanvasSyncFailure::ProviderHttpException,
+        )
+        .with_retry_after(37);
+        failure.code = "synthetic-forged-code";
+        failure.summary = "synthetic-provider-detail-never-persisted";
+        failure.retryable = false;
+        let canonical = failure.canonicalize_unexpected();
+        assert_eq!(canonical.code, "canvas_sync_unexpected_error");
+        assert_eq!(
+            canonical.summary,
+            "Canvas synchronization failed (HTTPException)"
+        );
+        assert!(canonical.retryable);
+        assert_eq!(canonical.retry_after_seconds, Some(37));
     }
 }
 

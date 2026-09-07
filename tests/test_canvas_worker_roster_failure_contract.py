@@ -1,0 +1,139 @@
+"""Fixture/registration controls; actual native Linux execution is a separate gate."""
+
+import importlib
+import json
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(suffix):
+    return json.loads(
+        (ROOT / f"contracts/canvas-worker-roster-failure-{suffix}.json").read_text()
+    )
+
+
+def test_frozen_roster_failures_keep_distinct_side_effects():
+    spec, reference = read("scenarios"), read("oracle")
+    assert len(spec["cases"]) == len(reference) == 5
+    assert {case["name"] for case in spec["cases"]} == set(reference)
+    for case in spec["cases"]:
+        result = reference[case["name"]]
+        assert result["schema"] == "marty.canvas-worker-roster-failure-oracle/v1"
+        assert len(result["observations"]) == 1
+        observation = result["observations"][0]
+        assert observation["name"] == case["name"]
+        assert len(observation["requests"]) == case["expected_requests"]
+        assert observation["facts"] == []
+        assert observation["exit_code_after_interrupt"] == -2
+        assert len(observation["jobs"]) == 1
+        job = observation["jobs"][0]
+        assert job["last_error_code"] == case["code"]
+        assert job["status"] == ("retry" if case["retryable"] else "dead_letter")
+        assert job["attempt_count"] == 1
+        assert job["max_attempts"] == (8 if case["retryable"] else 1)
+        assert not job["lease_owner_present"] and not job["lease_expires_present"]
+        assert job["result"] == {}
+        if case["retryable"]:
+            assert job["retry_delay_within_backoff_bounds"] and job["retry_scheduled"]
+        assert result["target"] == {
+            "candidate_count": 0,
+            "config_version": 1,
+            "enabled": case["retryable"],
+            "heartbeat_timestamp_present": True,
+            "last_success_present": False,
+            "metadata": {
+                "roster_cursor": 1,
+                "synthetic_marker": "preserve",
+                "worker_id": "worker-rest",
+            },
+        }
+        # The published AGS-only path looks up OAuth even with no NRPS URL.
+        assert observation["oauth"]["secret_used"] == (
+            case["name"] != "roster_oauth_unavailable"
+        )
+    assert reference["nrps_context_unavailable"]["observations"][0]["requests"] == []
+    assert (
+        reference["roster_http_status_failed"]["observations"][0]["jobs"][0][
+            "last_error_summary"
+        ]
+        == "Canvas synchronization failed (HTTPException)"
+    )
+
+
+def test_roster_capture_is_not_counted_as_native_qualification():
+    audit = json.loads(
+        (ROOT / "contracts/canvas-worker-processor-coverage.json").read_text()
+    )
+    pending = audit["pending_process_qualification"]["roster_failure"]
+    assert pending["status"] == "published_capture_regenerated_native_linux_pending"
+    assert pending["scenarios"] == "canvas-worker-roster-failure-scenarios.json"
+    assert pending["reference"] == "canvas-worker-roster-failure-oracle.json"
+    codes = {case["code"] for case in read("scenarios")["cases"]}
+    assert codes - {pending["additional_worker_code"]} <= set(
+        audit["remaining_composed_outcomes"]
+    )
+    assert len(codes - {pending["additional_worker_code"]}) == 4
+
+
+def test_native_roster_matrix_retains_declared_responses_and_separate_children(
+    monkeypatch,
+):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    native = importlib.import_module("test_canvas_worker_rest_https")
+    calls = []
+    monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
+    native.run("synthetic-native-executable", "roster-failure")
+    assert len(calls) == len({call[4]["name"] for call in calls}) == 5
+    for executable, scenario, spec, reference, case in calls:
+        assert executable == "synthetic-native-executable"
+        assert scenario == "roster-failure"
+        assert spec["stages"] == [case]
+        assert reference["observations"][0]["name"] == case["name"]
+    assert calls[2][2]["stages"][0]["body"] == [
+        {"id": "11"},
+        {"id": "12"},
+        {"id": "13"},
+    ]
+    assert calls[-1][2]["stages"][0]["status"] == 503
+
+
+def test_roster_fixture_only_changes_exact_initial_rows():
+    spec = read("scenarios")
+    assert len(spec["seed"]) == 2
+    assert "'worker-roster-failure-job'" in spec["seed"][1]
+    for statement in [
+        spec["seed"][0],
+        *(s for case in spec["cases"] for s in case["seed"]),
+    ]:
+        assert statement.startswith("UPDATE issuance_service.")
+        assert any(
+            statement.endswith(f"WHERE id='{identity}'")
+            for identity in (
+                "target-review",
+                "worker-rest-connection",
+                "binding-review",
+            )
+        )
+        assert "canvas_evidence_sync_jobs" not in statement
+        assert all(
+            word not in statement.upper()
+            for word in (
+                "ALTER ",
+                "DROP ",
+                "DELETE ",
+                "TRUNCATE ",
+                "LEASE_",
+                "CLOCK_TIMESTAMP",
+            )
+        )
+
+
+@pytest.mark.parametrize("scenario", ["unknown-roster", "roster-failure/unknown"])
+def test_native_matrix_rejects_unknown_scenarios_before_start(monkeypatch, scenario):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    native = importlib.import_module("test_canvas_worker_rest_https")
+    with pytest.raises(AssertionError):
+        native.run("must-not-start", scenario)
