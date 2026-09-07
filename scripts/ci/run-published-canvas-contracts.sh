@@ -106,4 +106,5 @@ mapfile -t executables < <(jq -r '
 "${executables[0]}" --list | grep -Fx 'worker_provider_generation_preserves_stronger_recovery_fence: test'
 "${executables[0]}" --list | grep -Fx 'worker_provider_generation_native_child: test'
 "${executables[0]}" --list | grep -Fx 'canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation: test'
+"${executables[0]}" --list | grep -Fx 'worker_final_completion_race_has_one_repository_winner: test'
 "${executables[0]}" --nocapture --test-threads=1

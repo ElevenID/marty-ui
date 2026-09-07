@@ -2,6 +2,35 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_final_completion_race.rs"]
+mod canvas_worker_final_completion_race;
+
+#[tokio::test]
+async fn worker_final_completion_race_has_one_repository_winner() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-final-completion-race-scenarios.json"
+    ))
+    .unwrap();
+    assert_eq!(scenarios["lease_seconds"], 30);
+    assert_eq!(scenarios["cases"].as_array().unwrap().len(), 2);
+    for case in scenarios["cases"].as_array().unwrap() {
+        let owned = canvas_published_database::PublishedDatabase::start()
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&owned.url)
+            .await
+            .unwrap();
+        canvas_worker_final_completion_race::run(&pool, &owned.url, case).await;
+        pool.close().await;
+        owned.close().unwrap();
+    }
+}
+
 #[tokio::test]
 async fn worker_provider_generation_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

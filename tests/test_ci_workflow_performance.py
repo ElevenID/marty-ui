@@ -316,6 +316,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_provider_generation_reference_matches_published_process",
         "worker_provider_generation_preserves_stronger_recovery_fence",
         "worker_provider_generation_native_child",
+        "worker_final_completion_race_has_one_repository_winner",
         "canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation",
         "worker_oauth_revocation_selection_reference_matches_published_repository",
         "worker_oauth_revocation_selection_repository_matches_published",

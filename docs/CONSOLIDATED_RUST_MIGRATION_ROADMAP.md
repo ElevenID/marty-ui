@@ -319,6 +319,15 @@ qualification; final-attempt completion versus recovery remains open. The fixtur
 does not execute the operator configuration/validation API, and prior attempts are
 seeded history. No runtime feature or existing reference was deleted.
 
+The [final completion/recovery repository tests](rust-migrations/canvas-worker-final-completion-race.md)
+now force both terminal lock winners against the published schema with real
+30-second expiry, PostgreSQL-observed barriers and independent NOWAIT job-lock
+probes. Stale completion/failure/recovery preserve complete committed rows.
+Both directions pass locally; 1,012 Python tests pass with one existing skip.
+This brings the local gate to 99 entries, pending hosted qualification. It is
+normative repository evidence, not published-process parity; actual worker/provider
+composition remains the next named gate-five task. No runtime feature was removed.
+
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease
 and both heartbeat renewal without generation change. After forced process loss,
