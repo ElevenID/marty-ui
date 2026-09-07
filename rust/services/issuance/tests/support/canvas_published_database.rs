@@ -512,6 +512,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_provider_recovery_first() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_recovery_first",
+                "worker-provider-recovery-first",
+                "worker_provider_recovery_first",
+                "MARTY_CANVAS_WORKER_PROVIDER_RECOVERY_FIRST_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_retry() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -735,6 +748,7 @@ impl PublishedDatabase {
                 | "worker_provider_final"
                 | "worker_provider_generation"
                 | "worker_provider_completion"
+                | "worker_provider_recovery_first"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -821,6 +835,7 @@ impl PublishedDatabase {
                 | "worker_provider_final"
                 | "worker_provider_generation"
                 | "worker_provider_completion"
+                | "worker_provider_recovery_first"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -845,6 +860,7 @@ impl PublishedDatabase {
                 | "worker_provider_final"
                 | "worker_provider_generation"
                 | "worker_provider_completion"
+                | "worker_provider_recovery_first"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -860,6 +876,7 @@ impl PublishedDatabase {
             "worker_provider_final"
                 | "worker_provider_generation"
                 | "worker_provider_completion"
+                | "worker_provider_recovery_first"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -871,6 +888,11 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_provider_recovery_first" => &[
+                "contracts/canvas-worker-provider-completion-scenarios.json",
+                "contracts/canvas-worker-provider-final-scenarios.json",
+                "scripts/run_canvas_worker_provider_completion_oracle.py",
+            ],
             "worker_provider_generation" | "worker_provider_completion" => {
                 &["contracts/canvas-worker-provider-final-scenarios.json"]
             }

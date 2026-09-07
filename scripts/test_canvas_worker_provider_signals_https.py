@@ -30,6 +30,7 @@ def run(executable, scenario="signals"):
         "final",
         "generation",
         "completion",
+        "recovery_first",
         "concurrent",
         "reclaimers",
         "reclaimers_retry",
@@ -45,6 +46,8 @@ def run(executable, scenario="signals"):
     )
     if scenario == "reclaimers_retry":
         reference_name = "canvas-worker-reclaimers-retry-oracle.json"
+    elif scenario == "recovery_first":
+        reference_name = "canvas-worker-provider-recovery-first-oracle.json"
     reference = json.loads((root / "contracts" / reference_name).read_text())
     cases = {
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
@@ -52,6 +55,7 @@ def run(executable, scenario="signals"):
         "final": ["final"],
         "generation": ["generation"],
         "completion": ["completion"],
+        "recovery_first": ["recovery_first"],
         "concurrent": ["concurrent"],
         "reclaimers": ["reclaimers"],
         "reclaimers_retry": ["reclaimers_retry"],
@@ -61,9 +65,9 @@ def run(executable, scenario="signals"):
             "recovery" if scenario == "reclaimers_retry" else "final"
         )
         reference = {scenario: reference}
-    elif scenario == "completion":
-        assert reference["case"] == "completion"
-        reference = {"completion": reference}
+    elif scenario in {"completion", "recovery_first"}:
+        assert reference["case"] == scenario
+        reference = {scenario: reference}
     elif scenario == "concurrent":
         assert reference["schema"] == "marty.canvas-worker-concurrent-oracle/v1"
         reference = {"concurrent": reference}
@@ -108,6 +112,7 @@ def run(executable, scenario="signals"):
                         "final",
                         "generation",
                         "completion",
+                        "recovery_first",
                         "concurrent",
                         "reclaimers",
                         "reclaimers_retry",
@@ -167,6 +172,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|completion|concurrent|reclaimers|reclaimers_retry]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|completion|recovery_first|concurrent|reclaimers|reclaimers_retry]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

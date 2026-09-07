@@ -1,0 +1,12 @@
+{
+  "schema": "marty.canvas-worker-provider-recovery-first-scenarios/v1",
+  "extends": "canvas-worker-provider-completion-scenarios.json",
+  "case": "recovery_first",
+  "owner_barrier_setup": [
+    "CREATE FUNCTION issuance_service.synthetic_owner_statement_barrier() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF current_user='oracle' THEN PERFORM pg_advisory_xact_lock(814,52); END IF; RETURN NULL; END $$",
+    "CREATE TRIGGER synthetic_owner_statement_barrier BEFORE UPDATE ON issuance_service.canvas_evidence_sync_jobs FOR EACH STATEMENT EXECUTE FUNCTION issuance_service.synthetic_owner_statement_barrier()"
+  ],
+  "owner_barrier_sql": "SELECT pg_advisory_xact_lock(814,52)",
+  "owner_statement_wait_sql": "SELECT EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE l.locktype='advisory' AND l.classid=814 AND l.objid=52 AND NOT l.granted AND a.datname=current_database() AND a.usename='oracle' AND a.query LIKE '%canvas_evidence_sync_jobs%')",
+  "scope": "After an actual provider response, a statement-level fixture barrier holds the original worker's completion and subsequent renewal UPDATEs before job-row acquisition. Real expiry lets a distinct actual reclaimer own the terminal job write. Release the statement barrier while recovery remains blocked; observe the original worker's stale completion path, then release recovery. The provider effects committed before expiry are retained. No running job, lease, clock or worker function is edited. Earlier attempts are seeded history; expired in-flight provider effects are a separate boundary."
+}

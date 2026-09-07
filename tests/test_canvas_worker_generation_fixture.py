@@ -55,7 +55,7 @@ def test_generation_reference_keeps_observed_difference_and_real_crash_history()
 @pytest.mark.parametrize(
     "failure", [None, "child_exit", "timeout", "wrong_requests", "missing_release"]
 )
-@pytest.mark.parametrize("scenario", ["generation", "completion"])
+@pytest.mark.parametrize("scenario", ["generation", "completion", "recovery_first"])
 def test_generation_parent_requires_release_exact_request_and_clean_child(
     monkeypatch, tmp_path, failure, scenario
 ):
@@ -68,7 +68,7 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
             json.dumps({"stages": [{}]}),
             json.dumps(
                 {
-                    "case": "final" if scenario == "generation" else "completion",
+                    "case": "final" if scenario == "generation" else scenario,
                     "requests": [request],
                 }
             ),

@@ -111,4 +111,8 @@ mapfile -t executables < <(jq -r '
 "${executables[0]}" --list | grep -Fx 'worker_provider_completion_preserves_atomic_terminal_winner: test'
 "${executables[0]}" --list | grep -Fx 'worker_provider_completion_native_child: test'
 "${executables[0]}" --list | grep -Fx 'canvas_worker_provider_completion_replay::completion_atomicity_check_rejects_reference_or_target_drift: test'
+"${executables[0]}" --list | grep -Fx 'worker_provider_recovery_first_reference_matches_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_provider_recovery_first_preserves_terminal_winner: test'
+"${executables[0]}" --list | grep -Fx 'worker_provider_recovery_first_native_child: test'
+"${executables[0]}" --list | grep -Fx 'canvas_worker_provider_completion_replay::rejected_owner_check_rejects_unrelated_or_reference_drift: test'
 "${executables[0]}" --nocapture --test-threads=1

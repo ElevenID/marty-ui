@@ -335,8 +335,20 @@ mistaking the original worker's renewal for recovery. Completion alone commits a
 terminal job update, but the published process disables the target and leaves its
 success timestamp unset. Native replay preserves stronger atomicity and exact
 provider/job/issuance observations. This 103-entry extension awaits configured Linux
-qualification; recovery-first whole-process composition remains open. The 1,019-test
+qualification. The 1,019-test
 Python suite passes with one existing skip. No runtime feature or old reference was removed.
+
+The subsequent [recovery-first process extension](rust-migrations/canvas-worker-provider-recovery-first.md)
+has a successful actual published capture (36.44s) and independent complete
+reference regeneration (36.20s). A pre-row-lock statement barrier allows actual
+expiry and the distinct reclaimer to win; valid pre-expiry provider effects remain
+intact and the sole terminal write is dead-letter. Native replay explicitly
+requires fresh-clock stale-completion rejection and exact remaining state. The
+local gate now has 107 entries, pending configured Linux qualification. The full
+Python suite passes 1,026 tests with one existing skip (43.61s), and the original
+completion reference still matches after sharing the implementation (36.03s).
+Expiry during in-flight provider effects remains separate. No consumer or feature
+has been removed; the existing 103-entry head's live CI is not superseded or cancelled.
 
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease

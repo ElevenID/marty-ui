@@ -3,8 +3,9 @@
 Status: actual published-process capture and independent regeneration agree;
 native process replay is implemented, awaiting configured Linux qualification.
 The local mandatory gate now contains 103 entries, including the preceding
-two-direction repository test. Recovery-first whole-process composition remains
-open. No consumer switch, feature deletion or whole-worker acceptance is implied.
+two-direction repository test. The subsequent [recovery-first process extension](canvas-worker-provider-recovery-first.md)
+is implemented with an independently regenerated reference, also awaiting Linux
+qualification. No consumer switch, feature deletion or whole-worker acceptance is implied.
 
 ## Observed published behavior and retained Rust improvement
 
@@ -67,5 +68,5 @@ probe (69.17s). Ruff, shell syntax and patch checks pass.
 Windows early-return native entries are not Linux qualification.
 
 Next: retain both repository race directions and this completion-first process
-case, qualify the exact native head, then capture/replay recovery-first process
-competition with the same strict ownership, expiry and side-effect observations.
+case, then qualify the exact native heads including the recovery-first extension.
+Expiry during in-flight provider effects remains a separate boundary.
