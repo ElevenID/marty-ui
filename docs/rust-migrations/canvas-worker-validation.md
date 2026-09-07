@@ -1,8 +1,11 @@
 # Actual worker validation and processor-failure reference
 
-Status: twenty published-worker cases captured independently twice and frozen;
-native replay is implemented. The initial eleven cases passed Linux at
-`56f4658e1`; newer races/processor failures await exact-head qualification. This is selected
+Status: all twenty published/native worker cases are qualified, initially at
+`f195ad484ff47cab0fcbde3649c4e9b52dc17da1` and retained at
+`29bf8c226e13df1a708355538cc913adcbfa987f` (CI34079614572/runtime101612295594).
+All twenty native zero-request markers were inspected in the configured run.
+The [cross-corpus processor audit](canvas-worker-processor-coverage.md) separates
+these completed observations from remaining processor outcomes. This is selected
 gate-9 evidence, not a completed
 worker/consumer cutover. All nine normative validation errors now have captured
 actual-process outcomes, including the two reference-removal races below.

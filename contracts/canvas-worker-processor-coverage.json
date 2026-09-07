@@ -1,0 +1,30 @@
+{
+  "schema": "marty.canvas-worker-processor-coverage/v1",
+  "normative_contract": "issuance-canvas-sync-worker.json",
+  "actual_process": {
+    "validation": {
+      "scenarios": "canvas-worker-validation-scenarios.json",
+      "reference": "canvas-worker-validation-oracle.json",
+      "boundary": "processor_dispatch"
+    },
+    "retry": {
+      "reference": "canvas-worker-retry-oracle.json",
+      "stages": ["short_rate_limit_uses_backoff", "provider_unavailable_preserves_evidence"]
+    }
+  },
+  "controlled_worker_cycle": ["canvas_background_signing_forbidden"],
+  "typed_dispatch_reconciliation": [
+    "canvas_sync_processor_unavailable",
+    "canvas_sync_processor_contract_invalid"
+  ],
+  "remaining_composed_outcomes": [
+    "canvas_platform_reconfigured",
+    "canvas_application_unavailable",
+    "canvas_roster_oauth_unavailable",
+    "canvas_nrps_roster_unavailable",
+    "canvas_roster_collection_too_large",
+    "canvas_sync_resources_unavailable",
+    "canvas_authoritative_read_failed"
+  ],
+  "scope": "Exhaustive accounting of seventeen normative processor outcomes across existing corpora. Controlled-cycle evidence is not actual-provider process evidence. Typed dispatch reconciliation and remaining composed outcomes stay open; no entry is waived or removed from the normative contract. Runtime qualification is recorded separately against an exact commit."
+}

@@ -3,9 +3,10 @@
 Status: seven independently captured published-worker cases are frozen. Two
 complete captures match byte-for-byte with SHA-256
 `043023af2b132ed5be9a86be3b3c9b05832baa78f80e762234f8ac873290c017`.
-Native replay is implemented; a focused Rust regression demonstrated integer
-overflow fallback and the shared parser correction passes locally. Actual Linux
-whole-worker qualification of the correction remains pending. This extends
+The shared parser correction and all seven actual native HTTPS/deadline cases
+qualified at `a6826de39`, then passed again at `29bf8c226` in the 103-entry
+configured run CI34079614572/runtime101612295594. The historical overflow failure
+and its correction are retained below. This extends
 [retry/rejection evidence](canvas-worker-retry-reference.md), not whole-worker
 acceptance or permission to delete or switch deployed consumers.
 

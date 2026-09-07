@@ -9,6 +9,69 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_global_processor_inventory_is_disjoint_exhaustive_and_reference_backed():
+    def read(name):
+        return json.loads((ROOT / "contracts" / name).read_text())
+
+    audit = read("canvas-worker-processor-coverage.json")
+    contract = read(audit["normative_contract"])
+    required = {
+        item["code"]: item["retryable"]
+        for item in contract["processor_dispatch"]["stable_outcomes"]
+    }
+    assert len(required) == 17
+    observed = {}
+    validation = audit["actual_process"]["validation"]
+    reference = read(validation["reference"])
+    for case in read(validation["scenarios"])["cases"]:
+        if case.get("boundary") != validation["boundary"]:
+            continue
+        observation = reference[case["name"]]["observations"][0]
+        assert observation["name"] == case["name"]
+        assert observation["requests"] == []
+        assert len(observation["jobs"]) == 1
+        job = observation["jobs"][0]
+        assert job["last_error_code"] == case["code"]
+        observed[job["last_error_code"]] = job["status"]
+    assert len(observed) == 5
+
+    retry = audit["actual_process"]["retry"]
+    stages = {item["name"]: item for item in read(retry["reference"])["observations"]}
+    assert len(retry["stages"]) == 2
+    for name in retry["stages"]:
+        stage = stages[name]
+        assert stage["requests"]
+        job = stage["jobs"][-1]
+        observed[job["last_error_code"]] = job["status"]
+    assert len(observed) == 7
+    for code, status in observed.items():
+        assert status == ("retry" if required[code] else "dead_letter")
+
+    groups = [set(observed)]
+    for name, count in [
+        ("controlled_worker_cycle", 1),
+        ("typed_dispatch_reconciliation", 2),
+        ("remaining_composed_outcomes", 7),
+    ]:
+        group = set(audit[name])
+        assert len(group) == len(audit[name]) == count
+        assert all(not group & earlier for earlier in groups)
+        groups.append(group)
+    assert set.union(*groups) == set(required)
+    assert audit["controlled_worker_cycle"] == ["canvas_background_signing_forbidden"]
+    assert audit["typed_dispatch_reconciliation"] == [
+        "canvas_sync_processor_unavailable",
+        "canvas_sync_processor_contract_invalid",
+    ]
+    # This only protects test registration; hosted execution is separate evidence.
+    registered = (
+        ROOT / "rust/services/issuance/tests/canvas_sync_worker_postgres_contract.rs"
+    ).read_text()
+    assert (
+        "canvas_worker_signing_guard::assert_signing_guard(&pool).await;" in registered
+    )
+
+
 def test_native_validation_matrix_uses_separate_children_and_no_expected_reads(
     monkeypatch,
 ):

@@ -231,6 +231,15 @@ early return is counted as parity.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 
+The [cross-corpus processor audit](rust-migrations/canvas-worker-processor-coverage.md)
+reconciles stale readiness wording with that exact runtime evidence: all nine
+target-validation codes and seven Retry-After deadline cases are qualified.
+Of seventeen separate processor outcomes, seven have actual-process evidence,
+one has a real worker/PostgreSQL guard with a controlled processor, seven await
+composed observations and two require typed-dispatch reconciliation. The exhaustive
+inventory keeps every normative outcome; no deletion gate is waived. This avoids
+mistaking the validation corpus's local twelve-code remainder for twelve global gaps.
+
 [Credentials issue270](https://github.com/ElevenID/marty-credentials/issues/270)
 tracks an aggregate release gate: both exact published Windows Core 0.1.60 and
 0.1.61 wheels retain three compatibility failures against the unchanged issuance
