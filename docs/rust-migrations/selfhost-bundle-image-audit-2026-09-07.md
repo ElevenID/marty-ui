@@ -149,3 +149,29 @@ The complete Python suite subsequently passed 1,156 tests with one existing
 skip in 58.55 seconds. Independent review also re-rendered and compared every
 signing-keys runtime field. The rendered result remains source configuration
 evidence, not runtime acceptance.
+
+## Compose version compatibility repair
+
+The next hosted image job (`101666175310`, CI `34098106567`, head `8e7f66d46`)
+failed this complete-model check for `applicant`. Its Compose **2.38.2** retained
+the base `build` definition; the local Compose **5.4.0** renderer removed it.
+Comparison of the tested merge commit with the PR head found no content drift.
+The image job failed before builds or packaged startup gates ran.
+
+A checksummed official Linux 2.38.2 executable reproduced the failure with
+configuration rendering only. Minimal documents isolated the cause: a
+`build: !reset null` inherited through a mapping-merge anchor did not remove the
+base build, while a directly attached tagged scalar or scalar alias did.
+
+The compatible override keeps one shared image/pull-policy anchor and one shared
+tagged reset scalar. Each of the 17 converted service definitions attaches that
+scalar explicitly at its `build` key. This repetition is necessary to preserve
+the YAML merge semantics on both engines; image selection and reset values still
+have single owners. No runtime field, secret, migration dependency, or unqualified
+Python consumer was removed or normalized out of the equality gate.
+
+Independent full rendering now passes on both Linux 2.38.2 and Windows 5.4.0.
+All 47 focused bundle/dispatcher tests pass, including a YAML-node regression
+that rejects the old mapping-only reset and secret-safe field-name diagnostics.
+Hosted image requalification remains pending; neither local rendering nor this
+repair constitutes deployment or native worker cutover acceptance.

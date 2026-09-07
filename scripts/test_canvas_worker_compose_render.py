@@ -53,8 +53,16 @@ def assert_shared_rust_services(base, bundle):
         expected["environment"]["SERVICE_NAME"] = selector.replace("-", "_")
         actual = deepcopy(bundle["services"][name])
         actual["environment"] = environment_mapping(actual.get("environment", {}))
+        differences = sorted(
+            field
+            for field in actual.keys() | expected.keys()
+            if field not in actual
+            or field not in expected
+            or actual[field] != expected[field]
+        )
         assert actual == expected, (
-            f"Bundle must preserve converted Rust service: {name}"
+            f"Bundle must preserve converted Rust service: {name}; "
+            f"differing fields: {', '.join(differences)}"
         )
         checked.append(name)
     assert checked, "No converted Rust services inspected"
