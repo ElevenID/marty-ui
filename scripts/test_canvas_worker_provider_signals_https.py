@@ -28,6 +28,7 @@ def run(executable, scenario="signals"):
         "signals",
         "recovery",
         "final",
+        "generation",
         "concurrent",
         "reclaimers",
         "reclaimers_retry",
@@ -48,11 +49,12 @@ def run(executable, scenario="signals"):
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
         "recovery": ["renewal", "recovery"],
         "final": ["final"],
+        "generation": ["generation"],
         "concurrent": ["concurrent"],
         "reclaimers": ["reclaimers"],
         "reclaimers_retry": ["reclaimers_retry"],
     }[scenario]
-    if scenario in {"final", "reclaimers", "reclaimers_retry"}:
+    if scenario in {"final", "generation", "reclaimers", "reclaimers_retry"}:
         assert reference["case"] == (
             "recovery" if scenario == "reclaimers_retry" else "final"
         )
@@ -99,6 +101,7 @@ def run(executable, scenario="signals"):
                     in {
                         "recovery",
                         "final",
+                        "generation",
                         "concurrent",
                         "reclaimers",
                         "reclaimers_retry",
@@ -158,6 +161,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final|concurrent|reclaimers|reclaimers_retry]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|concurrent|reclaimers|reclaimers_retry]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

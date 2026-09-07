@@ -176,15 +176,15 @@ integer configuration. The latter preserves its non-idle phase and requires
 completed revocation writes; it does not claim the later ordinary job-leasing
 overflow disappeared. Existing queue/reference values remain unchanged. Shared
 matrix/fixture/process owners are reused. Native replay is implemented and the
-86-entry gate awaits exact-head hosted qualification. No runtime or feature changed.
+86-entry increment is now qualified by the later 90-entry run below. No runtime or feature changed.
 
 The [nonempty selection-cap reference](rust-migrations/canvas-worker-oauth-revocation-selection.md)
 now compares actual published and Rust repositories on 509 rows at limits
 0/499/500/501/2147483648. Counts and every ordered selected ID match; all rows,
 ciphertexts and issued records remain unchanged. Both real-repository gates pass
 locally. This is repository-boundary evidence, not 500 remote calls or whole-worker
-completion. Existing process evidence is retained. The 88-entry gate awaits hosted
-qualification; cycle-counter qualification and secret-resolution composition gaps remain.
+completion. Existing process evidence is retained. The 88-entry increment is now
+qualified by the later 90-entry run below; secret-resolution qualification remains.
 
 The [cycle-counter reference](rust-migrations/canvas-worker-oauth-revocation-counters.md)
 now freezes actual cycle API return values for success, retry and both owner-loss
@@ -193,7 +193,7 @@ Rust cycle replay is implemented with real database/vault/HTTPS dependencies and
 all seven returned fields compared. It preserves the original durable/HTTP checks
 and reuses the existing fixture and ownership-transfer protocol. Local strict
 Clippy, 24 Rust behavior tests and 991 Python tests pass (one existing opt-in skip).
-The mandatory gate now registers 90 entries; native Linux qualification is pending.
+The 90-entry increment passed native Linux qualification at e70e3abcc, recorded below.
 This is not standalone-loop or active-job processor acceptance, and no deployed
 consumer or feature was removed.
 
@@ -202,8 +202,8 @@ queue and lease replay hit a nullable retry-deadline decoder error in the test
 observer. The exact failure was reproduced against the real published schema;
 the observer is corrected without changing worker behavior or frozen expectations.
 All23 earlier native revocation markers and separate4workerDB cases passed.
-The failed run is not a newly qualified composed checkpoint; the90-entry followup
-must pass with the correction before claiming those new boundaries qualified.
+The failed run is not a qualified composed checkpoint. The corrected 90-entry
+followup subsequently passed; its exact evidence is recorded below.
 
 The [secret-resolution reference](rust-migrations/canvas-worker-oauth-revocation-secrets.md)
 adds six actual published worker captures for absent/malformed/missing/disabled or
@@ -216,16 +216,16 @@ startup, so that regression is not presented as a published-process capture.
 Shared fixtures and cycle construction are retained. The 94-entry gate awaits
 fresh native qualification; no consumer or feature was removed.
 
-Latest qualified UI checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87` passed
-CI34069978028 and all applicable exact-head checks, including Rust CodeQL34069978088.
-Runtime job101585424129 passed 81 configured tests in 1726.05 seconds, retaining
-the actual native validation/failure cases, and all four configured PostgreSQL
-worker-contract entries in 104.35 seconds. Its image job also passed. All 23 native
-OAuth revocation PASS markers were verified: seven transport, two replacement-owner,
-one marker-failure, eight Retry-After and five later-history backoff cases. This
-retains the twelve-case privacy checkpoint and qualifies those scoped boundaries.
-Later queue and acquired-lease changes require fresh hosted qualification;
-no unconfigured early-return group is counted as parity evidence.
+Latest qualified UI checkpoint `e70e3abccd83b4f6893ea655f9a97b000aa97e54` passed
+CI34074425466 and all applicable exact-head checks, including Rust CodeQL34074425459.
+Runtime job101597690121 passed 90 configured tests in 1960.69s and the separate
+four configured PostgreSQL worker-contract entries in 96.98s. Image job101597690020
+also passed. All 33 native OAuth revocation markers were verified: the earlier23,
+two queue, four acquired-lease and four actual cycle-return cases. Both real
+repository comparisons passed. This retains the earlier validation and privacy
+boundaries without treating repository tests as process evidence. Later secret
+and generation extensions need fresh qualification; no unconfigured early-return
+group is counted as parity evidence.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 
@@ -308,8 +308,16 @@ to dead-letter/target-disable with no second provider request. Earlier attempts
 are explicitly seeded history, not executed evidence. Native final-attempt
 replay passed with strict generation checks at `e959e113d` (CI34041341592,
 Rust34041341506), including one actual HTTPS request and all 56 configured tests
-in 841.38 seconds. The newer two-final-reclaimer qualification is recorded above;
-changed-generation races remain open.
+in 841.38 seconds. The newer two-final-reclaimer qualification is recorded above.
+The [newer-target recovery reference](rust-migrations/canvas-worker-provider-generation.md)
+now captures actual attempt-eight renewal/crash, a committed validated generation
+change and real expiry. Independent regeneration matches. Published Python disables
+the newer target; native replay explicitly retains Rust's stronger fence and requires
+the complete post-edit target row unchanged. Existing job, HTTPS, ciphertext and
+issuance assertions remain exact. This 98-entry extension awaits configured Linux
+qualification; final-attempt completion versus recovery remains open. The fixture
+does not execute the operator configuration/validation API, and prior attempts are
+seeded history. No runtime feature or existing reference was deleted.
 
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease

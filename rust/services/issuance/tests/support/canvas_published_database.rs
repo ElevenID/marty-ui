@@ -486,6 +486,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_provider_generation() -> Result<Self, String> {
+        Self::start_probe_with_extra(
+            Some((
+                "worker_provider_generation",
+                "worker-provider-generation",
+                "worker_provider_generation",
+                "MARTY_CANVAS_WORKER_PROVIDER_GENERATION_ORACLE=1",
+            )),
+            Some("canvas-issued-review-scenarios.json"),
+        )
+        .await
+    }
+
     pub async fn start_with_worker_retry() -> Result<Self, String> {
         Self::start_probe_with_extra(
             Some((
@@ -707,6 +720,7 @@ impl PublishedDatabase {
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
+                | "worker_provider_generation"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -791,6 +805,7 @@ impl PublishedDatabase {
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
+                | "worker_provider_generation"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -813,6 +828,7 @@ impl PublishedDatabase {
             script,
             "worker_provider_recovery"
                 | "worker_provider_final"
+                | "worker_provider_generation"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -826,6 +842,7 @@ impl PublishedDatabase {
         if matches!(
             script,
             "worker_provider_final"
+                | "worker_provider_generation"
                 | "worker_concurrent"
                 | "worker_reclaimers"
                 | "worker_reclaimers_retry"
@@ -837,6 +854,9 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_provider_generation" => {
+                &["contracts/canvas-worker-provider-final-scenarios.json"]
+            }
             "worker_oauth_revocation" if scenario == "worker-oauth-revocation-counters" => &[
                 "contracts/canvas-worker-oauth-revocation-scenarios.json",
                 "contracts/canvas-worker-oauth-revocation-fence-scenarios.json",

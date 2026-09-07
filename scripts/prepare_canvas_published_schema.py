@@ -224,6 +224,11 @@ def prepare():
                 "worker_provider_final",
                 "worker_provider_final",
             ),
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_GENERATION_ORACLE",
+                "worker_provider_generation",
+                "worker_provider_generation",
+            ),
             ("MARTY_CANVAS_WORKER_RETRY_ORACLE", "worker_retry", "worker_retry"),
             ("MARTY_CANVAS_WORKER_FACTS_ORACLE", "worker_facts", "worker_facts"),
             ("MARTY_CANVAS_WORKER_REST_ORACLE", "worker_rest", "worker_rest"),

@@ -198,6 +198,43 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                 result["crash_exit_code"] = child.wait(timeout=10)
                 result["after_crash"] = observe()
                 assert result["after_crash"] == renewed_state
+                if "generation_change_sql" in cases:
+                    assert case_name == "final" and child.poll() == -signal.SIGKILL
+                    with engine.begin() as connection:
+                        job_before_edit = connection.execute(
+                            text(cases["job_row_sql"])
+                        ).scalar_one()
+                        original_target = connection.execute(
+                            text(cases["target_row_sql"])
+                        ).scalar_one()
+                        for statement in cases["generation_change_sql"]:
+                            assert connection.exec_driver_sql(statement).rowcount == 1
+                        edited_target = connection.execute(
+                            text(cases["target_row_sql"])
+                        ).scalar_one()
+                        assert (
+                            connection.execute(text(cases["job_row_sql"])).scalar_one()
+                            == job_before_edit
+                        )
+                    assert (
+                        original_target["config_version"] == 1
+                        and original_target["enabled"] is True
+                    )
+                    assert (
+                        edited_target["config_version"] == 2
+                        and edited_target["enabled"] is True
+                    )
+                    result["generation_edit"] = {
+                        "before": {
+                            key: original_target[key]
+                            for key in ("config_version", "enabled")
+                        },
+                        "after": {
+                            key: edited_target[key]
+                            for key in ("config_version", "enabled")
+                        },
+                        "job_unchanged": True,
+                    }
                 https.release.set()
                 wait_for(
                     lambda: scalar(
@@ -293,6 +330,22 @@ def run(case_name, scenario="canvas-worker-provider-recovery-scenarios.json"):
                 assert result["target_enabled"] is (case_name != "final")
             if case_name == "final":
                 assert result["completed"]["facts"] == []
+            if "generation_change_sql" in cases:
+                current_target = scalar(engine, cases["target_row_sql"])
+                assert {
+                    key: value
+                    for key, value in current_target.items()
+                    if key not in {"enabled", "updated_at"}
+                } == {
+                    key: value
+                    for key, value in edited_target.items()
+                    if key not in {"enabled", "updated_at"}
+                }
+                result["generation_recovered"] = {
+                    "config_version": current_target["config_version"],
+                    "enabled": current_target["enabled"],
+                    "other_target_fields_preserved": True,
+                }
             result["source_sha256"] = {
                 name: hashlib.sha256(
                     Path(importlib.util.find_spec(name).origin)

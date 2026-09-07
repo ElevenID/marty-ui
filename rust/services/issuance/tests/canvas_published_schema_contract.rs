@@ -3,6 +3,33 @@ use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
 #[tokio::test]
+async fn worker_provider_generation_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned =
+        canvas_published_database::PublishedDatabase::start_with_worker_provider_generation()
+            .await
+            .unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-provider-generation-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
+    owned.close().unwrap();
+}
+
+#[test]
+fn worker_provider_generation_preserves_stronger_recovery_fence() {
+    assert_worker_provider_https("generation");
+}
+
+#[tokio::test]
+async fn worker_provider_generation_native_child() {
+    worker_provider_child("generation").await;
+}
+
+#[tokio::test]
 async fn worker_oauth_revocation_secrets_reference_matches_published_process() {
     assert_worker_matrix_reference("oauth-revocation-secrets").await;
 }
@@ -308,7 +335,7 @@ async fn worker_provider_child(scenario: &str) {
         "signals" => {
             canvas_worker_provider_signals_replay::replay(&pool, &owned.url, &origin, &signal).await
         }
-        "recovery" | "final" | "reclaimers" | "reclaimers_retry" => {
+        "recovery" | "final" | "generation" | "reclaimers" | "reclaimers_retry" => {
             canvas_worker_provider_recovery_replay::replay(&pool, &owned.url, &origin, &signal)
                 .await
         }

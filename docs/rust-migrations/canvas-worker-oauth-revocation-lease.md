@@ -1,5 +1,12 @@
 # Actual OAuth revocation lease bounds
 
+Qualification update: All four native acquired-lease cases
+passed at e70e3abccd83b4f6893ea655f9a97b000aa97e54 (CI34074425466,
+90 configured tests in 1960.69s; all applicable exact-head checks passed).
+This supersedes the initial pending status recorded below, not the scoped
+evidence limitations. Later secret/generation additions remain unqualified;
+see the [current audit](canvas-worker-oauth-revocation-coverage-audit.md).
+
 Four actual published-worker captures measure committed acquired leases for
 configuration inputs -1, 120, 301 and 999999999999999999999999 seconds. Each
 process acquires three eligible connections and stores leases of 30, 120, 300

@@ -147,12 +147,18 @@ async fn observe_reclaimers(
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str) {
     assert!(matches!(
         case,
-        "renewal" | "recovery" | "final" | "reclaimers" | "reclaimers_retry"
+        "renewal" | "recovery" | "final" | "generation" | "reclaimers" | "reclaimers_retry"
     ));
-    let final_attempt = matches!(case, "final" | "reclaimers");
+    let final_attempt = matches!(case, "final" | "generation" | "reclaimers");
     let retry_recovery = matches!(case, "recovery" | "reclaimers_retry");
     let dual_reclaimers = matches!(case, "reclaimers" | "reclaimers_retry");
     let (reference_json, scenarios_json) = match case {
+        "generation" => (
+            include_str!("../../../../../contracts/canvas-worker-provider-generation-oracle.json"),
+            include_str!(
+                "../../../../../contracts/canvas-worker-provider-generation-scenarios.json"
+            ),
+        ),
         "reclaimers_retry" => (
             include_str!("../../../../../contracts/canvas-worker-reclaimers-retry-oracle.json"),
             include_str!("../../../../../contracts/canvas-worker-reclaimers-retry-scenarios.json"),
@@ -172,10 +178,12 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
     };
     let reference: Value = serde_json::from_str(reference_json).unwrap();
     static FINAL_SCENARIO: OnceLock<Value> = OnceLock::new();
+    static GENERATION_SCENARIO: OnceLock<Value> = OnceLock::new();
     static RECOVERY_SCENARIO: OnceLock<Value> = OnceLock::new();
     static RECLAIMERS_SCENARIO: OnceLock<Value> = OnceLock::new();
     static RECLAIMERS_RETRY_SCENARIO: OnceLock<Value> = OnceLock::new();
     let cases = match case {
+        "generation" => &GENERATION_SCENARIO,
         "final" => &FINAL_SCENARIO,
         "reclaimers" => &RECLAIMERS_SCENARIO,
         "reclaimers_retry" => &RECLAIMERS_RETRY_SCENARIO,
@@ -214,7 +222,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
             }
             assert!(base.get("initial_job_seed").is_none());
             base
-        } else if case == "reclaimers" {
+        } else if matches!(case, "reclaimers" | "generation") {
             assert_eq!(
                 parsed["extends"],
                 "canvas-worker-provider-final-scenarios.json"
@@ -256,6 +264,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
     let control = control_directory();
     let (mut worker, mut started) = start(pool, database_url, &environment).await;
     let mut contender: Option<OwnedWorker> = None;
+    let mut edited_target: Option<Value> = None;
     await_marker(&control, "request-received", &mut worker).await;
     assert_leased_state(snapshot(pool, &fixture).await, &expected["before"], 1);
     let first = generation(pool).await;
@@ -300,6 +309,49 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
         assert_eq!(status.code(), None);
         assert_eq!(expected["crash_exit_code"], -9);
         assert_leased_state(snapshot(pool, &fixture).await, &expected["after_crash"], 1);
+        if case == "generation" {
+            let mut transaction = pool.begin().await.unwrap();
+            let job_before: Value = sqlx::query_scalar(cases["job_row_sql"].as_str().unwrap())
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+            let original: Value = sqlx::query_scalar(cases["target_row_sql"].as_str().unwrap())
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+            for statement in cases["generation_change_sql"].as_array().unwrap() {
+                assert_eq!(
+                    sqlx::raw_sql(statement.as_str().unwrap())
+                        .execute(&mut *transaction)
+                        .await
+                        .unwrap()
+                        .rows_affected(),
+                    1
+                );
+            }
+            let edited: Value = sqlx::query_scalar(cases["target_row_sql"].as_str().unwrap())
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+            let job_after: Value = sqlx::query_scalar(cases["job_row_sql"].as_str().unwrap())
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+            assert_eq!(
+                job_after, job_before,
+                "configuration edit mutated leased job"
+            );
+            transaction.commit().await.unwrap();
+            assert_eq!(
+                serde_json::json!({
+                    "before": {"config_version":original["config_version"],"enabled":original["enabled"]},
+                    "after": {"config_version":edited["config_version"],"enabled":edited["enabled"]},
+                    "job_unchanged":true,
+                }),
+                expected["generation_edit"]
+            );
+            edited_target = Some(edited);
+        }
         mark(&control, "release-response");
         await_database_condition(pool, "SELECT lease_expires_at<=clock_timestamp() FROM issuance_service.canvas_evidence_sync_jobs WHERE id=$1", &first.id, 35).await;
         if dual_reclaimers {
@@ -368,7 +420,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
             "succeeded"
         },
         match case {
-            "final" | "reclaimers" => 8,
+            "final" | "generation" | "reclaimers" => 8,
             "recovery" | "reclaimers_retry" => 2,
             _ => 1,
         },
@@ -393,8 +445,22 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
     if final_attempt || dual_reclaimers {
         let target_enabled: bool = sqlx::query_scalar("SELECT enabled FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'")
             .fetch_one(pool).await.unwrap();
-        assert_eq!(target_enabled, !final_attempt);
-        assert_eq!(expected["target_enabled"], !final_attempt);
+        if case == "generation" {
+            assert!(target_enabled, "expired old job disabled newer generation");
+            assert_eq!(expected["target_enabled"], false);
+            let recovered: Value = sqlx::query_scalar(cases["target_row_sql"].as_str().unwrap())
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_new_generation_preserved(
+                edited_target.as_ref().unwrap(),
+                &recovered,
+                &expected["generation_recovered"],
+            );
+        } else {
+            assert_eq!(target_enabled, !final_attempt);
+            assert_eq!(expected["target_enabled"], !final_attempt);
+        }
     }
     worker.signal("SIGINT");
     assert_eq!(worker.wait().await.code(), Some(130));
@@ -406,4 +472,58 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case: &str)
     );
     assert_eq!(expected["same_job_and_original_start"], true);
     fixture.assert_preserved(pool).await;
+}
+
+fn assert_new_generation_preserved(edited: &Value, recovered: &Value, published: &Value) {
+    // Explicit normative improvement, not a general-purpose field filter.
+    assert_eq!(
+        published,
+        &serde_json::json!({"config_version":2,"enabled":false,"other_target_fields_preserved":true})
+    );
+    assert_eq!(edited["config_version"], 2);
+    assert_eq!(edited["enabled"], true);
+    assert_eq!(
+        recovered, edited,
+        "recovery changed the newer target's complete row"
+    );
+}
+
+#[test]
+fn newer_generation_check_rejects_any_target_mutation() {
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-provider-generation-oracle.json"
+    ))
+    .unwrap();
+    let edited = serde_json::json!({"config_version":2,"enabled":true,
+        "metadata":{"synthetic":"preserved"},"updated_at":"synthetic-time","next_run_at":"synthetic-future"});
+    assert_new_generation_preserved(&edited, &edited, &reference["generation_recovered"]);
+    for (key, value) in [
+        ("config_version", serde_json::json!(1)),
+        ("enabled", serde_json::json!(true)),
+        ("other_target_fields_preserved", serde_json::json!(false)),
+    ] {
+        let mut changed = reference["generation_recovered"].clone();
+        changed[key] = value;
+        assert!(std::panic::catch_unwind(|| assert_new_generation_preserved(
+            &edited, &edited, &changed
+        ))
+        .is_err());
+    }
+    for (key, value) in [
+        ("enabled", serde_json::json!(false)),
+        ("config_version", serde_json::json!(1)),
+        ("metadata", serde_json::json!({})),
+        ("updated_at", serde_json::json!("changed")),
+        ("next_run_at", serde_json::Value::Null),
+        ("unexpected", serde_json::json!(true)),
+    ] {
+        let mut changed = edited.clone();
+        changed[key] = value;
+        assert!(std::panic::catch_unwind(|| assert_new_generation_preserved(
+            &edited,
+            &changed,
+            &reference["generation_recovered"]
+        ))
+        .is_err());
+    }
 }

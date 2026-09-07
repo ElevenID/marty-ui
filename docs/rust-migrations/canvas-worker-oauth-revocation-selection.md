@@ -1,5 +1,12 @@
 # Nonempty OAuth revocation selection cap
 
+Qualification update: The published and native repository comparisons
+passed at e70e3abccd83b4f6893ea655f9a97b000aa97e54 (CI34074425466,
+90 configured tests in 1960.69s; all applicable exact-head checks passed).
+This supersedes the initial pending status recorded below, not the scoped
+evidence limitations. Later secret/generation additions remain unqualified;
+see the [current audit](canvas-worker-oauth-revocation-coverage-audit.md).
+
 The actual published repository and Rust repository now select from the same
 509-row fixture, containing 506 eligible connections and the existing future,
 connected and active-lease controls. The 501 added due connections have unique

@@ -313,6 +313,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_oauth_revocation_secrets_matches_frozen_published_process",
         "worker_oauth_revocation_secret_reference_constraints_match_published_schema",
         "worker_oauth_revocation_empty_token_is_not_dispatched",
+        "worker_provider_generation_reference_matches_published_process",
+        "worker_provider_generation_preserves_stronger_recovery_fence",
+        "worker_provider_generation_native_child",
+        "canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation",
         "worker_oauth_revocation_selection_reference_matches_published_repository",
         "worker_oauth_revocation_selection_repository_matches_published",
     ]:
