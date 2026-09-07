@@ -87,6 +87,15 @@ def prepare():
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
         provider_signal = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL")
+        resource_race_case = os.environ.get("MARTY_CANVAS_WORKER_RESOURCE_RACE_CASE")
+        if resource_race_case is not None:
+            from run_canvas_worker_resource_race_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_resource_race"] = run(resource_race_case)
         roster_failure_case = os.environ.get("MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE")
         if roster_failure_case is not None:
             from run_canvas_worker_roster_failure_oracle import run

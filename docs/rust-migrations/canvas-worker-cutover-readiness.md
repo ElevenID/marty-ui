@@ -29,6 +29,14 @@ to 109 entries. Its native Linux qualification is pending; do not count its four
 processor codes as closed or mistake the frozen 503 outcome for an authoritative
 read error. The seven-code remaining composed inventory is deliberately retained.
 
+The subsequent [resource-race extension](canvas-worker-resource-races.md) freezes
+two real published-worker outcomes: platform reconfiguration and application
+removal during a held provider read. It adds a shared native replay and narrow
+Rust error-classification repairs while retaining lease, row-lock and update
+guards. Registration is now 113 entries, not 113 qualified passes. Its native
+Linux process qualification is pending; neither code leaves the seven-code
+remaining inventory on the strength of reference or repository tests alone.
+
 ## What the latest evidence does and does not prove
 
 The JSON-depth implementation passed all 36 configured published-image/schema

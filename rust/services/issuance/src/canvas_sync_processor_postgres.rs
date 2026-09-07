@@ -14,9 +14,10 @@ use crate::{
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_sync_lease::{lease_lost, CanvasSyncLease},
     canvas_sync_processor::{
-        CanvasAuthoritativeObservation, CanvasCandidateObservationSnapshot, CanvasFactCommit,
-        CanvasLinkedIdentitySnapshot, CanvasRosterCandidate, CanvasSyncApplicationSnapshot,
-        CanvasSyncPlatformSnapshot, CanvasSyncProcessorRepository, CanvasSyncResources,
+        application_unavailable, platform_reconfigured, CanvasAuthoritativeObservation,
+        CanvasCandidateObservationSnapshot, CanvasFactCommit, CanvasLinkedIdentitySnapshot,
+        CanvasRosterCandidate, CanvasSyncApplicationSnapshot, CanvasSyncPlatformSnapshot,
+        CanvasSyncProcessorRepository, CanvasSyncResources,
     },
     canvas_sync_worker::{CanvasSyncProcessingError, CanvasSyncTarget},
 };
@@ -647,6 +648,21 @@ async fn lock_current_scope(
     .await
     .map_err(repository_error)?;
     if current.is_none() {
+        // Classification only: the failed scope guard still forbids every write.
+        // Preserve the published platform-specific outcome without treating
+        // unrelated target/binding changes as platform reconfiguration.
+        let version = sqlx::query_scalar::<_, i32>(
+            "SELECT config_version FROM issuance_service.canvas_platforms
+             WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+        )
+        .bind(&resources.platform.id)
+        .bind(&resources.platform.organization_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(repository_error)?;
+        if version.is_some_and(|version| version != resources.platform.config_version) {
+            return Err(platform_reconfigured());
+        }
         return Err(stale());
     }
     Ok(())
@@ -656,10 +672,11 @@ async fn lock_current_application(
     transaction: &mut Transaction<'_, Postgres>,
     application: &CanvasSyncApplicationSnapshot,
 ) -> Result<(), CanvasSyncProcessingError> {
-    let current = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM issuance_service.applications
-         WHERE id = $1 AND organization_id = $2 AND status = $3
+    let current = sqlx::query_scalar::<_, bool>(
+        "SELECT status = $3
            AND integration_context::jsonb IS NOT DISTINCT FROM $4::jsonb
+         FROM issuance_service.applications
+         WHERE id = $1 AND organization_id = $2
          FOR UPDATE",
     )
     .bind(&application.application.id)
@@ -669,10 +686,13 @@ async fn lock_current_application(
     .fetch_optional(&mut **transaction)
     .await
     .map_err(repository_error)?;
-    if current.is_none() {
-        return Err(stale());
+    match current {
+        // A deleted row is terminal, but edits still require a fresh retry.
+        // The row lock, subsequent update CAS and commit lease guard remain.
+        None => Err(application_unavailable()),
+        Some(false) => Err(stale()),
+        Some(true) => Ok(()),
     }
-    Ok(())
 }
 
 fn required_text(

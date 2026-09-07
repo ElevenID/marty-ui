@@ -470,20 +470,14 @@ impl NativeCanvasSyncProcessor {
             .patch_platform_validation(target, resources, validation_error)
             .await?
         {
-            return Err(CanvasSyncProcessingError::retryable(
-                "canvas_platform_reconfigured",
-                "Canvas platform configuration changed during synchronization",
-            ));
+            return Err(platform_reconfigured());
         }
         if !self
             .repository
             .patch_application_sync(target, resources, &checked, policy_allowed)
             .await?
         {
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_application_unavailable",
-                "Canvas application became unavailable during synchronization",
-            ));
+            return Err(application_unavailable());
         }
         if let Some(retry_after_seconds) = retry_after {
             return Err(CanvasSyncProcessingError::retryable(
@@ -832,6 +826,20 @@ fn requirements(resources: &CanvasSyncResources) -> Result<Vec<Value>, CanvasSyn
             "Canvas evidence requirements are invalid",
         )
     })
+}
+
+pub(crate) fn platform_reconfigured() -> CanvasSyncProcessingError {
+    CanvasSyncProcessingError::retryable(
+        "canvas_platform_reconfigured",
+        "Canvas platform configuration changed during synchronization",
+    )
+}
+
+pub(crate) fn application_unavailable() -> CanvasSyncProcessingError {
+    CanvasSyncProcessingError::terminal(
+        "canvas_application_unavailable",
+        "Canvas application became unavailable during synchronization",
+    )
 }
 
 fn resources_unavailable() -> CanvasSyncProcessingError {

@@ -34,6 +34,7 @@ def run(executable, scenario="signals"):
         "concurrent",
         "reclaimers",
         "reclaimers_retry",
+        "resource_race",
     }
     root = Path(__file__).resolve().parents[1]
     spec = json.loads(
@@ -48,7 +49,16 @@ def run(executable, scenario="signals"):
         reference_name = "canvas-worker-reclaimers-retry-oracle.json"
     elif scenario == "recovery_first":
         reference_name = "canvas-worker-provider-recovery-first-oracle.json"
+    elif scenario == "resource_race":
+        reference_name = "canvas-worker-resource-race-oracle.json"
     reference = json.loads((root / "contracts" / reference_name).read_text())
+    resource_matrix = (
+        json.loads(
+            (root / "contracts/canvas-worker-resource-race-scenarios.json").read_text()
+        )
+        if scenario == "resource_race"
+        else None
+    )
     cases = {
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
         "recovery": ["renewal", "recovery"],
@@ -59,6 +69,9 @@ def run(executable, scenario="signals"):
         "concurrent": ["concurrent"],
         "reclaimers": ["reclaimers"],
         "reclaimers_retry": ["reclaimers_retry"],
+        "resource_race": [case["name"] for case in resource_matrix["cases"]]
+        if resource_matrix is not None
+        else [],
     }[scenario]
     if scenario in {"final", "generation", "reclaimers", "reclaimers_retry"}:
         assert reference["case"] == (
@@ -71,10 +84,17 @@ def run(executable, scenario="signals"):
     elif scenario == "concurrent":
         assert reference["schema"] == "marty.canvas-worker-concurrent-oracle/v1"
         reference = {"concurrent": reference}
+    assert cases, "Native provider matrix must execute at least one case"
     assert set(reference) == set(cases)
+    assert len(cases) == len(set(cases))
     for signal_name in cases:
         with WorkerHttpsFixture() as https:
-            https.stage = {**spec["stages"][0], "hold_response": True}
+            response = (
+                resource_matrix["response"]
+                if resource_matrix is not None
+                else spec["stages"][0]
+            )
+            https.stage = {**response, "hold_response": True}
             certificate_root = Path(https.certificates.name)
             empty_ca_directory = certificate_root / "empty-ca-directory"
             empty_ca_directory.mkdir()
@@ -116,6 +136,7 @@ def run(executable, scenario="signals"):
                         "concurrent",
                         "reclaimers",
                         "reclaimers_retry",
+                        "resource_race",
                     }
                     or signal_name == "SIGTERM"
                 )
@@ -172,6 +193,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|completion|recovery_first|concurrent|reclaimers|reclaimers_retry]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|completion|recovery_first|concurrent|reclaimers|reclaimers_retry|resource_race]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

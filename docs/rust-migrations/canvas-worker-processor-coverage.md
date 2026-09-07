@@ -70,3 +70,11 @@ preserve an existing cursor and empty candidate table, not populated candidate
 lifecycle behavior. The separate lease-expiry-during-effects and signing
 diagnostic requirements remain in their named gates. No norm, frozen observation,
 runtime feature, production consumer or deployment has been removed by this audit.
+
+The [two-case resource-race corpus](canvas-worker-resource-races.md) now also
+captures `canvas_platform_reconfigured` and `canvas_application_unavailable`
+through actual published-worker HTTPS runs, with independent regeneration and
+Rust repository repairs. Native process replay is implemented but not qualified.
+These two codes remain in the seven-code inventory until actual Linux replay
+passes. Changed application rows still retry, and lease loss still takes
+precedence; a missing application is not a waiver of either write guard.

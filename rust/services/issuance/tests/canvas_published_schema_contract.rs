@@ -338,6 +338,52 @@ fn worker_provider_recovery_matches_frozen_published_process() {
     assert_worker_provider_https("recovery");
 }
 
+#[test]
+fn worker_provider_resource_race_matches_frozen_published_process() {
+    assert_worker_provider_https("resource_race");
+}
+
+#[path = "support/canvas_worker_resource_race_replay.rs"]
+mod canvas_worker_resource_race_replay;
+
+#[tokio::test]
+async fn worker_provider_resource_race_native_child() {
+    worker_provider_child("resource_race").await;
+}
+
+#[tokio::test]
+async fn worker_resource_race_repository_preserves_stale_write_fences() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    for name in [
+        "platform_reconfigured",
+        "application_removed",
+        "application_status_changed",
+        "application_context_changed",
+        "target_reconfigured",
+        "binding_reconfigured",
+        "platform_reconfigured_wrong_owner",
+        "platform_reconfigured_wrong_attempt",
+        "application_removed_wrong_owner",
+        "application_removed_wrong_attempt",
+        "application_context_changed_wrong_owner",
+        "application_context_changed_wrong_attempt",
+    ] {
+        let owned = canvas_published_database::PublishedDatabase::start()
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&owned.url)
+            .await
+            .unwrap();
+        canvas_worker_resource_race_replay::assert_repository_errors(&pool, name).await;
+        pool.close().await;
+        owned.close().unwrap();
+    }
+}
+
 fn assert_worker_provider_https(scenario: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -414,6 +460,9 @@ async fn worker_provider_child(scenario: &str) {
         .unwrap();
     let signal = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NAME").unwrap();
     match scenario {
+        "resource_race" => {
+            canvas_worker_resource_race_replay::replay(&pool, &owned.url, &origin, &signal).await;
+        }
         "completion" | "recovery_first" => {
             assert_eq!(signal, scenario);
             canvas_worker_provider_completion_replay::replay(&pool, &owned.url, &origin, &signal)
@@ -784,6 +833,11 @@ async fn worker_roster_failure_reference_matches_published_process() {
     assert_worker_matrix_reference("roster-failure").await;
 }
 
+#[tokio::test]
+async fn worker_resource_race_reference_matches_published_process() {
+    assert_worker_matrix_reference("resource-race").await;
+}
+
 async fn assert_worker_matrix_reference(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -869,6 +923,10 @@ async fn assert_worker_matrix_reference(kind: &str) {
             include_str!("../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-roster-failure-oracle.json"),
         ),
+        "resource-race" => (
+            include_str!("../../../../contracts/canvas-worker-resource-race-scenarios.json"),
+            include_str!("../../../../contracts/canvas-worker-resource-race-oracle.json"),
+        ),
         _ => panic!("unknown static worker matrix"),
     };
     let scenarios: serde_json::Value = serde_json::from_str(scenario_source).unwrap();
@@ -933,6 +991,10 @@ async fn assert_worker_matrix_reference(kind: &str) {
             }
             "roster-failure" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_roster_failure(name)
+                    .await
+            }
+            "resource-race" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_resource_race(name)
                     .await
             }
             _ => unreachable!(),

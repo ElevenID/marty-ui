@@ -326,6 +326,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_resource_race(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-resource-race-scenarios.json"),
+            "worker_resource_race",
+            "worker-resource-race",
+            "MARTY_CANVAS_WORKER_RESOURCE_RACE_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_oauth_revocation_queue(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -755,6 +766,7 @@ impl PublishedDatabase {
                 | "worker_retry_after"
                 | "worker_validation"
                 | "worker_roster_failure"
+                | "worker_resource_race"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -843,6 +855,7 @@ impl PublishedDatabase {
                 | "worker_retry_after"
                 | "worker_validation"
                 | "worker_roster_failure"
+                | "worker_resource_race"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -902,6 +915,11 @@ impl PublishedDatabase {
         }
         let extra_scenarios: &[&str] = match script {
             "worker_roster_failure" => &["contracts/canvas-worker-retry-scenarios.json"],
+            "worker_resource_race" => &[
+                "contracts/canvas-worker-retry-scenarios.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
             "worker_provider_recovery_first" => &[
                 "contracts/canvas-worker-provider-completion-scenarios.json",
                 "contracts/canvas-worker-provider-final-scenarios.json",

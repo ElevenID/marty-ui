@@ -1,4 +1,4 @@
-"""Changed-generation harness integrity; not whole-process parity evidence."""
+"""Held-provider harness integrity; not whole-process parity evidence."""
 
 import importlib
 import json
@@ -55,7 +55,9 @@ def test_generation_reference_keeps_observed_difference_and_real_crash_history()
 @pytest.mark.parametrize(
     "failure", [None, "child_exit", "timeout", "wrong_requests", "missing_release"]
 )
-@pytest.mark.parametrize("scenario", ["generation", "completion", "recovery_first"])
+@pytest.mark.parametrize(
+    "scenario", ["generation", "completion", "recovery_first", "resource_race"]
+)
 def test_generation_parent_requires_release_exact_request_and_clean_child(
     monkeypatch, tmp_path, failure, scenario
 ):
@@ -63,34 +65,61 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
     native = importlib.import_module("test_canvas_worker_provider_signals_https")
     monkeypatch.setattr(native, "sys", SimpleNamespace(platform="linux"))
     request = {"method": "GET", "path": "/synthetic"}
+    cases = (
+        ["platform_reconfigured", "application_removed"]
+        if scenario == "resource_race"
+        else [scenario]
+    )
+    response = {"status": 503, "body": {"error": "synthetic-unavailable"}}
+    reference = (
+        {case: {"requests": [request]} for case in cases}
+        if scenario == "resource_race"
+        else {
+            "case": "final" if scenario == "generation" else scenario,
+            "requests": [request],
+        }
+    )
     inputs = iter(
         [
             json.dumps({"stages": [{}]}),
-            json.dumps(
-                {
-                    "case": "final" if scenario == "generation" else scenario,
-                    "requests": [request],
-                }
+            json.dumps(reference),
+            *(
+                [
+                    json.dumps(
+                        {
+                            "cases": [{"name": case} for case in cases],
+                            "response": response,
+                        }
+                    )
+                ]
+                if scenario == "resource_race"
+                else []
             ),
         ]
     )
     monkeypatch.setattr(Path, "read_text", lambda *_: next(inputs))
-    received, release = Event(), Event()
-    received.set()
-    closed, waits, commands = [], [], []
+    closed, waits, commands, fixtures, children = [], [], [], [], []
 
     class Fixture:
         def __enter__(self):
-            return SimpleNamespace(
-                certificates=SimpleNamespace(name=str(tmp_path)),
-                cert=tmp_path / "synthetic-cert",
+            certificate_root = tmp_path / str(len(fixtures))
+            certificate_root.mkdir()
+            received = Event()
+            received.set()
+            self.https = SimpleNamespace(
+                certificates=SimpleNamespace(name=str(certificate_root)),
+                cert=certificate_root / "synthetic-cert",
                 origin="https://127.0.0.1:1",
                 requests=[] if failure == "wrong_requests" else [request],
                 received=received,
-                release=release,
+                release=Event(),
             )
+            fixtures.append(self.https)
+            return self.https
 
         def __exit__(self, *_):
+            expected = response if scenario == "resource_race" else {}
+            assert self.https.stage == {**expected, "hold_response": True}
             closed.append(True)
 
     class Child:
@@ -100,27 +129,29 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
             return self.returncode
 
         def communicate(self, timeout):
-            assert release.is_set()
+            assert fixtures[-1].release.is_set()
             if failure == "timeout" and timeout == 90:
                 raise native.subprocess.TimeoutExpired("synthetic-child", timeout)
             self.returncode = 1 if failure == "child_exit" else 0
             return "", ""
 
-    child = Child()
-
     def launch(command, **kwargs):
+        expected_case = cases[len(commands)]
         commands.append(command)
-        assert kwargs["env"]["MARTY_CANVAS_WORKER_SIGNAL_NAME"] == scenario
+        assert kwargs["env"]["MARTY_CANVAS_WORKER_SIGNAL_NAME"] == expected_case
+        child = Child()
+        children.append(child)
         return child
 
     def wait(actual, predicate, description, timeout=30):
-        assert actual is child and not release.is_set()
+        assert actual is children[-1] and not fixtures[-1].release.is_set()
         waits.append(description)
         if description == "verified pending-I/O state":
-            assert (tmp_path / "native-control/request-received").is_file()
+            control = Path(fixtures[-1].certificates.name) / "native-control"
+            assert (control / "request-received").is_file()
             if failure == "missing_release":
                 raise AssertionError("missing committed state")
-            (tmp_path / "native-control/release-response").touch()
+            (control / "release-response").touch()
         assert predicate()
 
     monkeypatch.setattr(native, "WorkerHttpsFixture", Fixture)
@@ -131,13 +162,20 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
     else:
         with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
             native.run("synthetic-not-executed", scenario)
-    assert commands == [
-        [
-            "synthetic-not-executed",
-            f"worker_provider_{scenario}_native_child",
-            "--exact",
-            "--nocapture",
+    executed = len(cases) if failure is None else 1
+    assert (
+        commands
+        == [
+            [
+                "synthetic-not-executed",
+                f"worker_provider_{scenario}_native_child",
+                "--exact",
+                "--nocapture",
+            ]
         ]
-    ]
-    assert waits == ["actual HTTPS request", "verified pending-I/O state"]
-    assert child.poll() is not None and release.is_set() and closed == [True]
+        * executed
+    )
+    assert waits == ["actual HTTPS request", "verified pending-I/O state"] * executed
+    assert all(child.poll() is not None for child in children)
+    assert all(fixture.release.is_set() for fixture in fixtures)
+    assert closed == [True] * executed
