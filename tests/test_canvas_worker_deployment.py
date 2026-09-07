@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import json
 import os
 from pathlib import Path
 import runpy
 import subprocess
+import sys
 import tomllib
 
 import pytest
@@ -358,6 +360,397 @@ def test_compose_renderer_fails_closed(compose_worker_gate, monkeypatch, failure
         (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError)
     ):
         compose_worker_gate["render"](compose_worker_gate["BASE"])
+
+
+@pytest.mark.parametrize("variant", ["inherited", "isolated", "beta"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        None,
+        "image",
+        "entrypoint",
+        "command",
+        "environment",
+        "secrets",
+        "depends_on",
+        "networks",
+        "healthcheck",
+        "restart",
+        "ports",
+        "future_field",
+    ],
+)
+def test_consumer_comparison_preserves_complete_worker_with_only_reviewed_differences(
+    compose_worker_gate, variant, field
+):
+    base = _yaml("docker-compose.base.yml")
+    worker = base["services"]["canvas-sync-worker"]
+    # Seed preservation-sensitive fields even when today's base inherits them.
+    worker["secrets"] = ["synthetic-required-secret"]
+    worker["future_field"] = {"retained": True}
+    worker["container_name"] = "synthetic-source-worker"
+    pristine = deepcopy(base)
+    model = deepcopy(base)
+    changed = model["services"]["canvas-sync-worker"]
+    if variant == "isolated":
+        del changed["container_name"]
+    if variant == "beta":
+        changed["environment"].update(compose_worker_gate["BETA_WORKER_ENVIRONMENT"])
+    if field is not None:
+        if field == "environment":
+            changed[field].pop("CANVAS_SYNC_PROCESSOR")
+        elif field == "secrets":
+            changed[field] = []
+        else:
+            changed[field] = "synthetic-secret-must-not-appear-in-diagnostics"
+    compare = compose_worker_gate["assert_consumer_worker"]
+    if field is None:
+        compare(
+            base,
+            model,
+            "synthetic",
+            isolated=variant == "isolated",
+            beta=variant == "beta",
+        )
+    else:
+        with pytest.raises(
+            AssertionError, match="preserve complete Python worker"
+        ) as caught:
+            compare(
+                base,
+                model,
+                "synthetic",
+                isolated=variant == "isolated",
+                beta=variant == "beta",
+            )
+        assert "synthetic-secret" not in str(caught.value)
+    assert base == pristine
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_beta_environment_list_is_semantically_compared_without_dropping_fields(
+    compose_worker_gate, invalid
+):
+    base = _yaml("docker-compose.base.yml")
+    model = deepcopy(base)
+    environment = model["services"]["canvas-sync-worker"]["environment"]
+    environment.update(compose_worker_gate["BETA_WORKER_ENVIRONMENT"])
+    values = [f"{name}={value}" for name, value in environment.items()]
+    if invalid:
+        values.append("CANVAS_SYNC_PROCESSOR=unexpected-duplicate")
+    model["services"]["canvas-sync-worker"]["environment"] = values
+    if invalid:
+        with pytest.raises(AssertionError):
+            compose_worker_gate["assert_consumer_worker"](
+                base, model, "beta", beta=True
+            )
+    else:
+        compose_worker_gate["assert_consumer_worker"](base, model, "beta", beta=True)
+
+
+def test_consumer_matrix_derives_all_conformance_switches_from_real_owner(
+    compose_worker_gate,
+):
+    cases = compose_worker_gate["conformance_cases"]()
+    assert len(cases) == len({case["name"] for case in cases}) == 8
+    combinations = set()
+    for case in cases:
+        files = case["files"]
+        assert files[0] == "docker-compose.base.yml"
+        assert files[-1] == "docker-compose.profile.conformance.yml"
+        assert "docker-compose.profile.oidf.yml" in files
+        assert case["profiles"] == ["oidf"]
+        released = "docker-compose.profile.ghcr.yml" in files
+        assert ("docker-compose.profile.conformance-images.yml" in files) is released
+        assert ("docker-compose.profile.local-build.yml" in files) is not released
+        combinations.add(
+            (
+                released,
+                "docker-compose.profile.oidf-haip.yml" in files,
+                "docker-compose.profile.didcomm-authcrypt.yml" in files,
+            )
+        )
+    assert len(combinations) == 8
+
+
+def test_consumer_matrix_uses_catalog_groups_files_and_profiles_without_claiming_tunnel_worker_start(
+    compose_worker_gate,
+):
+    catalog = DeploymentCatalog.load(ROOT)
+    cases = {case["name"]: case for case in compose_worker_gate["catalog_cases"]()}
+    required = {
+        name
+        for name, stack in catalog.stacks.items()
+        if stack.get("compose_files")
+        and "canvas-sync-worker" in catalog.running_services_for_stack(name)
+    }
+    assert set(cases) == required | {"selfhost-beta-tunnel"}
+    for name, case in cases.items():
+        assert case["files"] == catalog.stack(name)["compose_files"]
+        assert case["profiles"] == catalog.stack(name)["compose_profiles"]
+        assert case["worker_required"] is (name in required)
+    assert cases["selfhost-beta-tunnel"]["worker_required"] is False
+    assert cases["selfhost-beta-tunnel"]["profiles"] == ["beta-tunnel"]
+    assert (
+        "docker-compose.profile.canvas-real.yml"
+        in cases["tunnel-beta-experiments"]["files"]
+    )
+    assert (
+        "docker-compose.profile.canvas-sandbox.yml"
+        in cases["tunnel-beta-experiments"]["files"]
+    )
+    assert (
+        "docker-compose.profile.northstar-admissions.yml"
+        in cases["tunnel-beta-d11"]["files"]
+    )
+
+
+def test_beta_tracked_matrix_reads_all_seven_release_source_layers(compose_worker_gate):
+    assert compose_worker_gate["beta_release_source_files"]() == [
+        "docker-compose.base.yml",
+        "docker-compose.beta.yml",
+        "docker-compose.profile.dev.yml",
+        "docker-compose.profile.tunnel.yml",
+        "docker-compose.profile.waltid.yml",
+        "docker-compose.profile.canvas-real.yml",
+        "docker-compose.profile.canvas-sandbox.yml",
+    ]
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [None, "container_name", "ports", "network", "bridge", "volume", "missing_profile"],
+)
+def test_conformance_complete_worker_scope_and_resource_isolation(
+    compose_worker_gate, changed
+):
+    project = compose_worker_gate["CONFORMANCE_PROJECT"]
+    model = {
+        "services": {
+            "canvas-sync-worker": {},
+            "oidf-tls-proxy": {"ports": [{"published": "8443"}]},
+        },
+        "networks": {
+            "marty-network": {"name": f"{project}_marty-network"},
+            "oidf-runner-network": {
+                "name": "${MARTY_CONFORMANCE_PROJECT:?set MARTY_CONFORMANCE_PROJECT}_oidf-runner",
+                "internal": True,
+            },
+        },
+        "volumes": {"data": {"name": f"{project}_data"}},
+    }
+    if changed in ("container_name", "ports"):
+        model["services"]["canvas-sync-worker"][changed] = "unexpected-global-resource"
+    elif changed == "network":
+        model["networks"]["marty-network"]["name"] = "unscoped-production-network"
+    elif changed == "bridge":
+        model["networks"]["oidf-runner-network"]["internal"] = False
+    elif changed == "volume":
+        model["volumes"]["data"]["name"] = "unscoped-production-volume"
+    elif changed == "missing_profile":
+        del model["services"]["oidf-tls-proxy"]
+    if changed:
+        with pytest.raises(AssertionError):
+            compose_worker_gate["assert_conformance_isolation"](model)
+    else:
+        compose_worker_gate["assert_conformance_isolation"](model)
+
+
+def test_renderer_preserves_explicit_profiles_and_project_without_resolving_secrets(
+    compose_worker_gate, monkeypatch
+):
+    calls = []
+
+    def execute(command, **options):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(compose_worker_gate["subprocess"], "run", execute)
+    compose_worker_gate["render"](
+        "source.yml",
+        profiles=["oidf", "beta-tunnel"],
+        project="marty-conformance-worker-config",
+    )
+    [command] = calls
+    assert command[:6] == [
+        "docker",
+        "compose",
+        "--project-name",
+        "marty-conformance-worker-config",
+        "--env-file",
+        os.devnull,
+    ]
+    assert command[6:12] == [
+        "-f",
+        "source.yml",
+        "--profile",
+        "oidf",
+        "--profile",
+        "beta-tunnel",
+    ]
+    assert command[12:] == [
+        "config",
+        "--no-interpolate",
+        "--no-env-resolution",
+        "--no-path-resolution",
+        "--no-consistency",
+        "--format",
+        "json",
+    ]
+
+
+def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
+    compose_worker_gate, monkeypatch
+):
+    calls = []
+    namespace = compose_worker_gate["run"].__globals__
+    monkeypatch.setitem(namespace, "render", lambda *args: {})
+    for name in (
+        "assert_worker_preserved",
+        "assert_published_issuance_preserved",
+        "assert_shared_rust_services",
+        "assert_consumer_matrix",
+    ):
+
+        def record(*args, owner=name):
+            calls.append(owner)
+            return ["synthetic"]
+
+        monkeypatch.setitem(namespace, name, record)
+    compose_worker_gate["run"]()
+    assert calls == [
+        "assert_worker_preserved",
+        "assert_published_issuance_preserved",
+        "assert_shared_rust_services",
+    ]
+
+
+def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_owner(
+    compose_worker_gate, monkeypatch, capsys
+):
+    namespace = compose_worker_gate["run"].__globals__
+    comparisons = []
+    scopes = []
+    renders = []
+
+    def renderer(*files, **options):
+        renders.append((files, options))
+        return {"networks": {"marty-network": {"name": "elevenid-beta-network"}}}
+
+    def unexpected(*args):
+        pytest.fail("Consumer suite must not silently replace the older bundle owner")
+
+    monkeypatch.setitem(namespace, "render", renderer)
+    monkeypatch.setitem(namespace, "assert_base_worker_selection", lambda model: None)
+    monkeypatch.setitem(
+        namespace,
+        "assert_consumer_worker",
+        lambda base, model, name, **options: comparisons.append((name, options)),
+    )
+    monkeypatch.setitem(
+        namespace, "assert_conformance_isolation", lambda model: scopes.append(model)
+    )
+    for name in (
+        "assert_worker_preserved",
+        "assert_published_issuance_preserved",
+        "assert_shared_rust_services",
+    ):
+        monkeypatch.setitem(namespace, name, unexpected)
+    compose_worker_gate["run"]("consumers", ["/owned/pinned-compose"])
+    assert len(comparisons) == len({name for name, _ in comparisons}) == 15
+    assert len(scopes) == 8
+    assert sum(options.get("isolated", False) for _, options in comparisons) == 8
+    assert sum(options.get("beta", False) for _, options in comparisons) == 2
+    assert len(renders) == 21
+    assert all(
+        options["compose_command"] == ["/owned/pinned-compose"]
+        for _, options in renders
+    )
+    assert "15 conformance/catalog/beta compositions" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("prefix", ["docker compose", [], [""], [1]])
+def test_renderer_rejects_shell_strings_and_invalid_argv_before_process_launch(
+    compose_worker_gate, monkeypatch, prefix
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid Compose argv must not launch a process")
+
+    monkeypatch.setattr(compose_worker_gate["subprocess"], "run", unexpected)
+    with pytest.raises(ValueError, match="argv sequence"):
+        compose_worker_gate["render"]("synthetic.yml", compose_command=prefix)
+
+
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [
+        ([], ("bundle", None)),
+        (
+            ["--suite", "consumers", "--compose-command", "/owned path/compose"],
+            ("consumers", ["/owned path/compose"]),
+        ),
+    ],
+)
+def test_actual_cli_defaults_to_bundle_and_requires_explicit_consumer_selection(
+    monkeypatch, arguments, expected
+):
+    import argparse
+
+    source = ast.parse(
+        (ROOT / "scripts/test_canvas_worker_compose_render.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    [entrypoint] = [node for node in source.body if isinstance(node, ast.If)]
+    calls = []
+    monkeypatch.setattr(sys, "argv", ["renderer.py", *arguments])
+    namespace = {
+        "__name__": "__main__",
+        "__doc__": "synthetic parser test",
+        "argparse": argparse,
+        "run": lambda *args: calls.append(args),
+    }
+    exec(
+        compile(
+            ast.Module(body=[entrypoint], type_ignores=[]),
+            "<actual-compose-cli>",
+            "exec",
+        ),
+        namespace,
+    )
+    assert calls == [expected]
+
+
+def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explicit_consumer_suite():
+    workflow = _yaml(".github/workflows/ci.yml")
+    steps = workflow["jobs"]["test-rust-service-images"]["steps"]
+    names = [step.get("name") for step in steps]
+    bundle = names.index("Verify merged Canvas worker deployment configuration")
+    consumers = names.index("Verify complete Canvas worker consumer configurations")
+    assert (
+        steps[bundle]["run"] == "python3 scripts/test_canvas_worker_compose_render.py"
+    )
+    assert bundle < consumers
+    gate = steps[consumers]
+    assert "if" not in gate and not gate.get("continue-on-error", False)
+    commands = gate["run"]
+    download = commands.index(
+        "https://github.com/docker/compose/releases/download/v5.4.0/docker-compose-linux-x86_64"
+    )
+    checksum = commands.index(
+        "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be"
+    )
+    verify = commands.index("sha256sum --check --strict")
+    execute = commands.index("python3 scripts/test_canvas_worker_compose_render.py")
+    assert download < checksum < verify < commands.index("chmod +x") < execute
+    assert 'compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"' in commands
+    assert '--suite consumers --compose-command "$compose_renderer"' in commands
+    builds = [
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses", "").startswith("docker/build-push-action@")
+    ]
+    assert builds and consumers < min(builds)
 
 
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:

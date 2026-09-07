@@ -59,6 +59,21 @@ historical evidence and do not supersede this latest qualification boundary.
 
 New local work, deliberately separate from that hosted checkpoint:
 
+- Latest attempt `f8670830b`, CI `34104771356`, failed the early mixed-roster
+  preflight in 25.79s: the metadata fix passed its stage-0 assertions, then exact
+  transport comparison observed 12 versus 10 requests and four versus two token
+  exchanges. Per-invocation token reuse is being repaired from the exact Python
+  source; no cross-job/tenant cache or frozen-trace normalization is allowed.
+  Image configuration gates passed, but a compiler documentation file was missing
+  from the deliberately test-free image context. Its five examples were moved
+  unchanged into packaged source; fresh image/runtime qualification remains.
+- A repository-scoped [worktree inventory](rust-migrations/marty-ui-worktree-cleanup-inventory-2026-09-07.md)
+  preserves the separate crypto worker's unmerged branches and ignored release
+  evidence/recordings. Clean Git status alone does not authorize their deletion.
+  Configuration-only consumer coverage now includes 15 conformance/catalog/beta
+  compositions using a checksum-pinned standalone Compose 5.4 renderer; existing
+  Compose 2.38 bundle qualification remains separate and unchanged.
+
 - The [typed dispatch reconciliation](rust-migrations/canvas-worker-dispatch-reconciliation.md)
   now preserves all three legacy dispatch failures and two controls through
   twice-identical published-worker captures, plus a third frozen-equality pass
