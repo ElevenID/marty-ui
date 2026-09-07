@@ -13,6 +13,27 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_compiler_contract_documentation_is_a_packaged_source_dependency():
+    source_root = ROOT / "rust/services/issuance/src"
+    source = (source_root / "canvas_sync_worker.rs").read_text(encoding="utf-8")
+    contract = source_root / "canvas_sync_processor_contract.md"
+    assert '#[doc = include_str!("canvas_sync_processor_contract.md")]' in source
+    assert "../tests/compile/" not in source
+    documentation = contract.read_text(encoding="utf-8")
+    assert documentation.count("```compile_fail") == 4
+    assert documentation.count("```no_run") == 1
+    image_inputs = (
+        (ROOT / "rust/services/Dockerfile.ci.dockerignore")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    # Image builds deliberately exclude integration tests. Compiler-consumed
+    # rustdoc must stay in the packaged source tree, not that excluded directory.
+    assert "!rust/**" in image_inputs
+    assert "rust/services/*/tests" in image_inputs
+    assert not any("src" in rule for rule in image_inputs if not rule.startswith("#"))
+
+
 @pytest.fixture
 def matrix():
     return json.loads(
