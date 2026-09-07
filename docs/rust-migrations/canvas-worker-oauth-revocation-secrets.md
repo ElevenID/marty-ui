@@ -1,5 +1,12 @@
 # OAuth revocation secret-resolution composition
 
+Qualification update: df3ed290b19a2cd8e82ef21bfa83355cb2c62a83 passed all 98
+configured entries in CI34076998603 (2085.34s). All six native zero-request markers,
+the real schema-rejection test and native empty-token regression were inspected.
+The separate four-test worker database suite passed in 96.39s; all applicable
+exact-head checks passed. This supersedes historical pending status below, not
+the distinctions between schema, process and counting-provider evidence.
+
 The actual published standalone worker now has six frozen observations for
 unavailable access-token references. Each starts from the official published
 schema with encrypted secrets and the existing isolated HTTPS owner:

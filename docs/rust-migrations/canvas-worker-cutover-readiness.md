@@ -1,20 +1,17 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `e70e3abccd83b4f6893ea655f9a97b000aa97e54`:
-90 configured runtime tests passed in 1960.69s (CI34074425466, runtime101597690121).
-All applicable exact-head checks passed, including Rust CodeQL34074425459 and
-image job101597690020. Earlier validation, privacy and startup boundaries remain
-retained. The separate configured PostgreSQL worker contract passed four entries
-in 96.98s. All 33 native revocation markers were verified: 23 earlier transport,
-fence, marker-failure and timing cases, two queue cases, four acquired-lease cases
-and four actual cycle-return cases. Both real repository comparisons also passed.
-This qualifies the selection/queue/lease/counter boundaries at that exact head,
-not later changes or whole-worker cutover. The subsequent [secret-resolution](canvas-worker-oauth-revocation-secrets.md)
-extension adds six process references, real schema rejections and a native-only
-empty-token guard regression; its 94-entry gate likewise awaits exact-head checks.
-The subsequent [newer-target recovery case](canvas-worker-provider-generation.md)
-has an independently regenerated published reference and native replay preserving
-Rust's stronger generation fence. Its 98-entry gate awaits configured Linux checks.
+Status: latest qualified composed checkpoint `df3ed290b19a2cd8e82ef21bfa83355cb2c62a83`:
+98 configured runtime tests passed in 2085.34s (CI34076998603, runtime101605017410).
+All applicable exact-head checks passed, including Rust CodeQL34076998599. Image
+job101605017315 passed eight preflight and 24 packaged startup cases. The separate
+configured PostgreSQL worker contract passed four entries in 96.39s. All 39 native
+OAuth process/cycle markers were inspected: the prior33 plus six zero-request
+secret-resolution cases. Real schema rejections, the native empty-token regression,
+and both repository comparisons passed. Actual newer-target recovery also passed
+with one HTTPS request and Rust's stronger complete-row generation preservation.
+Earlier validation, privacy and startup boundaries remain retained. This qualifies
+those scoped boundaries, not the later 103-entry completion/repository extension
+or whole-worker cutover.
 Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
@@ -165,8 +162,8 @@ Native final-attempt replay passed with exact generation-fence checks at
 `e959e113d` (CI34041341592, Rust34041341506; 56 configured tests in 841.38 seconds).
 Final-attempt and retryable concurrent reclaimers are qualified above;
 Newer-target recovery after final-attempt crash is now implemented in the
-[generation reference](canvas-worker-provider-generation.md), pending native
-qualification. Final-attempt completion versus recovery remains open.
+[generation reference](canvas-worker-provider-generation.md), qualified at df3ed290b.
+Final-attempt completion versus recovery remains open.
 
 The [final completion/recovery repository boundary](canvas-worker-final-completion-race.md)
 now executes both lock winners on the published schema with real expiry, observed
@@ -189,12 +186,12 @@ native Linux qualification; recovery-first process composition remains open.
 | 2. Legacy processor loader and removal | Python `test_canvas_worker_loader_oracle.py` exists; native binary constructs its processor directly | Remove the loader selection from all three consumer definitions only at qualified cutover; retain the frozen Python loader evidence. |
 | 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites | Compose the actual processor/provider with the loop; prove active I/O cancellation, recovery and cleanup on the published schema. |
 | 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests | Carry the same fences and outcome/error ordering through authoritative provider and business effects. |
-| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer process boundaries qualified above; newer-target recovery replay implemented; both repository lock winners pass locally; [completion-first process reference](canvas-worker-provider-completion.md) independently matches with stronger native replay implemented | Qualify generation/repository/completion-first extensions on Linux; implement recovery-first whole-process composition. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
+| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer and newer-target recovery process boundaries qualified above; both repository lock winners pass locally; [completion-first process reference](canvas-worker-provider-completion.md) independently matches with stronger native replay implemented | Qualify repository/completion-first extensions on Linux; implement recovery-first whole-process composition. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Frozen worker vectors and `canvas_sync_worker_behavior.rs`; provider-specific transport corpora | Verify durable retry scheduling for the actual worker/provider path, including date, malformed, negative and clamp behavior. |
 | 9. Target validation and processor failures | Repository validation, native typed processor, issued-review/mixed-roster and job-authorization tests | Map every frozen validation code to composed-worker outcomes; cover processor failure/no-signing behavior without emulating Python imports. |
-| 10. OAuth revocation failure and owner fences | 33 native process/cycle observations plus selection/order repository comparisons qualified at e70e3abcc; six secret-resolution replays implemented, schema-rejection and native empty-token regressions pass locally | Qualify secret-resolution and guard extensions in the [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md). Retain Rust's stronger atomic cleanup. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
+| 10. OAuth revocation failure and owner fences | 39 native process/cycle observations plus selection/order, schema-rejection and empty-token regressions qualified at df3ed290b | Retain the scoped [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md) and stronger atomic cleanup in future exact-head runs. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
 | 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |

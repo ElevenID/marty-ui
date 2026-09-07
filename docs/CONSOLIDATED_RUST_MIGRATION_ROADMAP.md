@@ -213,19 +213,19 @@ the tenant-prefix constraint; those are not worker scenarios. Review also found
 and fixed a native empty-token dispatch gap using a real-cycle regression and a
 counting provider. The published save API rejects empty plaintext before worker
 startup, so that regression is not presented as a published-process capture.
-Shared fixtures and cycle construction are retained. The 94-entry gate awaits
-fresh native qualification; no consumer or feature was removed.
+Shared fixtures and cycle construction are retained. This extension qualified in
+the later 98-entry run below; no consumer or feature was removed.
 
-Latest qualified UI checkpoint `e70e3abccd83b4f6893ea655f9a97b000aa97e54` passed
-CI34074425466 and all applicable exact-head checks, including Rust CodeQL34074425459.
-Runtime job101597690121 passed 90 configured tests in 1960.69s and the separate
-four configured PostgreSQL worker-contract entries in 96.98s. Image job101597690020
-also passed. All 33 native OAuth revocation markers were verified: the earlier23,
-two queue, four acquired-lease and four actual cycle-return cases. Both real
-repository comparisons passed. This retains the earlier validation and privacy
-boundaries without treating repository tests as process evidence. Later secret
-and generation extensions need fresh qualification; no unconfigured early-return
-group is counted as parity evidence.
+Latest qualified UI checkpoint `df3ed290b19a2cd8e82ef21bfa83355cb2c62a83` passed
+CI34076998603 and all applicable exact-head checks, including Rust CodeQL34076998599.
+Runtime job101605017410 passed 98 configured tests in 2085.34s and the separate
+four-test PostgreSQL worker contract in 96.39s. Image job101605017315 passed eight
+preflight and 24 packaged startup cases. All 39 native OAuth process/cycle markers
+were verified: the prior33 plus six zero-request secret cases. Real schema/empty-token
+regressions and both repository comparisons passed. The actual newer-generation
+recovery marker passed with one HTTPS request and full-row preservation. Earlier
+validation/privacy boundaries are retained; later completion/repository race
+extensions need fresh qualification. No unconfigured early return is counted as parity.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 
@@ -314,8 +314,8 @@ now captures actual attempt-eight renewal/crash, a committed validated generatio
 change and real expiry. Independent regeneration matches. Published Python disables
 the newer target; native replay explicitly retains Rust's stronger fence and requires
 the complete post-edit target row unchanged. Existing job, HTTPS, ciphertext and
-issuance assertions remain exact. This 98-entry extension awaits configured Linux
-qualification; final-attempt completion versus recovery remains open. The fixture
+issuance assertions remain exact. This 98-entry extension qualified at df3ed290b;
+final-attempt completion versus recovery remains open. The fixture
 does not execute the operator configuration/validation API, and prior attempts are
 seeded history. No runtime feature or existing reference was deleted.
 

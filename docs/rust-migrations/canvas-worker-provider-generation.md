@@ -1,8 +1,10 @@
 # Newer-target preservation after final-attempt crash
 
-Status: published-process reference captured and independently regenerated;
-native replay implemented, awaiting configured Linux qualification in the
-98-entry gate. This does not authorize worker routing or Python deletion.
+Status: qualified at df3ed290b19a2cd8e82ef21bfa83355cb2c62a83 in CI34076998603.
+All 98 configured tests passed in 2085.34s, including actual native generation
+recovery with one HTTPS request and exact newer-target row preservation. All
+applicable exact-head checks passed. Later completion-race changes require fresh
+qualification; this does not authorize worker routing or Python deletion.
 
 The existing final-attempt owner now also observes this sequence:
 
@@ -55,7 +57,8 @@ Windows native early returns are not configured Linux qualification.
 Final local checks: 1,011 Python tests passed with one existing opt-in skip in
 42.73s; the original final-attempt reference regenerated unchanged in 46.64s.
 The expanded mutation/expectation control passed, and strict all-target Clippy
-passed in 1.97s. These do not substitute for the pending native Linux replay.
+passed in 1.97s. Those local checks alone did not qualify native execution;
+the hosted result recorded above supplies that evidence.
 
 The next named gate-five gap remains the normative final-attempt completion race:
 one terminal winner and zero stale writes. Broader whole-worker gates remain in

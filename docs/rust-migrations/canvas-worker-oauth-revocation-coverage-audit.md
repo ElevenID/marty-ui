@@ -22,8 +22,14 @@ The corrected checkpoint e70e3abccd83b4f6893ea655f9a97b000aa97e54 subsequently
 passed CI34074425466: 90 configured entries in 1960.69s, separate worker DB4/4
 in 96.98s, and all applicable exact-head checks including Rust CodeQL34074425459.
 All 33 native markers were inspected: the earlier23 plus two queue, four lease
-and four cycle-counter cases. Both real repository comparisons passed. Later
-secret-resolution and native empty-token changes still need fresh qualification.
+and four cycle-counter cases. Both real repository comparisons passed.
+
+The later df3ed290b19a2cd8e82ef21bfa83355cb2c62a83 checkpoint passed CI34076998603:
+98 configured entries in 2085.34s, separate worker DB4/4 in 96.39s and all applicable
+exact-head checks, including Rust CodeQL34076998599. All 39 OAuth native markers
+were verified, including six secret-resolution cases with zero requests. Actual
+schema-rejection and native empty-token tests passed alongside retained repository
+and nonempty transport cases. Later completion-race changes remain unqualified.
 
 | Requirement | Evidence inspected | Remaining qualification or gap |
 | --- | --- | --- |
@@ -36,14 +42,13 @@ secret-resolution and native empty-token changes still need fresh qualification.
 | Due selection, status/lease eligibility and order | [Two actual multi-row queue captures](canvas-worker-oauth-revocation-queue.md), unchanged excluded rows, actual acquisition journal and real repository comparison | Both native process markers and repository comparison qualified at e70e3abcc; corrected Rust null ordering retained |
 | Batch cap and lease duration | [Four acquired-lease captures](canvas-worker-oauth-revocation-lease.md) and [real-repository selections](canvas-worker-oauth-revocation-selection.md) from 509 rows at limits around 500 | All four native lease markers and repository comparison qualified at e70e3abcc. Repository selection is not 500 remote requests; huge lease input remains scoped to revocation phase |
 | Returned revocation success/retry counters, including owner-fence loss | [Four actual cycle-return captures](canvas-worker-oauth-revocation-counters.md), exact regeneration and real Rust cycle replay; separate privacy marker-error counter replay retained | All four native cycle markers qualified at e70e3abcc; no counters inferred from heartbeat or stored retry count |
-| Exact tenant-scoped secret references | [Six actual published worker observations](canvas-worker-oauth-revocation-secrets.md), independent regeneration, three real schema rejections and native process replay implemented | Native Linux composition qualification pending; empty plaintext is separately rejected by the published save API, not a captured worker scenario |
-| Empty plaintext from the native vault | Real native cycle regression reproduced dispatch absent from the published worker's explicit guard; non-empty check added, retry and ciphertext preservation pass locally | Native-only regression uses a counting provider, not HTTPS parity; retain non-empty transport cases in exact-head CI |
+| Exact tenant-scoped secret references | [Six published worker observations](canvas-worker-oauth-revocation-secrets.md), independent regeneration, real schema rejections and actual native replay | All six zero-request markers and schema-rejection test qualified at df3ed290b; empty plaintext is separately rejected by the published save API, not a captured worker scenario |
+| Empty plaintext from the native vault | Real native cycle regression reproduced dispatch absent from the published guard; non-empty check, retry and ciphertext preservation verified | Qualified at df3ed290b alongside nonempty transport cases; counting-provider regression is not HTTPS parity |
 | Logging privacy | Independently captured twelve-case hardened worker corpus, actual native replay and known-error controls | Retain this separate provenance; do not claim the older transport image is the hardened privacy source |
 
-The remaining sequence is finite: retain the qualified queue/lease process,
-nonempty cap repository and cycle-counter comparisons; qualify the implemented
-six-case secret-resolution replay, retaining the separate native empty-token
-guard regression and schema rejections. Each addition must close a named
+The named queue/lease, cap, cycle-counter, six-case secret-resolution, native
+empty-token and schema-rejection extensions are now qualified at the recorded
+boundaries. Retain them in fresh exact-head runs. Each addition must close a named
 contract requirement rather than introduce an unspecified new acceptance gate.
 Repository/unit evidence remains useful but is not relabeled as whole-process
 differential parity. All consumer/readiness/deletion/beta gates remain separate.
