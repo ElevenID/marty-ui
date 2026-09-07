@@ -29,6 +29,7 @@ def run(executable, scenario="signals"):
         "recovery",
         "final",
         "generation",
+        "completion",
         "concurrent",
         "reclaimers",
         "reclaimers_retry",
@@ -50,6 +51,7 @@ def run(executable, scenario="signals"):
         "recovery": ["renewal", "recovery"],
         "final": ["final"],
         "generation": ["generation"],
+        "completion": ["completion"],
         "concurrent": ["concurrent"],
         "reclaimers": ["reclaimers"],
         "reclaimers_retry": ["reclaimers_retry"],
@@ -59,6 +61,9 @@ def run(executable, scenario="signals"):
             "recovery" if scenario == "reclaimers_retry" else "final"
         )
         reference = {scenario: reference}
+    elif scenario == "completion":
+        assert reference["case"] == "completion"
+        reference = {"completion": reference}
     elif scenario == "concurrent":
         assert reference["schema"] == "marty.canvas-worker-concurrent-oracle/v1"
         reference = {"concurrent": reference}
@@ -102,6 +107,7 @@ def run(executable, scenario="signals"):
                         "recovery",
                         "final",
                         "generation",
+                        "completion",
                         "concurrent",
                         "reclaimers",
                         "reclaimers_retry",
@@ -161,6 +167,6 @@ def run(executable, scenario="signals"):
 if __name__ == "__main__":
     if len(sys.argv) not in {2, 3}:
         raise SystemExit(
-            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|concurrent|reclaimers|reclaimers_retry]"
+            "Expected the exact compiled published-schema executable [signals|recovery|final|generation|completion|concurrent|reclaimers|reclaimers_retry]"
         )
     run(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "signals")

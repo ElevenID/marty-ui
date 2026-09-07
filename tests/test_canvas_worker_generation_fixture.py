@@ -55,8 +55,9 @@ def test_generation_reference_keeps_observed_difference_and_real_crash_history()
 @pytest.mark.parametrize(
     "failure", [None, "child_exit", "timeout", "wrong_requests", "missing_release"]
 )
+@pytest.mark.parametrize("scenario", ["generation", "completion"])
 def test_generation_parent_requires_release_exact_request_and_clean_child(
-    monkeypatch, tmp_path, failure
+    monkeypatch, tmp_path, failure, scenario
 ):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
     native = importlib.import_module("test_canvas_worker_provider_signals_https")
@@ -65,7 +66,12 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
     inputs = iter(
         [
             json.dumps({"stages": [{}]}),
-            json.dumps({"case": "final", "requests": [request]}),
+            json.dumps(
+                {
+                    "case": "final" if scenario == "generation" else "completion",
+                    "requests": [request],
+                }
+            ),
         ]
     )
     monkeypatch.setattr(Path, "read_text", lambda *_: next(inputs))
@@ -104,7 +110,7 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
 
     def launch(command, **kwargs):
         commands.append(command)
-        assert kwargs["env"]["MARTY_CANVAS_WORKER_SIGNAL_NAME"] == "generation"
+        assert kwargs["env"]["MARTY_CANVAS_WORKER_SIGNAL_NAME"] == scenario
         return child
 
     def wait(actual, predicate, description, timeout=30):
@@ -121,14 +127,14 @@ def test_generation_parent_requires_release_exact_request_and_clean_child(
     monkeypatch.setattr(native.subprocess, "Popen", launch)
     monkeypatch.setattr(native, "wait_for", wait)
     if failure is None:
-        native.run("synthetic-not-executed", "generation")
+        native.run("synthetic-not-executed", scenario)
     else:
         with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
-            native.run("synthetic-not-executed", "generation")
+            native.run("synthetic-not-executed", scenario)
     assert commands == [
         [
             "synthetic-not-executed",
-            "worker_provider_generation_native_child",
+            f"worker_provider_{scenario}_native_child",
             "--exact",
             "--nocapture",
         ]

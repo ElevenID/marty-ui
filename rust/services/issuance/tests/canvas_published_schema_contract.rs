@@ -2,6 +2,36 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_provider_completion_replay.rs"]
+mod canvas_worker_provider_completion_replay;
+
+#[test]
+fn worker_provider_completion_preserves_atomic_terminal_winner() {
+    assert_worker_provider_https("completion");
+}
+
+#[tokio::test]
+async fn worker_provider_completion_native_child() {
+    worker_provider_child("completion").await;
+}
+
+#[tokio::test]
+async fn worker_provider_completion_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned =
+        canvas_published_database::PublishedDatabase::start_with_worker_provider_completion()
+            .await
+            .unwrap();
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-provider-completion-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(owned.oracle.as_ref().unwrap(), &reference);
+    owned.close().unwrap();
+}
+
 #[path = "support/canvas_worker_final_completion_race.rs"]
 mod canvas_worker_final_completion_race;
 
@@ -357,6 +387,10 @@ async fn worker_provider_child(scenario: &str) {
         .unwrap();
     let signal = std::env::var("MARTY_CANVAS_WORKER_SIGNAL_NAME").unwrap();
     match scenario {
+        "completion" => {
+            assert_eq!(signal, "completion");
+            canvas_worker_provider_completion_replay::replay(&pool, &owned.url, &origin).await;
+        }
         "concurrent" => {
             assert_eq!(signal, "concurrent");
             canvas_worker_concurrent_replay::replay(&pool, &owned.url, &origin).await;

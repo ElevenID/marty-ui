@@ -328,6 +328,16 @@ This brings the local gate to 99 entries, pending hosted qualification. It is
 normative repository evidence, not published-process parity; actual worker/provider
 composition remains the next named gate-five task. No runtime feature was removed.
 
+The [completion-first whole-process reference](rust-migrations/canvas-worker-provider-completion.md)
+now independently captures actual HTTPS, terminal-write contention and real expiry.
+A distinct synthetic reclaimer identity and transitive PostgreSQL lock chain avoid
+mistaking the original worker's renewal for recovery. Completion alone commits a
+terminal job update, but the published process disables the target and leaves its
+success timestamp unset. Native replay preserves stronger atomicity and exact
+provider/job/issuance observations. This 103-entry extension awaits configured Linux
+qualification; recovery-first whole-process composition remains open. The 1,019-test
+Python suite passes with one existing skip. No runtime feature or old reference was removed.
+
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
 now has two matching captures per case. A real pending HTTPS request spans lease
 and both heartbeat renewal without generation change. After forced process loss,

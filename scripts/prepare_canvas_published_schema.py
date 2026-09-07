@@ -115,7 +115,9 @@ def prepare():
                     "oauth-revocation-secrets",
                 ),
                 (
-                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE"),
+                    os.environ.get(
+                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE"
+                    ),
                     "oauth-revocation-counters",
                 ),
                 (
@@ -204,6 +206,11 @@ def prepare():
                     "/verification/scripts/run_canvas_operations_oracle.py"
                 )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_COMPLETION_ORACLE",
+                "worker_provider_completion",
+                "worker_provider_completion",
+            ),
             (
                 "MARTY_CANVAS_WORKER_RECLAIMERS_RETRY_ORACLE",
                 "worker_reclaimers_retry",

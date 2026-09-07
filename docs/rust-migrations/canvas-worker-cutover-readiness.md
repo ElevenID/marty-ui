@@ -174,6 +174,13 @@ job/target locks and full-row preservation after every stale call. Local checks
 pass; its 99-entry extension awaits hosted qualification. Actual worker/provider
 composition remains open, so this does not close gate five.
 
+The [actual completion-first process reference](canvas-worker-provider-completion.md)
+now captures a terminal-write barrier, real expiry and the distinct reclaimer's
+transitive lock chain. Independent regeneration agrees. The old process disables
+the target despite one successful terminal job update; native replay explicitly
+requires its stronger atomic completion behavior. The 103-entry extension awaits
+native Linux qualification; recovery-first process composition remains open.
+
 "Covered boundary" is deliberately narrower than "deletion gate closed".
 
 | Gate | Inspected evidence | Remaining qualification |
@@ -182,7 +189,7 @@ composition remains open, so this does not close gate five.
 | 2. Legacy processor loader and removal | Python `test_canvas_worker_loader_oracle.py` exists; native binary constructs its processor directly | Remove the loader selection from all three consumer definitions only at qualified cutover; retain the frozen Python loader evidence. |
 | 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites | Compose the actual processor/provider with the loop; prove active I/O cancellation, recovery and cleanup on the published schema. |
 | 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests | Carry the same fences and outcome/error ordering through authoritative provider and business effects. |
-| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer process boundaries qualified above; newer-target recovery replay implemented; [both final-completion repository lock winners](canvas-worker-final-completion-race.md) pass locally with real expiry and zero stale writes | Qualify generation and repository extensions on Linux; compose final completion/recovery with actual worker/provider execution. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
+| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer process boundaries qualified above; newer-target recovery replay implemented; both repository lock winners pass locally; [completion-first process reference](canvas-worker-provider-completion.md) independently matches with stronger native replay implemented | Qualify generation/repository/completion-first extensions on Linux; implement recovery-first whole-process composition. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Frozen worker vectors and `canvas_sync_worker_behavior.rs`; provider-specific transport corpora | Verify durable retry scheduling for the actual worker/provider path, including date, malformed, negative and clamp behavior. |

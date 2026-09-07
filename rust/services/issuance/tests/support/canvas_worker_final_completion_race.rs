@@ -42,11 +42,15 @@ async fn target_wait(pool: &PgPool, barrier_pid: i32, completion: bool) {
         }
     }).await.expect("actual winner must block on the owned target barrier");
     // Confirm job-before-target locking independently of the query text.
+    assert_job_locked(pool, JOB).await;
+}
+
+pub(super) async fn assert_job_locked(pool: &PgPool, job_id: &str) {
     let mut probe = pool.begin().await.unwrap();
     let error = sqlx::query(
         "SELECT id FROM issuance_service.canvas_evidence_sync_jobs WHERE id=$1 FOR UPDATE NOWAIT",
     )
-    .bind(JOB)
+    .bind(job_id)
     .execute(&mut *probe)
     .await
     .unwrap_err();
