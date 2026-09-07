@@ -168,6 +168,15 @@ regenerates exactly. All unselected rows and ciphertexts remain unchanged.
 Shared native fixture preparation avoids a second scheduler or seed owner.
 The 84-entry suite awaits exact-head Linux qualification; no feature was deleted.
 
+The [acquired-lease extension](rust-migrations/canvas-worker-oauth-revocation-lease.md)
+adds four independently matched actual-worker observations: stored leases at the
+30-second floor, 120-second normal value and 300-second cap, including an oversized
+integer configuration. The latter preserves its non-idle phase and requires
+completed revocation writes; it does not claim the later ordinary job-leasing
+overflow disappeared. Existing queue/reference values remain unchanged. Shared
+matrix/fixture/process owners are reused. Native replay is implemented and the
+86-entry gate awaits exact-head hosted qualification. No runtime or feature changed.
+
 Latest qualified UI checkpoint `d0a09792b7866d60bc20284570d395e0b252477b` passed
 CI34068063872 and all applicable exact-head checks, including Rust CodeQL34068063928.
 Runtime job101580260455 passed 77 configured tests in 1668.72 seconds, retaining

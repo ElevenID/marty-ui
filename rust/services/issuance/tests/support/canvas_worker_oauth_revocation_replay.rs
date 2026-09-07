@@ -15,6 +15,9 @@ use std::{sync::OnceLock, time::Duration};
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str, kind: &str) {
     let matrix = matrix_for(kind);
     let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-lease" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-lease-oracle.json"
+        ),
         "oauth-revocation-queue" => include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-queue-oracle.json"
         ),
@@ -55,7 +58,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     let mut environment = canvas_worker_rest_replay::worker_environment(origin);
     if let Some(overrides) = case.get("environment") {
         for (key, value) in overrides.as_object().unwrap() {
-            assert_eq!(key, "CANVAS_OAUTH_REVOCATION_BATCH_SIZE");
+            assert!(matches!(
+                key.as_str(),
+                "CANVAS_OAUTH_REVOCATION_BATCH_SIZE" | "CANVAS_SYNC_WORKER_LEASE_SECONDS"
+            ));
             environment.insert(key.clone(), value.as_str().unwrap().into());
         }
     }
@@ -118,7 +124,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         loop {
             assert!(
                 worker.0.try_wait().unwrap().is_none(),
-                "native revocation worker exited before idle"
+                "native revocation worker exited before durable completion"
             );
             let heartbeat: Option<Value> =
                 sqlx::query_scalar(matrix["heartbeat_sql"].as_str().unwrap())
@@ -126,7 +132,21 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
                     .await
                     .unwrap();
             if let Some(heartbeat) = heartbeat {
-                if heartbeat["metadata"]["phase"] == "idle" {
+                let completed = if let Some(statement) = case.get("completion_sql") {
+                    sqlx::query_scalar::<_, bool>(statement.as_str().unwrap())
+                        .fetch_one(pool)
+                        .await
+                        .unwrap()
+                } else {
+                    true
+                };
+                if heartbeat["metadata"]["phase"]
+                    == case
+                        .get("completion_phase")
+                        .and_then(Value::as_str)
+                        .unwrap_or("idle")
+                    && completed
+                {
                     break heartbeat;
                 }
             }
@@ -134,7 +154,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         }
     })
     .await
-    .expect("actual native revocation must reach durable idle");
+    .expect("actual native revocation must reach the expected durable phase");
     // SIGINT behavior has a separate qualified process gate. Here stop only
     // this owned child after the observed cycle, before reading durable state.
     worker.signal("SIGINT");
@@ -184,9 +204,25 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
                 .await
                 .unwrap()
         );
-        Some(
-            json!({"lease_order": order, "connections": connections, "unselected_rows_unchanged": true}),
-        )
+        let mut observation = json!({"lease_order": order, "connections": connections, "unselected_rows_unchanged": true});
+        if let Some(seconds) = case.get("lease_seconds") {
+            let durations: Value =
+                sqlx::query_scalar(matrix["lease_journal_sql"].as_str().unwrap())
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            let durations = durations.as_array().unwrap();
+            assert_eq!(
+                durations.len(),
+                case["request_count"].as_u64().unwrap() as usize
+            );
+            assert!(durations
+                .iter()
+                .all(|value| (value.as_f64().unwrap() - seconds.as_f64().unwrap()).abs() <= 0.1));
+            observation["acquired_leases"] =
+                json!({"count": durations.len(), "seconds": seconds, "all_within_tolerance": true});
+        }
+        Some(observation)
     } else {
         None
     };
@@ -308,6 +344,7 @@ fn matrix_for(kind: &str) -> &'static Value {
             | "oauth-revocation-retry-after"
             | "oauth-revocation-backoff"
             | "oauth-revocation-queue"
+            | "oauth-revocation-lease"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
@@ -315,13 +352,23 @@ fn matrix_for(kind: &str) -> &'static Value {
     static RETRY_MATRIX: OnceLock<Value> = OnceLock::new();
     static BACKOFF_MATRIX: OnceLock<Value> = OnceLock::new();
     static QUEUE_MATRIX: OnceLock<Value> = OnceLock::new();
+    static LEASE_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
         ))
         .unwrap()
     });
+    let base = if kind == "oauth-revocation-lease" {
+        matrix_for("oauth-revocation-queue")
+    } else {
+        base
+    };
     let extension = match kind {
+        "oauth-revocation-lease" => Some((
+            &LEASE_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"),
+        )),
         "oauth-revocation-queue" => Some((
             &QUEUE_MATRIX,
             include_str!("../../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"),
@@ -411,12 +458,14 @@ async fn prepare_fixture(
     for secret in matrix["additional_secrets"].as_array().unwrap() {
         assert_ne!(before[secret[0].as_str().unwrap()], secret[2]);
     }
-    if let Some(statements) = matrix.get("before_start_sql") {
-        for statement in statements.as_array().unwrap() {
-            sqlx::raw_sql(statement.as_str().unwrap())
-                .execute(pool)
-                .await
-                .unwrap();
+    for key in ["before_start_sql", "case_before_start_sql"] {
+        if let Some(statements) = matrix.get(key) {
+            for statement in statements.as_array().unwrap() {
+                sqlx::raw_sql(statement.as_str().unwrap())
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
         }
     }
     (fixture, before)

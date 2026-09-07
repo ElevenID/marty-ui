@@ -111,6 +111,10 @@ def prepare():
                 (revocation_fence_case, "oauth-revocation-fence"),
                 (revocation_patch_case, "oauth-revocation-patch"),
                 (
+                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_LEASE_CASE"),
+                    "oauth-revocation-lease",
+                ),
+                (
                     os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_QUEUE_CASE"),
                     "oauth-revocation-queue",
                 ),

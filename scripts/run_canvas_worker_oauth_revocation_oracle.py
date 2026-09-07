@@ -8,10 +8,7 @@ import signal
 import time
 from email.utils import parsedate_to_datetime
 
-from sqlalchemy import create_engine, text
-
 from canvas_worker_https_fixture import WorkerHttpsFixture
-from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
 from run_canvas_worker_startup_oracle import (
     DATABASE,
     finish_worker,
@@ -21,7 +18,30 @@ from run_canvas_worker_startup_oracle import (
 )
 
 
+def load_matrix(contracts, filename, seen=()):
+    assert filename not in seen and Path(filename).name == filename
+    matrix = json.loads((contracts / filename).read_text())
+    if "base_scenario" in matrix:
+        return {
+            **load_matrix(contracts, matrix["base_scenario"], (*seen, filename)),
+            **matrix,
+        }
+    return matrix
+
+
+def observe_acquired_leases(durations, seconds, count):
+    assert len(durations) == count
+    assert all(
+        type(value) in (int, float) and abs(value - seconds) <= 0.1
+        for value in durations
+    )
+    return {"count": count, "seconds": seconds, "all_within_tolerance": True}
+
+
 def run(case_name, kind="oauth-revocation"):
+    from sqlalchemy import create_engine, text
+    from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
+
     assert kind in {
         "oauth-revocation",
         "oauth-revocation-fence",
@@ -29,16 +49,10 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation-retry-after",
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
+        "oauth-revocation-lease",
     }
     contracts = Path("/verification/contracts")
-    matrix = json.loads(
-        (contracts / f"canvas-worker-{kind}-scenarios.json").read_text()
-    )
-    if "base_scenario" in matrix:
-        matrix = {
-            **json.loads((contracts / matrix["base_scenario"]).read_text()),
-            **matrix,
-        }
+    matrix = load_matrix(contracts, f"canvas-worker-{kind}-scenarios.json")
     cases = [case for case in matrix["cases"] if case["name"] == case_name]
     assert len(cases) == 1, "Unknown or duplicate revocation case"
     case = cases[0]
@@ -70,6 +84,8 @@ def run(case_name, kind="oauth-revocation"):
                     text(matrix["secret_sql"])
                 ).scalar_one()
                 for statement in matrix.get("before_start_sql", []):
+                    connection.exec_driver_sql(statement)
+                for statement in matrix.get("case_before_start_sql", []):
                     connection.exec_driver_sql(statement)
                 before_queue = (
                     connection.execute(text(matrix["queue_rows_sql"])).scalar_one()
@@ -138,18 +154,29 @@ def run(case_name, kind="oauth-revocation"):
                     https.release.set()
                 deadline = time.monotonic() + 25
                 while True:
-                    assert child.poll() is None, "Published worker exited before idle"
+                    assert child.poll() is None, (
+                        "Published worker exited before durable completion"
+                    )
                     with engine.connect() as connection:
                         heartbeat = connection.execute(
                             text(matrix["heartbeat_sql"])
                         ).scalar_one_or_none()
+                        completed = (
+                            connection.execute(
+                                text(case["completion_sql"])
+                            ).scalar_one()
+                            if "completion_sql" in case
+                            else True
+                        )
                     if (
                         heartbeat is not None
-                        and heartbeat["metadata"]["phase"] == "idle"
+                        and heartbeat["metadata"]["phase"]
+                        == case.get("completion_phase", "idle")
+                        and completed is True
                     ):
                         break
                     assert time.monotonic() < deadline, (
-                        "Published revocation did not reach idle"
+                        "Published revocation did not reach the expected durable phase"
                     )
                     time.sleep(0.025)
                 if case.get("hold_response") and fence is None:
@@ -182,6 +209,13 @@ def run(case_name, kind="oauth-revocation"):
                             ).scalar_one(),
                             "unselected_rows_unchanged": True,
                         }
+                        if "lease_seconds" in case:
+                            durations = connection.execute(
+                                text(matrix["lease_journal_sql"])
+                            ).scalar_one()
+                            queue["acquired_leases"] = observe_acquired_leases(
+                                durations, case["lease_seconds"], case["request_count"]
+                            )
                     if fence is not None:
                         assert (
                             connection.execute(text(matrix["row_sql"])).scalar_one()

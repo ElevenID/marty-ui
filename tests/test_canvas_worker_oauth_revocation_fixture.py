@@ -29,6 +29,76 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
     }
 
 
+def test_nested_lease_matrix_inherits_queue_and_original_seed(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    matrix = oracle.load_matrix(
+        root / "contracts", "canvas-worker-oauth-revocation-lease-scenarios.json"
+    )
+    assert len(matrix["seed"]) == 4 and len(matrix["before_start_sql"]) == 5
+    assert len(matrix["case_before_start_sql"]) == 2
+    assert [case["lease_seconds"] for case in matrix["cases"]] == [30, 120, 300, 300]
+    reference = json.loads(
+        (
+            root / "contracts/canvas-worker-oauth-revocation-lease-oracle.json"
+        ).read_text()
+    )
+    assert {case["name"] for case in matrix["cases"]} == set(reference)
+    for case in matrix["cases"]:
+        observed = reference[case["name"]]
+        assert observed["queue"]["acquired_leases"] == {
+            "seconds": case["lease_seconds"],
+            "count": 3,
+            "all_within_tolerance": True,
+        }
+        assert observed["heartbeat"]["metadata"]["phase"] == case.get(
+            "completion_phase", "idle"
+        )
+        assert observed["queue"]["unselected_rows_unchanged"] is True
+        assert len(observed["requests"]) == len(observed["retained_secret_ids"]) == 3
+    assert "completion_sql" in matrix["cases"][-1]
+
+
+@pytest.mark.parametrize("filename", ["a.json", "../outside.json"])
+def test_reference_matrix_rejects_cycles_and_external_paths(
+    monkeypatch, tmp_path, filename
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    (tmp_path / "a.json").write_text(json.dumps({"base_scenario": "b.json"}))
+    (tmp_path / "b.json").write_text(json.dumps({"base_scenario": "a.json"}))
+    with pytest.raises(AssertionError):
+        oracle.load_matrix(tmp_path, filename)
+
+
+@pytest.mark.parametrize(
+    "durations",
+    [
+        [30, 30],
+        [30, 30, None],
+        [30, 30, 29.8],
+        [30, 30, 30.2],
+        [30, 30, float("nan")],
+        [30, 30, float("inf")],
+        [30, 30, "30"],
+        [30, 30, True],
+    ],
+)
+def test_acquired_lease_observation_rejects_incomplete_or_wrong_evidence(
+    monkeypatch, durations
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    with pytest.raises(AssertionError):
+        oracle.observe_acquired_leases(durations, 30, 3)
+    assert oracle.observe_acquired_leases([29.95, 30, 30.05], 30, 3) == {
+        "seconds": 30,
+        "count": 3,
+        "all_within_tolerance": True,
+    }
+
+
 @pytest.mark.parametrize("names,reference", [(["a", "a"], {"a": {}}), (["a"], {})])
 @pytest.mark.parametrize(
     "kind",
@@ -39,6 +109,7 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
         "oauth-revocation-retry-after",
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
+        "oauth-revocation-lease",
     ],
 )
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
@@ -71,6 +142,7 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
         "oauth-revocation-retry-after",
         "oauth-revocation-backoff",
         "oauth-revocation-queue",
+        "oauth-revocation-lease",
     ],
 )
 def test_native_owner_fails_closed_and_closes_https(

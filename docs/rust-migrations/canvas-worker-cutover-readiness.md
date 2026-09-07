@@ -8,8 +8,9 @@ including deferred roster configuration and all three reference-removal barriers
 The configured PostgreSQL worker contract, including the typed-processor
 signing guard and twelve-case privacy checkpoint, passed all four entries in 96.66
 seconds. All seven transport, two replacement-owner and one marker-failure native
-revocation PASS markers were verified. Later Retry-After, backoff and queue
-extensions still need fresh hosted checks. Earlier worker gates
+revocation PASS markers were verified. Later Retry-After, backoff, queue
+and [acquired-lease](canvas-worker-oauth-revocation-lease.md) extensions still need
+fresh hosted checks. Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized

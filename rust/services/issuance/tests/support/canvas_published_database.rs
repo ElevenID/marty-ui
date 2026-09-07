@@ -328,6 +328,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_oauth_revocation_lease(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"
+            ),
+            "worker_oauth_revocation",
+            "worker-oauth-revocation-lease",
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_LEASE_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_oauth_revocation_backoff(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -797,6 +810,10 @@ impl PublishedDatabase {
             {
                 &["contracts/canvas-worker-oauth-revocation-scenarios.json"]
             }
+            "worker_oauth_revocation" if scenario == "worker-oauth-revocation-lease" => &[
+                "contracts/canvas-worker-oauth-revocation-scenarios.json",
+                "contracts/canvas-worker-oauth-revocation-queue-scenarios.json",
+            ],
             "worker_reclaimers" => &[
                 "contracts/canvas-worker-provider-final-scenarios.json",
                 "contracts/canvas-worker-concurrent-scenarios.json",

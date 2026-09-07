@@ -1,0 +1,16 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-lease-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-queue-scenarios.json",
+  "scope": "Actual acquired lease duration from the committed acquisition journal; real worker configuration and queue processing, not an empty-queue range observation",
+  "cases": [
+    {"name": "lease_below_floor", "status": 429, "body": {}, "headers": {"Retry-After": "86400"}, "request_count": 3, "lease_seconds": 30, "environment": {"CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "3", "CANVAS_SYNC_WORKER_LEASE_SECONDS": "-1"}},
+    {"name": "lease_in_range", "status": 429, "body": {}, "headers": {"Retry-After": "86400"}, "request_count": 3, "lease_seconds": 120, "environment": {"CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "3", "CANVAS_SYNC_WORKER_LEASE_SECONDS": "120"}},
+    {"name": "lease_above_cap", "status": 429, "body": {}, "headers": {"Retry-After": "86400"}, "request_count": 3, "lease_seconds": 300, "environment": {"CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "3", "CANVAS_SYNC_WORKER_LEASE_SECONDS": "301"}},
+    {"name": "lease_huge_integer", "status": 429, "body": {}, "headers": {"Retry-After": "86400"}, "request_count": 3, "lease_seconds": 300, "completion_phase": "oauth_revocation", "completion_sql": "SELECT count(*)=3 AND bool_and(c.revoke_retry_count=1 AND c.refresh_lease_owner IS NULL) FROM issuance_service.synthetic_revocation_acquisitions a JOIN issuance_service.canvas_oauth_connections c ON c.id=a.connection_id", "environment": {"CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "3", "CANVAS_SYNC_WORKER_LEASE_SECONDS": "999999999999999999999999"}}
+  ],
+  "lease_journal_sql": "SELECT jsonb_agg(extract(epoch FROM acquired_expires_at-acquired_updated_at)::float8 ORDER BY ordinal) FROM issuance_service.synthetic_revocation_acquisitions",
+  "case_before_start_sql": [
+    "ALTER TABLE issuance_service.synthetic_revocation_acquisitions ADD COLUMN acquired_expires_at timestamptz, ADD COLUMN acquired_updated_at timestamptz",
+    "CREATE OR REPLACE FUNCTION issuance_service.synthetic_observe_revocation_acquisition() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO issuance_service.synthetic_revocation_acquisitions (connection_id,acquired_expires_at,acquired_updated_at) VALUES (NEW.id,NEW.refresh_lease_expires_at,NEW.updated_at); RETURN NEW; END $$"
+  ]
+}
