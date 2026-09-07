@@ -1,17 +1,19 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `df3ed290b19a2cd8e82ef21bfa83355cb2c62a83`:
-98 configured runtime tests passed in 2085.34s (CI34076998603, runtime101605017410).
-All applicable exact-head checks passed, including Rust CodeQL34076998599. Image
-job101605017315 passed eight preflight and 24 packaged startup cases. The separate
-configured PostgreSQL worker contract passed four entries in 96.39s. All 39 native
+Status: latest qualified composed checkpoint `29bf8c226e13df1a708355538cc913adcbfa987f`:
+103 configured runtime tests passed in 2245.41s (CI34079614572, runtime101612295594).
+All applicable exact-head checks passed, including Rust CodeQL34079614417. Image
+job101612295627 passed eight preflight and 24 packaged startup cases. The separate
+configured PostgreSQL worker contract passed four entries in 96.22s. All 39 native
 OAuth process/cycle markers were inspected: the prior33 plus six zero-request
 secret-resolution cases. Real schema rejections, the native empty-token regression,
 and both repository comparisons passed. Actual newer-target recovery also passed
 with one HTTPS request and Rust's stronger complete-row generation preservation.
-Earlier validation, privacy and startup boundaries remain retained. This qualifies
-those scoped boundaries, not the later 103-entry completion/repository extension,
-the local 107-entry recovery-first extension, or whole-worker cutover.
+Both final-attempt repository race winners and actual completion-first process
+atomicity now pass, including the exact one-HTTPS-request native marker. Earlier
+validation, privacy and startup boundaries remain retained. This qualifies those
+scoped boundaries, not the local 107-entry recovery-first extension, subsequent
+LOG_LEVEL/image-default repair and nine-case preflight, or whole-worker cutover.
 Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
@@ -168,15 +170,15 @@ Final-attempt completion versus recovery remains open.
 The [final completion/recovery repository boundary](canvas-worker-final-completion-race.md)
 now executes both lock winners on the published schema with real expiry, observed
 job/target locks and full-row preservation after every stale call. Local checks
-pass; its 99-entry extension awaits hosted qualification. Actual worker/provider
-composition remains open, so this does not close gate five.
+pass; both directions are now qualified at 29bf8c226 in the 103-entry run above.
+This alone does not close gate five.
 
 The [actual completion-first process reference](canvas-worker-provider-completion.md)
 now captures a terminal-write barrier, real expiry and the distinct reclaimer's
 transitive lock chain. Independent regeneration agrees. The old process disables
 the target despite one successful terminal job update; native replay explicitly
-requires its stronger atomic completion behavior. The 103-entry extension awaits
-native Linux qualification. The [recovery-first process extension](canvas-worker-provider-recovery-first.md)
+requires its stronger atomic completion behavior. The 103-entry extension is now
+qualified on Linux at 29bf8c226. The [recovery-first process extension](canvas-worker-provider-recovery-first.md)
 now has an actual capture and independent matching regeneration. Its native replay
 requires fresh-clock rejection of stale completion while recovery owns the row,
 one dead-letter terminal journal and preservation of valid pre-expiry provider
@@ -191,7 +193,7 @@ in-flight provider effects remains separate.
 | 2. Legacy processor loader and removal | Python `test_canvas_worker_loader_oracle.py` exists; native binary constructs its processor directly | Remove the loader selection from all three consumer definitions only at qualified cutover; retain the frozen Python loader evidence. |
 | 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites | Compose the actual processor/provider with the loop; prove active I/O cancellation, recovery and cleanup on the published schema. |
 | 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests | Carry the same fences and outcome/error ordering through authoritative provider and business effects. |
-| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer and newer-target recovery process boundaries qualified above; both repository lock winners pass locally; completion-first and [recovery-first process references](canvas-worker-provider-recovery-first.md) independently match with stronger native replay implemented | Qualify repository and both terminal-race process extensions on Linux; cover expiry during in-flight provider effects separately. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
+| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer, newer-target recovery, both repository lock winners and completion-first process atomicity qualified above; [recovery-first process reference](canvas-worker-provider-recovery-first.md) independently matches with stronger native replay implemented | Qualify recovery-first process extension on Linux; cover expiry during in-flight provider effects separately. Repository calls and process exit alone do not prove whole-worker disposal or parity. |
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Frozen worker vectors and `canvas_sync_worker_behavior.rs`; provider-specific transport corpora | Verify durable retry scheduling for the actual worker/provider path, including date, malformed, negative and clamp behavior. |

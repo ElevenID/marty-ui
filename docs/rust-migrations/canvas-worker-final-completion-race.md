@@ -1,9 +1,11 @@
 # Final-attempt completion/recovery lock boundary
 
-Status: both native repository race directions pass against isolated databases
-with the official published schema. The new mandatory test raises the local gate
-to 99 entries. Hosted qualification and whole-worker/provider composition remain
-required; this is not a new Python process oracle or a closed cutover gate.
+Status: both native repository race directions are qualified against isolated
+published-schema databases at `29bf8c226e13df1a708355538cc913adcbfa987f`.
+CI34079614572/runtime101612295594 passed 103 configured entries in 2245.41s;
+both real-expiry/one-winner/zero-stale-write markers were inspected. The test first
+raised the local gate to 99 entries, before the subsequent completion-first
+process extension. This is not a new Python process oracle or a closed cutover gate.
 
 The language-neutral scenario names both outcomes from the existing normative
 `executable_fixtures.postgres_lease_recovery.final_attempt_completion_race`

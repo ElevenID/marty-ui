@@ -216,16 +216,18 @@ startup, so that regression is not presented as a published-process capture.
 Shared fixtures and cycle construction are retained. This extension qualified in
 the later 98-entry run below; no consumer or feature was removed.
 
-Latest qualified UI checkpoint `df3ed290b19a2cd8e82ef21bfa83355cb2c62a83` passed
-CI34076998603 and all applicable exact-head checks, including Rust CodeQL34076998599.
-Runtime job101605017410 passed 98 configured tests in 2085.34s and the separate
-four-test PostgreSQL worker contract in 96.39s. Image job101605017315 passed eight
+Latest qualified UI checkpoint `29bf8c226e13df1a708355538cc913adcbfa987f` passed
+CI34079614572 and all applicable exact-head checks, including Rust CodeQL34079614417.
+Runtime job101612295594 passed 103 configured tests in 2245.41s and the separate
+four-test PostgreSQL worker contract in 96.22s. Image job101612295627 passed eight
 preflight and 24 packaged startup cases. All 39 native OAuth process/cycle markers
 were verified: the prior33 plus six zero-request secret cases. Real schema/empty-token
 regressions and both repository comparisons passed. The actual newer-generation
 recovery marker passed with one HTTPS request and full-row preservation. Earlier
-validation/privacy boundaries are retained; later completion/repository race
-extensions need fresh qualification. No unconfigured early return is counted as parity.
+validation/privacy boundaries are retained. Both repository terminal-race winners
+and actual completion-first process atomicity now pass. The later recovery-first
+and deployed-logging/image-default repairs need fresh qualification. No unconfigured
+early return is counted as parity.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 
@@ -324,7 +326,7 @@ now force both terminal lock winners against the published schema with real
 30-second expiry, PostgreSQL-observed barriers and independent NOWAIT job-lock
 probes. Stale completion/failure/recovery preserve complete committed rows.
 Both directions pass locally; 1,012 Python tests pass with one existing skip.
-This brings the local gate to 99 entries, pending hosted qualification. It is
+This first brought the local gate to 99 entries; it is now qualified at 29bf8c226. It is
 normative repository evidence, not published-process parity; actual worker/provider
 composition remains the next named gate-five task. No runtime feature was removed.
 
@@ -334,8 +336,8 @@ A distinct synthetic reclaimer identity and transitive PostgreSQL lock chain avo
 mistaking the original worker's renewal for recovery. Completion alone commits a
 terminal job update, but the published process disables the target and leaves its
 success timestamp unset. Native replay preserves stronger atomicity and exact
-provider/job/issuance observations. This 103-entry extension awaits configured Linux
-qualification. The 1,019-test
+provider/job/issuance observations. This 103-entry extension is now qualified on
+Linux at 29bf8c226. The 1,019-test
 Python suite passes with one existing skip. No runtime feature or old reference was removed.
 
 The subsequent [recovery-first process extension](rust-migrations/canvas-worker-provider-recovery-first.md)
@@ -348,7 +350,7 @@ local gate now has 107 entries, pending configured Linux qualification. The full
 Python suite passes 1,026 tests with one existing skip (43.61s), and the original
 completion reference still matches after sharing the implementation (36.03s).
 Expiry during in-flight provider effects remains separate. No consumer or feature
-has been removed; the existing 103-entry head's live CI is not superseded or cancelled.
+has been removed; the preceding 103-entry head's CI completed successfully without cancellation.
 
 The deployment-wiring audit also found and repaired a concrete Rust compatibility
 gap: [the worker ignored deployed LOG_LEVEL](rust-migrations/canvas-worker-logging-configuration.md).

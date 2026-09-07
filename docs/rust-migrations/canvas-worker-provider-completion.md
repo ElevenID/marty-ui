@@ -1,9 +1,11 @@
 # Actual completion-first worker/reclaimer race
 
-Status: actual published-process capture and independent regeneration agree;
-native process replay is implemented, awaiting configured Linux qualification.
-The local mandatory gate now contains 103 entries, including the preceding
-two-direction repository test. The subsequent [recovery-first process extension](canvas-worker-provider-recovery-first.md)
+Status: qualified at `29bf8c226e13df1a708355538cc913adcbfa987f`:
+CI34079614572/runtime101612295594 passed 103 configured entries in 2245.41s,
+including the actual native completion marker with one HTTPS request and both
+repository race directions. All applicable checks, including Rust CodeQL34079614417,
+passed; image101612295627 retained eight preflight and 24 startup cases.
+The subsequent [recovery-first process extension](canvas-worker-provider-recovery-first.md)
 is implemented with an independently regenerated reference, also awaiting Linux
 qualification. No consumer switch, feature deletion or whole-worker acceptance is implied.
 
@@ -68,5 +70,5 @@ probe (69.17s). Ruff, shell syntax and patch checks pass.
 Windows early-return native entries are not Linux qualification.
 
 Next: retain both repository race directions and this completion-first process
-case, then qualify the exact native heads including the recovery-first extension.
+case, then qualify the new native head including the recovery-first extension.
 Expiry during in-flight provider effects remains a separate boundary.
