@@ -367,7 +367,9 @@ Sixteen independently captured logging-configuration inputs now replay through
 the native subscriber, retaining explicit RUST_LOG directives and static errors
 for invalid operator settings. Seven actual child-process rejection cases and all
 existing executable smoke tests pass locally. The packaged preflight grows from
-eight to nine cases; fresh exact-head image/CI qualification remains pending.
+eight to nine cases. Image101620519633 at c3e51a4d5 now passes all nine preflight,
+24 startup and sixteen published logging-reference cases; combined runtime
+CI34082559053 remains in progress, so full exact-head qualification is pending.
 This does not switch any deployment consumer or replace the remaining worker gates.
 
 The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
