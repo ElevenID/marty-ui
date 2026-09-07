@@ -326,6 +326,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_mixed_roster(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-mixed-roster-scenarios.json"),
+            "worker_mixed_roster",
+            "worker-mixed-roster",
+            "MARTY_CANVAS_WORKER_MIXED_ROSTER_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_resources_unavailable(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -781,6 +792,7 @@ impl PublishedDatabase {
                 | "worker_roster_failure"
                 | "worker_resource_race"
                 | "worker_resources_unavailable"
+                | "worker_mixed_roster"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -871,6 +883,7 @@ impl PublishedDatabase {
                 | "worker_roster_failure"
                 | "worker_resource_race"
                 | "worker_resources_unavailable"
+                | "worker_mixed_roster"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -929,6 +942,13 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_mixed_roster" => &[
+                "scripts/canvas_worker_mixed_roster_https_fixture.py",
+                "contracts/canvas-mixed-roster-scenarios.json",
+                "contracts/canvas-mixed-roster-oracle.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
             "worker_resources_unavailable" => &[
                 "contracts/canvas-worker-validation-scenarios.json",
                 "scripts/run_canvas_worker_provider_signals_oracle.py",

@@ -2,6 +2,81 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_effect_expiry.rs"]
+mod canvas_worker_effect_expiry;
+
+#[path = "support/canvas_worker_mixed_roster_replay.rs"]
+mod canvas_worker_mixed_roster_replay;
+
+#[test]
+fn worker_mixed_roster_matches_frozen_published_process() {
+    assert_worker_https_script("test_canvas_worker_mixed_roster_https.py", &[]);
+}
+
+#[tokio::test]
+async fn worker_mixed_roster_native_child() {
+    let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_NATIVE_ORIGIN") else {
+        return;
+    };
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let signer_origin = std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_SIGNER_ORIGIN").unwrap();
+    let case = std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_CASE").unwrap();
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_mixed_roster_replay::replay(&pool, &owned.url, &origin, &signer_origin, &case)
+        .await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn worker_mixed_roster_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_worker_mixed_roster(
+        "mixed_candidates_resume_wrap",
+    )
+    .await
+    .unwrap();
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-mixed-roster-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(owned.oracle.as_ref().unwrap(), &reference);
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn worker_effect_transaction_obeys_real_database_lease_expiry() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    for expire_before_commit in [false, true] {
+        let owned = canvas_published_database::PublishedDatabase::start()
+            .await
+            .unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&owned.url)
+            .await
+            .unwrap();
+        canvas_worker_effect_expiry::run(&pool, &owned.url, expire_before_commit).await;
+        pool.close().await;
+        owned.close().unwrap();
+    }
+}
+
 #[test]
 fn worker_provider_recovery_first_preserves_terminal_winner() {
     assert_worker_provider_https("recovery_first");
@@ -385,6 +460,14 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
 }
 
 fn assert_worker_provider_https(scenario: &str) {
+    assert_worker_https_script("test_canvas_worker_provider_signals_https.py", &[scenario]);
+}
+
+fn assert_worker_https_script(script: &str, arguments: &[&str]) {
+    assert!(matches!(
+        script,
+        "test_canvas_worker_provider_signals_https.py" | "test_canvas_worker_mixed_roster_https.py"
+    ));
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
@@ -397,9 +480,9 @@ fn assert_worker_provider_https(scenario: &str) {
         .nth(3)
         .unwrap();
     let output = std::process::Command::new("python3")
-        .arg(root.join("scripts/test_canvas_worker_provider_signals_https.py"))
+        .arg(root.join("scripts").join(script))
         .arg(std::env::current_exe().unwrap())
-        .arg(scenario)
+        .args(arguments)
         .output()
         .unwrap();
     assert!(

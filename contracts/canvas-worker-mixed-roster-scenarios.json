@@ -1,0 +1,41 @@
+{
+  "schema": "marty.canvas-worker-mixed-roster-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "roster_scenario": "canvas-mixed-roster-scenarios.json",
+  "roster_reference": "canvas-mixed-roster-oracle.json",
+  "seed_observation_stage": "verified_join_allows_both_sources",
+  "scope": "Seven actual worker cycles with real loopback Canvas HTTPS and a synthetic loopback internal signer transport. This observes roster behavior, not remote signing or cryptographic-service qualification. Seed only before worker startup; thereafter change provider responses and restart only an idle owned worker. Never edit running jobs, leases, clocks, scheduler timestamps, candidate state or schema constraints. Preserve issued credentials, transactions and encrypted OAuth material.",
+  "batch_size": 3,
+  "roster_limit": 10,
+  "schedule_seconds": 60,
+  "roster_users": [12,8,11,7,9,10,7],
+  "requirements": [
+    {"requirement_id":"rest","source":"canvas_rest","fact_type":"canvas.assignment_score","scope":{"course_id":"42","activity_id":"9"},"pass_rule":{"min_score_percent":80},"required":true},
+    {"requirement_id":"ags","source":"ags_result","fact_type":"canvas.assignment_score","scope":{"course_id":"42","line_item_url":"{origin}/api/lti/courses/42/line_items/5"},"pass_rule":{"min_score_percent":80},"required":true}
+  ],
+  "identities": [
+    {"user":"8","status":"linked"},
+    {"user":"9","status":"linked"},
+    {"user":"11","status":"subject_verified"},
+    {"user":"12","status":"linked"}
+  ],
+  "terminal_candidates": [{"user":"7","state":"claimed"},{"user":"8","state":"dismissed"}],
+  "target_sql": "SELECT jsonb_build_object('enabled',enabled,'config_version',config_version,'schedule_seconds',schedule_seconds,'cursor',metadata->'roster_cursor','roster_size',metadata->'roster_size','marker',metadata->'synthetic_marker','cycle_completed_at_present',metadata->>'roster_cycle_completed_at' IS NOT NULL,'last_success_present',last_succeeded_at IS NOT NULL,'worker_id',metadata->'worker_id') FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review' AND organization_id='org-review'",
+  "job_rows_sql": "SELECT COALESCE(jsonb_agg(to_jsonb(j) ORDER BY created_at,id),'[]'::jsonb) FROM issuance_service.canvas_evidence_sync_jobs j",
+  "stored_roster_sql": "SELECT jsonb_build_object('candidates',(SELECT jsonb_agg(to_jsonb(c)) FROM issuance_service.canvas_award_candidates c),'observations',(SELECT jsonb_agg(to_jsonb(o)) FROM issuance_service.canvas_candidate_observations o))",
+  "cases": [
+    {
+      "name":"mixed_candidates_resume_wrap",
+      "initial_cursor":3,
+      "stages":[
+        {"name":"tail_positive_wrap","active_12":false,"score":90,"cursor":0,"ordinary_state":"pending_claim","seeded_heads_reused":true},
+        {"name":"head_identity_gates","active_12":false,"score":90,"cursor":3,"ordinary_state":"pending_claim","restart_after_idle":true},
+        {"name":"resumed_tail_negative","active_12":false,"score":10,"cursor":0,"ordinary_state":"observed"},
+        {"name":"head_active_membership","active_12":true,"score":10,"cursor":3,"ordinary_state":"observed","head_score":90},
+        {"name":"tail_provider_outage","active_12":true,"score":10,"cursor":0,"ordinary_state":"observed","error":true,"preserve_tail_observations_from":"resumed_tail_negative"},
+        {"name":"head_duplicate_observations","active_12":true,"score":10,"cursor":3,"ordinary_state":"observed","head_score":90,"preserve_head_observations_from":"head_active_membership"},
+        {"name":"tail_positive_recovery","active_12":true,"score":90,"cursor":0,"ordinary_state":"pending_claim"}
+      ]
+    }
+  ]
+}

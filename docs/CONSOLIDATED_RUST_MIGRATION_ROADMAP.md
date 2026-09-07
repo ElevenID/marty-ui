@@ -57,6 +57,29 @@ not inherit the 115-entry head's qualification. PR #814 remains open, draft and
 unrouted; production is unchanged. Earlier checkpoint narratives below retain
 historical evidence and do not supersede this latest qualification boundary.
 
+New local work, deliberately separate from that hosted checkpoint:
+
+- The [effect-expiry regression](rust-migrations/canvas-worker-effect-expiry.md)
+  passed its real-database-time rollback and successful-before-expiry controls
+  in 38.14s after independent review. It uses a controlled provider, not a
+  complete worker or real provider I/O.
+- The [complete-worker mixed-roster reference](rust-migrations/canvas-worker-mixed-roster.md)
+  passed two independent published captures in 366.35s and 365.89s, with
+  byte-identical observations. Seven natural cycles cover one idle restart,
+  cursor resume/wrap, terminal candidates, identity/membership gates, negative
+  evidence, outage preservation, duplicate observations and recovery. The
+  reference is frozen, and the permanent comparison passed in 366.31s. Native
+  replay is implemented with mandatory Linux registration; actual native
+  execution and qualification remain pending.
+- The [self-host bundle repairs](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
+  preserve the unqualified issuance family and select the existing Rust
+  signing-keys binary. Read-only rendering compares all 17 converted service
+  definitions without changing crypto implementation or deploying anything.
+
+The final full local Python suite passed 1,201 tests with one existing skip in
+62.16s after the frozen corpus, numeric-token and driver-failure tests. These results do not grant native-worker
+cutover, Python deletion, production promotion or aggregate acceptance.
+
 The [target-validation reference](rust-migrations/canvas-worker-validation.md)
 freezes twenty actual published-worker cases with matching independent captures:
 no Canvas reads, exact terminal errors, disabled targets and preserved issued
