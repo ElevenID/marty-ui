@@ -13,7 +13,10 @@ Later queue and [acquired-lease](canvas-worker-oauth-revocation-lease.md) extens
 fresh hosted checks. The later selection-cap repository and
 [cycle-return counter](canvas-worker-oauth-revocation-counters.md) comparisons are
 implemented and locally checked; the 90-entry gate still requires exact-head
-native qualification. Earlier worker gates
+native qualification. The subsequent [secret-resolution](canvas-worker-oauth-revocation-secrets.md)
+extension adds six process references, real schema rejections and a native-only
+empty-token guard regression; its 94-entry gate likewise awaits exact-head checks.
+Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
@@ -177,7 +180,7 @@ changed-generation races remain open.
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Frozen worker vectors and `canvas_sync_worker_behavior.rs`; provider-specific transport corpora | Verify durable retry scheduling for the actual worker/provider path, including date, malformed, negative and clamp behavior. |
 | 9. Target validation and processor failures | Repository validation, native typed processor, issued-review/mixed-roster and job-authorization tests | Map every frozen validation code to composed-worker outcomes; cover processor failure/no-signing behavior without emulating Python imports. |
-| 10. OAuth revocation failure and owner fences | [23 native process observations](canvas-worker-oauth-revocation.md) are qualified at75d82, including Retry-After and backoff. Two queue and four acquired-lease process cases await hosted qualification; the nonempty selection-cap repository differential passes locally | Qualify those scoped extensions and close returned-counter and secret-resolution composition gaps in the [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md). Retain Rust's stronger atomic cleanup. Repository selection is not whole-process HTTPS evidence. |
+| 10. OAuth revocation failure and owner fences | [23 native process observations](canvas-worker-oauth-revocation.md) are qualified at75d82. Queue/lease, returned-counter and six secret-resolution replays are implemented; selection-cap, schema-rejection and native empty-token regressions pass locally | Qualify these exact-head extensions in the [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md). Retain Rust's stronger atomic cleanup. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
 | 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |

@@ -162,6 +162,7 @@ def test_acquired_lease_observation_rejects_incomplete_or_wrong_evidence(
         "oauth-revocation-queue",
         "oauth-revocation-lease",
         "oauth-revocation-counters",
+        "oauth-revocation-secrets",
     ],
 )
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
@@ -185,7 +186,9 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
         native.run("synthetic-not-executed", kind)
 
 
-@pytest.mark.parametrize("failure", ["child_exit", "timeout", "wrong_requests"])
+@pytest.mark.parametrize(
+    "failure", ["child_exit", "timeout", "wrong_requests", "unexpected_requests"]
+)
 @pytest.mark.parametrize(
     "kind",
     [
@@ -196,6 +199,7 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
         "oauth-revocation-queue",
         "oauth-revocation-lease",
         "oauth-revocation-counters",
+        "oauth-revocation-secrets",
     ],
 )
 def test_native_owner_fails_closed_and_closes_https(
@@ -206,7 +210,15 @@ def test_native_owner_fails_closed_and_closes_https(
     inputs = iter(
         [
             json.dumps({"cases": [{"name": "synthetic"}]}),
-            json.dumps({"synthetic": {"requests": [{"method": "DELETE"}]}}),
+            json.dumps(
+                {
+                    "synthetic": {
+                        "requests": []
+                        if failure == "unexpected_requests"
+                        else [{"method": "DELETE"}]
+                    }
+                }
+            ),
         ]
     )
     monkeypatch.setattr(Path, "read_text", lambda *_: next(inputs))
@@ -218,7 +230,9 @@ def test_native_owner_fails_closed_and_closes_https(
                 certificates=SimpleNamespace(name=str(tmp_path)),
                 cert=tmp_path / "synthetic-cert",
                 origin="https://127.0.0.1:1",
-                requests=[],
+                requests=[{"method": "DELETE"}]
+                if failure == "unexpected_requests"
+                else [],
             )
 
         def __exit__(self, *_):
@@ -237,6 +251,64 @@ def test_native_owner_fails_closed_and_closes_https(
     with pytest.raises((AssertionError, native.subprocess.TimeoutExpired)):
         native.run("synthetic-not-executed", kind)
     assert closed == [True]
+
+
+def test_secret_reference_cases_preserve_no_request_retry_and_tenant_state(monkeypatch):
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    monkeypatch.syspath_prepend(str(contracts.parent / "scripts"))
+    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    matrix = oracle.load_matrix(
+        contracts, "canvas-worker-oauth-revocation-secrets-scenarios.json"
+    )
+    reference = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-secrets-oracle.json").read_text()
+    )
+    expected_refs = {
+        "absent_reference": None,
+        "empty_secret_id": "org_secret://org-review/",
+        "nested_secret_id": "org_secret://org-review/nested/token",
+        "missing_secret": "org_secret://org-review/missing-token",
+        "disabled_secret": "org_secret://org-review/worker-rest-token",
+        "other_tenant_secret_id": "org_secret://org-review/worker-unrelated-token",
+    }
+    assert (
+        {case["name"] for case in matrix["cases"]}
+        == set(reference)
+        == set(expected_refs)
+    )
+    assert len(matrix["cases"]) == len(reference) == 6
+    for case in matrix["cases"]:
+        observed = reference[case["name"]]
+        assert case["request_count"] == 0 and case["delay_bounds"] == [30, 37]
+        assert (
+            observed["requests"] == []
+            and observed["retained_ciphertexts_unchanged"] is True
+        )
+        assert (
+            len(observed["retained_secret_ids"]) == 3
+            and observed["issued_rows_unchanged"] is True
+        )
+        assert observed["heartbeat"]["metadata"]["phase"] == "idle"
+        assert observed["connection"] == {
+            "error_code": "canvas_oauth_revoke_rejected",
+            "retry_count": 1,
+            "status": "revocation_pending",
+            "retry_at_present": True,
+            "lease_owner_present": False,
+            "lease_expires_present": False,
+        }
+        state = observed["secret_state"]
+        assert state["access_ref"] == expected_refs[case["name"]]
+        assert state["refresh_ref"] == "org_secret://org-review/worker-refresh-token"
+        assert set(state["secrets"]) == set(observed["retained_secret_ids"])
+        for secret_id, secret in state["secrets"].items():
+            assert secret["used"] is False
+            assert secret["organization_id"] == (
+                "org-other" if secret_id == "worker-unrelated-token" else "org-review"
+            )
+            assert secret["enabled"] is not (
+                case["name"] == "disabled_secret" and secret_id == "worker-rest-token"
+            )
 
 
 def test_cycle_reference_counts_return_values_not_durable_retry_count(monkeypatch):

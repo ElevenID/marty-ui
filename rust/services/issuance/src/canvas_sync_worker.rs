@@ -983,7 +983,9 @@ impl CanvasSyncWorker {
             None => Ok(None),
         };
         let revoke_result = match access_token {
-            Ok(Some(token)) if !connection.canvas_base_url.trim().is_empty() => {
+            Ok(Some(token))
+                if !token.is_empty() && !connection.canvas_base_url.trim().is_empty() =>
+            {
                 self.oauth_provider
                     .revoke(&connection.canvas_base_url, &token)
                     .await

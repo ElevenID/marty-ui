@@ -61,6 +61,7 @@ def run(executable, kind="oauth-revocation"):
         "oauth-revocation-queue",
         "oauth-revocation-lease",
         "oauth-revocation-counters",
+        "oauth-revocation-secrets",
     }
     root = Path(__file__).resolve().parents[1]
     matrix = json.loads(

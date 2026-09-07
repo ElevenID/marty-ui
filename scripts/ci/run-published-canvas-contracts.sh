@@ -98,4 +98,8 @@ mapfile -t executables < <(jq -r '
 "${executables[0]}" --list | grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'
 "${executables[0]}" --list | grep -Fx 'worker_oauth_revocation_counters_reference_matches_published_cycle: test'
 "${executables[0]}" --list | grep -Fx 'worker_oauth_revocation_counters_matches_frozen_published_cycle: test'
+"${executables[0]}" --list | grep -Fx 'worker_oauth_revocation_secrets_reference_matches_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_oauth_revocation_secrets_matches_frozen_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_oauth_revocation_secret_reference_constraints_match_published_schema: test'
+"${executables[0]}" --list | grep -Fx 'worker_oauth_revocation_empty_token_is_not_dispatched: test'
 "${executables[0]}" --nocapture --test-threads=1

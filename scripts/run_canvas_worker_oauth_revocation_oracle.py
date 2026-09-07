@@ -90,6 +90,7 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation-lease",
         "oauth-revocation-selection",
         "oauth-revocation-counters",
+        "oauth-revocation-secrets",
     }
     contracts = Path("/verification/contracts")
     matrix = load_matrix(contracts, f"canvas-worker-{kind}-scenarios.json")
@@ -422,6 +423,11 @@ def run(case_name, kind="oauth-revocation"):
                     observation["queue"] = queue
                 if cycle_result is not None:
                     observation["cycle_result"] = cycle_result
+                if "secret_state_sql" in matrix:
+                    with engine.connect() as connection:
+                        observation["secret_state"] = connection.execute(
+                            text(matrix["secret_state_sql"])
+                        ).scalar_one()
                 return observation
             finally:
                 finish_worker(child)

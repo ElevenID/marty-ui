@@ -341,6 +341,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_oauth_revocation_secrets(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"
+            ),
+            "worker_oauth_revocation",
+            "worker-oauth-revocation-secrets",
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SECRETS_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_oauth_revocation_selection(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -833,6 +846,7 @@ impl PublishedDatabase {
                 if matches!(
                     scenario,
                     "worker-oauth-revocation-fence"
+                        | "worker-oauth-revocation-secrets"
                         | "worker-oauth-revocation-patch"
                         | "worker-oauth-revocation-retry-after"
                         | "worker-oauth-revocation-backoff"

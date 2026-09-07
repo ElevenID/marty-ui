@@ -205,6 +205,17 @@ All23 earlier native revocation markers and separate4workerDB cases passed.
 The failed run is not a newly qualified composed checkpoint; the90-entry followup
 must pass with the correction before claiming those new boundaries qualified.
 
+The [secret-resolution reference](rust-migrations/canvas-worker-oauth-revocation-secrets.md)
+adds six actual published worker captures for absent/malformed/missing/disabled or
+other-tenant-only secret IDs. Independent regeneration matches full retry, reference,
+secret usage and zero-request observations. Three real schema rejections preserve
+the tenant-prefix constraint; those are not worker scenarios. Review also found
+and fixed a native empty-token dispatch gap using a real-cycle regression and a
+counting provider. The published save API rejects empty plaintext before worker
+startup, so that regression is not presented as a published-process capture.
+Shared fixtures and cycle construction are retained. The 94-entry gate awaits
+fresh native qualification; no consumer or feature was removed.
+
 Latest qualified UI checkpoint `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87` passed
 CI34069978028 and all applicable exact-head checks, including Rust CodeQL34069978088.
 Runtime job101585424129 passed 81 configured tests in 1726.05 seconds, retaining

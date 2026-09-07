@@ -30,12 +30,14 @@ is still required for the corrected queue/lease and new selection/counter entrie
 | Due selection, status/lease eligibility and order | [Two actual multi-row queue captures](canvas-worker-oauth-revocation-queue.md), exact unchanged excluded rows, actual acquisition journal, and real repository differential regression | Rust null-order discrepancy corrected; native whole-process queue qualification pending |
 | Batch cap and lease duration | Frozen configuration/range corpora, [four actual acquired-lease captures](canvas-worker-oauth-revocation-lease.md), and [matched real-repository selections](canvas-worker-oauth-revocation-selection.md) from 509 rows at limits around 500 | Nonempty cap matches locally; exact-head hosted repository and acquired-lease process qualification pending. Repository selection is not 500 remote requests |
 | Returned revocation success/retry counters, including owner-fence loss | [Four actual cycle-return captures](canvas-worker-oauth-revocation-counters.md), exact regeneration, real Rust cycle replay implemented; separate qualified privacy marker-error counter replay retained | Native Linux cycle replay awaits exact-head qualification; no counters inferred from heartbeat or stored retry count |
-| Exact tenant-scoped secret references | Shared reference parser unit tests reject foreign tenant and nested paths; valid encrypted-secret process cases | Worker composition for unavailable/malformed/foreign references needs explicit observation before claiming the whole branch |
+| Exact tenant-scoped secret references | [Six actual published worker observations](canvas-worker-oauth-revocation-secrets.md), independent regeneration, three real schema rejections and native process replay implemented | Native Linux composition qualification pending; empty plaintext is separately rejected by the published save API, not a captured worker scenario |
+| Empty plaintext from the native vault | Real native cycle regression reproduced dispatch absent from the published worker's explicit guard; non-empty check added, retry and ciphertext preservation pass locally | Native-only regression uses a counting provider, not HTTPS parity; retain non-empty transport cases in exact-head CI |
 | Logging privacy | Independently captured twelve-case hardened worker corpus, actual native replay and known-error controls | Retain this separate provenance; do not claim the older transport image is the hardened privacy source |
 
 The remaining sequence is finite: qualify the queue/lease process extensions
 and nonempty cap repository differential; qualify the implemented cycle-counter
-replay and observe remaining secret-resolution branches. Each addition must close a named
+and six-case secret-resolution replays, retaining the separate native empty-token
+guard regression and schema rejections. Each addition must close a named
 contract requirement rather than introduce an unspecified new acceptance gate.
 Repository/unit evidence remains useful but is not relabeled as whole-process
 differential parity. All consumer/readiness/deletion/beta gates remain separate.

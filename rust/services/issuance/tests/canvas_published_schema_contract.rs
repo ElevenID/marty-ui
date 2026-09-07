@@ -3,6 +3,16 @@ use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
 #[tokio::test]
+async fn worker_oauth_revocation_secrets_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation-secrets").await;
+}
+
+#[test]
+fn worker_oauth_revocation_secrets_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-secrets");
+}
+
+#[tokio::test]
 async fn worker_oauth_revocation_counters_reference_matches_published_cycle() {
     assert_worker_matrix_reference("oauth-revocation-counters").await;
 }
@@ -29,6 +39,42 @@ async fn worker_oauth_revocation_selection_repository_matches_published() {
         .await
         .unwrap();
     canvas_worker_oauth_revocation_replay::assert_capped_repository_selection(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn worker_oauth_revocation_secret_reference_constraints_match_published_schema() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_oauth_revocation_replay::assert_secret_reference_constraints(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn worker_oauth_revocation_empty_token_is_not_dispatched() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_oauth_revocation_replay::assert_empty_token_not_dispatched(&pool).await;
     pool.close().await;
     owned.close().unwrap();
 }
@@ -615,6 +661,14 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-secrets" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"
+            ),
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-secrets-oracle.json"
+            ),
+        ),
         "oauth-revocation-counters" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
@@ -704,6 +758,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-secrets" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_secrets(name).await
+            }
             "oauth-revocation-counters" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_counters(name).await
             }

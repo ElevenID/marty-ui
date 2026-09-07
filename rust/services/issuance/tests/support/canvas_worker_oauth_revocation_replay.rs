@@ -24,6 +24,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     );
     let matrix = matrix_for(kind);
     let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-secrets" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-secrets-oracle.json"
+        ),
         "oauth-revocation-counters" => include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-counters-oracle.json"
         ),
@@ -361,6 +364,12 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
             "oauth_revocations_retried": result.oauth_revocations_retried,
         });
     }
+    if let Some(statement) = matrix.get("secret_state_sql") {
+        actual["secret_state"] = sqlx::query_scalar::<_, Value>(statement.as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    }
     let mut expected = reference[name].as_object().unwrap().clone();
     // HTTP observations are compared in full by the actual HTTPS owner.
     // Published source hashes are verified by independent reference regeneration.
@@ -398,8 +407,27 @@ fn start_counter_cycle(
     environment: &std::collections::BTreeMap<String, String>,
 ) -> tokio::task::JoinHandle<marty_issuance_service::canvas_sync_worker::CanvasSyncWorkerCycleResult>
 {
+    use marty_issuance_service::canvas_oauth_http::HttpCanvasOAuthProvider;
+    let worker = cycle_worker(
+        pool,
+        fixture,
+        environment,
+        std::sync::Arc::new(HttpCanvasOAuthProvider::new(
+            Duration::from_secs(10),
+            vec![origin.into()],
+            false,
+        )),
+    );
+    tokio::spawn(async move { worker.run_cycle().await.unwrap() })
+}
+
+fn cycle_worker(
+    pool: &PgPool,
+    fixture: &canvas_worker_rest_replay::WorkerFixture,
+    environment: &std::collections::BTreeMap<String, String>,
+    provider: std::sync::Arc<dyn marty_issuance_service::canvas_oauth::CanvasOAuthProvider>,
+) -> marty_issuance_service::canvas_sync_worker::CanvasSyncWorker {
     use marty_issuance_service::{
-        canvas_oauth_http::HttpCanvasOAuthProvider,
         canvas_oauth_postgres::PostgresCanvasOAuthRepository,
         canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
         canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
@@ -407,19 +435,14 @@ fn start_counter_cycle(
     use std::sync::Arc;
     let mut values = environment.clone();
     values.insert("CANVAS_SYNC_WORKER_ID".into(), "worker-revocation".into());
-    let worker = CanvasSyncWorker::new(
+    CanvasSyncWorker::new(
         Arc::new(PostgresCanvasSyncWorkerRepository::new(pool.clone())),
         Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
         Arc::new(fixture.vault.clone()),
-        Arc::new(HttpCanvasOAuthProvider::new(
-            Duration::from_secs(10),
-            vec![origin.into()],
-            false,
-        )),
+        provider,
         Arc::new(no_jobs::NoJobsExpected(true)),
         CanvasSyncWorkerConfig::from_values(&values).unwrap(),
-    );
-    tokio::spawn(async move { worker.run_cycle().await.unwrap() })
+    )
 }
 
 fn matrix_for(kind: &str) -> &'static Value {
@@ -434,6 +457,7 @@ fn matrix_for(kind: &str) -> &'static Value {
             | "oauth-revocation-lease"
             | "oauth-revocation-selection"
             | "oauth-revocation-counters"
+            | "oauth-revocation-secrets"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
@@ -444,6 +468,7 @@ fn matrix_for(kind: &str) -> &'static Value {
     static LEASE_MATRIX: OnceLock<Value> = OnceLock::new();
     static SELECTION_MATRIX: OnceLock<Value> = OnceLock::new();
     static COUNTERS_MATRIX: OnceLock<Value> = OnceLock::new();
+    static SECRETS_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
@@ -461,6 +486,10 @@ fn matrix_for(kind: &str) -> &'static Value {
         base
     };
     let extension = match kind {
+        "oauth-revocation-secrets" => Some((
+            &SECRETS_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"),
+        )),
         "oauth-revocation-counters" => Some((
             &COUNTERS_MATRIX,
             include_str!("../../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"),
@@ -631,6 +660,134 @@ pub async fn assert_capped_repository_selection(pool: &PgPool) {
     let mut expected = reference["selection_limits"].as_object().unwrap().clone();
     assert!(expected.remove("repository_source_sha256").is_some());
     assert_eq!(actual, Value::Object(expected));
+}
+
+pub async fn assert_empty_token_not_dispatched(pool: &PgPool) {
+    use async_trait::async_trait;
+    use marty_issuance_service::canvas_oauth::{
+        CanvasOAuthProvider, CanvasOAuthProviderError, CanvasOAuthTokenBundle,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct ObserveDispatch(AtomicUsize);
+    #[async_trait]
+    impl CanvasOAuthProvider for ObserveDispatch {
+        async fn exchange(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError> {
+            panic!("revocation must not exchange tokens")
+        }
+        async fn refresh(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<CanvasOAuthTokenBundle, CanvasOAuthProviderError> {
+            panic!("revocation must not refresh tokens")
+        }
+        async fn revoke(&self, _: &str, _: &str) -> Result<(), CanvasOAuthProviderError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(CanvasOAuthProviderError::RevocationRejected)
+        }
+    }
+    let matrix = matrix_for("oauth-revocation");
+    let (fixture, _) =
+        prepare_fixture(pool, "https://127.0.0.1:1", matrix, &matrix["cases"][0]).await;
+    // Native-only guard regression: the published save API rejects empty values.
+    // Keep cipher behavior intact; construct through the real native vault API.
+    fixture
+        .vault
+        .delete("org-review", "worker-rest-token")
+        .await
+        .unwrap();
+    fixture
+        .vault
+        .save(NewIntegrationSecret {
+            id: "worker-rest-token".into(),
+            organization_id: "org-review".into(),
+            name: "Synthetic empty token".into(),
+            provider: "canvas".into(),
+            purpose: "api_token".into(),
+            value: String::new(),
+            metadata: json!({}),
+        })
+        .await
+        .unwrap();
+    let before_secrets: Value = sqlx::query_scalar(matrix["secret_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let provider = Arc::new(ObserveDispatch(AtomicUsize::new(0)));
+    let worker = cycle_worker(
+        pool,
+        &fixture,
+        &std::collections::BTreeMap::new(),
+        provider.clone(),
+    );
+    let result = worker.run_cycle().await.unwrap();
+    assert_eq!(
+        provider.0.load(Ordering::SeqCst),
+        0,
+        "empty decrypted token reached provider dispatch"
+    );
+    assert_eq!(
+        (
+            result.oauth_revocations_succeeded,
+            result.oauth_revocations_retried
+        ),
+        (0, 1)
+    );
+    let state: Value = sqlx::query_scalar(matrix["connection_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        state,
+        json!({"status":"revocation_pending", "retry_count":1,
+        "error_code":"canvas_oauth_revoke_rejected", "retry_at_present":true,
+        "lease_owner_present":false,"lease_expires_present":false})
+    );
+    let after_secrets: Value = sqlx::query_scalar(matrix["secret_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(after_secrets, before_secrets);
+    fixture.assert_issued_rows_preserved(pool).await;
+}
+
+pub async fn assert_secret_reference_constraints(pool: &PgPool) {
+    let matrix = matrix_for("oauth-revocation-secrets");
+    let (fixture, before_secrets) =
+        prepare_fixture(pool, "https://127.0.0.1:1", matrix, &matrix["cases"][0]).await;
+    const ROW: &str = "SELECT to_jsonb(c) FROM issuance_service.canvas_oauth_connections c WHERE id='worker-rest-connection'";
+    let before: Value = sqlx::query_scalar(ROW).fetch_one(pool).await.unwrap();
+    for statement in [
+        "UPDATE issuance_service.canvas_oauth_connections SET client_secret_ref=$1 WHERE id='worker-rest-connection'",
+        "UPDATE issuance_service.canvas_oauth_connections SET access_token_secret_ref=$1 WHERE id='worker-rest-connection'",
+        "UPDATE issuance_service.canvas_oauth_connections SET refresh_token_secret_ref=$1 WHERE id='worker-rest-connection'",
+    ] {
+        let error = sqlx::query(statement).bind("org_secret://org-other/worker-unrelated-token")
+            .execute(pool).await.unwrap_err();
+        let error = error.as_database_error().expect("actual schema rejection");
+        assert_eq!(error.code().as_deref(), Some("23514"));
+        assert_eq!(error.constraint(), Some("ck_canvas_oauth_connections_tenant_secret_refs"));
+        let after: Value = sqlx::query_scalar(ROW).fetch_one(pool).await.unwrap();
+        assert_eq!(after, before, "rejected reference update changed a stored row");
+    }
+    let after_secrets: Value = sqlx::query_scalar(matrix["secret_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(after_secrets, before_secrets);
+    fixture.assert_issued_rows_preserved(pool).await;
 }
 
 pub async fn assert_queue_repository_selection(pool: &PgPool) {
