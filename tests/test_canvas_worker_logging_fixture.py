@@ -24,6 +24,12 @@ def test_logging_reference_preserves_all_declared_inputs_and_source():
     assert sum("error_class" in case["observed"] for case in reference["cases"]) == 7
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "python3 scripts/test_canvas_worker_logging_reference.py" in workflow
+    dockerfile = (root / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
+    issuance = dockerfile.split("FROM runtime AS issuance\n", 1)[1].split(
+        "FROM runtime AS gateway\n", 1
+    )[0]
+    assert "RUST_LOG=" not in issuance, "image defaults must not mask deployed LOG_LEVEL"
+    assert "RUST_LOG=" not in (root / "services/Dockerfile").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("failure", [None, "start", "wait", "exit", "mismatch"])

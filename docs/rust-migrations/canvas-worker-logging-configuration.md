@@ -29,14 +29,19 @@ including seven actual child-process failures with exactly the static error and
 no operator-value output (2.67s). Existing API health/readiness/version and disabled
 gRPC checks are retained. Strict all-target Clippy passes (2.43s).
 The final full Python suite passes 1,032 tests with one existing opt-in skip
-(40.85s). The first full run caught an omitted ninth-case name in the preflight
+(40.53s after the final image-default correction). The first full run caught an omitted ninth-case name in the preflight
 inventory test; that inventory was corrected without removing any prior case.
 Ruff and patch checks pass.
 
 CI regenerates the immutable reference and adds an invalid-logging packaged-image
 preflight case, retaining all eight prior cases and all 24 startup cases. The new
 image gate requires the updated image to fail before secret setup without echoing
-the synthetic invalid value. Native filtering is exercised by the real tracing
+the synthetic invalid value. Final image review also found that the dedicated
+issuance CI image baked in `RUST_LOG=info`, which would mask the deployed setting.
+That redundant image default is removed only from issuance: both binaries retain
+their INFO fallback and explicit operator Rust directives still take precedence.
+An inventory assertion prevents reintroducing the hidden override; the shared
+production Dockerfile has no such override. Native filtering is exercised by the real tracing
 subscriber; neither Windows unit checks nor the reference-expression capture is
 claimed as complete Linux worker execution. Fresh exact-head CI and the nine-case
 image gate remain required. No deployment definition or persistent service changed.
