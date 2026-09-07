@@ -40,9 +40,27 @@ def render(*files):
     return json.loads(result.stdout)
 
 
+def assert_inherited_service(base, bundle, service):
+    assert bundle["services"][service] == base["services"][service], (
+        f"Bundle must preserve the complete unqualified Python {service} definition"
+    )
+
+
+def assert_published_issuance_preserved(base, bundle):
+    original = base["services"]["issuance"]
+    migration = base["services"]["issuance-migrations"]
+    assert original["image"].startswith("${MARTY_ISSUANCE_IMAGE:?"), (
+        "Unqualified issuance API must retain its immutable published image"
+    )
+    assert original["image"] == migration["image"]
+    assert original["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
+    assert original["command"][:4] == ["python", "-m", "uvicorn", "main:app"]
+    for service in ("issuance", "issuance-migrations"):
+        assert_inherited_service(base, bundle, service)
+
+
 def assert_worker_preserved(base, bundle):
     original = base["services"][WORKER]
-    merged = bundle["services"][WORKER]
     assert original["image"].startswith("${MARTY_ISSUANCE_IMAGE:?"), (
         "Unqualified worker must retain the immutable published issuance image"
     )
@@ -64,14 +82,16 @@ def assert_worker_preserved(base, bundle):
     # Compare the entire rendered worker, not selected fields: this also guards
     # file-secret bindings, source paths, URL-template escaping, configuration,
     # networks, and future additions against unintended bundle overrides.
-    assert merged == original, (
-        "Bundle must preserve the complete unqualified Python worker definition"
-    )
+    assert_inherited_service(base, bundle, WORKER)
 
 
 def run():
-    assert_worker_preserved(render(BASE), render(BASE, BUNDLE))
-    print("Self-host bundle preserves the complete immutable Python Canvas worker")
+    base, bundle = render(BASE), render(BASE, BUNDLE)
+    assert_worker_preserved(base, bundle)
+    assert_published_issuance_preserved(base, bundle)
+    print(
+        "Self-host bundle preserves immutable issuance API, migrations and Canvas worker"
+    )
 
 
 if __name__ == "__main__":

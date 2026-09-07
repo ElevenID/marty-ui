@@ -66,13 +66,9 @@ services:
     environment:
       SERVICE_NAME: trust_profile
 
-  issuance:
-    <<: *selfhost-service-image
-    environment:
-      SERVICE_NAME: issuance
-
-  # The standalone Canvas worker is not cutover-qualified yet. Inherit its
-  # immutable MARTY_ISSUANCE_IMAGE and complete Python/secret-loader definition
+  # The issuance API and standalone Canvas worker are not cutover-qualified yet.
+  # Inherit their immutable MARTY_ISSUANCE_IMAGE, migration image, and complete
+  # Python/secret-loader definitions
   # from the self-host base; the shared services image contains Rust, not Python.
 
   applicant:

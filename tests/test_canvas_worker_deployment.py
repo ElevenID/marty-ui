@@ -196,7 +196,10 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     )["value"] == ("http://gateway:8000/internal/signing-keys")
 
 
-def test_selfhost_bundle_does_not_override_the_unqualified_worker() -> None:
+@pytest.mark.parametrize(
+    "service", ["canvas-sync-worker", "issuance", "issuance-migrations"]
+)
+def test_selfhost_bundle_does_not_override_unqualified_services(service) -> None:
     # Parse nodes rather than pretending Compose's !reset is ordinary YAML.
     # The executable rendering gate separately tests actual Compose merging.
     override = yaml.compose(
@@ -207,7 +210,7 @@ def test_selfhost_bundle_does_not_override_the_unqualified_worker() -> None:
     assert isinstance(override, yaml.MappingNode)
     services = next(value for key, value in override.value if key.value == "services")
     assert isinstance(services, yaml.MappingNode)
-    assert "canvas-sync-worker" not in {key.value for key, _ in services.value}
+    assert service not in {key.value for key, _ in services.value}
 
 
 @pytest.fixture
@@ -307,6 +310,38 @@ def test_compose_renderer_only_reads_fixed_sources_without_secret_resolution(
             },
         )
     ]
+
+
+@pytest.mark.parametrize("service", ["issuance", "issuance-migrations"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        None,
+        "image",
+        "entrypoint",
+        "command",
+        "environment",
+        "secrets",
+        "volumes",
+        "depends_on",
+        "healthcheck",
+        "restart",
+        "future_field",
+    ],
+)
+def test_bundle_issuance_comparison_preserves_every_field(
+    compose_worker_gate, service, field
+):
+    base = _yaml("docker-compose.selfhost.prod.yml")
+    bundle = deepcopy(base)
+    if field is not None:
+        bundle["services"][service][field] = "synthetic-unexpected-change"
+    compare = compose_worker_gate["assert_published_issuance_preserved"]
+    if field is None:
+        compare(base, bundle)
+    else:
+        with pytest.raises(AssertionError, match="complete unqualified Python"):
+            compare(base, bundle)
 
 
 @pytest.mark.parametrize("failure", ["command", "timeout", "invalid_json"])

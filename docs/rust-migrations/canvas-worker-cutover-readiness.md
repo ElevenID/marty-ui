@@ -298,7 +298,7 @@ neither the global installed package nor another worker's crypto branch changed.
 | Base Compose | `docker-compose.base.yml`: immutable issuance image, `python -m issuance.canvas_worker`, `CANVAS_SYNC_PROCESSOR` | Native image/command, equivalent configuration and secrets, both migration dependencies, no ports, database heartbeat and restart behavior. |
 | Beta overlay | `docker-compose.beta.yml`: only adds worker environment; inherits the base command/image | Render the exact aggregate beta composition and verify native selection; an environment-only overlay is not a cutover. |
 | Self-host production definition | `docker-compose.selfhost.prod.yml`: shell secret loader followed by Python, with loader selection | Preserve file-secret and database-template handling, migration ordering and headless health semantics in source. Do not deploy to persistent self-host. |
-| Self-host bundle override | `docker-compose.selfhost.bundle.override.yml` now inherits the base worker unchanged: immutable Python issuance image and shell secret loader. Its incompatible Rust-only-image/Python-command override was removed | Mandatory read-only Compose merge gate compares the entire worker model. At qualified cutover, render both image families and explicitly select the worker rather than the API while preserving the secret loader. Current inheritance is not Rust acceptance. |
+| Self-host bundle override | `docker-compose.selfhost.bundle.override.yml` inherits the base issuance API, migrations and worker unchanged: immutable Python issuance image and their secret-loader definitions. The incompatible Rust-only-image/Python-command overrides were removed | Mandatory read-only Compose merge gate compares all three complete service models. At qualified cutover, render both image families and explicitly select the worker rather than the API while preserving the secret loader. Current inheritance is not Rust acceptance. |
 | Kubernetes | `k8s/oracle/07-microservices.yaml`: Python command/args; `01-configmap.yaml`: loader selection | Native image provenance/command, ConfigMap cleanup, all secret inputs, migration job ordering and termination policy in rendered artifacts. Do not apply to production. |
 | Shared Rust image | `services/Dockerfile` and `rust/services/Dockerfile.ci` contain the worker binary; the shared entrypoint now implements explicit worker selection | Qualify the [image launch gate](canvas-worker-image-entrypoint.md) and [24-case packaged startup gate](canvas-worker-image-startup.md), then remaining consumer configuration/secrets, headless health and migration ordering; startup alone does not prove active worker-cycle acceptance. |
 
@@ -318,6 +318,15 @@ fields, including secrets, URL template, migration dependencies, headless health
 and restart policy. CI now runs this real read-only rendering check before image
 builds. It disables interpolation, environment-file and path resolution; it does
 not prove resolved secret values, image startup or the exact beta composition.
+
+The follow-up API audit found the same mismatch: the bundle selected the shared
+Rust-only image while retaining the API's Python Uvicorn command and OpenBao
+startup wrapper. Removing only that image/selector override restores the base
+immutable issuance image shared with `issuance-migrations`; it does not route
+the unqualified native API. The expanded real Compose renderer failed before
+this repair and passed afterward. All 48 focused deployment tests passed
+locally, including mutation tests for both complete API/migration definitions.
+This preserves existing functionality while API and worker cutover remain open.
 
 The initial local debug-binary diagnostic confirmed a startup obstacle: with
 rollout disabled, synthetic keys, no LTI identity and an unavailable loopback
