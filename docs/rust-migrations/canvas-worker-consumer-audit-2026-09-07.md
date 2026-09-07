@@ -49,13 +49,12 @@ job-detail exports remain part of the public contract even without a direct page
 call found in this audit. This is **implemented candidate code, not live Rust
 routing**. Source routing labels are not proof of a deployed upstream version.
 
-There is one stale inventory statement to reconcile without changing frozen
-behavior: the operations contract's `status` says all eight native operations
-are candidates, but its [last `limits` entry](../../contracts/issuance-canvas-operations.json#L95)
-still says only four read candidates exist and write implementation is pending.
-The router disproves the latter implementation count; its remaining live-routing,
-deployment and external-effect limitations still apply. No contract was edited
-by this audit.
+The audit found a stale implementation count: the operations contract's `status`
+listed all eight native candidates while its last `limits` entry still described
+only four read candidates. A parallel maintainer follow-up corrected that prose
+in [the operations contract](../../contracts/issuance-canvas-operations.json).
+This does not change frozen behavior or qualify live routing. The remaining
+integration, deployment and external-effect limitations still apply.
 
 Platform readiness and binding activation/deactivation are already present in
 the [native coverage allowlist](../../contracts/issuance-native-coverage.json#L303),
@@ -114,3 +113,62 @@ turn candidate preparation into credential signing.
 This audit adds no new permission to deploy, route candidate operations, delete
 Python, change cryptography, or restore beta. Whole-worker qualification and the
 goal's aggregate beta-only acceptance remain separate gates.
+
+## Worker-only rollback hardening follow-up
+
+The image-only rollback finding above led to a narrowly scoped implementation in
+[the pure launch contract](../../scripts/beta-worker-launch-contract.ps1),
+[capture](../../scripts/deploy-local-beta-release.ps1) and
+[restore](../../scripts/restore-local-beta-release.ps1). Only worker records gain
+`rollback_launch`; unrelated environment values and secrets are not copied.
+Versioned records preserve effective Docker entrypoint/command vectors, including
+null versus empty arrays, and explicit `SERVICE_NAME` and `CANVAS_SYNC_PROCESSOR`
+presence/value. The restore
+overlay clears effective empty vectors explicitly and removes an absent selector
+with `!reset null`, avoiding host-environment fallback. An absent captured selector
+is rejected if the immutable image would reintroduce either baked-in selector.
+The processor selector is restricted to the known built-in Canvas callback or
+intentional empty/absent state; arbitrary dynamic plugin paths are not persisted.
+
+The launch contract accepts only the supported exact Python/native worker argv,
+the tracked shared dispatcher with a worker selector, and the exact tracked
+selfhost loader statement. It does not execute or parse arbitrary shell text.
+An older manifest without launch metadata is accepted only with a verified
+compatible legacy Python Compose command and empty image/current entrypoints;
+the inspected immutable image must also have the known published Python Uvicorn
+or Python worker default command. A null entrypoint alone cannot distinguish the
+shared Rust image. An unknown or switched launch fails with recovery guidance
+before stopping beta. Provenance-less old records additionally require the
+effective built-in processor from verified source/image configuration; the
+helper does not silently invent a missing callback. New complete captures retain
+intentional empty/absent selection exactly.
+The complete generated image/compatibility/worker overlay and UI image-ID check
+now precede the first stop/database/volume mutation. The existing PostgreSQL
+container and exact beta Redis/applicant volume identity checks also run before
+that first stop, with their validated identifiers reused during restore. This
+prevents a missing or mislabeled later data target from being discovered only
+after an earlier store has already been restored. Existing backup hashes,
+project/volume scope, image IDs and restricted compatibility environment checks
+remain in place.
+
+Expanded verification: 70 synthetic PowerShell launch-contract/AST tests passed
+again after the data-target preflight change (20.87 seconds). They cover
+capture/JSON/YAML round trips, legacy image and processor compatibility,
+null/empty distinctions, both ambient selectors, privacy-preserving rejection,
+worker-only capture, and unique data identity validation before the first stop.
+The test author also reported 116 combined focused tests passing before this
+ordering follow-up: these 70 launch tests, 31 local-beta-release-runner tests,
+and 15 verification-migration-runner tests. All three PowerShell files passed
+parser checks.
+[The config-only Compose gate](../../scripts/test_beta_worker_launch_compose.py)
+passed all 21 synthetic merges on both Compose 2.38.2 and 5.4, comparing the
+complete runtime model and positively checking ordinary null's ambient fallback.
+These are synthetic helper/AST and configuration-rendering checks, not a live
+restore, deployed-image startup or beta acceptance result. Neither deployment
+nor restore was executed. An initial non-elevated inspection did not establish
+image availability. The parent subsequently inspected the exact stack-lock image
+read-only: `ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176`
+has a null entrypoint and no image `SERVICE_NAME`. Combined with the tracked base
+worker's Python module command, this is a supported legacy launch. No image was
+pulled or container started. Real beta restore execution and aggregate beta
+acceptance remain separate gates, not claims made by these helper/config tests.

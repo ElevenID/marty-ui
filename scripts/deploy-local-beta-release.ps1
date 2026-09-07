@@ -31,6 +31,7 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
 }
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
@@ -448,7 +449,7 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
                 $rollbackEnvironment["DATABASE_DRIVER"] = $Matches[1]
             }
         }
-        $records += [ordered]@{
+        $record = [ordered]@{
             container_id = $container
             container = $inspect.Name.TrimStart('/')
             service = $target.service
@@ -463,6 +464,10 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
             runtime_marker_environment = $markerEnvironment
             rollback_environment = $rollbackEnvironment
         }
+        if ($target.service -eq "canvas-sync-worker") {
+            $record["rollback_launch"] = New-BetaWorkerRollbackLaunch -ContainerConfig $inspect.Config
+        }
+        $records += $record
     }
     return $records
 }
