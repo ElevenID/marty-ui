@@ -123,3 +123,29 @@ Recommended small extension, without another hard-coded service inventory:
 
 This is a test/packaging follow-up, not a reason to re-port already retained
 features or relax native cutover gates. Production remains unchanged.
+
+## Packaging follow-up in the owned UI worktree
+
+The follow-up adds only `signing-keys` to the shared-image bundle anchor, with
+`SERVICE_NAME=signing_keys`. Its existing Rust binary and dispatcher already
+exist in the shared image source. All implementation, key-custody, secret
+configuration and crypto-owner files remain untouched. This isolated packaging
+change does not adopt another worker's unlanded crypto changes or qualify a
+published signing service.
+
+The mandatory Compose-render gate now derives the expected converted service
+set from the base build definitions, including dedicated Rust CI-image targets.
+It compares each entire service model after only the intended image, build,
+pull-policy and normalized-selector changes. Environment lists and mappings
+share one normalization helper; secret values are not resolved or printed.
+This avoids a second hard-coded service inventory and detects missing overrides.
+
+The expanded actual renderer failed specifically on the omitted `signing-keys`
+definition before repair, then passed all **17 converted Rust service models**
+afterward, alongside the unchanged issuance API, migrations and worker models.
+Independent mutation and dispatcher-binding tests passed all 40 focused cases,
+including swapped dispatch bodies, missing overrides and lost runtime fields.
+The complete Python suite subsequently passed 1,156 tests with one existing
+skip in 58.55 seconds. Independent review also re-rendered and compared every
+signing-keys runtime field. The rendered result remains source configuration
+evidence, not runtime acceptance.

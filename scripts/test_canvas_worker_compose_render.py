@@ -1,5 +1,6 @@
 """Read-only Compose merge gate; no image pull, process launch, or deployment."""
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,54 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE = "docker-compose.selfhost.prod.yml"
 BUNDLE = "docker-compose.selfhost.bundle.override.yml"
 WORKER = "canvas-sync-worker"
+
+
+def environment_mapping(value):
+    if isinstance(value, dict):
+        return dict(value)
+    assert isinstance(value, list)
+    result = {}
+    for item in value:
+        assert isinstance(item, str)
+        key, separator, content = item.partition("=")
+        assert key and key not in result
+        result[key] = content if separator else None
+    return result
+
+
+def assert_shared_rust_services(base, bundle):
+    anchor = bundle["x-selfhost-service-image"]
+    assert anchor["pull_policy"] == "always"
+    assert "/services:${SELFHOST_IMAGE_TAG:?" in anchor["image"]
+    checked = []
+    for name, original in base["services"].items():
+        build = original.get("build", {})
+        dockerfile = build.get("dockerfile")
+        if dockerfile == "services/Dockerfile":
+            selector = environment_mapping(original.get("environment", {})).get(
+                "SERVICE_NAME"
+            ) or environment_mapping(build.get("args", {})).get("SERVICE_NAME")
+        elif dockerfile == "rust/services/Dockerfile.ci":
+            selector = build.get("target")
+        else:
+            continue
+        assert isinstance(selector, str) and selector, f"Missing base selector: {name}"
+        assert not original.get("command") and not original.get("entrypoint"), (
+            f"Review explicit Rust launch override: {name}"
+        )
+        expected = deepcopy(original)
+        del expected["build"]
+        expected.update(image=anchor["image"], pull_policy=anchor["pull_policy"])
+        expected["environment"] = environment_mapping(original.get("environment", {}))
+        expected["environment"]["SERVICE_NAME"] = selector.replace("-", "_")
+        actual = deepcopy(bundle["services"][name])
+        actual["environment"] = environment_mapping(actual.get("environment", {}))
+        assert actual == expected, (
+            f"Bundle must preserve converted Rust service: {name}"
+        )
+        checked.append(name)
+    assert checked, "No converted Rust services inspected"
+    return checked
 
 
 def render(*files):
@@ -89,8 +138,12 @@ def run():
     base, bundle = render(BASE), render(BASE, BUNDLE)
     assert_worker_preserved(base, bundle)
     assert_published_issuance_preserved(base, bundle)
+    converted = assert_shared_rust_services(base, bundle)
     print(
         "Self-host bundle preserves immutable issuance API, migrations and Canvas worker"
+    )
+    print(
+        f"Self-host bundle preserves all {len(converted)} converted Rust service definitions"
     )
 
 

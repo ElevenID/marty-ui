@@ -1,6 +1,9 @@
 """The shared service image must expose only allowlisted Rust executables."""
 
 from pathlib import Path
+import re
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,20 +43,48 @@ def test_shared_service_image_builds_all_rust_binaries_once() -> None:
     )
 
 
-def test_container_entrypoint_is_the_exact_closed_rust_allowlist() -> None:
-    script = (ROOT / "services" / "entrypoint.sh").read_text(encoding="utf-8")
-
+def assert_closed_rust_dispatch(script: str) -> None:
     assert "python" not in script.lower()
     assert "service_runner" not in script
     assert "Unsupported SERVICE_NAME" in script
     assert "exit 64" in script
     assert script.count('if [ "$MODULE_NAME" = ') == len(RUST_SERVICES)
     assert script.count("exec /usr/local/bin/marty-") == len(RUST_SERVICES)
-    for service_name, binary in RUST_SERVICES.items():
-        assert f'if [ "$MODULE_NAME" = "{service_name}" ]; then' in script
-        assert f"exec /usr/local/bin/{binary}" in script
+    branches = re.findall(
+        r'^if \[ "\$MODULE_NAME" = "([a-z_]+)" \]; then\n(.*?)^fi$',
+        script,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert len(branches) == len(RUST_SERVICES)
+    assert {name for name, _ in branches} == set(RUST_SERVICES)
+    for service_name, body in branches:
+        expected = f"exec /usr/local/bin/{RUST_SERVICES[service_name]}"
+        if service_name == "verification":
+            expected += ' "$@"'
+        assert [
+            line.strip()
+            for line in body.splitlines()
+            if line.strip().startswith("exec ")
+        ] == [expected]
     for binary in UNROUTED_RUST_BINARIES:
         assert f"exec /usr/local/bin/{binary}" not in script
+
+
+def test_container_entrypoint_is_the_exact_closed_rust_allowlist() -> None:
+    script = (ROOT / "services" / "entrypoint.sh").read_text(encoding="utf-8")
+    assert_closed_rust_dispatch(script)
+
+
+def test_closed_allowlist_rejects_swapped_dispatch_bodies() -> None:
+    script = (ROOT / "services" / "entrypoint.sh").read_text(encoding="utf-8")
+    swapped = script.replace("/usr/local/bin/marty-auth", "SYNTHETIC_SWAP")
+    swapped = swapped.replace(
+        "/usr/local/bin/marty-gateway", "/usr/local/bin/marty-auth"
+    )
+    swapped = swapped.replace("SYNTHETIC_SWAP", "/usr/local/bin/marty-gateway")
+    assert swapped != script
+    with pytest.raises(AssertionError):
+        assert_closed_rust_dispatch(swapped)
 
 
 def test_every_allowlisted_binary_is_built_and_copied() -> None:
