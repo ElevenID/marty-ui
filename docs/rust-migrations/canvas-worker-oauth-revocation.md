@@ -241,3 +241,34 @@ hosted result. No production runtime, consumer or feature is changed here.
 Gate 10 still needs those exact-head qualifications and a requirement-by-requirement
 audit against the normative OAuth selection, retry and ownership contract before
 closure; this extension alone is not whole-worker cutover acceptance.
+
+## Later-attempt backoff and coverage audit
+
+The [contract coverage audit](canvas-worker-oauth-revocation-coverage-audit.md)
+identified later-history timing as unproven by first-attempt captures. Five actual
+published-process observations are now frozen separately in
+`contracts/canvas-worker-oauth-revocation-backoff-oracle.json`, canonical LF SHA256
+`810f653d2d5a400df8744078b02bd41dc2f3f528461c8befe68811ab326b9fad`.
+Independent captures matched exactly in 25.25 and 25.38 seconds; regeneration
+against the frozen artifact passed in 29.17 seconds.
+
+Historical retry counts 1, 9, 10, 11 and 999 are seeded and checked before any
+worker starts. Actual remote 503 responses produce retry counts 2, 10, 11, 12
+and 1000 and persist deadlines within 60–75, 15360–19200 and the capped
+21600–27000-second bounds. The actual worker chooses its own jitter and timing;
+no running state or clock is modified. Every case preserves both token ciphertexts,
+the unrelated tenant's secret, platform configuration and issued rows, and
+reaches idle with no background jobs. Native replay uses the same owned seed,
+vault, process and HTTPS helpers and checks the same complete observations.
+
+An additional native helper regression checks the captured bounds with absent,
+zero, one-day and oversized Retry-After hints without mocking randomness or
+requiring any particular random draw. All 24 behavior tests and strict all-target
+Clippy pass. Python regressions pass 954 tests with one existing opt-in skip in
+53.81 seconds. Full native process qualification remains pending; 81 top-level
+configured entries are now registered. No runtime or live feature is changed.
+
+The audit retains specific remaining gaps in nonempty queue ordering/eligibility,
+batch and lease boundaries, returned cycle counters and secret-resolution branches.
+These are named contract requirements, not a claim that an unspecified set of
+additional tests must continue indefinitely. All cutover and beta gates remain open.

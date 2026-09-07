@@ -19,11 +19,13 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
             | "oauth-revocation-fence"
             | "oauth-revocation-patch"
             | "oauth-revocation-retry-after"
+            | "oauth-revocation-backoff"
     ));
     static MATRIX: OnceLock<Value> = OnceLock::new();
     static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
     static PATCH_MATRIX: OnceLock<Value> = OnceLock::new();
     static RETRY_MATRIX: OnceLock<Value> = OnceLock::new();
+    static BACKOFF_MATRIX: OnceLock<Value> = OnceLock::new();
     let base = MATRIX.get_or_init(|| {
         serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
@@ -31,6 +33,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         .unwrap()
     });
     let extension = match kind {
+        "oauth-revocation-backoff" => Some((
+            &BACKOFF_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"),
+        )),
         "oauth-revocation-retry-after" => Some((
             &RETRY_MATRIX,
             include_str!("../../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"),
@@ -60,6 +66,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         base
     };
     let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-backoff" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-backoff-oracle.json"
+        ),
         "oauth-revocation-retry-after" => include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-retry-after-oracle.json"
         ),
@@ -86,6 +95,21 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
             .execute(pool)
             .await
             .unwrap();
+    }
+    if let Some(statements) = case.get("seed") {
+        for statement in statements.as_array().unwrap() {
+            sqlx::raw_sql(statement.as_str().unwrap())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    if let Some(count) = case.get("retry_count") {
+        let seeded: Value = sqlx::query_scalar(matrix["connection_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(&seeded["retry_count"], count);
     }
     for secret in matrix["additional_secrets"].as_array().unwrap() {
         fixture

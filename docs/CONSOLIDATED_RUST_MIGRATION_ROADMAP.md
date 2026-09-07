@@ -150,6 +150,15 @@ evidence controls. Local Python948PASS/1opt-inSKIP and strict Rust Clippy pass;
 79 configured entries are registered. Native timing qualification is pending.
 No runtime, consumer or feature is changed by this acceptance extension.
 
+The [OAuth contract coverage audit](rust-migrations/canvas-worker-oauth-revocation-coverage-audit.md)
+now distinguishes qualified transport evidence from remaining queue/lease,
+counter and secret-resolution requirements. Its later-history backoff gap has
+five independently matched published-process captures and implemented native
+replay at retry counts1,9,10,11,999. Stored deadlines, counter increments and
+token retention are checked without modifying running state. Local24behavior
+and954Python tests pass (one existing opt-in skip); strict Clippy passes. The
+81-entry native Linux gate remains pending. No runtime or feature was removed.
+
 Latest qualified UI checkpoint `31355d24a1ef5d87d2da98a121f73863ca8bcf7e` passed
 CI34066329798 and all applicable exact-head checks, including Rust CodeQL34066329814.
 Runtime job101575640066 passed 73 configured tests in 1632.34 seconds, retaining

@@ -25,6 +25,11 @@ fn worker_oauth_revocation_retry_after_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation-retry-after");
 }
 
+#[test]
+fn worker_oauth_revocation_backoff_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-backoff");
+}
+
 fn assert_native_oauth_revocation_matrix(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -456,6 +461,11 @@ async fn worker_oauth_revocation_retry_after_reference_matches_published_process
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_backoff_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation-backoff").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -534,6 +544,14 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-backoff" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
+            ),
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-backoff-oracle.json"
+            ),
+        ),
         "oauth-revocation-retry-after" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"
@@ -587,6 +605,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-backoff" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_backoff(name).await
+            }
             "oauth-revocation-retry-after" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_retry_after(name).await
             }

@@ -37,6 +37,7 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
         "oauth-revocation-fence",
         "oauth-revocation-patch",
         "oauth-revocation-retry-after",
+        "oauth-revocation-backoff",
     ],
 )
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
@@ -63,7 +64,12 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
 @pytest.mark.parametrize("failure", ["child_exit", "timeout", "wrong_requests"])
 @pytest.mark.parametrize(
     "kind",
-    ["oauth-revocation", "oauth-revocation-patch", "oauth-revocation-retry-after"],
+    [
+        "oauth-revocation",
+        "oauth-revocation-patch",
+        "oauth-revocation-retry-after",
+        "oauth-revocation-backoff",
+    ],
 )
 def test_native_owner_fails_closed_and_closes_https(
     monkeypatch, tmp_path, failure, kind
@@ -131,6 +137,31 @@ def test_revocation_retry_matrix_retains_all_eight_rate_limit_shapes():
         assert observed["connection"]["lease_owner_present"] is False
         assert len(observed["retained_secret_ids"]) == 3
         assert observed["retry_timing"] == {"kind": case["timing"], "matches": True}
+
+
+def test_backoff_extension_preserves_historical_counts_and_capped_boundaries():
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    matrix = json.loads(
+        (
+            contracts / "canvas-worker-oauth-revocation-backoff-scenarios.json"
+        ).read_text()
+    )
+    reference = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-backoff-oracle.json").read_text()
+    )
+    assert [case["retry_count"] for case in matrix["cases"]] == [1, 9, 10, 11, 999]
+    assert len(matrix["cases"]) == len(reference) == 5
+    assert {case["name"] for case in matrix["cases"]} == set(reference)
+    assert matrix["cases"][0]["delay_bounds"] == [60, 75]
+    assert matrix["cases"][1]["delay_bounds"] == [15360, 19200]
+    assert all(case["delay_bounds"] == [21600, 27000] for case in matrix["cases"][2:])
+    for case in matrix["cases"]:
+        assert case["status"] == 503 and len(case["seed"]) == 1
+        observed = reference[case["name"]]
+        assert observed["connection"]["retry_count"] == case["retry_count"] + 1
+        assert observed["connection"]["error_code"] == "canvas_oauth_revoke_rejected"
+        assert len(observed["retained_secret_ids"]) == 3
+        assert observed["retry_timing"] == {"kind": "bounds", "matches": True}
 
 
 @pytest.mark.parametrize(

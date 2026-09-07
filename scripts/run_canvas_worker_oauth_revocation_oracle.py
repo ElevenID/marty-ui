@@ -27,6 +27,7 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation-fence",
         "oauth-revocation-patch",
         "oauth-revocation-retry-after",
+        "oauth-revocation-backoff",
     }
     contracts = Path("/verification/contracts")
     matrix = json.loads(
@@ -57,6 +58,13 @@ def run(case_name, kind="oauth-revocation"):
             with engine.begin() as connection:
                 for statement in matrix["seed"][1:]:
                     connection.exec_driver_sql(statement)
+                for statement in case.get("seed", []):
+                    connection.exec_driver_sql(statement)
+                if "retry_count" in case:
+                    seeded = connection.execute(
+                        text(matrix["connection_sql"])
+                    ).scalar_one()
+                    assert seeded["retry_count"] == case["retry_count"]
                 before_secrets = connection.execute(
                     text(matrix["secret_sql"])
                 ).scalar_one()
