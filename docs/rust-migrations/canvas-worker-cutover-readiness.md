@@ -1,15 +1,15 @@
 # Canvas worker cutover readiness — 2026-09-06
 
-Status: latest qualified composed checkpoint `31355d24a1ef5d87d2da98a121f73863ca8bcf7e`,
+Status: latest qualified composed checkpoint `d0a09792b7866d60bc20284570d395e0b252477b`,
 including eight image-preflight cases, 24 packaged startup/configuration cases
-and 73 configured runtime tests in 1632.34 seconds (CI34066329798; all applicable
-exact-head checks, including Rust CodeQL34066329814, passed). The native validation/failure cases remain covered,
+and 77 configured runtime tests in 1668.72 seconds (CI34068063872; all applicable
+exact-head checks, including Rust CodeQL34068063928, passed). The native validation/failure cases remain covered,
 including deferred roster configuration and all three reference-removal barriers.
 The configured PostgreSQL worker contract, including the typed-processor
-signing guard and twelve-case privacy checkpoint, passed all four entries in 96.54
-seconds. All seven actual native revocation PASS markers were verified, qualifying
-that boundary and its scoped HTTP adapter correction. Subsequent ownership and
-marker-failure extensions still need fresh hosted checks. Earlier worker gates
+signing guard and twelve-case privacy checkpoint, passed all four entries in 96.66
+seconds. All seven transport, two replacement-owner and one marker-failure native
+revocation PASS markers were verified. Later Retry-After, backoff and queue
+extensions still need fresh hosted checks. Earlier worker gates
 are retained. PR #814 remains draft and
 unrouted. This is a source/test/consumer inventory, not a
 whole-worker acceptance result. No deployment or Python deletion is authorized
@@ -173,7 +173,7 @@ changed-generation races remain open.
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
 | 8. Retry-After edges | Frozen worker vectors and `canvas_sync_worker_behavior.rs`; provider-specific transport corpora | Verify durable retry scheduling for the actual worker/provider path, including date, malformed, negative and clamp behavior. |
 | 9. Target validation and processor failures | Repository validation, native typed processor, issued-review/mixed-roster and job-authorization tests | Map every frozen validation code to composed-worker outcomes; cover processor failure/no-signing behavior without emulating Python imports. |
-| 10. OAuth revocation failure and owner fences | [Seven published-process DELETE observations](canvas-worker-oauth-revocation.md) have exact-head native Linux qualification at31355; two replacement-owner races, one marker-write failure, eight Retry-After cases and five later-history backoff cases are separately frozen with native replay implemented, qualification pending | Qualify these extensions and close the named queue/lease, counter and secret-resolution gaps in the [contract coverage audit](canvas-worker-oauth-revocation-coverage-audit.md). Retain Rust's stronger atomic cleanup. Windows transport diagnostics are not native HTTPS parity. |
+| 10. OAuth revocation failure and owner fences | [Seven published-process DELETE observations](canvas-worker-oauth-revocation.md), two replacement-owner races and one marker-write failure are native Linux qualified at d0a09792. Eight Retry-After, five backoff and [two queue-selection cases](canvas-worker-oauth-revocation-queue.md) have native replay implemented; qualification pending | Qualify the remaining extensions and close the named lease/cap, counter and secret-resolution gaps in the [contract coverage audit](canvas-worker-oauth-revocation-coverage-audit.md). Retain Rust's stronger atomic cleanup. The real queue repository regression is not whole-process HTTPS evidence. |
 | 11. Cursor and terminal candidate preservation | Twelve-stage published/native mixed-roster replay retains cursor, observations, claimed/dismissed states | Execute those transitions through complete worker cycles and real provider adapters, including resume/wrap. |
 | 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
 | 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |

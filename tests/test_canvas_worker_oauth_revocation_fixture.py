@@ -38,6 +38,7 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
         "oauth-revocation-patch",
         "oauth-revocation-retry-after",
         "oauth-revocation-backoff",
+        "oauth-revocation-queue",
     ],
 )
 def test_native_owner_rejects_duplicate_or_missing_reference_cases(
@@ -69,6 +70,7 @@ def test_native_owner_rejects_duplicate_or_missing_reference_cases(
         "oauth-revocation-patch",
         "oauth-revocation-retry-after",
         "oauth-revocation-backoff",
+        "oauth-revocation-queue",
     ],
 )
 def test_native_owner_fails_closed_and_closes_https(
@@ -137,6 +139,45 @@ def test_revocation_retry_matrix_retains_all_eight_rate_limit_shapes():
         assert observed["connection"]["lease_owner_present"] is False
         assert len(observed["retained_secret_ids"]) == 3
         assert observed["retry_timing"] == {"kind": case["timing"], "matches": True}
+
+
+def test_queue_reference_retains_order_eligibility_and_limited_batch():
+    contracts = Path(__file__).resolve().parents[1] / "contracts"
+    matrix = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-queue-scenarios.json").read_text()
+    )
+    reference = json.loads(
+        (contracts / "canvas-worker-oauth-revocation-queue-oracle.json").read_text()
+    )
+    assert matrix["base_scenario"] == "canvas-worker-oauth-revocation-scenarios.json"
+    assert {case["name"] for case in matrix["cases"]} == set(reference)
+    order = [
+        "queue-expired",
+        "queue-unleased",
+        "queue-oldest",
+        "queue-later",
+        "worker-rest-connection",
+    ]
+    for case in matrix["cases"]:
+        observed = reference[case["name"]]
+        selected = order[: case["request_count"]]
+        assert observed["queue"]["lease_order"] == selected
+        assert len(observed["requests"]) == len(selected)
+        assert observed["queue"]["unselected_rows_unchanged"] is True
+        assert observed["retry_timing"] == {"kind": "selected_bounds", "matches": True}
+        rows = {row["id"]: row for row in observed["queue"]["connections"]}
+        assert len(rows) == 8
+        assert rows["queue-connected"]["status"] == "connected"
+        assert rows["queue-leased"]["lease_owner"] == "synthetic-prior-worker"
+        assert rows["queue-leased"]["lease_expires_present"] is True
+        assert all(
+            row["retry_count"] == int(name in selected) for name, row in rows.items()
+        )
+        assert all(rows[name]["lease_owner"] is None for name in selected)
+        assert observed["retained_ciphertexts_unchanged"] is True
+        assert len(observed["retained_secret_ids"]) == 3
+    assert reference["limited_three"]["connection"]["retry_at_present"] is False
+    assert reference["all_eligible"]["connection"]["retry_at_present"] is True
 
 
 def test_backoff_extension_preserves_historical_counts_and_capped_boundaries():

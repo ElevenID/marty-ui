@@ -112,8 +112,8 @@ now freezes seven actual published-process HTTPS/SQL observations from matching
 independent captures. It covers remote success, rate limiting, rejection, redirect
 and timeout, both token secrets and unrelated-tenant retention. Native replay and
 mandatory Linux CI registration are implemented and the seven-case native boundary
-is now qualified; owner-fence/patch qualification and Retry-After extensions remain
-pending. No runtime mapping has
+is now qualified, as are the owner-fence and patch extensions at d0a09792.
+Retry-After, backoff and queue qualification remain pending. No runtime mapping has
 been changed on the basis of the unqualified Windows transport diagnostic.
 The actual native loopback-HTTP adapter test separately reproduced two frozen
 classification differences; a revocation-only Rust correction preserves the
@@ -125,8 +125,8 @@ The separate two-case ownership-transfer extension now has actual published
 the synthetic connection is transferred to a replacement owner; the stale
 worker preserves the complete replacement row, platform and all three encrypted
 secrets. Native replay shares the existing vault/database/process/marker owners
-and is registered in the mandatory Linux gate (75 top-level entries); its
-qualification remains pending. The original seven-case artifact is unchanged.
+and was registered in the mandatory Linux gate at 75 top-level entries; both
+native cases are now qualified at d0a09792. The original seven-case artifact is unchanged.
 Local Python regressions pass 926 tests with one existing opt-in skip; strict
 Rust Clippy and integration compilation pass. No runtime or consumer is changed
 by this extension. Patch failure and Retry-After extensions remain separate.
@@ -136,8 +136,8 @@ published worker attempts the platform UPDATE, handles its synthetic database
 failure, and still removes the connection and both token secrets while retaining
 the unrelated tenant's secret. Independent captures and regeneration match.
 Native replay reuses the existing database barrier and process owners, retaining
-atomic native cleanup; its Linux qualification is pending (77 top-level entries
-now registered). Transport and ownership artifacts remain unchanged. Retry-After
+atomic native cleanup; its Linux qualification passed at d0a09792 (77 configured
+entries). Transport and ownership artifacts remain unchanged. Retry-After
 edges and the remaining whole-worker gates are not declared complete.
 
 The remote-revocation Retry-After extension now separately freezes eight actual
@@ -159,16 +159,25 @@ token retention are checked without modifying running state. Local24behavior
 and954Python tests pass (one existing opt-in skip); strict Clippy passes. The
 81-entry native Linux gate remains pending. No runtime or feature was removed.
 
-Latest qualified UI checkpoint `31355d24a1ef5d87d2da98a121f73863ca8bcf7e` passed
-CI34066329798 and all applicable exact-head checks, including Rust CodeQL34066329814.
-Runtime job101575640066 passed 73 configured tests in 1632.34 seconds, retaining
+The [queue parity extension](rust-migrations/canvas-worker-oauth-revocation-queue.md)
+now freezes two actual nonempty selection observations with batch limits 3 and 25.
+It found and corrects a real Rust null-order mismatch: overdue dated retries must
+precede undated connections, matching the published worker. The repository
+regression failed before the one-line fix and passes afterward; the reference
+regenerates exactly. All unselected rows and ciphertexts remain unchanged.
+Shared native fixture preparation avoids a second scheduler or seed owner.
+The 84-entry suite awaits exact-head Linux qualification; no feature was deleted.
+
+Latest qualified UI checkpoint `d0a09792b7866d60bc20284570d395e0b252477b` passed
+CI34068063872 and all applicable exact-head checks, including Rust CodeQL34068063928.
+Runtime job101580260455 passed 77 configured tests in 1668.72 seconds, retaining
 the actual native validation/failure cases, and all four configured PostgreSQL
-worker-contract entries in 96.54 seconds. Its image job also passed. All seven
-actual native OAuth revocation PASS markers were verified in the configured
-runtime log. This retains the twelve-case privacy checkpoint and qualifies the
-seven-case whole-worker revocation boundary and scoped adapter correction.
-The subsequent ownership and marker-failure extensions require fresh hosted
-qualification; no unconfigured early-return group is counted as parity evidence.
+worker-contract entries in 96.66 seconds. Its image job also passed. All seven
+transport, two replacement-owner and one marker-failure native OAuth revocation
+PASS markers were verified in the configured runtime log. This retains the
+twelve-case privacy checkpoint and qualifies those scoped revocation boundaries.
+Later Retry-After, backoff and queue changes require fresh hosted qualification;
+no unconfigured early-return group is counted as parity evidence.
 PR814 remains draft/unrouted; these are retained boundary qualifications, not
 authorization to remove live Python or claim aggregate beta acceptance.
 

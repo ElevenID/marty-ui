@@ -315,6 +315,19 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_oauth_revocation_queue(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"
+            ),
+            "worker_oauth_revocation",
+            "worker-oauth-revocation-queue",
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_QUEUE_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_oauth_revocation_backoff(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -779,6 +792,7 @@ impl PublishedDatabase {
                         | "worker-oauth-revocation-patch"
                         | "worker-oauth-revocation-retry-after"
                         | "worker-oauth-revocation-backoff"
+                        | "worker-oauth-revocation-queue"
                 ) =>
             {
                 &["contracts/canvas-worker-oauth-revocation-scenarios.json"]

@@ -28,6 +28,7 @@ def run(case_name, kind="oauth-revocation"):
         "oauth-revocation-patch",
         "oauth-revocation-retry-after",
         "oauth-revocation-backoff",
+        "oauth-revocation-queue",
     }
     contracts = Path("/verification/contracts")
     matrix = json.loads(
@@ -70,6 +71,11 @@ def run(case_name, kind="oauth-revocation"):
                 ).scalar_one()
                 for statement in matrix.get("before_start_sql", []):
                     connection.exec_driver_sql(statement)
+                before_queue = (
+                    connection.execute(text(matrix["queue_rows_sql"])).scalar_one()
+                    if "queue_rows_sql" in matrix
+                    else None
+                )
             assert set(before_secrets) == {
                 "worker-rest-token",
                 "worker-refresh-token",
@@ -79,7 +85,9 @@ def run(case_name, kind="oauth-revocation"):
                 assert before_secrets[secret_id] != plaintext
             assert before_secrets["worker-rest-token"] != spec["token"]
             https.stage = case
-            worker_input = worker_case(https.origin, https.cert)
+            worker_input = worker_case(
+                https.origin, https.cert, case.get("environment", {})
+            )
             patch_attempt_observed = False
 
             def observe_patch_attempt():
@@ -149,6 +157,31 @@ def run(case_name, kind="oauth-revocation"):
                 child.send_signal(signal.SIGINT)
                 assert child.wait(timeout=10) == -signal.SIGINT
                 with engine.connect() as connection:
+                    queue = None
+                    if before_queue is not None:
+                        order = connection.execute(
+                            text(matrix["queue_order_sql"])
+                        ).scalar_one()
+                        after_queue = connection.execute(
+                            text(matrix["queue_rows_sql"])
+                        ).scalar_one()
+                        assert set(after_queue) == set(before_queue)
+                        assert len(order) == len(set(order)) == case["request_count"]
+                        for key in before_queue.keys() - set(order):
+                            assert after_queue[key] == before_queue[key]
+                        assert (
+                            connection.execute(
+                                text(matrix["queue_delay_sql"])
+                            ).scalar_one()
+                            is True
+                        )
+                        queue = {
+                            "lease_order": order,
+                            "connections": connection.execute(
+                                text(matrix["queue_state_sql"])
+                            ).scalar_one(),
+                            "unselected_rows_unchanged": True,
+                        }
                     if fence is not None:
                         assert (
                             connection.execute(text(matrix["row_sql"])).scalar_one()
@@ -197,7 +230,9 @@ def run(case_name, kind="oauth-revocation"):
                     value == before_secrets[key] for key, value in secrets.items()
                 )
                 timing = None
-                if fence is not None:
+                if queue is not None:
+                    timing = {"kind": "selected_bounds", "matches": True}
+                elif fence is not None:
                     assert secrets == before_secrets
                     timing = {"kind": "preserved", "matches": True}
                 elif case.get("timing") == "http_date":
@@ -222,7 +257,7 @@ def run(case_name, kind="oauth-revocation"):
                         "authorization": f"Bearer {spec['token']}",
                         "accept": "application/json",
                     }
-                ]
+                ] * case.get("request_count", 1)
                 sources = worker_source_sha256()
                 module = "issuance.application.canvas_oauth"
                 sources[module] = hashlib.sha256(
@@ -249,6 +284,8 @@ def run(case_name, kind="oauth-revocation"):
                 if kind == "oauth-revocation-patch":
                     assert patch_attempt_observed
                     observation["disconnect_marker_update_observed"] = True
+                if queue is not None:
+                    observation["queue"] = queue
                 return observation
             finally:
                 finish_worker(child)

@@ -199,10 +199,14 @@ separate configured four-entry worker PostgreSQL group passed in 96.54 seconds.
 The image job passed too. The earlier 0.37-second unconfigured group is not
 being counted as database/process parity evidence.
 
-This qualifies the frozen seven-case native transport/durable cleanup boundary
-and its scoped adapter correction. It does not qualify the subsequent ownership
-or marker-failure extensions, which require the fresh 77-entry Linux gate.
-Remaining Retry-After/fence and whole-worker consumer cutover requirements keep
+That checkpoint qualified the seven-case native transport/durable cleanup
+boundary and scoped adapter correction. The subsequent 77-entry Linux gate at
+`d0a09792b7866d60bc20284570d395e0b252477b` now also qualifies both ownership
+cases and marker-write failure: CI34068063872, runtime101580260455, all 77
+configured tests in 1668.72 seconds and the separate four-entry worker DB group
+in 96.66 seconds. All ten actual native revocation PASS markers and applicable
+exact-head checks, including Rust CodeQL34068063928, were verified.
+Remaining Retry-After, backoff, queue and whole-worker consumer requirements keep
 gate 10 and PR814 open; no live Python deletion or beta acceptance is claimed.
 
 ## Remote revocation Retry-After extension
@@ -236,8 +240,8 @@ missing dates and incorrect bounds fail the parent and retain owned cleanup.
 The complete local Python suite passed 948 tests with one existing opt-in skip
 in 45.22 seconds. Strict all-target Clippy and integration compilation passed;
 79 top-level configured entries are now registered. Full native Linux timing
-qualification remains pending, as does the preceding ownership/marker extension's
-hosted result. No production runtime, consumer or feature is changed here.
+qualification remains pending; ownership/marker cases are now qualified at
+d0a09792 above. No production runtime, consumer or feature is changed here.
 Gate 10 still needs those exact-head qualifications and a requirement-by-requirement
 audit against the normative OAuth selection, retry and ownership contract before
 closure; this extension alone is not whole-worker cutover acceptance.
@@ -272,3 +276,9 @@ The audit retains specific remaining gaps in nonempty queue ordering/eligibility
 batch and lease boundaries, returned cycle counters and secret-resolution branches.
 These are named contract requirements, not a claim that an unspecified set of
 additional tests must continue indefinitely. All cutover and beta gates remain open.
+
+The [nonempty queue extension](canvas-worker-oauth-revocation-queue.md) now adds
+two frozen actual-process captures, native replay and a real repository
+regression. It corrects the observed Rust null-order mismatch while preserving
+all excluded rows and existing features. The repository regression is locally
+red-before/green-after; whole-process Linux qualification remains pending.

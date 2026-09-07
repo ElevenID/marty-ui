@@ -5,6 +5,24 @@ use tracing::instrument::WithSubscriber;
 #[path = "support/canvas_worker_oauth_revocation_replay.rs"]
 mod canvas_worker_oauth_revocation_replay;
 
+#[tokio::test]
+async fn worker_oauth_revocation_repository_selection_matches_published_order() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_worker_oauth_revocation_replay::assert_queue_repository_selection(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[test]
 fn worker_oauth_revocation_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation");
@@ -28,6 +46,11 @@ fn worker_oauth_revocation_retry_after_matches_frozen_published_process() {
 #[test]
 fn worker_oauth_revocation_backoff_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation-backoff");
+}
+
+#[test]
+fn worker_oauth_revocation_queue_matches_frozen_published_process() {
+    assert_native_oauth_revocation_matrix("oauth-revocation-queue");
 }
 
 fn assert_native_oauth_revocation_matrix(kind: &str) {
@@ -466,6 +489,11 @@ async fn worker_oauth_revocation_backoff_reference_matches_published_process() {
 }
 
 #[tokio::test]
+async fn worker_oauth_revocation_queue_reference_matches_published_process() {
+    assert_worker_matrix_reference("oauth-revocation-queue").await;
+}
+
+#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -544,6 +572,12 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
+        "oauth-revocation-queue" => (
+            include_str!(
+                "../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"
+            ),
+            include_str!("../../../../contracts/canvas-worker-oauth-revocation-queue-oracle.json"),
+        ),
         "oauth-revocation-backoff" => (
             include_str!(
                 "../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
@@ -605,6 +639,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
+            "oauth-revocation-queue" => {
+                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_queue(name).await
+            }
             "oauth-revocation-backoff" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_backoff(name).await
             }

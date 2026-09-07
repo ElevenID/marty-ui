@@ -13,59 +13,11 @@ use sqlx::PgPool;
 use std::{sync::OnceLock, time::Duration};
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str, kind: &str) {
-    assert!(matches!(
-        kind,
-        "oauth-revocation"
-            | "oauth-revocation-fence"
-            | "oauth-revocation-patch"
-            | "oauth-revocation-retry-after"
-            | "oauth-revocation-backoff"
-    ));
-    static MATRIX: OnceLock<Value> = OnceLock::new();
-    static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
-    static PATCH_MATRIX: OnceLock<Value> = OnceLock::new();
-    static RETRY_MATRIX: OnceLock<Value> = OnceLock::new();
-    static BACKOFF_MATRIX: OnceLock<Value> = OnceLock::new();
-    let base = MATRIX.get_or_init(|| {
-        serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
-        ))
-        .unwrap()
-    });
-    let extension = match kind {
-        "oauth-revocation-backoff" => Some((
-            &BACKOFF_MATRIX,
-            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"),
-        )),
-        "oauth-revocation-retry-after" => Some((
-            &RETRY_MATRIX,
-            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"),
-        )),
-        "oauth-revocation-fence" => Some((
-            &FENCE_MATRIX,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
-            ),
-        )),
-        "oauth-revocation-patch" => Some((
-            &PATCH_MATRIX,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
-            ),
-        )),
-        _ => None,
-    };
-    let matrix = if let Some((storage, source)) = extension {
-        storage.get_or_init(|| {
-            let extension: Value = serde_json::from_str(source).unwrap();
-            let mut merged = base.as_object().unwrap().clone();
-            merged.extend(extension.as_object().unwrap().clone());
-            Value::Object(merged)
-        })
-    } else {
-        base
-    };
+    let matrix = matrix_for(kind);
     let reference: Value = serde_json::from_str(match kind {
+        "oauth-revocation-queue" => include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-queue-oracle.json"
+        ),
         "oauth-revocation-backoff" => include_str!(
             "../../../../../contracts/canvas-worker-oauth-revocation-backoff-oracle.json"
         ),
@@ -89,60 +41,24 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         .collect::<Vec<_>>();
     assert_eq!(matching.len(), 1);
     let case = matching[0];
-    let fixture = canvas_worker_rest_replay::prepare(pool, origin, "rest").await;
-    for statement in matrix["seed"].as_array().unwrap() {
-        sqlx::raw_sql(statement.as_str().unwrap())
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-    if let Some(statements) = case.get("seed") {
-        for statement in statements.as_array().unwrap() {
-            sqlx::raw_sql(statement.as_str().unwrap())
-                .execute(pool)
+    let (fixture, before) = prepare_fixture(pool, origin, matrix, case).await;
+    let before_queue: Option<Value> = if let Some(statement) = matrix.get("queue_rows_sql") {
+        Some(
+            sqlx::query_scalar(statement.as_str().unwrap())
+                .fetch_one(pool)
                 .await
-                .unwrap();
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let mut environment = canvas_worker_rest_replay::worker_environment(origin);
+    if let Some(overrides) = case.get("environment") {
+        for (key, value) in overrides.as_object().unwrap() {
+            assert_eq!(key, "CANVAS_OAUTH_REVOCATION_BATCH_SIZE");
+            environment.insert(key.clone(), value.as_str().unwrap().into());
         }
     }
-    if let Some(count) = case.get("retry_count") {
-        let seeded: Value = sqlx::query_scalar(matrix["connection_sql"].as_str().unwrap())
-            .fetch_one(pool)
-            .await
-            .unwrap();
-        assert_eq!(&seeded["retry_count"], count);
-    }
-    for secret in matrix["additional_secrets"].as_array().unwrap() {
-        fixture
-            .vault
-            .save(NewIntegrationSecret {
-                id: secret[0].as_str().unwrap().into(),
-                organization_id: secret[1].as_str().unwrap().into(),
-                name: "Synthetic worker control".into(),
-                provider: "canvas".into(),
-                purpose: "api_token".into(),
-                value: secret[2].as_str().unwrap().into(),
-                metadata: json!({}),
-            })
-            .await
-            .unwrap();
-    }
-    let before: Value = sqlx::query_scalar(matrix["secret_sql"].as_str().unwrap())
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    assert_eq!(before.as_object().unwrap().len(), 3);
-    for secret in matrix["additional_secrets"].as_array().unwrap() {
-        assert_ne!(before[secret[0].as_str().unwrap()], secret[2]);
-    }
-    if let Some(statements) = matrix.get("before_start_sql") {
-        for statement in statements.as_array().unwrap() {
-            sqlx::raw_sql(statement.as_str().unwrap())
-                .execute(pool)
-                .await
-                .unwrap();
-        }
-    }
-    let environment = canvas_worker_rest_replay::worker_environment(origin);
     let mut patch_attempt_observed = false;
     let mut worker = if kind == "oauth-revocation-patch" {
         start_workers_at_barrier(
@@ -223,6 +139,57 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     // this owned child after the observed cycle, before reading durable state.
     worker.signal("SIGINT");
     assert_eq!(worker.wait().await.code(), Some(130));
+    let queue = if let Some(before_queue) = before_queue {
+        let order: Vec<String> =
+            sqlx::query_scalar::<_, Value>(matrix["queue_order_sql"].as_str().unwrap())
+                .fetch_one(pool)
+                .await
+                .map(|value| serde_json::from_value(value).unwrap())
+                .unwrap();
+        let after_queue: Value = sqlx::query_scalar(matrix["queue_rows_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let before_queue = before_queue.as_object().unwrap();
+        let after_queue = after_queue.as_object().unwrap();
+        assert_eq!(
+            before_queue
+                .keys()
+                .collect::<std::collections::BTreeSet<_>>(),
+            after_queue.keys().collect()
+        );
+        assert_eq!(
+            order.len(),
+            case["request_count"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            order.len(),
+            order
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        );
+        for (id, row) in before_queue {
+            if !order.contains(id) {
+                assert_eq!(&after_queue[id], row, "unselected connection changed: {id}");
+            }
+        }
+        let connections: Value = sqlx::query_scalar(matrix["queue_state_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert!(
+            sqlx::query_scalar::<_, bool>(matrix["queue_delay_sql"].as_str().unwrap())
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        );
+        Some(
+            json!({"lease_order": order, "connections": connections, "unselected_rows_unchanged": true}),
+        )
+    } else {
+        None
+    };
     let connection: Option<Value> = sqlx::query_scalar(matrix["connection_sql"].as_str().unwrap())
         .fetch_optional(pool)
         .await
@@ -252,7 +219,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
     for (id, ciphertext) in secrets.as_object().unwrap() {
         assert_eq!(ciphertext, &before[id]);
     }
-    let timing = if kind == "oauth-revocation-retry-after" {
+    let timing = if queue.is_some() {
+        json!({"kind": "selected_bounds", "matches": true})
+    } else if kind == "oauth-revocation-retry-after" {
         assert_eq!(secrets, before);
         // Explicit storage mapping: OAuth revoke_retry_at is the shared
         // comparator's available_at. The parent owns the emitted HTTP date
@@ -305,6 +274,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         assert!(patch_attempt_observed);
         actual["disconnect_marker_update_observed"] = json!(true);
     }
+    if let Some(queue) = queue {
+        actual["queue"] = queue;
+    }
     let mut expected = reference[name].as_object().unwrap().clone();
     // HTTP observations are compared in full by the actual HTTPS owner.
     // Published source hashes are verified by independent reference regeneration.
@@ -325,4 +297,161 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         Value::Object(expected),
         "actual native revocation {name}"
     );
+}
+
+fn matrix_for(kind: &str) -> &'static Value {
+    assert!(matches!(
+        kind,
+        "oauth-revocation"
+            | "oauth-revocation-fence"
+            | "oauth-revocation-patch"
+            | "oauth-revocation-retry-after"
+            | "oauth-revocation-backoff"
+            | "oauth-revocation-queue"
+    ));
+    static MATRIX: OnceLock<Value> = OnceLock::new();
+    static FENCE_MATRIX: OnceLock<Value> = OnceLock::new();
+    static PATCH_MATRIX: OnceLock<Value> = OnceLock::new();
+    static RETRY_MATRIX: OnceLock<Value> = OnceLock::new();
+    static BACKOFF_MATRIX: OnceLock<Value> = OnceLock::new();
+    static QUEUE_MATRIX: OnceLock<Value> = OnceLock::new();
+    let base = MATRIX.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"
+        ))
+        .unwrap()
+    });
+    let extension = match kind {
+        "oauth-revocation-queue" => Some((
+            &QUEUE_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"),
+        )),
+        "oauth-revocation-backoff" => Some((
+            &BACKOFF_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"),
+        )),
+        "oauth-revocation-retry-after" => Some((
+            &RETRY_MATRIX,
+            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"),
+        )),
+        "oauth-revocation-fence" => Some((
+            &FENCE_MATRIX,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
+            ),
+        )),
+        "oauth-revocation-patch" => Some((
+            &PATCH_MATRIX,
+            include_str!(
+                "../../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
+            ),
+        )),
+        _ => None,
+    };
+    if let Some((storage, source)) = extension {
+        storage.get_or_init(|| {
+            let extension: Value = serde_json::from_str(source).unwrap();
+            let mut merged = base.as_object().unwrap().clone();
+            merged.extend(extension.as_object().unwrap().clone());
+            Value::Object(merged)
+        })
+    } else {
+        base
+    }
+}
+
+async fn prepare_fixture(
+    pool: &PgPool,
+    origin: &str,
+    matrix: &'static Value,
+    case: &'static Value,
+) -> (canvas_worker_rest_replay::WorkerFixture, Value) {
+    let fixture = canvas_worker_rest_replay::prepare(pool, origin, "rest").await;
+    for statement in matrix["seed"].as_array().unwrap() {
+        sqlx::raw_sql(statement.as_str().unwrap())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    if let Some(statements) = case.get("seed") {
+        for statement in statements.as_array().unwrap() {
+            sqlx::raw_sql(statement.as_str().unwrap())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    if let Some(count) = case.get("retry_count") {
+        let seeded: Value = sqlx::query_scalar(matrix["connection_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(&seeded["retry_count"], count);
+    }
+    for secret in matrix["additional_secrets"].as_array().unwrap() {
+        fixture
+            .vault
+            .save(NewIntegrationSecret {
+                id: secret[0].as_str().unwrap().into(),
+                organization_id: secret[1].as_str().unwrap().into(),
+                name: "Synthetic worker control".into(),
+                provider: "canvas".into(),
+                purpose: "api_token".into(),
+                value: secret[2].as_str().unwrap().into(),
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+    }
+    let before: Value = sqlx::query_scalar(matrix["secret_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(before.as_object().unwrap().len(), 3);
+    for secret in matrix["additional_secrets"].as_array().unwrap() {
+        assert_ne!(before[secret[0].as_str().unwrap()], secret[2]);
+    }
+    if let Some(statements) = matrix.get("before_start_sql") {
+        for statement in statements.as_array().unwrap() {
+            sqlx::raw_sql(statement.as_str().unwrap())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    (fixture, before)
+}
+
+pub async fn assert_queue_repository_selection(pool: &PgPool) {
+    use marty_issuance_service::{
+        canvas_oauth::CanvasOAuthRepository, canvas_oauth_postgres::PostgresCanvasOAuthRepository,
+    };
+    let matrix = matrix_for("oauth-revocation-queue");
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-oauth-revocation-queue-oracle.json"
+    ))
+    .unwrap();
+    let (fixture, _) =
+        prepare_fixture(pool, "https://127.0.0.1:1", matrix, &matrix["cases"][0]).await;
+    let repository = PostgresCanvasOAuthRepository::new(pool.clone());
+    for case in matrix["cases"].as_array().unwrap() {
+        let limit = case["environment"]["CANVAS_OAUTH_REVOCATION_BATCH_SIZE"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let ids = repository
+            .due_revocations(limit)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|connection| connection.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            json!(ids),
+            reference[case["name"].as_str().unwrap()]["queue"]["lease_order"],
+            "real repository selection must match actual published acquisition order"
+        );
+    }
+    fixture.assert_issued_rows_preserved(pool).await;
 }
