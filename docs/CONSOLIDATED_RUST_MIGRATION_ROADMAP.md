@@ -31,6 +31,16 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
+Parallel consumer hardening now includes a shared generated-release image plan
+and complete effective-model checks for all 19 application services. The local
+verification rehearsal pin also owns recorded provenance, fixing a mutable-tag
+race without changing the Python issuance/worker selection. Independent review,
+76 focused tests and five actual config-only Compose comparisons passed; a
+mandatory generated-overlay CI gate was added. See the
+[consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md#generated-release-image-follow-up-2026-09-08).
+Worker BODY/expiry qualification, composed operations lifecycle gates, actual
+consumer switching and beta acceptance remain separate unfinished work.
+
 ### Current transport integration and merge gates
 
 The application REST repair at `2d864723f74831d4338e1686c242b1bad534a4b9`
