@@ -31,12 +31,20 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
-Latest local integration `9a292d9cd` passes 2,924 root tests (three platform
-skips) and all 118 separately collected service tests. Its Rust, frozen contracts,
-stack lock and mandatory published runner match qualified gateway `afe9084b8`
-exactly. The expanded candidate passed with 31 native forwards and zero legacy
-forwards; its shared actual-process lifecycle regression also passed. This is
-local qualification, not the still-running hosted `d498` result below.
+Latest local integration `718a72776` includes the qualified seven-case gateway
+state expansion `724122012`: 38 native forwards, zero legacy forwards, eight
+pure controls and strict scoped Clippy passed. The configured candidate took
+7.97 seconds and its shared actual-process lifecycle regression took 5.63 seconds.
+The base corpus now has 35 represented names and 11 remaining; these are not
+35 exact unadapted replays. Thirteen full lifecycle cases remain. See the
+[coverage inventory](rust-migrations/canvas-gateway-coverage.md).
+Earlier `9a292d9cd` passed 2,924 root tests (three platform skips) and all 118
+separately collected service tests. Subsequent webhook-helper retirement
+`d5f16228e` transferred its two Python tests into Rust before deleting the unused
+100-line helper and 61-line test file. Six native auth tests, 13 ownership/
+composition tests, and all 116 retained service tests passed. The combined tree
+preserves the separately qualified gateway and webhook inputs. These are local
+results, not the still-running hosted `d498` result below.
 Two unused Python helpers (`common/di.py`, `common/metrics.py`) were deleted
 after caller/packaging review and passing tests; their migration-image copies
 were unused. Exact-path retirement guards preserve retained common adapters.
@@ -105,9 +113,18 @@ newer Core source `08a0d435`, which contains the already-merged fixes. No publis
 Core release contains those fixes. Current Core main is 0.2.0 and intentionally
 omits DIDComm APIs still required by credentials, so changing the dependency pin
 alone is not a safe repair. Preserve all assertions and the immutable v0.1.73 tag;
-qualify the downstream KMS-only capability migration before selecting a new
-release. Other release build jobs may still finish, but image publication,
-artifact qualification and lock advancement remain pending.
+qualify compatible consumer capabilities before selecting a new release.
+The release run is now terminal failure: artifact builds passed but
+draft creation was skipped. Image publication, artifact qualification and lock
+advancement remain pending. Credentials ownership is now explicitly clear of
+the crypto worker. The contract-only inventory passed independent review and
+45 tests (37 retained behavioral cases and eight inventory/parser checks).
+User decision on 2026-09-08: migrate the remaining DIDComm consumer behavior to
+Rust first, reusing the existing native issuance owner; defer DIDComm KMS-layer
+corrections as outstanding work `DIDCOMM-KMS-001` in Credentials
+`docs/rust-migrations/didcomm-kms-outstanding.md`. Preserve anoncrypt and true
+authcrypt with no downgrade. No new backend is being provisioned, no removed
+Core Python API is restored, and the Rust port alone is not KMS-only acceptance.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub

@@ -1,10 +1,16 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Latest local integration `9a292d9cd`: 2,924 root tests passed (three skips),
-118 service tests passed, and Rust inputs exactly match qualified gateway
-`afe9084b8` (31 native forwards, zero legacy; actual-process lifecycle passed).
+Latest local integration `718a72776` includes qualified gateway state parity
+from `724122012`: 38 native forwards, zero legacy, eight pure controls and the
+actual-process lifecycle regression passed. Base coverage is 35 represented
+names with 11 remaining; lifecycle still has 13 full cases remaining.
+Earlier `9a292d9cd` passed 2,924 root tests (three skips) and 118 service tests.
+Subsequent unused webhook-helper retirement transferred both Python tests to
+Rust: six native auth tests, 13 ownership/composition tests and all 116 retained
+service tests passed. Its implementation/test inputs match the reviewed
+retirement commit; the gateway helper matches its separately qualified commit.
 Unused Python bootstrap helpers and unused Python-job database provisioning
-are removed with retained coverage. Hosted qualification is still separate.
+are also removed with retained coverage. Hosted qualification is separate.
 Credentials v0.1.73 preparation passed, but release tests fail against the old
 Core dependency. Current Core's KMS-only DIDComm compatibility must be resolved
 before a new immutable dependency/release can be selected; see the roadmap.

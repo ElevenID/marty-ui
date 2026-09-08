@@ -7,7 +7,7 @@ route cutover, Python deletion or deployment is established by this document.
 
 ## Evidence boundary
 
-The tested `afe9084b8` candidate controls (integrated at `9a292d9cd`) live in
+The tested `724122012` candidate controls (integrated at `718a72776`) live in
 [canvas_operations_gateway_replay.rs](../../rust/services/issuance/tests/support/canvas_operations_gateway_replay.rs).
 They compose the actual gateway router/proxy and bounded HTTP client with the
 actual issuance executable and owned PostgreSQL. Identity and membership ports
@@ -19,8 +19,9 @@ Both real runtime and proxy route tables are used. Candidate construction change
 only the eight operation service selections; methods, paths, authentication and
 other policy fields must remain identical. The published-table control makes
 eight requests to a separately served legacy trap, with zero native effects.
-The candidate gate counts 31 native requests and zero legacy requests. Neither
-count means 31 frozen cases. The seven-entry `NON_MANUAL_CASES` list supplies
+The candidate gate counts 38 native requests and zero legacy requests: one
+against an actual rollout-disabled process and 37 against the enabled process.
+This does not mean 38 frozen cases. The seven-entry `NON_MANUAL_CASES` list supplies
 one request for each nonmanual route, not an exhaustive replay inventory.
 
 The new registered
@@ -38,13 +39,16 @@ not a copied lifecycle service graph. It requires ten requests, nine native
 forwards and zero legacy forwards. Its legacy endpoint is a distinct owned,
 unserved reservation, not another executed legacy-trap test.
 
-## Base operations: 46 names, 28 represented, 18 remaining
+## Base operations: 46 names, 35 represented, 11 remaining
 
 The authority is [canvas-operations-oracle.json](../../contracts/canvas-operations-oracle.json)
 with [its scenarios](../../contracts/canvas-operations-scenarios.json).
-The following **28 distinct corpus names are represented by source-derived
-checks**, not 28 exact unadapted replays. The fourteen-case read expansion passed
-configured PostgreSQL qualification, retaining all eight legacy-route controls.
+The following **35 distinct corpus names are represented by source-derived
+checks**, not 35 exact unadapted replays. The seven-case state expansion passed
+configured PostgreSQL qualification in 7.97 seconds, retaining the preceding
+31 native requests and all eight legacy-route controls. Eight pure controls and
+strict scoped Clippy passed; the shared gateway lifecycle regression passed in
+5.63 seconds. All four owned containers were verified absent after cleanup.
 
 | Coverage form | Corpus names | Boundary |
 | --- | --- | --- |
@@ -54,17 +58,17 @@ configured PostgreSQL qualification, retaining all eight legacy-route controls.
 | Public validation errors | `jobs_invalid_status`, `review_invalid_action` | Explicit public 422 envelopes, not unchanged direct Python error bodies. |
 | Filtering and unmatched bindings | `jobs_filtered`, `jobs_unmatched_binding`, `candidates_filtered`, `candidates_unmatched_binding`, `reviews_filtered`, `reviews_unmatched_binding` | Exact frozen DTOs before mutations; full raw state unchanged and one native forward per request. |
 | Additional list validation | `jobs_zero_limit`, `jobs_excess_limit`, `candidates_invalid_status`, `candidates_zero_limit`, `candidates_excess_limit`, `reviews_invalid_status`, `reviews_zero_limit`, `reviews_excess_limit` | Frozen status strings/complete bound arrays checked before explicit public MIP projection; raw state unchanged. |
+| Rollout, foreign tenant and repeated job transitions | `retry_rollout_closed`, `retry_foreign`, `retry_again`, `resolve_queued`, `resolve_again`, `enqueue_foreign` | Real disabled startup and frozen transition ordering; explicit public MIP errors and exact unchanged raw state. Foreign cases use an authenticated foreign principal, not untrusted tenant headers. |
+| Duplicate enqueue | `enqueue_duplicate` | Frozen existing-job response and snapshot; only the matched target's two nondecreasing timestamps and request-source metadata may refresh. All jobs and unrelated raw rows remain exact. Mutation controls reject extra effects. |
 
 Six additional auth/RBAC denials check zero upstream calls and unchanged raw
 state, but are not exact replays of the four base authentication/tenant cases.
-The remaining **18 base names** are:
+The remaining **11 base names** are:
 
 | Required family | Names still outside the represented base-name set |
 | --- | --- |
 | Authentication/tenant precedence (4) | `missing_management_key`, `wrong_management_key`, `missing_tenant`, `foreign_query` |
-| Retry/resolve state and tenant gates (5) | `retry_rollout_closed`, `retry_foreign`, `retry_again`, `resolve_queued`, `resolve_again` |
 | Manual review, effects and recovery (7) | `review_note_limit`, `review_suspend`, `review_revoke`, `review_failed`, `review_recovered_failure`, `review_recovered_success`, `review_concurrent` |
-| Enqueue idempotence/tenant gates (2) | `enqueue_duplicate`, `enqueue_foreign` |
 
 New lifecycle outcomes do not silently mark the seven base manual-review names
 as complete: those scenarios have their own setup, ordering, effects and recovery
@@ -113,7 +117,8 @@ lifecycle 17 observations.
 
 ## Concrete completion gates and adaptation hazards
 
-1. Expand read/filter/limit and job/enqueue cases using the existing seed,
+1. Cover remaining supplementary read/filter/limit and job/enqueue inputs
+   without recounting the represented base names. Reuse the existing seed,
    snapshot, owned-process and candidate-router owners. Keep the exact eight
    route-selection assertion independent of the growing replay list. Compare
    full DTOs, null/omitted fields, safe error/result projections and durable
