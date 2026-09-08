@@ -1,0 +1,23 @@
+{
+  "schema": "marty.didcomm-trusted-tenant-python-reference/v1",
+  "reference": {
+    "repository": "ElevenID/marty-credentials",
+    "source_commit": "9bd2747f040f203188529758ec38f0a5dce5ac5f",
+    "source_path": "services/issuance/infrastructure/api/routes.py",
+    "source_blob": "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a",
+    "function": "didcomm_deliver",
+    "capture": "Executed unchanged async route with real request model and Starlette headers; controlled pending same-tenant repository and delivery response. Management authentication is separately exercised by the native HTTP test, not this direct-function capture.",
+    "scope": "Pre-lookup trusted-tenant authorization, not cryptography, repository finalization or KMS acceptance. Missing, empty and whitespace headers produce no lookup or delivery; a foreign claimed tenant is hidden before lookup."
+  },
+  "shared_contract": "gateway-didcomm-delivery-behavior.json",
+  "request_ref": "valid_request",
+  "success_body_ref": "expected_response",
+  "cases": [
+    {"name": "missing", "trusted_organization": null, "status": 403, "body": {"detail": "Trusted organization context is required"}, "lookup_calls": 0, "delivery_calls": 0},
+    {"name": "empty", "trusted_organization": "", "status": 403, "body": {"detail": "Trusted organization context is required"}, "lookup_calls": 0, "delivery_calls": 0},
+    {"name": "whitespace", "trusted_organization": "  ", "status": 403, "body": {"detail": "Trusted organization context is required"}, "lookup_calls": 0, "delivery_calls": 0},
+    {"name": "foreign", "trusted_organization": "org_other", "status": 404, "body": {"detail": "Resource not found"}, "lookup_calls": 0, "delivery_calls": 0},
+    {"name": "matching", "trusted_organization": "org_123", "status": 200, "lookup_calls": 1, "delivery_calls": 1},
+    {"name": "trimmed", "trusted_organization": " org_123 ", "status": 200, "lookup_calls": 1, "delivery_calls": 1}
+  ]
+}

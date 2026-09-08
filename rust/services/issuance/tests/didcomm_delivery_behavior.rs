@@ -64,6 +64,21 @@ fn contract() -> Value {
     .unwrap()
 }
 
+fn successful_delivery(expected: &Value) -> ContractDelivery {
+    ContractDelivery {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        receipt: NativeInitiationDidcommDeliveryReceipt {
+            transaction_id: expected["transaction_id"].as_str().unwrap().to_owned(),
+            credential_id: expected["credential_id"].as_str().unwrap().to_owned(),
+            holder_did: expected["holder_did"].as_str().unwrap().to_owned(),
+            service_endpoint: expected["service_endpoint"].as_str().unwrap().to_owned(),
+            didcomm_message_id: expected["didcomm_message_id"].as_str().unwrap().to_owned(),
+            status: NativeDidcommDeliveryStatus::Delivered,
+            error: None,
+        },
+    }
+}
+
 fn app(delivery: ContractDelivery) -> axum::Router {
     let config =
         IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
@@ -92,8 +107,9 @@ fn error_app(error: NativeInitiationDidcommDeliveryError) -> axum::Router {
 }
 
 fn request(body: Value, api_key: Option<&str>) -> Request<Body> {
-    let mut request =
-        Request::post("/v1/issuance/didcomm/deliver").header("content-type", "application/json");
+    let mut request = Request::post("/v1/issuance/didcomm/deliver")
+        .header("content-type", "application/json")
+        .header("x-organization-id", "org_123");
     if let Some(api_key) = api_key {
         request = request.header("x-api-key", api_key);
     }
@@ -110,21 +126,61 @@ async fn body(response: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
+async fn direct_didcomm_trusted_tenant_matches_captured_python_before_delivery() {
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/didcomm-trusted-tenant-python-reference.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        frozen["schema"],
+        "marty.didcomm-trusted-tenant-python-reference/v1"
+    );
+    assert_eq!(
+        frozen["shared_contract"],
+        "gateway-didcomm-delivery-behavior.json"
+    );
+    let shared = contract();
+    let expected = &shared[frozen["success_body_ref"].as_str().unwrap()];
+    let cases = frozen["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 6);
+    for case in cases {
+        let delivery = successful_delivery(expected);
+        let calls = delivery.calls.clone();
+        let input = shared[frozen["request_ref"].as_str().unwrap()].clone();
+        let mut req = request(input.clone(), Some("test-api-key"));
+        req.headers_mut().remove("x-organization-id");
+        if let Some(tenant) = case["trusted_organization"].as_str() {
+            req.headers_mut()
+                .insert("x-organization-id", tenant.parse().unwrap());
+        }
+        let response = app(delivery).oneshot(req).await.unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            case["status"].as_u64().unwrap(),
+            "{}",
+            case["name"]
+        );
+        let expected_body = case.get("body").unwrap_or(expected);
+        assert_eq!(&body(response).await, expected_body, "{}", case["name"]);
+        let observed = calls.lock().unwrap();
+        assert_eq!(
+            observed.len() as u64,
+            case["delivery_calls"].as_u64().unwrap()
+        );
+        if !observed.is_empty() {
+            assert_eq!(observed.as_slice(), [input]);
+        }
+        // No invocation of this port also means no downstream repository lookup
+        // is possible. Positive repository/crypto behavior is a separate gate.
+        assert_eq!(case["lookup_calls"], case["delivery_calls"]);
+    }
+}
+
+#[tokio::test]
 async fn direct_didcomm_route_matches_the_language_neutral_contract() {
     let contract = contract();
     let expected = &contract["expected_response"];
-    let delivery = ContractDelivery {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        receipt: NativeInitiationDidcommDeliveryReceipt {
-            transaction_id: expected["transaction_id"].as_str().unwrap().to_owned(),
-            credential_id: expected["credential_id"].as_str().unwrap().to_owned(),
-            holder_did: expected["holder_did"].as_str().unwrap().to_owned(),
-            service_endpoint: expected["service_endpoint"].as_str().unwrap().to_owned(),
-            didcomm_message_id: expected["didcomm_message_id"].as_str().unwrap().to_owned(),
-            status: NativeDidcommDeliveryStatus::Delivered,
-            error: None,
-        },
-    };
+    let delivery = successful_delivery(expected);
     let response = app(delivery.clone())
         .oneshot(request(
             contract["valid_request"].clone(),

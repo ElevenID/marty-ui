@@ -2349,11 +2349,12 @@ async fn deliver_didcomm_credential(
     if let Err(error) = service.authorize(request.headers()) {
         return error.into_response();
     }
+    let headers = request.headers().clone();
     let Json(input) = match Json::<DidcommDeliverRequest>::from_request(request, &state).await {
         Ok(input) => input,
         Err(rejection) => return rejection.into_response(),
     };
-    match service.deliver_authorized(&input).await {
+    match service.deliver_authorized(&headers, &input).await {
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }

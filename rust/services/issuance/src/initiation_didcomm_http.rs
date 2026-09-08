@@ -83,7 +83,7 @@ impl InitiationDidcommHttpService {
         request: &DidcommDeliverRequest,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, InitiationDidcommHttpError> {
         self.authorize(headers)?;
-        self.deliver_authorized(request).await
+        self.deliver_authorized(headers, request).await
     }
 
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), InitiationDidcommHttpError> {
@@ -94,8 +94,14 @@ impl InitiationDidcommHttpService {
 
     pub async fn deliver_authorized(
         &self,
+        headers: &HeaderMap,
         request: &DidcommDeliverRequest,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, InitiationDidcommHttpError> {
+        self.security.require_organization(
+            header(headers, "X-Organization-ID"),
+            &request.organization_id,
+            true,
+        )?;
         self.delivery
             .deliver_for_organization(
                 &request.organization_id,
@@ -144,6 +150,13 @@ impl InitiationDidcommHttpError {
             }
             Self::Security(TransactionReadError::InvalidApiKey) => {
                 (StatusCode::UNAUTHORIZED, "Invalid API Key")
+            }
+            Self::Security(TransactionReadError::TrustedOrganizationRequired) => (
+                StatusCode::FORBIDDEN,
+                "Trusted organization context is required",
+            ),
+            Self::Security(TransactionReadError::ResourceNotFound) => {
+                (StatusCode::NOT_FOUND, "Resource not found")
             }
             Self::Security(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
