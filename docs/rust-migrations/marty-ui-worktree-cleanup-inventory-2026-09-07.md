@@ -1,6 +1,53 @@
 # Local marty-ui worktree cleanup inventory — 2026-09-07
 
-## Current cleanup checkpoint — 2026-09-08
+## UI preservation and compatibility hold — 2026-09-08
+
+The independent read-only follow-up found local `main` clean: no staged,
+unstaged or ordinary untracked changes at
+`97bf86a3824ac7e79fb4ff662f4c86c002fa716d`. It retains **two local commits and is
+31 commits behind cached `origin/main`**, not a freshly fetched remote. The
+comparison uses cached `f5c4da685f5723a7614649c883bfaa540dd153f1`, whose recorded
+fetch is `2026-09-05T23:06:57-06:00`. PR checkpoint
+`afc8bd754e84104c45ae48e7cc8297125cd7f579` contains that cached main but not local
+`97bf86a38`. The older cleanup counts and Canvas/CI heads below are historical;
+this bounded update does not re-inventory worktrees or refresh hosted CI.
+
+Unique commit `827ab777bbc11fbf8024ab26889d31a71529df15` is retained by both
+`main` and `security/kms-boundary-hardening-v1`; the audit found no other local
+reference containing it. Local main merges that commit with
+`1866528ab859ea7007ca34671ad80a62131fd79d`. Its unmatched patch changes only:
+
+- `ui/src/components/trust/adapters/api/TrustApiAdapter.jsx`
+- `ui/src/components/trust/adapters/api/TrustApiAdapter.test.ts` (new)
+- `ui/src/components/trust/ports/types.js`
+
+This is feature work to preserve, not disposable cleanup: the adapter rejects
+truthy `privateKeyPem`, requires a trimmed `keyReference`, and sends
+`key_reference` instead of `private_key_pem`. Three mocked-fetch unit controls
+are present; their existence does not establish backend compatibility or a
+passing current test run. No demo files occur in this local-only patch.
+
+**Hold integration and reference deletion pending trust/crypto owner review.**
+The adapter's `/v1/organizations/{org}/trust-config/byok` endpoint has no
+established matching `key_reference` request contract in the inspected current
+Rust routes or relevant frozen gateway/organization/trust contracts. Generic
+gateway organization ownership does not establish that an actual deployed
+request returns 404. No deployed endpoint was tested. The mock adapter ignores
+the input; `TrustProvider` exposes the operation but the audit found no active
+UI caller. Existing issuer onboarding uses public certificates plus
+`keyLocation.kmsArn`, not a demonstrated translation into this adapter's
+`keyReference` contract.
+
+First obtain owner-approved endpoint/schema evidence and an actual authenticated
+backend request-contract test proving `key_reference` acceptance, tenant binding
+and certificate semantics. Only after that capability proof and ownership
+handoff should a separately attributed three-file port and expanded adapter
+unit tests proceed. Preserve rejection of private-key material
+and existing onboarding/demo features; do not invent an API or remove a feature
+to make the patch merge. Clean status is neither owner release nor permission
+to reset, delete, deploy or integrate these references.
+
+## Earlier cleanup checkpoint — 2026-09-08 (historical)
 
 Current local inventory is **eight worktrees and four branches**. The reviewed
 body reference and application REST repair are composed into retained native
