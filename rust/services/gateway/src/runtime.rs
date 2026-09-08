@@ -354,6 +354,9 @@ async fn authentication_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
+    // Only gateway-authenticated identity may supply downstream actor attribution.
+    // Some upstreams prefer this legacy alias over the trusted X-User-ID header.
+    request.headers_mut().remove("x-authenticated-user-id");
     let Some(method) = http_method(request.method().as_str()) else {
         return error_response(
             405,
@@ -5446,6 +5449,13 @@ mod tests {
     fn runtime_state_with_events(
         event_streams: Arc<dyn EventStreamProvider>,
     ) -> Arc<GatewayRuntimeState> {
+        runtime_state_with_upstream(event_streams, Arc::new(SuccessfulUpstream))
+    }
+
+    fn runtime_state_with_upstream(
+        event_streams: Arc<dyn EventStreamProvider>,
+        upstream: Arc<dyn UpstreamClient>,
+    ) -> Arc<GatewayRuntimeState> {
         let routes = GatewayContract::load()
             .expect("contract")
             .runtime_route_table()
@@ -5488,7 +5498,7 @@ mod tests {
         let proxy = GatewayProxy::new(
             proxy_routes,
             Arc::new(registry),
-            Arc::new(SuccessfulUpstream),
+            upstream,
             ProxyConfig::default(),
         )
         .expect("proxy");
@@ -5517,6 +5527,250 @@ mod tests {
         .with_service_token(Some("s".repeat(32)))
         .expect("service token");
         Arc::new(state)
+    }
+
+    #[derive(Default)]
+    struct ActorRecordingUpstream(std::sync::Mutex<Vec<(String, GatewayRequest)>>);
+
+    #[async_trait]
+    impl UpstreamClient for ActorRecordingUpstream {
+        async fn send(
+            &self,
+            instance: &ServiceInstance,
+            request: GatewayRequest,
+        ) -> Result<GatewayResponse, PlatformError> {
+            self.0
+                .lock()
+                .expect("owned request recorder")
+                .push((instance.service_name.clone(), request));
+            Ok(GatewayResponse {
+                status_code: 200,
+                headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+                body: Some(br#"{"keys":[],"ok":true}"#.to_vec()),
+                response_time_ms: None,
+                upstream_service: None,
+            })
+        }
+    }
+
+    struct ActorIdentityProvider;
+
+    #[async_trait]
+    impl GatewayIdentityProvider for ActorIdentityProvider {
+        async fn validate_session(
+            &self,
+            session: &str,
+        ) -> Result<Option<SessionIdentity>, SecurityError> {
+            Ok(match session {
+                "actor-session" | "actor-denied" => Some(SessionIdentity {
+                    user_id: session.into(),
+                    organization_id: Some("org-1".into()),
+                    ..SessionIdentity::default()
+                }),
+                _ => None,
+            })
+        }
+
+        async fn validate_api_key(
+            &self,
+            key: &str,
+        ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
+            Ok(match key {
+                "actor-key" | "actor-key-no-scope" | "actor-key-wrong-org" => {
+                    Some(ApiKeyIdentity {
+                        api_key_id: "trusted-key-id".into(),
+                        organization_id: Some(
+                            if key == "actor-key-wrong-org" {
+                                "org-other"
+                            } else {
+                                "org-1"
+                            }
+                            .into(),
+                        ),
+                        key_prefix: Some("synthetic-prefix".into()),
+                        scopes: if key == "actor-key-no-scope" {
+                            vec![]
+                        } else {
+                            vec!["integrations:write".into()]
+                        },
+                    })
+                }
+                _ => None,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl OrganizationMembershipProvider for ActorIdentityProvider {
+        async fn get_membership(
+            &self,
+            user_id: &str,
+            organization_id: &str,
+        ) -> Result<Option<OrganizationMembership>, SecurityError> {
+            Ok(
+                (user_id == "actor-session" && organization_id == "org-1").then(|| {
+                    OrganizationMembership {
+                        user_id: user_id.into(),
+                        organization_id: organization_id.into(),
+                        status: "active".into(),
+                        role_names: BTreeSet::new(),
+                        permissions: BTreeSet::from(["integration-connector:edit".into()]),
+                        is_owner: false,
+                    }
+                }),
+            )
+        }
+    }
+
+    fn actor_test_router() -> (Router, Arc<ActorRecordingUpstream>) {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        let state_mut = Arc::get_mut(&mut state).expect("owned test state");
+        state_mut.identities = Arc::new(ActorIdentityProvider);
+        state_mut.memberships = Arc::new(ActorIdentityProvider);
+        (gateway_router(state), recorder)
+    }
+
+    fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {
+        let mut request = Request::builder()
+            .method(if public { "GET" } else { "POST" })
+            .uri(if public {
+                "/v1/integrations/canvas/lti/jwks"
+            } else {
+                "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve?organization_id=org-1"
+            })
+            .header("content-type", "application/json")
+            .header("x-user-id", "forged-user")
+            .header("x-api-key-id", "forged-key")
+            .header("x-organization-id", "forged-org")
+            .body(if public { Body::empty() } else {
+                Body::from(r#"{"action":"dismiss","organization_id":"org-1"}"#)
+            })
+            .expect("synthetic gateway request");
+        for (name, value) in [
+            ("X-Authenticated-User-ID", "forged-priority-one"),
+            ("x-AuThEnTiCaTeD-uSeR-iD", "forged-priority-two"),
+        ] {
+            request.headers_mut().append(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_static(value),
+            );
+        }
+        assert_eq!(
+            request
+                .headers()
+                .get_all("x-authenticated-user-id")
+                .iter()
+                .count(),
+            2
+        );
+        if let Some((name, value)) = authentication {
+            request.headers_mut().insert(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        request
+    }
+
+    #[tokio::test]
+    async fn gateway_trusted_actor_session_and_api_key_replace_client_aliases() {
+        // This asserts the real router/proxy boundary, not a persisted SQL actor.
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-operations.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            frozen["behavior"]["actor_priority"],
+            json!(["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"])
+        );
+        for (authentication, expected_user, expected_key) in [
+            (("cookie", "sessionId=actor-session"), "actor-session", None),
+            (
+                ("x-api-key", "actor-key"),
+                "api_key:trusted-key-id",
+                Some("trusted-key-id"),
+            ),
+        ] {
+            let (router, recorder) = actor_test_router();
+            let response = router
+                .oneshot(forged_actor_request(Some(authentication), false))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let (service, forwarded) = &calls[0];
+            assert_eq!(service, issuance_native::LEGACY_SERVICE);
+            assert_eq!(
+                forwarded.path,
+                "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve"
+            );
+            assert_eq!(forwarded.method, HttpMethod::Post);
+            assert_eq!(forwarded.header("x-authenticated-user-id"), None);
+            assert_eq!(forwarded.header("x-user-id"), Some(expected_user));
+            assert_eq!(forwarded.header("x-api-key-id"), expected_key);
+            assert_eq!(forwarded.header("x-organization-id"), Some("org-1"));
+            assert_eq!(forwarded.header("x-api-key"), Some("issuance-service-key"));
+            assert!(forwarded
+                .headers
+                .values()
+                .all(|value| !value.contains("forged-")));
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_trusted_actor_auth_and_tenant_denials_never_reach_upstream() {
+        for (authentication, status) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (
+                Some(("cookie", "sessionId=invalid")),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (Some(("x-api-key", "invalid")), StatusCode::UNAUTHORIZED),
+            (
+                Some(("cookie", "sessionId=actor-denied")),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("x-api-key", "actor-key-no-scope")),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("x-api-key", "actor-key-wrong-org")),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let (router, recorder) = actor_test_router();
+            let response = router
+                .oneshot(forged_actor_request(authentication, false))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert!(recorder.0.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_trusted_actor_public_bypass_cannot_forward_client_identity() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(forged_actor_request(None, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, forwarded) = &calls[0];
+        assert_eq!(service, issuance_native::NATIVE_SERVICE);
+        for name in [
+            "x-authenticated-user-id",
+            "x-user-id",
+            "x-api-key-id",
+            "x-organization-id",
+        ] {
+            assert_eq!(forwarded.header(name), None);
+        }
     }
 
     #[test]
