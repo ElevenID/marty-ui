@@ -1,6 +1,31 @@
-# Canvas worker cutover readiness — 2026-09-07
+# Canvas worker cutover readiness — 2026-09-08
 
 Status: latest qualified composed checkpoint
+`f0b60073093a89567e43a6fd6452100b2ddc67ec`.
+[CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
+completed successfully; all required checks passed, including Rust CodeQL.
+Runtime job `101944349432` passed **137 configured published-schema tests in
+3639.20s** at `2026-09-08T06:21:43Z`, plus **four configured worker/PostgreSQL
+tests in 96.32s**. Ignore unconfigured counts as qualification evidence.
+
+Both actual native deadline cases (`early_release`, `deadline_cancel`) passed,
+each with three real HTTPS requests. Fresh deadline and four-case timeout
+published-reference comparisons passed, and the seven-stage mixed-roster replay
+retained 55 actual HTTPS requests. Release checks passed 1,694 tests with one
+existing skip, including both Linux coordinator/grandchild containment cases;
+Rust Images and Rust CodeQL succeeded.
+
+The scoped provider-I/O deadline, real-renewal and retained-prefix replay now has
+hosted qualification. It does not close all lifecycle/provider/consumer gates,
+real-provider lease expiry, signing or beta acceptance. The later native timeout
+work (`395cab656` and its later follow-ups) and separate body-reference branch
+`c5e77f260` are not qualified by `f0`; actual native timeout execution is still
+pending. PR #814 remains draft and unrouted. No Python feature deletion,
+deployment or restore occurred.
+
+## Historical 121-entry checkpoint
+
+Previously qualified composed checkpoint
 `9cbba6b7bc687614e8c2d74ef78fab532e5888fb`: CI `34109922914` and Rust CodeQL
 `34109922824` succeeded. Runtime job `101703569433` passed **121 configured
 published-schema tests in 3319.49s**, and four configured worker/PostgreSQL
@@ -19,7 +44,7 @@ Image job `101703569310` passed all builds, nine worker preflight cases,
 24 packaged startup cases and the 16-case published logging reference. It also
 passed the 17-service bundle, 21 synthetic rollback merges and 15 complete
 consumer-source compositions. The compiler-consumed examples remain packaged
-and compiled. Local deadline/timeout extensions are separate and unqualified;
+and compiled. At that checkpoint the later deadline/timeout extensions were unqualified;
 remaining whole-worker, loader/consumer, signing and beta acceptance gates stay
 open. PR #814 remains draft and unrouted; no Python features were removed and no
 deployment or restore occurred.
@@ -315,8 +340,8 @@ do not substitute for the newer deadline/timeout or consumer cutover gates.
 | --- | --- | --- |
 | 1. Environment parsing, bounds, malformed startup | 133 startup vectors and PostgreSQL consumer cycles; [LOG_LEVEL repair](canvas-worker-logging-configuration.md) has 16 frozen threshold cases and seven actual invalid-process checks. Combined runtime and image qualification passed at c3e51a4d5 | Execute remaining deployed entrypoint/configuration shapes, not only configuration factories; retain these gates in the new exact-head run. |
 | 2. Legacy processor loader and removal | Python `test_canvas_worker_loader_oracle.py` exists; native binary constructs its processor directly | Remove the loader selection from all three consumer definitions only at qualified cutover; retain the frozen Python loader evidence. |
-| 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites | Compose the actual processor/provider with the loop; prove active I/O cancellation, recovery and cleanup on the published schema. |
-| 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests | Carry the same fences and outcome/error ordering through authoritative provider and business effects. |
+| 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites; both three-HTTPS native deadline cases and fresh reference regeneration qualified at `f0b600730` | Retain this scoped active-I/O cancellation and post-release stability proof; remaining lifecycle/provider failures and all-consumer disposal are separate requirements. |
+| 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests; actual two-renewal deadline composition with retained committed facts qualified at `f0b600730` | Carry the same fences and outcome/error ordering through the remaining authoritative-provider/business-effect paths; real-provider lease expiry is not the job-deadline case. |
 | 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer, newer-target recovery, both repository lock winners, completion-first atomicity and [recovery-first process fencing](canvas-worker-provider-recovery-first.md) qualified above; [real-time effect transaction regression](canvas-worker-effect-expiry.md), including its valid-lease positive control, passed configured hosted CI at `9cbba6b7b` | Retain the repository regression in fresh exact-head CI and cover real provider I/O expiry separately. Controlled provider calls and process exit alone do not prove whole-worker disposal or parity. |
 | 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |

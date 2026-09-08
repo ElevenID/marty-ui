@@ -83,8 +83,9 @@ verify code and harness integrity, **not native timeout parity**.
 
 The separate pushed baseline `f0b600730` has hosted release-test evidence of 1,694
 passes and one existing skip, including both actual Linux coordinator/grandchild
-cleanup cases. That baseline's larger worker parity CI is still in progress at
-this checkpoint; neither it nor those containment tests qualify this new replay.
+cleanup cases. That baseline's larger worker parity CI subsequently passed 137
+configured tests, including both native deadline cases, in run `34189450698`.
+Neither that earlier head nor those containment tests qualify this new replay.
 
 Current source predicts a failing `application_delayed_headers` replay: native
 authoritative and roster calls both use a 20s total-request timeout, so the
