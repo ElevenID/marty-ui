@@ -31,6 +31,20 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
+The newer PR #814 head `d498` is still under hosted qualification in
+[CI34233064711](https://github.com/ElevenID/marty-ui/actions/runs/34233064711).
+Runtime job `102083828642` remains live; image, browser and UI jobs completed
+successfully. Service Tests `102083828627` failed a stale assertion that mapped
+the worker to an issuance image, and the Rust 2021 formatting gate also failed.
+The service-image assertion is repaired locally in `121b77737`; Rust 2021
+formatting is repaired in `cca487a73`. Nine focused image-strategy tests and all
+118 service tests passed, and 229 target format checks passed. The earlier
+2,891-test root `tests/` run did not collect
+`services/`; the 118-test service suite is separate evidence, not part of that
+count. Neither local repair is a passing hosted rerun or a completed runtime
+result. The verified `afc8bd754` baseline below remains attributed to its exact
+head.
+
 Draft PR #814 at `afc8bd754` passed
 [CI34223397680](https://github.com/ElevenID/marty-ui/actions/runs/34223397680).
 Runtime job `102051657514` passed all four preflights and the complete database
@@ -88,6 +102,16 @@ binary or full lifecycle acceptance. Remaining error, foreign-object, recovery
 and lifecycle cases still precede route cutover and Python deletion. The new
 test is registered in the existing mandatory full database gate, but these
 local changes are not yet merged or qualified by hosted CI.
+
+The next gateway lifecycle helper has independent source-review clearance and
+reuses the actual issuance process/dependency owner for suspend, revoke, mirror
+refusal and publication refusal, including the held-claim conflict and durable
+duplicate guards. Its execution and integration are still pending. Its explicit
+public error expectations do not replace the frozen direct-response contract;
+candidate routing and controlled identity ports are not production route
+cutover. No gateway route change, Python deletion or deployment has been
+performed in this lane; those actions remain gated by the required evidence.
+Enabling the disabled release workflows still requires explicit new approval.
 
 Cleanup also found unique unmerged UI key-custody work in `827ab777b` on local
 main and the security branch. Both references are preserved. Backend

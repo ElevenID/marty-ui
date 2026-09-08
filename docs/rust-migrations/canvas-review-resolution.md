@@ -7,6 +7,27 @@ recovery and atomic review/audit finalization. The candidate native executable n
 composes these handlers into its shared HTTP router; gateway ownership remains
 unchanged. Reachable Python and deployment consumers remain.
 
+Current qualification remains exact-head scoped: `afc8bd754` passed complete
+CI; the newer `d498` runtime job `102083828642` remains live. Its stale service
+image assertion is repaired locally in `121b77737`, and Rust 2021 formatting in
+`cca487a73`; these are not a passing hosted rerun. The separate local
+service suite passed 118 tests, including nine image-strategy tests; the root
+2,891-test run did not include services. All 229 target format checks passed.
+Image, browser and UI jobs completed successfully. The
+[roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08)
+retains the release-workflow approval hold and outstanding qualification gates.
+
+The next candidate gateway lifecycle helper is independently source-reviewed,
+but execution and integration remain pending. It reuses the actual-main owner
+for all four publication/mirror lifecycle cases and the held concurrent 409,
+with trusted actor persistence, tenant/auth denial and durable duplicate checks.
+Public MIP errors have explicit expected-only projections; direct frozen
+responses are not weakened. Controlled identity ports and candidate route
+selection do not qualify production routing, recovery or cancellation behavior.
+No gateway route cutover, Python deletion or deployment has been performed in
+this lane; those actions remain gated by the required evidence. Enabling the
+disabled release workflows still requires explicit new approval.
+
 ## Native composition checkpoint — 2026-09-08
 
 `CanvasServices.with_operations` feeds the existing full-service router before

@@ -1,6 +1,23 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Latest qualified composed checkpoint:
+Current checkpoint: `afc8bd754` passed complete CI `34223397680`, including
+169 configured published-schema tests (two explicit captures ignored) and
+11 worker/PostgreSQL tests (two manual diagnostics ignored). Those ignored
+paths are not parity gates. The newer `d498` CI `34233064711` runtime job
+`102083828642` remains live; image, browser and UI jobs completed successfully.
+Its stale service image assertion is repaired locally in `121b77737`; Rust 2021
+formatting is repaired in `cca487a73`. Nine focused tests, 118 service tests and
+229 target format checks passed. The separate root `tests/` run passed 2,891
+tests but did not collect the service suite. Hosted repair qualification is
+pending, and the independently reviewed next gateway lifecycle helper still
+awaits execution/integration. No gateway route cutover, Python deletion or
+deployment has been performed in this lane; those actions remain gated by the
+required evidence. Enabling the disabled release workflows still requires
+explicit new approval.
+See the [current roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08).
+
+Earlier qualified composed checkpoint (historical; later failures and pending
+statements below retain their original checkpoint scope):
 `2d864723f74831d4338e1686c242b1bad534a4b9`.
 [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184)
 completed successfully. Runtime job `101977399347` passed **146 configured
