@@ -9,6 +9,18 @@ All four actual header-timeout HTTPS cases, seven mixed-roster stages with
 55 actual HTTPS requests, and 104 operation-timeout/TLS cases passed.
 Unconfigured test counts are not database qualification evidence.
 
+Latest attempted head `3e552ccaef5dd4f42f79fe7d41c2cf42b316ffb0` failed
+[CI34216248461](https://github.com/ElevenID/marty-ui/actions/runs/34216248461),
+runtime job `102028592657`, during expiry `child-done`. Header parity passed.
+The early case observed `succeeded`, terminal `succeeded`, renewal true and
+original-expiry false, but closed diagnostics reached `VerifyShutdown` followed
+by `FailureUnknown`; that partial outcome is not a passing expiry case.
+BODY/mixed/full groups were skipped. The follow-up adds distinct closed shutdown
+wait, exit-status, post-shutdown state, output and final-parity categories while
+retaining all existing gates. Local validation: 274 focused Python tests,
+five Rust expiry controls, published-contract compilation (13.27s), and strict
+all-target Clippy (1.03s) passed. Actual native replay remains required.
+
 The newer integrated `4fbe9fdcb` candidate and subsequent reference registration
 still require fresh-head hosted qualification; native BODY and actual native
 live-provider lease-expiry behavior remain unqualified. The gate audit begun at

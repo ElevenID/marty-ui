@@ -81,6 +81,11 @@ DIAGNOSTIC_CATEGORIES = frozenset(
         "FailureJobGeneration",
         "FailureTerminalLease",
         "FailureJobQuery",
+        "FailureShutdownWait",
+        "FailureShutdownStatus",
+        "FailurePostShutdownState",
+        "FailureOutput",
+        "FailureParity",
         "FailureUnknown",
     )
 )

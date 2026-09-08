@@ -23,7 +23,7 @@ def test_every_rust_category_matches_closed_parser_inventory(native):
     ).read_text(encoding="utf-8")
     block = re.search(r"enum Diagnostic \{([^}]+)\}", source).group(1)
     categories = re.findall(r"^\s*([A-Za-z]+),\s*$", block, re.MULTILINE)
-    assert len(categories) == len(set(categories)) == 33
+    assert len(categories) == len(set(categories)) == 38
     assert {name.encode() for name in categories} == native.DIAGNOSTIC_CATEGORIES
     mapping = re.search(
         r"fn failure_diagnostic\(reason: &str\) -> Diagnostic \{(.*?)\n\}\n",
@@ -32,7 +32,7 @@ def test_every_rust_category_matches_closed_parser_inventory(native):
     )
     mapped_reasons = re.findall(r'"(native expiry [^"\n]+)"', mapping.group(1))
     actual_checks = source[mapping.end() :].split("#[cfg(test)]")[0]
-    assert len(mapped_reasons) == 19
+    assert len(mapped_reasons) == 24
     assert all(f'"{reason}"' in actual_checks for reason in mapped_reasons)
     for name in categories:
         contents = (
@@ -139,4 +139,65 @@ def test_invalid_parser_family_cannot_echo_supplied_name(native):
             io.BytesIO(), family="private-family-secret"
         )
         == "Native coordinator diagnostics invalid"
+    )
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "FailureShutdownWait",
+        "FailureShutdownStatus",
+        "FailurePostShutdownState",
+        "FailureOutput",
+        "FailureParity",
+    ],
+)
+def test_final_check_diagnostics_keep_phase_without_exposing_private_output(
+    native, category
+):
+    contents = (
+        b"private-worker-output\n"
+        b"MARTY_EXPIRY_DIAG_V1:VerifyShutdown\n"
+        + native.DIAGNOSTIC_PREFIX
+        + category.encode()
+        + b"\nprivate-panic-payload\n"
+    )
+    assert native.coordinator_diagnostics(io.BytesIO(contents)) == (
+        "Native expiry coordinator diagnostics: VerifyShutdown," + category
+    )
+    for suffix in (b" private-worker-output", b":private-panic-payload"):
+        malformed = native.DIAGNOSTIC_PREFIX + category.encode() + suffix + b"\n"
+        assert native.coordinator_diagnostics(io.BytesIO(malformed)) == (
+            "Native expiry coordinator diagnostics invalid"
+        )
+
+
+def test_final_checks_remain_strict_and_cleanup_precedes_failure_diagnostic():
+    source = (
+        ROOT
+        / "rust/services/issuance/tests/support/canvas_worker_lease_expiry_replay.rs"
+    ).read_text(encoding="utf-8")
+    final_checks = source.split("emit_diagnostic(Diagnostic::VerifyShutdown);", 1)[1]
+    final_checks = final_checks.split("pub async fn replay", 1)[0]
+    ordered = [
+        "AssertUnwindSafe(worker.wait())",
+        ".catch_unwind()",
+        '"native expiry worker shutdown wait failed"',
+        "shutdown_status.code() == Some(130)",
+        "stable(pool, fixture, &outcome, &rows)",
+        '"native expiry post-shutdown state verification failed"',
+        "output.assert_private_quiet(",
+        'mark(control, "child-done")?',
+        "require(\n        quiet,",
+        '"native expiry output requires separate closed classification"',
+        "require(\n        parity,",
+        '"native expiry full outcome differs from frozen published behavior"',
+        "emit_diagnostic(Diagnostic::Complete)",
+    ]
+    positions = [final_checks.index(item) for item in ordered]
+    assert positions == sorted(positions)
+    replay = source.split("pub async fn replay", 1)[1].split("#[cfg(test)]", 1)[0]
+    assert replay.index("let rollback_ok") < replay.index("let cleanup_ok")
+    assert replay.index("let cleanup_ok") < replay.index(
+        "emit_diagnostic(failure_diagnostic(reason))"
     )

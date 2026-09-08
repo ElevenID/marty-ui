@@ -62,6 +62,11 @@ enum Diagnostic {
     FailureJobGeneration,
     FailureTerminalLease,
     FailureJobQuery,
+    FailureShutdownWait,
+    FailureShutdownStatus,
+    FailurePostShutdownState,
+    FailureOutput,
+    FailureParity,
     FailureUnknown,
 }
 
@@ -97,6 +102,15 @@ fn failure_diagnostic(reason: &str) -> Diagnostic {
         "native expiry narrow job query timed out"
         | "native expiry narrow job query failed"
         | "native expiry narrow query too wide" => Diagnostic::FailureJobQuery,
+        "native expiry worker shutdown wait failed" => Diagnostic::FailureShutdownWait,
+        "native expiry worker shutdown status differs" => Diagnostic::FailureShutdownStatus,
+        "native expiry post-shutdown state verification failed" => {
+            Diagnostic::FailurePostShutdownState
+        }
+        "native expiry output requires separate closed classification" => Diagnostic::FailureOutput,
+        "native expiry full outcome differs from frozen published behavior" => {
+            Diagnostic::FailureParity
+        }
         _ => Diagnostic::FailureUnknown,
     }
 }
@@ -739,11 +753,19 @@ async fn run<'a>(
     stable(pool, fixture, &outcome, &rows).await?;
     worker.signal("SIGINT");
     emit_diagnostic(Diagnostic::VerifyShutdown);
+    // Keep the existing ten-second wait and status requirement. Classify a
+    // wait panic without inspecting or forwarding its potentially private payload.
+    let shutdown_status = AssertUnwindSafe(worker.wait())
+        .catch_unwind()
+        .await
+        .map_err(|_| "native expiry worker shutdown wait failed")?;
     require(
-        worker.wait().await.code() == Some(130),
+        shutdown_status.code() == Some(130),
         "native expiry worker shutdown status differs",
     )?;
-    stable(pool, fixture, &outcome, &rows).await?;
+    stable(pool, fixture, &outcome, &rows)
+        .await
+        .map_err(|_| "native expiry post-shutdown state verification failed")?;
     // Unexpected native output remains unqualified, even if the database
     // result is an anticipated diagnostic divergence. Never print its bytes.
     let quiet = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -885,6 +907,26 @@ mod tests {
     #[test]
     fn diagnostic_failure_mapping_is_exact_and_payload_free() {
         for (reason, expected) in [
+            (
+                "native expiry worker shutdown wait failed",
+                Diagnostic::FailureShutdownWait,
+            ),
+            (
+                "native expiry worker shutdown status differs",
+                Diagnostic::FailureShutdownStatus,
+            ),
+            (
+                "native expiry post-shutdown state verification failed",
+                Diagnostic::FailurePostShutdownState,
+            ),
+            (
+                "native expiry output requires separate closed classification",
+                Diagnostic::FailureOutput,
+            ),
+            (
+                "native expiry full outcome differs from frozen published behavior",
+                Diagnostic::FailureParity,
+            ),
             (
                 "native expiry clock ordering invalid",
                 Diagnostic::FailureClockOrder,
