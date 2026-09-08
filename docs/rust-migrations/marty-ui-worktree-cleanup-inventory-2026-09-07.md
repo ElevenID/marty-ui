@@ -1,5 +1,127 @@
 # Local marty-ui worktree cleanup inventory — 2026-09-07
 
+## Authoritative update — 2026-09-08
+
+This update supersedes the counts, heads, current ownership and cleanup status
+in the dated historical audit below. Scope remains this repository only. The
+parent verified live GitHub main at
+`f5c4da685f5723a7614649c883bfaa540dd153f1`, matching cached `origin/main`.
+No fetch was performed. The read-only audit was followed by the parent-owned
+cleanup recorded below.
+
+The removal checkpoint left **eight worktrees and four local branches**, after the
+parent removed the separately audited detached deadline-validation checkout and
+the four cache-only checkouts below. At their pre-removal audit, all eight
+historical checkouts had no tracked modifications or ordinary untracked files,
+but all retained ignored files. That is not a claim that
+the entire workspace is clean or that ignored files are disposable.
+
+A subsequent clean worktree, `_codex-worktrees/marty-ui-canvas-body-timeout-reference-v1`,
+was created at `395cab656` on `feat/canvas-worker-body-timeout-reference-v1` for
+parallel streamed-body fixture preparation. Current totals are therefore **nine
+worktrees and five local branches**. This is active reference work to preserve,
+not an abandoned checkout; no body-worker capture is qualified yet.
+
+Retain both earlier active Canvas branches:
+
+- `feat/canvas-review-resolution-v1` at
+  `f0b60073093a89567e43a6fd6452100b2ddc67ec` matches its cached upstream. PR #814
+  remains draft; its runtime CI is still in progress at the parent's checkpoint.
+- `feat/canvas-worker-timeout-replay-v1` at
+  `395cab656f9a3c3063651a2a6c52657b4cdc7884` was clean before this owned inventory
+  update and retains three local commits beyond `f0`: `c17f1e1fa`, `e3009a4f5`,
+  and `395cab656`. No upstream is
+  configured. This is feature-preserving test/qualification work to land, not
+  an abandoned branch to discard.
+
+Metadata-only exclusions remain: local `main` at `97bf86a38` is ahead 2/behind
+31 relative to cached main; `security/kms-boundary-hardening-v1` at `827ab777b`
+is ahead 1/behind 33. Their work contents were not inspected. Preserve the
+separate crypto owner's references and obtain its handoff before integration.
+
+### Material release artifacts: preserve checkouts 114–117
+
+These tracked-clean checkouts contain ignored `tests/artifacts/` trees:
+
+| Worktree | Retained head / merged provenance | Ignored artifact files |
+| --- | --- | --- |
+| `_codex-release-activate-114` | `24f5d5dc0` / #779 | 114 |
+| `_codex-release-activate-115` | `1866528ab` / #783 | 95 |
+| `_codex-release-activate-116` | `89c66b07a` / #788 | 64 |
+| `_codex-release-activate-117` | `4596afaca` / #794 | 207 |
+
+All four heads are ancestors of retained Canvas/main history. Their ignored
+files are nevertheless material: filenames include PostgreSQL dumps, OpenBao
+archives, Redis/applicant backups, deployment/recovery manifests, signed
+transactions and SBOMs. Checkouts 116 and 117 retain KMS-switching `.webm`
+recordings; 117 also retains hosted lifecycle evidence. Only filenames and
+counts were inspected, never backup, credential, environment or log contents.
+Do not remove these worktrees until approved private archival, recoverability,
+recording retention and live deployment/rollback references are verified.
+No claim is made that these files are duplicated elsewhere.
+
+### Four removed cache-only checkouts, with preserved history
+
+All paths below are relative to `marty-workspace`. The ignored directory names
+and recursive regular-file counts were checked with read-only access sufficient
+to resolve the initial pytest-cache ACL warnings.
+
+| Removed worktree | Source/provenance evidence | Generated caches discarded after audit |
+| --- | --- | --- |
+| `_codex-release-activate-113` | Head `3bf4cc05d` is merged #777 and an ancestor of retained main/Canvas refs | `.pytest_cache/`: 4; `scripts/__pycache__/`: 2; `tests/__pycache__/`: 3 (9 total) |
+| `_codex-worktrees/marty-ui-ci-cache-v2` | Head `cf7930956` is #815's original head; its whole tree equals merged main `f5c4da685` | `.pytest_cache/`: 4; `.ruff_cache/`: 4; `scripts/ci/__pycache__/`: 1; `tests/__pycache__/`: 7 (16 total) |
+| `_codex-worktrees/marty-ui-ci-next-v1` | Head `dac18d03e` is #807's original head; its whole tree equals merge `e5c619010` | `.pytest_cache/`: 5; `tests/__pycache__/`: 4 (9 total) |
+| `_codex-worktrees/marty-ui-timing-refresh-v1` | Head `cbb59f4cf` is #803's original head; its sole patch is equivalent on retained main | `.pytest_cache/`: 4; `tests/__pycache__/`: 1 (5 total) |
+
+Current read-only GitHub PR metadata independently confirms:
+
+- [#777](https://github.com/ElevenID/marty-ui/pull/777) is merged at
+  `2026-09-04T21:43:51Z`; merge commit
+  `3bf4cc05d719161a0dc026351ca6f4f12075179a`, original PR head
+  `57cb7b38dadc5ebff0143b1836cc8d74fa77bc37`.
+- [#815](https://github.com/ElevenID/marty-ui/pull/815) is merged at
+  `2026-09-06T04:49:01Z`; original head
+  `cf7930956809a68959f69b2a1e59a8fd7a2e3349` and merge `f5c4da685` share tree
+  `e8f2e09a394cacb29a13596519a815c0fa2f5b43`.
+- [#807](https://github.com/ElevenID/marty-ui/pull/807) is merged at
+  `2026-09-05T21:19:19Z`; original head
+  `dac18d03e65f1f9502efdc36815896778bed2fd0` and merge
+  `e5c61901015a7e4ebb30e1ce4bee9ba75500f7b2` share tree
+  `9bc996817132c3ba47933aea65c32563e1947f30`.
+- [#803](https://github.com/ElevenID/marty-ui/pull/803) is merged at
+  `2026-09-05T16:01:52Z`; original head
+  `cbb59f4cf5e66baf8b675c21e0bbedce4a749c7c`, merge
+  `94c8fc02b85854c290a18eb5b6f06756cb7fd7e9`. `git cherry` reports its patch
+  equivalent; the affected paths are the timing-refresh workflow and its test.
+
+PR head metadata records provenance; it does not prove a corresponding remote
+branch still exists. Whole-tree/patch equivalence means no missing final source
+feature was found in these checkouts. Before removing them, the parent found no
+other process command line referencing their exact paths and no matching bind
+mount or Compose source label among 210 inspected running/stopped containers.
+A tracked documentation/script/workflow search found audit references only.
+The parent rechecked exact resolved targets, unchanged heads, clean ordinary
+status, all 39 ignored files against the audited cache directories/counts, and
+absence of reparse points. Normal `git worktree remove` succeeded for all four;
+no force or recursive shell deletion was used, and all four paths are absent.
+
+Every original checkout commit was retained before removal in local Git refs
+under `refs/archive/worktree-cleanup-20260908/`:
+
+- `release-113`: `3bf4cc05d719161a0dc026351ca6f4f12075179a`
+- `ci-cache-v2`: `cf7930956809a68959f69b2a1e59a8fd7a2e3349`
+- `ci-next-v1`: `dac18d03e65f1f9502efdc36815896778bed2fd0`
+- `timing-refresh-v1`: `cbb59f4cf5e66baf8b675c21e0bbedce4a749c7c`
+
+These are local archive refs, not new branches or release tags. They preserve
+intermediate history as well as final source, and can be passed to
+`git worktree add --detach <new-path> <archive-ref>` to recreate a checkout.
+The 39 deleted cache files are regenerable; no backup, recording, runtime
+configuration, feature source, branch or tag was discarded. Release checkouts
+114–117 and both crypto-owned local references remain untouched.
+
+## Historical audit — 2026-09-07 (superseded where stated above)
+
 ## Scope and evidence freshness
 
 This is a **marty-ui repository-only** audit, not workspace-wide cleanup. The
