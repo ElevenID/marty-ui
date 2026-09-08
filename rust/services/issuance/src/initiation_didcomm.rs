@@ -1657,6 +1657,23 @@ mod tests {
         )
     }
 
+    // Base58btc of the X25519 multicodec prefix EC01 and authcrypt_parties'
+    // synthetic recipient public key. Both tests verify its decoded key through
+    // canonical Core; no local multibase/resolver implementation is introduced.
+    const SYNTHETIC_RECIPIENT_MULTIBASE: &str = "z6LSd1FDxqS6PDoWwxco3fnM3DGEuXyse6pr7uRRYamJDqit";
+
+    fn assert_embedded_key_binding(document: &DidDocument, did: &str, expected_key: [u8; 32]) {
+        assert_eq!(document.id, did);
+        let methods = document.x25519_key_agreement_methods();
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].1, expected_key);
+        assert!(methods[0].0.starts_with(&format!("{did}#")));
+        assert!(document
+            .verification_method
+            .iter()
+            .all(|method| method.controller == did));
+    }
+
     fn authcrypt_policy_file(issuer_did: &str, secret: &[u8; 32]) -> PathBuf {
         policy_file(
             &json!({
@@ -3033,6 +3050,89 @@ mod tests {
         assert!(!packed.message_id.is_empty());
         assert!(!format!("{prepared:?}").contains("did:example:holder"));
         assert!(!format!("{packed:?}").contains("signed-credential"));
+    }
+
+    #[tokio::test]
+    async fn embedded_key_and_jwk_resolve_without_network_but_require_delivery_endpoints() {
+        let (_, _, recipient, _) = authcrypt_parties();
+        let expected_key = recipient.x25519_key_agreement_methods()[0].1;
+        let public_jwk = json!({
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": URL_SAFE_NO_PAD.encode(expected_key),
+        });
+        let envelope = NativeDidcommEnvelope::new(None, None, None);
+        for (did, source) in [
+            (
+                format!("did:key:{SYNTHETIC_RECIPIENT_MULTIBASE}"),
+                "embedded:did:key",
+            ),
+            (
+                format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(public_jwk.to_string())),
+                "embedded:did:jwk",
+            ),
+        ] {
+            let resolved = envelope.resolver.resolve_with_metadata(&did).await.unwrap();
+            assert_eq!(resolved.source, source);
+            assert_embedded_key_binding(&resolved.document, &did, expected_key);
+            assert_eq!(
+                envelope.resolve_recipient(&did).await.err(),
+                Some(NativeDidcommError::MissingEndpoint),
+                "an embedded method without a service must resolve, then fail endpoint selection"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_peer2_resolves_inline_service_and_encrypts_without_network() {
+        let (sender, _, recipient, recipient_secret) = authcrypt_parties();
+        let expected_key = recipient.x25519_key_agreement_methods()[0].1;
+        let endpoint = "https://wallet.example/inbox";
+        // Core's existing full ServiceEntry representation, not a claim that
+        // abbreviated peer-DID service encodings or method 0 are qualified.
+        let service = json!({
+            "id": "#didcomm-1",
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": endpoint,
+        });
+        let holder_did = format!(
+            "did:peer:2.E{SYNTHETIC_RECIPIENT_MULTIBASE}.S{}",
+            URL_SAFE_NO_PAD.encode(service.to_string())
+        );
+        let envelope = NativeDidcommEnvelope::new(None, None, None);
+        let metadata = envelope
+            .resolver
+            .resolve_with_metadata(&holder_did)
+            .await
+            .unwrap();
+        assert_eq!(metadata.source, "embedded:did:peer");
+        assert_eq!(metadata.document.id, holder_did);
+        let resolved = envelope.resolve_recipient(&holder_did).await.unwrap();
+        assert_eq!(resolved.endpoint, endpoint);
+        assert_embedded_key_binding(&resolved.document, &holder_did, expected_key);
+        let prepared = envelope
+            .prepare_encryption(&sender.id, resolved.document)
+            .await
+            .unwrap();
+        let packed = envelope
+            .pack_credential(
+                "synthetic-peer-credential",
+                "w3c_vcdm_v2_sd_jwt",
+                &sender.id,
+                &holder_did,
+                "transaction-peer-1",
+                "credential-peer-1",
+            )
+            .unwrap();
+        let encrypted = envelope
+            .encrypt_prepared(&packed.plaintext, &prepared)
+            .unwrap();
+        let plaintext = marty_didcomm::decrypt_jwe(&encrypted, &recipient_secret).unwrap();
+        assert_eq!(plaintext, packed.plaintext);
+        let message: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
+        assert_eq!(message["from"], sender.id);
+        assert_eq!(message["to"], json!([holder_did]));
+        assert_eq!(message["id"], packed.message_id);
     }
 
     #[tokio::test]
