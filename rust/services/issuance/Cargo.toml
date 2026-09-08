@@ -37,6 +37,7 @@ http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+log.workspace = true
 mmf-config.workspace = true
 mmf-core.workspace = true
 mmf-runtime.workspace = true

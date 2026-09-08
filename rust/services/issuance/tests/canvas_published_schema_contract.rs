@@ -2061,6 +2061,21 @@ async fn status_main_process_resolves_reviews_with_real_http_publication_and_mir
     owned.close().unwrap();
 }
 
+#[path = "support/canvas_worker_sql_logging.rs"]
+mod canvas_worker_sql_logging;
+
+#[tokio::test]
+async fn worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    canvas_worker_sql_logging::replay(&owned.url).await;
+    owned.close().unwrap();
+}
+
 #[tokio::test]
 async fn status_runtime_preserves_unicode_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

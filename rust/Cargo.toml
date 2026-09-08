@@ -29,6 +29,7 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 httpdate = "1"
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+log = "0.4"
 marty-crypto = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
 marty-didcomm = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }
 marty-iso18013 = { version = "=0.1.61", git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }

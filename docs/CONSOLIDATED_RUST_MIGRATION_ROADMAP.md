@@ -34,14 +34,22 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 The eight operations handlers are now composed into the native executable with
 one shared credential lifecycle service; gateway routing remains unchanged.
 Actual-process auth/transport, ten configured operations/lifecycle test entries,
-362 issuance unit tests and independent review passed at `211ae9d8b`. This does
-not yet qualify actual-main authenticated publication or the public gateway path.
+362 issuance unit tests and independent review passed at `211ae9d8b`. The
+subsequent actual-main four-case lifecycle/publication test passed in 8.72s at
+`8df5df68f`, with ten retained configured status regressions in 55.09s. The public
+gateway path and fresh-head hosted qualification remain open.
 See the [composition checkpoint](rust-migrations/canvas-review-resolution.md#native-composition-checkpoint-2026-09-08).
 The combined draft passed 2,699 Python tests (three skips) in 202.58s and all
 four executable smoke tests in 7.03s. Worker CI at `67ee5c986` identified strict
 output rejection after successful early renewal and shutdown checks; bounded
-output classification is added without allowing that output or changing runtime
-logging. Full native BODY/expiry qualification remains open.
+output classification was added without allowing that output. The `4b26aacb1`
+run identified the SQLx slow-query warning signature. A worker-only repair keeps
+slow SQL statements at DEBUG with the same one-second threshold, preserving
+operational warnings/errors and the existing logging filters. Its real PostgreSQL
+baseline/WARN/DEBUG test passed in 6.88s, all seven worker controls (including the
+16-case frozen logging matrix) passed, and strict Clippy passed in 26.09s. The
+actual-main lifecycle gate also passed on the combined local source in 7.06s.
+Full native BODY/expiry qualification remains open; no strict gate is relaxed.
 
 Parallel consumer hardening now includes a shared generated-release image plan
 and complete effective-model checks for all 19 application services. The local

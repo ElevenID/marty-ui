@@ -14,7 +14,8 @@ use marty_issuance_service::{
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
     canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
     canvas_sync_worker_lifecycle::{
-        finish_on_shutdown, spawn_with_postgres_cleanup, worker_pool_options, WorkerShutdown,
+        finish_on_shutdown, spawn_with_postgres_cleanup, worker_connect_options,
+        worker_pool_options, WorkerShutdown,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     integration_secret::IntegrationSecretCipher,
@@ -49,7 +50,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
         .min_connections(1)
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
-        .connect_lazy(&database_url)?;
+        .connect_lazy_with(worker_connect_options(&database_url)?);
     let (stop, receiver) = watch::channel(false);
     // Register Unix handlers before worker tasks can report database readiness.
     let shutdown = shutdown_signal();

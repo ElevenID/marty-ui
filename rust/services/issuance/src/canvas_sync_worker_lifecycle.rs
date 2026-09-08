@@ -9,7 +9,10 @@ use std::{
 };
 
 use mmf_runtime::managed_task::{ManagedTask, TaskCompletion, TaskJoinError};
-use sqlx::{postgres::PgPoolOptions, Connection, PgPool};
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    ConnectOptions, Connection, PgPool,
+};
 use tokio::sync::watch;
 
 /// Explicit graceful stop and task cancellation are separate control events.
@@ -17,6 +20,16 @@ use tokio::sync::watch;
 pub enum WorkerShutdown {
     Drain,
     Cancel,
+}
+
+/// Lock waits are expected worker coordination, not operational warnings.
+/// Preserve SQLx URL parsing and its one-second slow-query threshold while
+/// keeping both normal and slow statement diagnostics at DEBUG. Genuine
+/// database/worker warnings and errors retain their existing subscriber policy.
+pub fn worker_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(database_url
+        .parse::<PgConnectOptions>()?
+        .log_slow_statements(log::LevelFilter::Debug, Duration::from_secs(1)))
 }
 
 /// Bound validation of a connection whose query future has already returned or

@@ -37,6 +37,25 @@ No logging filter, runtime SQL, frozen outcome or timing gate changes. The actua
 log signature remains to be observed; SQLx's default slow warning is only a
 source-derived hypothesis until then.
 
+That follow-up ran at `4b26aacb13e76736c97508c5b4c907dc642acbd5` in
+[CI34220548320](https://github.com/ElevenID/marty-ui/actions/runs/34220548320).
+Runtime `102042435358` failed with `OutputSqlxSlowQueries,FailureOutput` after the
+same successful early renewal and shutdown checks. The hypothesis is now backed
+by the actual worker's bounded log signature, not just a library-default guess.
+The scoped repair configures only SQLx slow-statement severity to DEBUG, keeping
+the one-second threshold, normal DEBUG statements, operator logging filters,
+operational warnings/errors, connection settings and cleanup hooks unchanged.
+It does not redact SQL at DEBUG or accept nonempty output in parity tests.
+
+An actual PostgreSQL test uses the production connection options: stock SQLx
+emits the slow warning at WARN; the repair keeps SQL quiet at WARN while retaining
+explicit operational WARN/ERROR events; DEBUG retains both ordinary and slow
+query events and the original threshold. It passed in 6.88s after a clean package
+rebuild in 44.24s. All seven worker controls passed, including unchanged 16-case
+published logging thresholds and Rust-directive precedence; strict all-target
+Clippy passed in 26.09s and 66 affected Python controls in 1.89s. The configured
+SQL logging test is mandatory. Actual full-worker expiry/BODY rerun remains due.
+
 The newer integrated `4fbe9fdcb` candidate and subsequent reference registration
 still require fresh-head hosted qualification; native BODY and actual native
 live-provider lease-expiry behavior remain unqualified. The gate audit begun at
