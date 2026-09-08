@@ -1,10 +1,17 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Current candidate `2d864723f74831d4338e1686c242b1bad534a4b9` passed native timeout
+Gate audit at `a897c18d3`: named historical qualifications are retained below;
+fresh exact-head hosted qualification remains pending. The new gate 6/7
+composed regression passed the complete four-entry configured PostgreSQL suite
+locally on Windows in 94.81s, including the 21-value-class, empty-result and
+orphan marker. Mandatory Linux signal cases and fresh-head CI remain pending.
+No whole-worker cutover, Python deletion or deployment is approved by this audit.
+
+Earlier application-repair candidate `2d864723f74831d4338e1686c242b1bad534a4b9` passed native timeout
 and mixed-roster preflights in
 [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184),
 runtime job `101977399347`, at 07:45:35Z and 07:51:41Z on 2026-09-08.
-The full isolated database suites remain in progress. PR #814 remains draft and
+At that recorded checkpoint the full isolated database suites were in progress. PR #814 remains draft and
 unrouted; these preflights do not close the remaining qualification gates.
 
 Earlier unqualified candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` failed
@@ -16,8 +23,7 @@ snapshot and target differences. This supersedes the earlier byte-count-only
 failure at `7ca035d03`. Roster cases and the later full configured suite were
 not reached. At that historical head, Rust Service Tests and CI Gate failed.
 
-The narrow application REST repair is implemented in its separate worktree and
-compiled in 65s; after the additional malformed-header regression and test-spy
+The narrow application REST repair compiled in 65s before integration; after the additional malformed-header regression and test-spy
 type alias, final unit execution passed 354 tests in 15.73s (8.94s compilation).
 Strict all-target Clippy passed in 21.75s. Hosted qualification is still required. Application/issued-drift
 scope selects the shared 15s operation transport; roster, LTI and signing paths
@@ -371,28 +377,35 @@ followed by both the valid-lease and real-expiry rollback controls; the mixed
 worker replay recorded seven stages and 55 HTTPS requests. These scoped passes
 do not substitute for the newer deadline/timeout or consumer cutover gates.
 
-| Gate | Inspected evidence | Remaining qualification |
-| --- | --- | --- |
-| 1. Environment parsing, bounds, malformed startup | 133 startup vectors and PostgreSQL consumer cycles; [LOG_LEVEL repair](canvas-worker-logging-configuration.md) has 16 frozen threshold cases and seven actual invalid-process checks. Combined runtime and image qualification passed at c3e51a4d5 | Execute remaining deployed entrypoint/configuration shapes, not only configuration factories; retain these gates in the new exact-head run. |
-| 2. Legacy processor loader and removal | Python `test_canvas_worker_loader_oracle.py` exists; native binary constructs its processor directly | Remove the loader selection from all three consumer definitions only at qualified cutover; retain the frozen Python loader evidence. |
-| 3. Loop stop, cancellation, recovery, disposal | Lifecycle, awaited-disposal and actual-process signal suites; both three-HTTPS native deadline cases and fresh reference regeneration qualified at `f0b600730` | Retain this scoped active-I/O cancellation and post-release stability proof; remaining lifecycle/provider failures and all-consumer disposal are separate requirements. |
-| 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations, lease unit tests; actual two-renewal deadline composition with retained committed facts qualified at `f0b600730` | Carry the same fences and outcome/error ordering through the remaining authoritative-provider/business-effect paths; real-provider lease expiry is not the job-deadline case. |
-| 5. Scheduler, reclaim, final-attempt crash races | Scheduler/reclaimer, newer-target recovery, both repository lock winners, completion-first atomicity and [recovery-first process fencing](canvas-worker-provider-recovery-first.md) qualified above; [real-time effect transaction regression](canvas-worker-effect-expiry.md), including its valid-lease positive control, passed configured hosted CI at `9cbba6b7b` | Retain the repository regression in fresh exact-head CI and cover real provider I/O expiry separately. Controlled provider calls and process exit alone do not prove whole-worker disposal or parity. |
-| 6. Missing target and unexpected-error privacy | Worker error mapping, result allowlist, durable repository assertions | Cross-language whole-cycle failure/log/state projections, including missing target and 429/non-429 provider outcomes. |
-| 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists; database exact-number assertion | Preserve these cases through composed worker outcomes; do not claim every non-JSON Python host value from a JSON corpus. |
-| 8. Retry-After edges | Seven actual native HTTPS/deadline cases and shared parser correction qualified at a6826de39 and retained at 29bf8c226; existing parser vectors remain | Retain date, malformed, negative, zero, clamp and huge-integer durable scheduling evidence in fresh exact-head CI. Full-worker acceptance remains separate. |
-| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): fourteen processor codes have process evidence and one has a controlled-processor worker/PG guard. [Typed dispatch proof](canvas-worker-dispatch-reconciliation.md) has five published-worker observations qualified in configured hosted CI at `9cbba6b7b`; five compiler tests also passed locally | Retain the published dispatch gate, reconcile exact-head compiler evidence and complete all-consumer reconciliation for the two typed-dispatch codes; none of the seventeen codes is waived. Keep the no-signing guard; do not emulate Python imports or mistake an empty composed-code inventory for full worker/provider qualification. |
-| 10. OAuth revocation failure and owner fences | 39 native process/cycle observations plus selection/order, schema-rejection and empty-token regressions qualified at df3ed290b | Retain the scoped [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md) and stronger atomic cleanup in future exact-head runs. Repository selection and counting-provider regression are not whole-process HTTPS evidence. |
-| 11. Cursor and terminal candidate preservation | Twelve-stage published/native direct-processor replay remains; [seven-stage complete published-worker reference](canvas-worker-mixed-roster.md) and actual native replay qualified at `9cbba6b7b`, including natural scheduling, one idle restart, resume/wrap, terminal preservation and mixed REST/AGS/NRPS behavior with exact transport ledgers | Retain both complete corpora and exact ledgers in fresh exact-head CI. Remaining lifecycle, consumer/signing and aggregate acceptance gates stay open; this scoped native process qualification is not whole-worker cutover approval. |
-| 12. All four fact projections | Actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Retain both complete corpora in fresh exact-head CI; other error, mutation and lifecycle requirements remain in their named gates. |
-| 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Compare actual Rust diagnostic selection, bounded detail and operation/status handling; capture alone is not native parity. |
-| 14. Allowlisted worker logs | All twelve landed reference worker observations now pass native PostgreSQL replay locally, with typed unexpected-failure categories and known-error preservation controls | Qualify the complete worker-reference follow-up and remaining composed driver/provider failures; boundary coverage alone is not aggregate acceptance. |
+The following table tracks the exact fourteen normative boundaries, not an
+unbounded requirement to repeat every failure through every provider. Historical
+qualification is not a fresh-head pass. Controlled adapters, published-process
+references, actual native HTTPS and consumer cutover remain distinct evidence.
 
-Reference-side observations above were read from the clean local
-`marty-credentials` checkout at `28b53d433031fe46b3f0c0c589d91f2c85d22c6e`.
-That is a local source observation, not a new claim about protected main or the
-immutable reference image. Check remote branch ownership and provenance before
-changing reference source; preserve the other worker's unrelated work.
+| Gate | Inspected evidence | Remaining qualification or action |
+| --- | --- | --- |
+| 1. Environment parsing, bounds, malformed startup | Historically qualified: 133 configuration vectors, actual `worker_startup_matches_published_process_and_idle_heartbeat`, PostgreSQL consumer cycles and [LOG_LEVEL repair](canvas-worker-logging-configuration.md) with 16 frozen threshold cases and seven invalid-process checks; combined runtime/image qualification at `c3e51a4d5` | Fresh exact-head run pending. No additional parser behavior gap identified; deployed secret/entrypoint adoption remains a consumer cutover action, not missing configuration-factory evidence. |
+| 2. Legacy processor loader and removal | Retained Credentials `tests/unit/test_canvas_worker_loader_oracle.py`, five published dispatch observations and native typed construction; see [dispatch reconciliation](canvas-worker-dispatch-reconciliation.md) | At qualified cutover, remove active loader selection from every consumer, updating commands/images and operational validators together. Preserve frozen legacy evidence and Python rollback compatibility while supported; do not recreate dynamic imports in Rust. |
+| 3. Loop stop, cancellation, recovery, disposal | Historically qualified: `assert_owned_cycle_lifecycle`, `assert_initialized_pool_disposal`, privacy replay's failed-then-recovered actual `run_loop`, and actual-process signals. Both three-HTTPS deadline cases and reference regeneration qualified at `f0b600730` | Fresh exact-head run pending. Named lifecycle boundaries have evidence; controlled-processor awaited disposal is not inferred from process exit. The separate missing live-provider expiry composition is gate 4. |
+| 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations and lease-loss cancellation unit tests; actual provider renewal/recovery and two-renewal deadline composition qualified at `f0b600730` | Missing: actual lease expiry while a surviving worker's real provider I/O remains pending. Capture expiry, delayed renewal outcome, effects and recovery against frozen published behavior, with a valid-lease control; investigate any unsafe discrepancy explicitly. Python computes renewal expiry before a blocked save, so a queued renewal may revive the lease before provider completion: original expiry alone does not establish that all later writes must fail. Deadline tests require a current renewed lease; controlled fence edits and transaction expiry do not close this composition. |
+| 5. Scheduler, reclaim, final-attempt crash races | Historically qualified actual-process concurrent scheduler, retryable/final reclaimers, final-attempt crash, newer-target recovery and both terminal-race winners; [recovery-first fencing](canvas-worker-provider-recovery-first.md). [Effect transaction expiry](canvas-worker-effect-expiry.md) and valid-lease control additionally qualified at `9cbba6b7b` | Fresh exact-head run pending. The named scheduler/reclaim/crash requirements have composed evidence; retain them. Controlled-provider effect expiry is not the missing live-provider case in gate 4, nor whole-worker disposal proof. |
+| 6. Missing target and unexpected-error privacy | Unexpected runtime/429/503 durable and complete-log projections historically qualified in the twelve-case [privacy replay](canvas-worker-privacy.md) at `b02b77d13562db717d6e16cdf85ff430edbc2eeb`. New `assert_projection_cycles` composes a preseeded orphan and successful siblings through actual `run_cycle`/PostgreSQL | Complete four-entry configured PostgreSQL suite passed locally on Windows in 94.81s with the new marker. Mandatory Linux signal cases and fresh exact-head CI remain pending. The orphan is in the dedicated worker test schema, not a claim of published-schema FK/deletion reachability or actual-provider failure injection. |
+| 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists. New `assert_projection_cycles` passes all 21 frozen value classes plus an empty control through actual worker persistence and compares raw result lexemes | Complete four-entry configured PostgreSQL suite passed locally on Windows in 94.81s with the new marker; fresh exact-head CI remains pending. Retain exhaustive scalar/projection vectors alongside composed representatives; do not infer non-JSON Python host-value coverage, native-binary parity or Linux signal qualification from this run. |
+| 8. Retry-After edges | Historically qualified: seven actual native HTTPS/deadline cases and shared parser correction at `a6826de39`, retained at `29bf8c226`; parser vectors remain | Fresh exact-head run pending for date, malformed, negative, zero, clamp and huge-integer durable scheduling boundaries. No additional named edge gap identified; aggregate acceptance remains separate. |
+| 9. Target validation and processor failures | All nine validation codes have qualified actual-process outcomes. [Cross-corpus audit](canvas-worker-processor-coverage.md): fourteen processor codes have process evidence and one has a controlled-processor worker/PG guard. [Typed dispatch proof](canvas-worker-dispatch-reconciliation.md) has five published-worker observations qualified at `9cbba6b7b`; five compiler tests also passed locally | Fresh exact-head dispatch/compiler evidence and all-consumer selector removal at cutover remain, shared with gate 2. Both typed-dispatch codes require the documented reconciliation, not Python import emulation; none of the seventeen codes is waived. Keep the no-signing guard. |
+| 10. OAuth revocation failure and owner fences | Historically qualified: 39 native process/cycle observations plus selection/order, schema-rejection and empty-token regressions at `df3ed290b` | Fresh exact-head run pending. Retain the named [coverage audit](canvas-worker-oauth-revocation-coverage-audit.md) boundaries and stronger atomic cleanup; repository/counting-provider controls are not mislabeled as whole-process HTTPS. |
+| 11. Cursor and terminal candidate preservation | Historically qualified: twelve-stage direct-processor replay plus [seven-stage published/native worker replay](canvas-worker-mixed-roster.md) at `9cbba6b7b`, with natural scheduling, one idle restart, resume/wrap, terminal preservation and exact mixed REST/AGS/NRPS ledgers | Fresh exact-head run pending; retain both complete corpora and ledgers. The named cursor/candidate boundary is qualified historically, not whole-worker cutover or signing/consumer acceptance. |
+| 12. All four fact projections | Historically qualified: actual native worker, HTTPS, encrypted OAuth, official schema and durable effects match the independent assignment/quiz/module/course corpus at `6977a70ba` | Fresh exact-head run pending; retain both complete corpora. Other error/mutation/lifecycle boundaries remain in their named gates, not an unspecified extension of fact projection. |
+| 13. Bounded signing error detail | Credentials PR269 landed at protected `d418ac0`; landed PR271 freezes 45 helper and six remote-operation observations, with two identical captures | Concrete gap: adopt and compare actual Rust signing diagnostic selection, bounded JSON string/object/text detail and operation/status handling against all 51 observations. Coordinate overlapping crypto ownership before implementation; coordination is pending. Reference repair/capture alone is not native parity. |
+| 14. Allowlisted worker logs | Historically qualified: all twelve reference worker observations, actual PostgreSQL cycles/loops, complete producer/formatter output and known-error controls at `b02b77d13562db717d6e16cdf85ff430edbc2eeb`; CI34064588338 completed successfully | Fresh exact-head run pending. This qualifies the named allowlisted worker-log boundary, not every module, production collector, signing diagnostic or aggregate deployment. Preserve explicit mappings and redaction negatives in the [privacy audit](canvas-worker-privacy.md). |
+
+An earlier historical source inspection used the clean local `marty-credentials`
+checkout at `28b53d433031fe46b3f0c0c589d91f2c85d22c6e`; that statement does not
+describe every later reference above or establish current protected-main state.
+Signing diagnostic adoption uses the immutable repaired `d418ac0` source and
+blob `5e84cfdcbdf289ec0059eb39dd54c4a5c79c5b3a`, not that earlier checkout.
+Each later corpus retains its own recorded provenance. Check reference-source
+ownership before changes and preserve the other worker's unrelated work.
 
 The scoped repair [Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269)
 landed at protected `d418ac0df283625f43b0c011fb1c72fd7d3013a9` after review of
@@ -423,11 +436,11 @@ encrypted-secret cleanup and another tenant's secret while restoring the exact
 error event; cleanup behavior already matched. The final six cases use payload-free
 unexpected processor categories and preserve known classified error behavior;
 they verify all durable outcomes and complete producer/formatter log fields.
-The corrections pass locally without removing the private SQL generation fence.
-Signing diagnostic adoption and broader complete worker/driver behavior remain
-separate gates; do not confuse those requirements with the now-empty remaining
-composed processor-code inventory. Fresh exact-head hosted checks are required
-for extensions beyond the qualified checkpoint above.
+The complete corrections qualified at `b02b77d13562db717d6e16cdf85ff430edbc2eeb`
+in CI34064588338 without removing the private SQL generation fence. Signing
+diagnostic adoption remains a separate concrete gap; the empty remaining composed
+processor-code inventory is not consumer cutover approval. Fresh exact-head
+hosted checks must retain these scoped privacy boundaries.
 
 Native adoption must not hide source-inspection differences by changing that
 artifact: the resolver currently omits diagnostic detail on non-success, while
@@ -526,13 +539,13 @@ complete deployed entrypoint/secret-source behavior remain separate gates.
 2. Retain the qualified REST/facts/retry/signal/renewal and nonfinal recovery
    sequences on the pinned migrations with real native provider/OAuth adapters.
    Retain final-attempt, concurrent scheduler, two-final-reclaimer and retryable
-   two-reclaimer qualification, then extend
-   the same harness across the remaining crash-reclaimer, mutation, OAuth,
-   failure and cleanup requirements above. Do not repeat completed boundaries
-   as though their native adoption were still missing.
-3. Close the two explicit reference privacy requirements without changing frozen
-   expectations to conceal implementation differences. Keep improvements scoped
-   and coordinate reference-source ownership before protected landing.
+   two-reclaimer qualification. Add the explicit live-provider lease-expiry
+   composition in gate 4 and retain the locally passed gate 6/7 cycle projections
+   in fresh exact-head hosted validation.
+   Do not repeat completed boundaries as though native adoption were missing.
+3. Retain the qualified worker-log privacy boundary; adopt the remaining Rust
+   signing diagnostics against the repaired reference without changing frozen
+   expectations. Coordinate overlapping crypto ownership before implementation.
 4. Qualify whole readiness/activation and all eight candidate operation routes,
    then switch every intended consumer with executable packaging/configuration
    gates. Require fresh exact-head CI and maintainer review before merging.

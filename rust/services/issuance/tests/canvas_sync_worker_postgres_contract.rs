@@ -29,6 +29,9 @@ mod canvas_worker_signing_guard;
 #[path = "support/canvas_worker_privacy_replay.rs"]
 mod canvas_worker_privacy_replay;
 
+#[path = "support/canvas_worker_projection_cycles.rs"]
+mod canvas_worker_projection_cycles;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
@@ -434,6 +437,8 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     canvas_worker_privacy_replay::assert_worker_failure_privacy(&pool).await;
     setup_worker_schema(&pool).await;
     canvas_worker_signing_guard::assert_signing_guard(&pool).await;
+    setup_worker_schema(&pool).await;
+    canvas_worker_projection_cycles::assert_projection_cycles(&pool).await;
     setup_worker_schema(&pool).await;
     canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
     canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool).await;

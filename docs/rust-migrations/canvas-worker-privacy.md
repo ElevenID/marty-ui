@@ -1,5 +1,20 @@
 # Hardened worker privacy replay
 
+## Current qualification status
+
+The complete twelve-worker-observation follow-up is historically qualified at
+`b02b77d13562db717d6e16cdf85ff430edbc2eeb`: parent-verified
+[CI34064588338](https://github.com/ElevenID/marty-ui/actions/runs/34064588338)
+completed successfully. Exact-head checks, configured PostgreSQL/runtime and
+image evidence are recorded below. This qualifies the named allowlisted worker
+logging boundary (gate 14) and unexpected-error privacy portion of gate 6.
+Fresh hosted qualification of the integrated `a897c18d3` candidate remains
+pending. The new missing-target/composed-result regression passed the complete
+four-entry configured PostgreSQL suite locally on Windows in 94.81s, including
+the 21-value-class, empty-result and orphan marker. Mandatory Linux signal cases
+and fresh-head CI remain pending. Historical local-only checkpoints below describe the
+order of development, not the current qualification status.
+
 The complete `contracts/canvas-worker-privacy-reference.json` is copied unchanged
 from Credentials PR271, landed at `948bca975b493285c512c20a13d5abf8ee5e6305`.
 Its production-reference source is the earlier protected privacy repair
@@ -9,7 +24,7 @@ The SHA256 of the canonical LF text is
 The replay checks this digest, source revision and all 63 retained cases.
 No old immutable oracle or observation is rewritten.
 
-## Newly replayed boundaries
+## Retained qualified boundaries
 
 All twelve worker observations now execute through actual Rust worker
 cycles/loops and PostgreSQL, using the existing observed-repository owner:
@@ -98,9 +113,9 @@ group passed in 93.77 seconds, including all four native observation markers
 and the observer regression; its loopback-only tmpfs fixture was removed.
 Library 332, worker binary 5 and behavior 23
 tests passed, as did strict all-target Clippy and 907 Python tests with one
-existing opt-in skip. Fresh exact-head hosted checks must pass before treating
-this follow-up as qualified. Windows does not attest the Linux process-signal
-cases; those remain mandatory in hosted CI.
+existing opt-in skip. At this historical checkpoint hosted checks were still
+required; the subsequent qualifications below supersede that local-only status.
+Windows results alone do not attest Linux process-signal cases.
 
 The expanded six-observation checkpoint passed all four configured PostgreSQL
 entries in 93.73 seconds, with all six native markers and the earlier guard,
@@ -108,8 +123,8 @@ range, lifecycle, disposal and renewal cases retained. Its isolated loopback
 tmpfs database was removed. The new checkpoint also passed 332 library tests,
 5 worker-binary tests, 23 behavior tests, strict all-target Clippy, and 907 Python
 tests in 42.87 seconds with the same existing opt-in skip. The frozen corpus
-hash remains unchanged. This local result still requires fresh exact-head
-hosted qualification; it does not close the whole-worker gates.
+hash remains unchanged. This was a local-only result until the hosted
+qualification below; it did not authorize whole-worker cutover.
 
 ## Unexpected processing boundary
 
@@ -129,8 +144,10 @@ The shared worker now accepts an explicit, payload-free unexpected-failure
 category: runtime failure or HTTP status. It does not emulate Python exceptions,
 inspect an arbitrary exception object, or carry a URL, response body, header or
 credential. Known first-party adapter failures remain explicitly classified.
-This does not claim every actual driver/provider failure has been composed and
-qualified through those adapters; that remains a separate whole-worker gate.
+This covers the named controlled unexpected-error projections, not actual
+driver/provider failure injection. Other concrete behavior requirements retain
+their own gates; this limitation does not reopen the qualified worker-log
+projection or imply an unbounded failure matrix.
 
 At the worker boundary, unexpected errors are rebuilt from their category before
 persistence. All six native cases deliberately overwrite public diagnostic
@@ -155,10 +172,10 @@ renewal combinations remain green. The isolated loopback tmpfs fixture was
 removed afterward. Final qualification also passed 333 library, five worker
 binary and 23 behavior tests, strict all-target Clippy, and 907 Python tests in
 37.17 seconds with the same existing opt-in skip. The immutable 63-case hash is
-unchanged. Fresh exact-head hosted qualification remains required; local Windows
-results do not attest Linux process-signal behavior.
+unchanged. These local results preceded the exact-head hosted qualification
+below; they alone did not attest Linux process-signal behavior.
 
-## Still required
+## Hosted qualification and remaining work
 
 The complete twelve-case follow-up subsequently qualified at
 `b02b77d13562db717d6e16cdf85ff430edbc2eeb`: CI34064588338 and all applicable
@@ -166,10 +183,18 @@ exact-head checks passed, including Rust CodeQL34064588330. Runtime job101571024
 passed the four-entry configured worker PostgreSQL group in 96.51 seconds and
 the separate 70-entry published-schema/runtime group in 1449.26 seconds. The
 image job passed as well. This qualifies these retained privacy boundaries;
-later revocation work and the remaining whole-worker gates are separate.
+the current candidate must retain them in fresh exact-head CI. Later revocation
+qualification is tracked separately in the cutover readiness table.
 
-All 51 signing helper/operation observations still need native adoption.
-Coordinate overlapping signing-adapter work with the crypto worker. Whole-worker
-driver/provider failures, remote OAuth, races, all consumers and aggregate
-acceptance remain their own gates. This twelve-case replay does not close gates
-6, 13 or 14, authorize deleting live Python, or change production deployment.
+All 51 signing helper/operation observations still need native diagnostic
+adoption (gate 13); coordination with the overlapping crypto owner is pending.
+The new gate 6 missing-target test composes an orphan in the dedicated worker
+test schema, not a published-schema FK/deletion race; the complete configured
+PostgreSQL suite passed all four entries locally on Windows in 94.81s. Fresh-head
+hosted qualification, including mandatory Linux signals, remains pending.
+The twelve-case replay already qualifies gate 14's named structured-log boundary
+and gate 6's unexpected-error projections. It does not prove signing diagnostics,
+all-service/collector logging or whole-worker cutover. Consumer selector removal,
+the separate live-provider lease-expiry composition and aggregate beta acceptance
+remain explicit work in the [readiness table](canvas-worker-cutover-readiness.md).
+No live Python deletion or production deployment is authorized by these passes.
