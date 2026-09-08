@@ -1,5 +1,14 @@
 # Canvas worker cutover readiness — 2026-09-08
 
+Newer unqualified candidate `7ca035d03` failed native timeout preflight in
+[CI34195421549](https://github.com/ElevenID/marty-ui/actions/runs/34195421549).
+The prompt application case passed; the delayed case exited during outcome
+observation, before the roster cases or full configured suite. Closed
+coordinator diagnostics are implemented for the next replay; the particular
+runtime mismatch remains unproven by the existing byte-count-only failure.
+The scoped qualified checkpoint below is unchanged. The worker is still
+unrouted, with no runtime policy change, Python deletion or deployment.
+
 Status: latest qualified composed checkpoint
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`.
 [CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)

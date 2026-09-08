@@ -33,6 +33,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
+The next candidate `7ca035d03` ran actual native timeout preflight in
+[CI34195421549](https://github.com/ElevenID/marty-ui/actions/runs/34195421549)
+and failed: the prompt application control passed one HTTPS request, then the
+delayed application case exited during outcome observation. Its hidden child
+assertion is not established by the exposed byte counts; closed diagnostic
+categories are implemented for the next replay. The roster cases and later
+configured suites were not reached. See the
+[native timeout record](rust-migrations/canvas-worker-native-timeout-replay.md).
+This does not revoke the earlier scoped `f0` checkpoint below or qualify worker
+cutover. No runtime policy, frozen outcome, routing or deployment changed.
+
 Latest qualified composed worker checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`:
 [CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)

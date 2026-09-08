@@ -1,9 +1,43 @@
 # Native worker timeout replay
 
-Status: implemented and locally tested on `feat/canvas-worker-timeout-replay-v1`,
-based on `f0b60073093a89567e43a6fd6452100b2ddc67ec`. Actual native Linux execution
-is still required. No runtime timeout policy, published fixture, frozen outcome,
+Status: actual native Linux preflight at `7ca035d03` failed and remains
+unqualified; the prompt application control passed. No runtime timeout policy,
+published fixture, frozen outcome,
 live job, lease, clock, production consumer or deployment was changed.
+
+## Actual Linux preflight — 2026-09-08
+
+[CI 34195421549](https://github.com/ElevenID/marty-ui/actions/runs/34195421549),
+runtime job `101961994076`, executed the new native preflight at exact head
+`7ca035d03f1e5bb69c2695c7ad2d9629aff3cb1b`. `application_prompt` passed with one
+actual HTTPS request. The next case, `application_delayed_headers`, failed with
+`Native timeout child exited during outcome-observed`; the wrapper finished
+with one failed test after 49.77s at `2026-09-08T06:43:52Z`. The roster cases and
+later mixed/full configured suites were not reached by this preflight.
+
+The failure note exposed only coordinator stdout/stderr byte counts (217/266),
+not the child's assertion or observed durable status. The controller can notice
+a nonzero child exit even if its marker has just been published. Consequently
+this proves a failed delayed-application replay, **not yet** the specific
+predicted 20s-versus-15s cause, an observed `succeeded` status, or successful
+failure-path cleanup. Closed categorical diagnostics are the next step; do not
+infer hidden state from timing or byte counts or weaken the equality/timing gate.
+
+The follow-up now emits fixed coordinator-only diagnostic categories for the
+first observed terminal status, mismatched top-level state fields, and phases
+before/after transition publication. The controller reads at most 65,537 bytes
+from its independent stderr reader and exposes only exact, newline-terminated
+allowlisted records, with duplicate/count/size rejection. Panic text, values,
+dynamic field names and worker output are never copied into diagnostic notes.
+The original output byte counts, failure, equality and timing checks remain.
+Independent review found no blockers. Final focused Python checks passed 201
+tests in 4.45s; both new Rust diagnostic controls passed, with strict all-target
+Clippy passing in 4.41s. The actual next Linux replay is still required to learn
+the failure category; these controls do not establish runtime parity.
+
+The earlier `f0` 137-test/deadline qualification is retained. The PR stays draft
+and the worker remains unrouted; this failed candidate does not authorize a
+runtime policy change without further diagnosis, Python deletion or deployment.
 
 The [published four-case reference](canvas-worker-timeout-capture-plan.md) remains
 the independent behavioral authority. The native replay does not derive its
@@ -41,7 +75,7 @@ published removal of roster heartbeat metadata remain part of equality.
 - `TimeoutHttpsFixture` and its independent release controller are unchanged.
   Python-only import warnings are not manufactured in native output.
 
-## Local checks and required next evidence
+## Historical local checks before the first native preflight
 
 ### Delayed-observer hardening
 

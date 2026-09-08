@@ -18,6 +18,79 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Coordinator diagnostics only: never format worker output, database values,
+// panic payloads, paths or dynamic field names. Python accepts exact enum lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Diagnostic {
+    AwaitTerminal,
+    TerminalSucceeded,
+    TerminalRetry,
+    TerminalDeadLetter,
+    TerminalUnknown,
+    TerminalMismatch,
+    AwaitIdle,
+    CompareOutcome,
+    OutcomeJobs,
+    OutcomeFacts,
+    OutcomeOauth,
+    OutcomeSnapshot,
+    OutcomeHeartbeat,
+    OutcomeTarget,
+    OutcomeShape,
+    PublishTransition,
+    PostPublicationGeneration,
+    PostPublicationLease,
+    PostPublicationEffects,
+    PostPublicationOutput,
+    AwaitLateWindow,
+    VerifyLateState,
+    AwaitHandlerJoin,
+    VerifyJoinedState,
+    InterruptWorker,
+    VerifyShutdown,
+    Complete,
+}
+
+fn emit_diagnostic(category: Diagnostic) {
+    eprintln!("MARTY_TIMEOUT_DIAG_V1:{category:?}");
+}
+
+fn terminal_diagnostic(status: &str) -> Diagnostic {
+    match status {
+        "succeeded" => Diagnostic::TerminalSucceeded,
+        "retry" => Diagnostic::TerminalRetry,
+        "dead_letter" => Diagnostic::TerminalDeadLetter,
+        _ => Diagnostic::TerminalUnknown,
+    }
+}
+
+fn outcome_diagnostics(actual: &Value, expected: &Value) -> Vec<Diagnostic> {
+    let fields = [
+        ("jobs", Diagnostic::OutcomeJobs),
+        ("facts", Diagnostic::OutcomeFacts),
+        ("oauth", Diagnostic::OutcomeOauth),
+        ("snapshot", Diagnostic::OutcomeSnapshot),
+        ("heartbeat", Diagnostic::OutcomeHeartbeat),
+        ("target", Diagnostic::OutcomeTarget),
+    ];
+    let mut categories = Vec::new();
+    for (field, category) in fields {
+        if actual.get(field) != expected.get(field) {
+            categories.push(category);
+        }
+    }
+    match (actual.as_object(), expected.as_object()) {
+        (Some(left), Some(right))
+            if left.len() == fields.len()
+                && right.len() == fields.len()
+                && fields
+                    .iter()
+                    .all(|(field, _)| left.contains_key(*field) && right.contains_key(*field)) => {}
+        _ => categories.push(Diagnostic::OutcomeShape),
+    }
+    categories
+}
+
 fn scenarios() -> &'static Value {
     static MATRIX: OnceLock<Value> = OnceLock::new();
     MATRIX.get_or_init(|| {
@@ -424,6 +497,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     // Do not time a full snapshot or wait for idle here. Each verified leased
     // query starts before its snapshot; the first terminal query finishes after
     // its snapshot. Together these bracket the actual durable transition.
+    emit_diagnostic(Diagnostic::AwaitTerminal);
     let (first_terminal_end, terminal_status) =
         tokio::time::timeout(Duration::from_secs(25), async {
             loop {
@@ -441,6 +515,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
         })
         .await
         .expect("native timeout worker must reach its first terminal job status");
+    emit_diagnostic(terminal_diagnostic(&terminal_status));
+    if case["expected_status"].as_str() != Some(terminal_status.as_str()) {
+        emit_diagnostic(Diagnostic::TerminalMismatch);
+    }
     let lo = last_leased_start
         .duration_since(request_origin)
         .as_secs_f64();
@@ -449,6 +527,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
         .as_secs_f64();
 
     // Idle bookkeeping is a separate requirement, never the terminal timestamp.
+    emit_diagnostic(Diagnostic::AwaitIdle);
     let outcome = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             alive(&mut worker);
@@ -468,23 +547,33 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     })
     .await
     .expect("native timeout worker must become idle after its first terminal outcome");
+    emit_diagnostic(Diagnostic::CompareOutcome);
+    for category in outcome_diagnostics(&outcome, &expected["outcome"]) {
+        emit_diagnostic(category);
+    }
     assert_eq!(outcome["jobs"][0]["status"], terminal_status);
     assert!(
         outcome == expected["outcome"],
         "native timeout outcome differs from frozen published state"
     );
+    emit_diagnostic(Diagnostic::PublishTransition);
     publish_transition(&control, lo, hi).expect("native timeout transition publication failed");
+    emit_diagnostic(Diagnostic::PostPublicationGeneration);
     let completed = read_job(pool).await;
     assert_eq!(
         completed.verified_status(job_id, started, expires),
         terminal_status
     );
+    emit_diagnostic(Diagnostic::PostPublicationLease);
     assert_original_lease_current(pool, expires).await;
+    emit_diagnostic(Diagnostic::PostPublicationEffects);
     let stable = (effects(pool).await, operational(pool).await);
     if case["expected_status"] == "retry" {
         assert_unavailable_effects(&initial_effects, &stable.0);
     }
+    emit_diagnostic(Diagnostic::PostPublicationOutput);
     output.assert_private_quiet(fixture.spec["token"].as_str().unwrap(), database_url);
+    emit_diagnostic(Diagnostic::AwaitLateWindow);
     tokio::time::timeout(Duration::from_secs(30), async {
         while !marker(&control, "late-window-complete").is_file() {
             alive(&mut worker);
@@ -494,20 +583,26 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     })
     .await
     .expect("parent must complete the fixed timeout late-response window");
+    emit_diagnostic(Diagnostic::VerifyLateState);
     alive(&mut worker);
     assert_stable(pool, &fixture, &outcome, &stable).await;
     // This is the original captured lease, not a later renewal or cleared
     // terminal field; it must still be current after the independent release.
     assert_original_lease_current(pool, expires).await;
     mark(&control, "late-window-verified");
+    emit_diagnostic(Diagnostic::AwaitHandlerJoin);
     await_marker(&control, "handlers-joined", &mut worker).await;
+    emit_diagnostic(Diagnostic::VerifyJoinedState);
     assert_stable(pool, &fixture, &outcome, &stable).await;
     output.assert_private_quiet(fixture.spec["token"].as_str().unwrap(), database_url);
+    emit_diagnostic(Diagnostic::InterruptWorker);
     worker.signal("SIGINT");
     assert_eq!(worker.wait().await.code(), Some(130));
+    emit_diagnostic(Diagnostic::VerifyShutdown);
     assert_stable(pool, &fixture, &outcome, &stable).await;
     output.assert_private_quiet(fixture.spec["token"].as_str().unwrap(), database_url);
     mark(&control, "child-done");
+    emit_diagnostic(Diagnostic::Complete);
     eprintln!("native worker timeout {case_name}: exact held/outcome state, original lease and no late effects passed");
 }
 
@@ -525,6 +620,56 @@ async fn assert_original_lease_current(pool: &PgPool, expires: DateTime<Utc>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_terminal_diagnostics_classify_only_closed_statuses() {
+        for (input, expected) in [
+            ("succeeded", Diagnostic::TerminalSucceeded),
+            ("retry", Diagnostic::TerminalRetry),
+            ("dead_letter", Diagnostic::TerminalDeadLetter),
+            ("private-status-payload", Diagnostic::TerminalUnknown),
+            (
+                "succeeded\nprivate-status-payload",
+                Diagnostic::TerminalUnknown,
+            ),
+        ] {
+            assert_eq!(terminal_diagnostic(input), expected);
+            assert!(!format!("{:?}", terminal_diagnostic(input)).contains("private"));
+        }
+    }
+
+    #[test]
+    fn timeout_outcome_diagnostics_expose_categories_not_values_or_dynamic_keys() {
+        let expected = json!({
+            "jobs": [], "facts": [], "oauth": {}, "snapshot": {},
+            "heartbeat": {}, "target": {},
+        });
+        assert!(outcome_diagnostics(&expected, &expected).is_empty());
+        for (field, category) in [
+            ("jobs", Diagnostic::OutcomeJobs),
+            ("facts", Diagnostic::OutcomeFacts),
+            ("oauth", Diagnostic::OutcomeOauth),
+            ("snapshot", Diagnostic::OutcomeSnapshot),
+            ("heartbeat", Diagnostic::OutcomeHeartbeat),
+            ("target", Diagnostic::OutcomeTarget),
+        ] {
+            let mut actual = expected.clone();
+            actual[field] = json!({"private-field": "private-row-payload"});
+            let categories = outcome_diagnostics(&actual, &expected);
+            assert_eq!(categories, vec![category]);
+            assert!(!format!("{categories:?}").contains("private"));
+        }
+        let mut extra = expected.clone();
+        extra["private-unrecognized-field"] = json!("private-row-payload");
+        assert_eq!(
+            outcome_diagnostics(&extra, &expected),
+            vec![Diagnostic::OutcomeShape]
+        );
+        assert_eq!(
+            outcome_diagnostics(&Value::Null, &Value::Null),
+            vec![Diagnostic::OutcomeShape]
+        );
+    }
 
     #[test]
     fn timeout_transition_payload_is_closed_finite_and_bounded() {
