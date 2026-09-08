@@ -88,6 +88,14 @@ def synthetic_captures():
             [". /app/load-secrets-env.sh\nexec python -m issuance.canvas_worker\n"],
             {"CANVAS_SYNC_PROCESSOR": PROCESSOR},
         ),
+        (
+            "native-secret-loader",
+            ["/bin/sh", "-c"],
+            [
+                ". /app/load-secrets-env.sh\nexec /usr/local/bin/marty-canvas-sync-worker\n"
+            ],
+            {},
+        ),
     ]
     return [
         {

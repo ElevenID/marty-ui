@@ -92,9 +92,10 @@ function Assert-BetaWorkerRollbackLaunch {
         (Test-BetaWorkerVector $direct @('/usr/local/bin/marty-canvas-sync-worker'))
     $dispatcher = (Test-BetaWorkerVector $direct @('/app/services/entrypoint.sh')) -and
         $Launch.service_name_present -and $Launch.service_name -cin @('canvas-sync-worker', 'canvas_sync_worker')
-    # This is the exact tracked selfhost loader form, not a shell command parser.
+    # These are the exact selfhost loader forms, not a shell command parser.
     $loader = (Test-BetaWorkerVector $entrypoint @('/bin/sh', '-c')) -and
-        (Test-BetaWorkerVector $command @(". /app/load-secrets-env.sh`nexec python -m issuance.canvas_worker`n"))
+        ((Test-BetaWorkerVector $command @(". /app/load-secrets-env.sh`nexec python -m issuance.canvas_worker`n")) -or
+         (Test-BetaWorkerVector $command @(". /app/load-secrets-env.sh`nexec /usr/local/bin/marty-canvas-sync-worker`n")))
     if (-not ($knownDirect -or $dispatcher -or $loader)) {
         throw "Unsupported worker rollback launch; recover with matching reviewed source or a complete supported launch manifest before stopping beta."
     }

@@ -32,6 +32,9 @@ PYTHON_IMAGE_COMMAND = [
 PROCESSOR = (
     "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target"
 )
+NATIVE_LOADER = (
+    ". /app/load-secrets-env.sh\nexec /usr/local/bin/marty-canvas-sync-worker\n"
+)
 
 HARNESS = r"""
 param([string]$Source, [string]$InputPath)
@@ -177,6 +180,9 @@ def rendered_fields(report: dict) -> dict:
             [". /app/load-secrets-env.sh\nexec python -m issuance.canvas_worker\n"],
             None,
         ),
+        (["/bin/sh", "-c"], [NATIVE_LOADER], None),
+        (["/bin/sh", "-c"], [NATIVE_LOADER], ""),
+        (["/bin/sh", "-c"], [NATIVE_LOADER], "canvas_sync_worker"),
     ],
 )
 def test_capture_persist_and_render_exact_headless_launch(
@@ -284,6 +290,128 @@ def test_unrecognized_shell_or_secret_bearing_launch_is_not_replayed(exercise, c
     assert report["mutations"] == 0
     assert report["lines"] == []
     assert "synthetic-secret" not in (report["message"] or "")
+
+
+def test_native_secret_loader_rejects_nonexact_shell_vectors_before_mutation(exercise):
+    variants = [
+        (["/bin/bash", "-c"], [NATIVE_LOADER]),
+        (["sh", "-c"], [NATIVE_LOADER]),
+        (["/bin/sh", "-C"], [NATIVE_LOADER]),
+        (["/bin/sh", "-lc"], [NATIVE_LOADER]),
+        (["/bin/sh", "-ec"], [NATIVE_LOADER]),
+        (["/bin/sh", "-c", "--"], [NATIVE_LOADER]),
+        (["/bin/sh"], ["-c", NATIVE_LOADER]),
+        (["/bin/sh", "-c"], [NATIVE_LOADER, "synthetic-secret"]),
+        (["/bin/sh", "-c", NATIVE_LOADER], []),
+    ]
+    altered_scripts = [
+        NATIVE_LOADER.rstrip("\n"),
+        NATIVE_LOADER + "\n",
+        "\n" + NATIVE_LOADER,
+        " " + NATIVE_LOADER,
+        NATIVE_LOADER.replace("\n", "\r\n"),
+        NATIVE_LOADER.replace("exec ", "exec\t"),
+        NATIVE_LOADER.replace("exec ", "exec  "),
+        NATIVE_LOADER.replace("exec ", "EXEC "),
+        NATIVE_LOADER.replace("marty-canvas", "Marty-canvas"),
+        NATIVE_LOADER.replace("/app/", "/usr/local/bin/"),
+        NATIVE_LOADER.replace("load-secrets-env.sh", "other-loader.sh"),
+        NATIVE_LOADER.replace(". /app/", "source /app/"),
+        NATIVE_LOADER.replace("/usr/local/bin/", ""),
+        NATIVE_LOADER.replace("exec ", ""),
+        "exec /usr/local/bin/marty-canvas-sync-worker\n. /app/load-secrets-env.sh\n",
+        NATIVE_LOADER.replace("\nexec", " && exec"),
+        NATIVE_LOADER.replace("worker\n", "worker --synthetic-secret\n"),
+        "echo synthetic-secret\n" + NATIVE_LOADER,
+        NATIVE_LOADER + "echo synthetic-secret\n",
+        NATIVE_LOADER.replace("worker\n", "worker; echo synthetic-secret\n"),
+        NATIVE_LOADER.replace("worker\n", "worker ${SYNTHETIC_SECRET}\n"),
+        NATIVE_LOADER.replace("worker\n", "worker $(echo synthetic-secret)\n"),
+        NATIVE_LOADER.replace("worker\n", "worker > synthetic-secret\n"),
+        NATIVE_LOADER.replace("worker\n", "worker # synthetic-secret\n"),
+    ]
+    variants.extend((["/bin/sh", "-c"], [script]) for script in altered_scripts)
+    cases = []
+    for entrypoint, command in variants:
+        cases.extend(
+            [
+                {
+                    "operation": "capture",
+                    "config": {"Entrypoint": entrypoint, "Cmd": command, "Env": []},
+                },
+                {
+                    "operation": "validate",
+                    "launch": launch(entrypoint, command),
+                },
+            ]
+        )
+    for index, report in enumerate(exercise(cases)):
+        assert report["caught"] is True, index
+        assert report["mutations"] == 0, index
+        assert report["lines"] == [], index
+        assert report["message"] == (
+            "Unsupported worker rollback launch; recover with matching reviewed "
+            "source or a complete supported launch manifest before stopping beta."
+        ), index
+
+
+@pytest.mark.parametrize("selector", [None, "", "canvas_sync_worker"])
+@pytest.mark.parametrize("processor", [None, "", PROCESSOR])
+def test_native_loader_saved_record_preserves_both_selector_states(
+    exercise, selector, processor
+):
+    config = {
+        "Entrypoint": ["/bin/sh", "-c"],
+        "Cmd": [NATIVE_LOADER],
+        "Env": ["DATABASE_URL=synthetic-secret"],
+    }
+    for key, value in (
+        ("SERVICE_NAME", selector),
+        ("CANVAS_SYNC_PROCESSOR", processor),
+    ):
+        if value is not None:
+            config["Env"].append(f"{key}={value}")
+    [captured] = exercise([{"operation": "capture", "config": config}])
+    assert captured["caught"] is False
+    assert captured["launch"] == launch(
+        ["/bin/sh", "-c"], [NATIVE_LOADER], selector, processor
+    )
+    [resolved] = exercise(
+        [
+            resolution_case(
+                captured["launch"],
+                current={
+                    "entrypoint": ["/app/services/entrypoint.sh"],
+                    "command": [],
+                    "environment": {"SERVICE_NAME": "issuance_native"},
+                },
+                image=config,
+            )
+        ]
+    )
+    assert resolved["caught"] is False
+    assert resolved["mutations"] == 1
+    assert resolved["launch"] == captured["launch"]
+    assert resolved["lines"] == captured["lines"]
+    assert "synthetic-secret" not in json.dumps([captured, resolved])
+
+
+def test_legacy_manifest_does_not_infer_native_secret_loader(exercise):
+    [report] = exercise(
+        [
+            resolution_case(
+                current={
+                    "entrypoint": ["/bin/sh", "-c"],
+                    "command": [NATIVE_LOADER],
+                    "environment": {"CANVAS_SYNC_PROCESSOR": PROCESSOR},
+                },
+                image={"Entrypoint": None, "Cmd": PYTHON_IMAGE_COMMAND, "Env": []},
+            )
+        ]
+    )
+    assert report["caught"] is True
+    assert report["mutations"] == 0
+    assert report["lines"] == []
 
 
 def resolution_case(snapshot=None, *, current=None, image=None) -> dict:
