@@ -38,11 +38,35 @@ and no capture artifact was emitted. Remaining cases were not executed.
 The parent verified both exact-owned containers were removed: PostgreSQL
 `ad053c9126caeadbd1f01d47ad323ac91510eb69323a61b5ea5ceb7f4541a89c` and probe
 `8a05162fb1b6fb1c03a7b29d2ca4466023c8b3d1762a6c9ecbb3e27b816ad717`.
-The next action is a pinned-source review of shutdown output and, if warranted,
-a distinct strictly bounded shutdown profile with privacy/unknown-output
-negative tests. Do not weaken the pre-interrupt profile, accept arbitrary
-tracebacks, or freeze this failed attempt. Any runner repair requires a new A/B
-sequence with the reviewed inputs fixed before A.
+The failure prompted a pinned-source shutdown review and the distinct bounded
+profile below. The failed attempt remains diagnostic only. Any runner repair
+requires a new A/B sequence with the reviewed inputs fixed before A.
+
+### Reviewed idle-shutdown profile
+
+The source-pinned Python 3.12.13 runner cancels the idle main task on SIGINT and
+raises `KeyboardInterrupt` from its `CancelledError` handler. The new
+`canvas_worker_shutdown_output.py` recognizes only that exact two-trace chain:
+eleven fixed frame tuples, exact code lines from hash-verified worker/stdlib
+files, the exact chaining text, and bare exception names. Only one optional
+bounded ASCII caret-decoration line per source line is allowed. Quiet output,
+other frames, messages, notes, extra traces and unknown lines fail.
+
+Both streams retain the shared 65,536-byte limit and all synthetic-secret
+tripwires. The prefix must still pass the unchanged two-warning profile, and
+stdout must remain empty. Runtime version and six immutable source-file hashes
+are checked without importing or executing application code. This profile is
+called only after owned SIGINT and the terminal wait; it does not change or
+waive the existing pre-interrupt checks or establish native output equivalence.
+
+Independent source review found no blockers. The 106 new shutdown controls
+passed, including every frame mutation and truncated prefix, source/runtime
+pin failure, secrets, unknown output, growth bounds and post-wait reads.
+Combined focused checks passed 537 tests in 23.31s, including existing deadline
+and timeout contracts. The Rust body-only mount/selector check passed and
+strict all-target Clippy passed in 5.50s. The full updated Python suite then
+passed 2,215 tests with three explicit skips in 158.55s. A fresh actual A/B
+capture is still required; none of these checks freezes worker behavior.
 
 The reference image remains:
 
@@ -214,12 +238,12 @@ and cleanup path must be bounded and ownership-checked. Reuse exact process
 containment and the surviving disposable-database owner for native replay;
 do not claim protection against uncatchable death of that surviving owner.
 Check both raw streams with the strict published warning profile and synthetic
-secret exclusions before interruption and again after the bounded SIGINT wait
-and expected Python exit `-2`. Retain separate `logs_before_interrupt` and
-`logs_after_interrupt` observations. The final check uses the same strict
-profile, not a shutdown exception: legitimate unexpected shutdown output must
-first receive separate source review; secrets or unknown output cannot be
-silently removed. Native output remains separately classified.
+secret exclusions before interruption. After the bounded SIGINT wait and
+expected Python exit `-2`, apply the separately source-reviewed closed shutdown
+profile above, retaining the same bounded-read and secret exclusions. Keep
+separate `logs_before_interrupt` and `logs_after_interrupt` observations.
+Secrets or unknown output cannot be silently removed. Native output remains
+separately classified.
 
 ## Explicit immutable capture wiring
 
@@ -263,8 +287,9 @@ Before freezing any reference:
    schedule failures, incomplete-body handling, extra requests, cancellation,
    bounded output, handler joining, and failure cleanup. Focused review and
    controls and aggregate validation passed at the pre-provenance-fix checkpoint
-   above; the subsequent newline-canonicalization change requires its own review
-   and verification before capture.
+   above; newline canonicalization and the distinct shutdown profile have their
+   separate reviewed focused evidence. Retain updated aggregate validation
+   before capture.
 2. Register the immutable-image mounts and fresh published-database capture
    entrypoint (implemented above). Verify installed source hashes and dependencies; freeze all
    inputs while a capture is running.

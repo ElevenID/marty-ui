@@ -1007,7 +1007,7 @@ def test_success_requires_entire_conservative_interval_in_declared_final_flush_w
     "mutation", [None, "secret", "stderr", "stdout", "oversize", "exit", "wait_timeout"]
 )
 def test_shutdown_reads_actual_output_after_wait_without_leaking_payloads(
-    runner, mutation
+    runner, monkeypatch, mutation
 ):
     stdout = io.BytesIO()
     stderr = io.BytesIO(
@@ -1040,10 +1040,21 @@ def test_shutdown_reads_actual_output_after_wait_without_leaking_payloads(
 
     child = SimpleNamespace(send_signal=signal, wait=wait)
     if mutation is None:
+        # This driver seam proves post-wait delegation to the distinct profile.
+        # The independent shutdown suite supplies the actual closed traceback;
+        # quiet output is not a supported real shutdown alternative.
+        expected_shutdown = {"synthetic_distinct_shutdown_profile": True}
+
+        def post_wait_profile(out, err, token):
+            assert calls == ["signal", "wait"]
+            assert runner.observed_log_profile(out, err, token) == initial
+            return expected_shutdown
+
+        monkeypatch.setattr(runner, "observed_shutdown_profile", post_wait_profile)
         exit_code, observed = runner.finish_and_verify_output(
             child, stdout, stderr, "synthetic-shutdown-secret"
         )
-        assert exit_code == -2 and observed == initial
+        assert exit_code == -2 and observed == expected_shutdown
     else:
         with pytest.raises((AssertionError, TimeoutError)) as caught:
             runner.finish_and_verify_output(

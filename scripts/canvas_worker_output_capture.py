@@ -59,10 +59,9 @@ def log_counts(contents):
     return counts
 
 
-def observed_log_profile(stdout, stderr, token):
-    # Observe actual child output at WARNING level, before the separate SIGINT
-    # shutdown boundary. Never retain raw unexpected logs or exception payloads.
-    observations = []
+def read_private_output(stdout, stderr, token):
+    """Bound both independently owned streams and reject synthetic secrets."""
+    contents_by_stream = []
     forbidden = (
         token.encode(),
         b"synthetic-startup-api-key",
@@ -80,7 +79,16 @@ def observed_log_profile(stdout, stderr, token):
         assert all(value not in contents for value in forbidden), (
             "Synthetic authentication material appeared in worker output"
         )
-        observations.append(log_counts(contents))
+        contents_by_stream.append(contents)
+    return tuple(contents_by_stream)
+
+
+def observed_log_profile(stdout, stderr, token):
+    # Observe actual child output at WARNING level, before the separate SIGINT
+    # shutdown boundary. Never retain raw unexpected logs or exception payloads.
+    observations = [
+        log_counts(contents) for contents in read_private_output(stdout, stderr, token)
+    ]
     expected_stdout = dict.fromkeys(observations[0], 0)
     expected_stderr = {
         **expected_stdout,

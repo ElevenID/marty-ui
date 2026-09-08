@@ -25,6 +25,7 @@ from canvas_worker_output_capture import (
     owned_log_streams,
     published_log_source_sha256,
 )
+from canvas_worker_shutdown_output import observed_shutdown_profile
 from run_canvas_worker_provider_recovery_oracle import scalar
 from run_canvas_worker_provider_signals_oracle import snapshot
 from run_canvas_worker_rest_oracle import seed_worker_database, worker_case
@@ -244,6 +245,7 @@ def verify_sources(matrix, contracts):
             "canvas_worker_body_timeout_https_fixture.py",
             "canvas_worker_https_fixture.py",
             "canvas_worker_output_capture.py",
+            "canvas_worker_shutdown_output.py",
             "run_canvas_worker_rest_oracle.py",
             "run_canvas_worker_startup_oracle.py",
             "run_canvas_worker_provider_signals_oracle.py",
@@ -768,11 +770,9 @@ def finish_and_verify_output(child, stdout, stderr, token):
     child.send_signal(signal.SIGINT)
     exit_code = child.wait(timeout=10)
     require(exit_code == -2, "Unexpected owned Python body worker shutdown")
-    # Start strict: legitimate additional shutdown output must first receive
-    # separate source review; it cannot silently disappear with the owned files.
-    # This neither manufactures native log equivalence nor widens the existing
-    # pre-interrupt classifier.
-    return exit_code, observed_log_profile(stdout, stderr, token)
+    # The distinct source-pinned idle SIGINT chain does not weaken the strict
+    # pre-interrupt profile or establish native log equivalence.
+    return exit_code, observed_shutdown_profile(stdout, stderr, token)
 
 
 def run(case_name):

@@ -1147,6 +1147,7 @@ impl PublishedDatabase {
             "worker_body_timeout" => &[
                 "scripts/canvas_worker_body_timeout_https_fixture.py",
                 "scripts/canvas_worker_output_capture.py",
+                "scripts/canvas_worker_shutdown_output.py",
                 "contracts/canvas-worker-deadline-scenarios.json",
                 "contracts/canvas-worker-retry-scenarios.json",
                 "contracts/canvas-worker-validation-scenarios.json",
