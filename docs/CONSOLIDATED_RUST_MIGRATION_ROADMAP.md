@@ -165,6 +165,17 @@ author tree passed 23 native DIDComm unit tests and strict library Clippy;
 these new tests have not yet been rerun on the combined integration tree.
 Peer method 0 and abbreviated peer service representations remain unqualified;
 no unnecessary Cargo features or Core dependency changes were introduced.
+Public prerequisite parity integration `103e6c918` preserves eight captured
+Python status/detail responses through a closed native error enum, without
+including arbitrary exception text. The unchanged Python helper capture checked
+zero status allocation, signing and packing. Native qualification passed 26
+DIDComm unit tests, five HTTP tests and strict scoped Clippy on the isolated
+author tree, after the HTTP regression first failed with 503 instead of 422.
+New controls cover typed preflight failure ordering, exact transport-claim
+release and failed-release fencing, and generic post-preflight packing/encryption
+failure with release before retry. Existing successful replay, unknown-outcome
+and concurrent-claim behavior is retained. Combined-tree qualification is
+underway; this is not full wallet/PostgreSQL consumer cutover evidence.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub
