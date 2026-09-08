@@ -274,6 +274,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in published
     assert "grep -Fx 'operations_match_frozen_published_python: test'" in published
     assert (
+        "grep -Fx 'operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'operations_reads_match_frozen_published_python: test'" in published
     )
     assert (
@@ -528,6 +532,94 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     assert "--native-executable" in gate["run"]
     assert "select(.profile.test == true)" in gate["run"]
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
+
+
+def _assert_gateway_operations_registration(published: str, source: str) -> None:
+    name = "operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes"
+    inventory = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    assert published.splitlines().count(inventory) == 1
+    assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
+    assert published.rstrip().endswith(
+        '"${executables[0]}" --nocapture --test-threads=1'
+    )
+    assert (
+        '#[path = "support/canvas_operations_gateway_replay.rs"]\n'
+        "mod canvas_operations_gateway_replay;"
+    ) in source
+    matches = re.findall(
+        r"((?:^#\[[^\n]+\]\s*\n)+)" + rf"^async fn {name}\(\) \{{(.*?)^\}}",
+        source,
+        re.M | re.S,
+    )
+    assert len(matches) == 1
+    attributes, body = matches[0]
+    assert attributes.strip() == "#[tokio::test]"
+    # Pin the small orchestration wrapper, not the replay implementation. Exact
+    # statements reject an extra opt-in, early success, dormant closure, ignored
+    # test, or omitted cleanup while allowing ordinary Rustfmt whitespace.
+    expected = """
+        if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+            return;
+        }
+        let owned = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+            .await.unwrap();
+        let pool = PgPoolOptions::new().max_connections(4)
+            .connect(&owned.url).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            canvas_operations_gateway_replay::run(&pool, &owned.url),
+        ).await.expect("gateway operations replay must not deadlock");
+        pool.close().await;
+        owned.close().unwrap();
+    """
+    assert re.sub(r"\s+", "", body) == re.sub(r"\s+", "", expected)
+
+
+def test_gateway_operations_candidate_is_required_and_not_dormant() -> None:
+    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    _assert_gateway_operations_registration(published, source)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["inventory", "ignored", "extra-opt-in", "helper", "database", "cleanup"],
+)
+def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(mutation):
+    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    name = "operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes"
+    if mutation == "inventory":
+        published = "\n".join(
+            line for line in published.splitlines() if name not in line
+        )
+    elif mutation == "ignored":
+        source = source.replace(f"async fn {name}", f"#[ignore]\nasync fn {name}")
+    else:
+        start = source.index(f"async fn {name}")
+        end = source.index("\n}", start)
+        body = source[start:end]
+        original, changed = {
+            "extra-opt-in": (
+                "    let owned =",
+                "    if true { return; }\n    let owned =",
+            ),
+            "helper": ("canvas_operations_gateway_replay::run", "unused_replay::run"),
+            "database": ("start_with_review_recovery()", "start()"),
+            "cleanup": ("    owned.close().unwrap();", ""),
+        }[mutation]
+        assert original in body
+        source = source[:start] + body.replace(original, changed) + source[end:]
+    with pytest.raises(AssertionError):
+        _assert_gateway_operations_registration(published, source)
 
 
 def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:

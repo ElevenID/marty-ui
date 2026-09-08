@@ -1715,6 +1715,32 @@ async fn status_provider_matches_json_depth_reference() {
 #[path = "support/canvas_operations_read_replay.rs"]
 mod canvas_operations_read_replay;
 
+#[path = "support/canvas_operations_gateway_replay.rs"]
+mod canvas_operations_gateway_replay;
+
+#[tokio::test]
+async fn operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        canvas_operations_gateway_replay::run(&pool, &owned.url),
+    )
+    .await
+    .expect("gateway operations replay must not deadlock");
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[path = "support/canvas_status_provider_replay.rs"]
 mod canvas_status_provider_replay;
 

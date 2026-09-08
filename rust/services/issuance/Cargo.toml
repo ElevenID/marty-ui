@@ -71,6 +71,8 @@ uuid.workspace = true
 [dev-dependencies]
 ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
+marty-gateway = { path = "../gateway" }
+mmf-platform.workspace = true
 rand08 = { package = "rand", version = "0.8" }
 rsa = "0.9"
 tower.workspace = true
