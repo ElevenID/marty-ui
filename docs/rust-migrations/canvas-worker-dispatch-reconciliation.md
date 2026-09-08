@@ -71,7 +71,13 @@ without an intermediate numeric rewrite. The permanent
 `worker_dispatch_reference_matches_published_process` gate passed a third fresh
 configured run in 25.13s. The frozen file SHA256 is
 `29ec41961a6212536ccc4d1a28eadacd41d5f1694fe0658d580136e1b65d25cc`.
-Exact-head hosted Linux qualification remains separate.
+The published five-case gate subsequently passed in the configured section of
+[runtime job 101703569433](https://github.com/ElevenID/marty-ui/actions/runs/34109922914/job/101703569433)
+at `9cbba6b7bc687614e8c2d74ef78fab532e5888fb`, ending at
+2026-09-07 11:17:54 UTC as part of 121 configured passes in 3319.49s.
+The earlier unconfigured 121-entry run in 0.34s is not that evidence.
+Retain this scoped published-dispatch qualification in fresh exact-head CI;
+it does not prove native provider, signing or all-consumer parity.
 
 The separate compiler-positive/negative suite passed five doctests in 1.96s,
 proving native construction, asynchronous and mapping constraints. It does not

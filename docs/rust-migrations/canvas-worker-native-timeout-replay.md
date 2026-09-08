@@ -43,6 +43,38 @@ published removal of roster heartbeat metadata remain part of equality.
 
 ## Local checks and required next evidence
 
+### Delayed-observer hardening
+
+Independent review found that timing only the coordinator's outcome marker
+could hide an early durable completion behind slow database snapshots or idle
+bookkeeping. The replay now records the first terminal job transition separately:
+the last verified leased query's start and the first terminal query's end bound
+that transition. Every leased observation retains the original job, attempt,
+start, lease owner, exact expiry and generation fence.
+
+The existing request/held-state handshake brackets the Rust monotonic origin
+between two Python monotonic samples. Only bounded numeric offsets are published,
+atomically and without overwriting, in the existing outcome marker. Python requires
+the entire conservative transition interval within the original timing limits.
+The original marker-receipt timing and release-order checks remain mandatory too;
+slow reporting is inconclusive, not a reason to widen the published window.
+Idle/full-state equality and all late-effect, output and cleanup checks remain
+separate requirements. Successful prompt/roster ordering retains the published
+observed-outcome-after-release predicate; it does not claim the uncertain lower
+transition bound must be later than release.
+
+No database clock, live row or frozen reference is changed. This additional
+evidence integrity requirement does not itself qualify actual native behavior.
+
+Integrated local validation passed 1,832 Python tests with three explicit skips
+in 138.21s, including 121 timeout controller tests. Five Rust timeout controls
+and all seven existing deadline timing/output controls passed; strict all-target
+Clippy passed in 8.50s. The two Linux process-containment controls remain skipped
+on Windows, with their separate hosted `f0` evidence below. Actual native Linux
+timeout replay has still not run.
+
+### Prior local checkpoint
+
 The integrated executable compiled in 53.29s. Two new pure timeout controls and
 all seven existing deadline timing/output tests passed; strict all-target Clippy
 passed in 31.31s. The independent controller suite passed 68 tests. The full local

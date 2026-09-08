@@ -19,6 +19,14 @@ CASE_NAMES = (
 )
 
 
+def transition(lower=14.9, upper=15.1):
+    return {
+        "schema": "marty.canvas-worker-timeout-transition/v1",
+        "last_leased_start_seconds": lower,
+        "first_terminal_end_seconds": upper,
+    }
+
+
 @pytest.fixture
 def native(monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
@@ -129,7 +137,7 @@ def test_single_authenticated_get_is_exact_and_errors_do_not_echo_payload(
         (20, False),
     ],
 )
-def test_application_delayed_outcome_rejects_wrong_timer(
+def test_application_marker_receipt_retains_frozen_observation_window(
     native, corpus, elapsed, accepted
 ):
     matrix, _ = corpus
@@ -139,6 +147,181 @@ def test_application_delayed_outcome_rejects_wrong_timer(
     else:
         with pytest.raises(AssertionError):
             native.assert_outcome_timing(100, 100 + elapsed, case, matrix["timing"])
+
+
+@pytest.mark.parametrize("lower,upper", [(0, 0), (14.9, 15.1), (90, 90)])
+@pytest.mark.parametrize("size", [None, 512])
+def test_transition_marker_accepts_only_bounded_closed_numeric_payload(
+    native, tmp_path, lower, upper, size
+):
+    marker = tmp_path / "outcome-observed"
+    expected = transition(lower, upper)
+    raw = json.dumps(expected).encode()
+    if size is not None:
+        raw += b" " * (size - len(raw))
+    marker.write_bytes(raw)
+    assert native.load_transition(marker) == expected
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "invalid-json",
+        "invalid-utf8",
+        "array",
+        "null",
+        "wrong-schema",
+        "missing-key",
+        "extra-key",
+        "duplicate-schema",
+        "duplicate-number",
+        "oversize",
+        "bool-lower",
+        "bool-upper",
+        "string",
+        "nan",
+        "infinity",
+        "negative",
+        "reversed",
+        "too-large",
+    ],
+)
+def test_transition_marker_rejects_malformed_payload_without_echoing_it(
+    native, tmp_path, mutation
+):
+    marker = tmp_path / "outcome-observed"
+    value = transition()
+    if mutation == "wrong-schema":
+        value["schema"] = "private-sentinel"
+    elif mutation == "missing-key":
+        value.pop("first_terminal_end_seconds")
+    elif mutation == "extra-key":
+        value["private-sentinel"] = True
+    elif mutation in {"bool-lower", "string", "nan", "infinity", "negative"}:
+        value["last_leased_start_seconds"] = {
+            "bool-lower": True,
+            "string": "private-sentinel",
+            "nan": float("nan"),
+            "infinity": float("inf"),
+            "negative": -0.001,
+        }[mutation]
+    elif mutation == "bool-upper":
+        value["first_terminal_end_seconds"] = True
+    elif mutation == "reversed":
+        value = transition(16, 15)
+    elif mutation == "too-large":
+        value = transition(89, 90.001)
+    raw = json.dumps(value).encode()
+    if mutation == "invalid-json":
+        raw = b'{"private-sentinel":'
+    elif mutation == "invalid-utf8":
+        raw = b"\xffprivate-sentinel"
+    elif mutation == "array":
+        raw = b'["private-sentinel"]'
+    elif mutation == "null":
+        raw = b"null"
+    elif mutation.startswith("duplicate-"):
+        duplicate = (
+            b'"schema":"private-sentinel"'
+            if mutation == "duplicate-schema"
+            else b'"last_leased_start_seconds":15'
+        )
+        raw = raw[:-1] + b"," + duplicate + b"}"
+    elif mutation == "oversize":
+        raw += b" " * (513 - len(raw))
+    if mutation != "missing":
+        marker.write_bytes(raw)
+    with pytest.raises(AssertionError) as caught:
+        native.load_transition(marker)
+    assert "private-sentinel" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "lower,upper,anchor_upper,accepted",
+    [
+        (14.5, 16.5, 100, True),
+        (14.499, 15, 100, False),
+        (15, 16.501, 100, False),
+        (14, 17, 100, False),
+        (14.9, 15.1, 100.1, True),
+        (15, 15, 102, False),
+        (4.9, 5.1, 100.1, False),
+        (9.9, 10.1, 100.1, False),
+        (19.9, 20.1, 100.1, False),
+        (4.9, 15, 100.1, False),
+    ],
+)
+def test_application_requires_whole_conservative_transition_interval(
+    native, corpus, lower, upper, anchor_upper, accepted
+):
+    matrix, _ = corpus
+    args = (
+        transition(lower, upper),
+        100,
+        anchor_upper,
+        100,
+        matrix["cases"][1],
+        matrix["timing"],
+    )
+    if accepted:
+        actual = native.assert_transition_timing(*args)
+        assert actual == pytest.approx((lower, anchor_upper + upper - 100))
+    else:
+        with pytest.raises(AssertionError):
+            native.assert_transition_timing(*args)
+
+
+@pytest.mark.parametrize(
+    "lower,upper,anchor_lower,anchor_upper,request_at,accepted",
+    [
+        (17, 20, 100, 100.1, 100, True),
+        (24, 25, 100, 100.01, 100, False),
+        (0, 1, 99, 100, 100, False),
+        (1, 2, 101, 100, 100, False),
+        (1, 2, True, 100, 100, False),
+        (1, 2, 100, float("nan"), 100, False),
+    ],
+)
+def test_general_transition_budget_retains_roster_window_and_valid_anchor_order(
+    native, corpus, lower, upper, anchor_lower, anchor_upper, request_at, accepted
+):
+    matrix, _ = corpus
+    args = (
+        transition(lower, upper),
+        anchor_lower,
+        anchor_upper,
+        request_at,
+        matrix["cases"][3],
+        matrix["timing"],
+    )
+    if accepted:
+        native.assert_transition_timing(*args)
+    else:
+        with pytest.raises(AssertionError):
+            native.assert_transition_timing(*args)
+
+
+@pytest.mark.parametrize(
+    "case_index,upper,released,accepted",
+    [
+        (1, 16.5, 117, True),
+        (1, 16.5, 116.5, False),
+        (1, 16.5, 116, False),
+        (0, 0.2, 100.1, True),
+        (3, 17.2, 117, True),
+    ],
+)
+def test_only_application_timeout_requires_entire_transition_before_release(
+    native, corpus, case_index, upper, released, accepted
+):
+    matrix, _ = corpus
+    args = (upper, 100, released, matrix["cases"][case_index])
+    if accepted:
+        native.assert_transition_before_release(*args)
+    else:
+        with pytest.raises(AssertionError):
+            native.assert_transition_before_release(*args)
 
 
 @pytest.mark.parametrize("elapsed", [17.1, 19.9, 20.1])
@@ -233,6 +416,8 @@ def test_child_acknowledgment_cannot_be_consumed_twice(native, tmp_path):
     "case_name,failure,outcome_override",
     [(name, None, None) for name in CASE_NAMES]
     + [("roster_delayed_headers", None, 124)]
+    + [("application_delayed_headers", None, 116.2)]
+    + [("application_delayed_headers", "late-marker", 116.8)]
     + [
         ("application_delayed_headers", failure, None)
         for failure in (
@@ -249,6 +434,11 @@ def test_child_acknowledgment_cannot_be_consumed_twice(native, tmp_path):
             "shutdown-request",
             "cleanup-timeout",
             "cleanup-error",
+            "early-terminal-late-marker",
+            "early-terminal-late-idle",
+            "broad-transition",
+            "lower-straddle",
+            "upper-straddle",
         )
     ],
 )
@@ -261,8 +451,31 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
     observation = next(
         item for item in reference["observations"] if item["case"] == case_name
     )
-    model = SimpleNamespace(now=100.0, fixture=None, child=None, control=None)
+    model = SimpleNamespace(
+        now=100.0, fixture=None, child=None, control=None, anchor=None
+    )
     handles, actions = [], []
+    terminal_at = (
+        115
+        if case_name == "application_delayed_headers"
+        else (117.1 if case["delayed"] else 100.2)
+    )
+    idle_at = terminal_at
+    marker_at = outcome_override if outcome_override is not None else terminal_at
+    last_leased_at, first_terminal_at = terminal_at - 0.025, terminal_at
+    if failure in {"early-terminal-late-marker", "early-terminal-late-idle"}:
+        terminal_at = 105
+        idle_at = 115 if failure == "early-terminal-late-idle" else terminal_at
+        marker_at = 115
+        last_leased_at, first_terminal_at = 104.975, 105
+    elif failure == "broad-transition":
+        terminal_at, idle_at, marker_at = 105, 115, 115
+        last_leased_at, first_terminal_at = 104.9, 115
+    elif failure == "lower-straddle":
+        last_leased_at, first_terminal_at = 114.499, 115
+    elif failure == "upper-straddle":
+        terminal_at, idle_at, marker_at = 116.5, 116.5, 116.8
+        last_leased_at, first_terminal_at = 116.4, 116.501
 
     class ControllerRelease(Event):
         def set(self):
@@ -371,23 +584,25 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
                 return self.returncode
             control = model.control
             if (control / "request-received").exists():
+                if model.anchor is None:
+                    model.anchor = model.now
                 if failure not in {
                     "missing-prefix",
                     "cleanup-timeout",
                     "cleanup-error",
                 }:
                     (control / "before-release-verified").touch(exist_ok=True)
-            outcome_time = (
-                115
-                if case_name == "application_delayed_headers"
-                else (117.1 if case["delayed"] else 100.2)
-            )
-            if outcome_override is not None:
-                outcome_time = outcome_override
             if (
-                control / "before-release-verified"
-            ).exists() and model.now >= outcome_time:
-                (control / "outcome-observed").touch(exist_ok=True)
+                (control / "before-release-verified").exists()
+                and model.now >= max(terminal_at, idle_at, marker_at)
+                and not (control / "outcome-observed").exists()
+            ):
+                payload = transition(
+                    last_leased_at - model.anchor, first_terminal_at - model.anchor
+                )
+                pending = control.parent / "transition-pending"
+                pending.write_text(json.dumps(payload), encoding="utf-8")
+                pending.replace(control / "outcome-observed")
             if (
                 failure == "late-request"
                 and model.now >= 120
@@ -397,7 +612,7 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
             if (control / "late-window-complete").exists():
                 assert model.now >= 122
                 assert model.fixture.released_at is not None
-                assert model.now >= outcome_time + 2
+                assert model.now >= marker_at + 2
                 if failure == "late-child-failure":
                     self.returncode = 1
                 else:

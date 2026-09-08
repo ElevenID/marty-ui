@@ -207,10 +207,7 @@ def assert_requests(fixture, reference):
 
 def assert_outcome_timing(received_at, outcome_at, case, timing):
     require(
-        all(
-            type(value) in (int, float) and math.isfinite(value)
-            for value in (received_at, outcome_at)
-        ),
+        all(finite_number(value) for value in (received_at, outcome_at)),
         "Invalid native timeout response timing sample",
     )
     elapsed = outcome_at - received_at
@@ -218,6 +215,8 @@ def assert_outcome_timing(received_at, outcome_at, case, timing):
         0 <= elapsed <= timing["outcome_max_seconds"],
         "Native timeout outcome exceeded its observation budget",
     )
+    # Preserve the published observation-quality bound as well as proving the
+    # durable transition separately. Slow delivery is inconclusive, not parity.
     if case["name"] == "application_delayed_headers":
         require(
             timing["application_timeout_min_seconds"]
@@ -227,11 +226,105 @@ def assert_outcome_timing(received_at, outcome_at, case, timing):
         )
 
 
+def finite_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def validate_transition(transition):
+    require(
+        type(transition) is dict
+        and set(transition)
+        == {
+            "schema",
+            "last_leased_start_seconds",
+            "first_terminal_end_seconds",
+        }
+        and transition["schema"] == "marty.canvas-worker-timeout-transition/v1",
+        "Native timeout transition payload differs from its closed schema",
+    )
+    lower = transition["last_leased_start_seconds"]
+    upper = transition["first_terminal_end_seconds"]
+    require(
+        finite_number(lower)
+        and finite_number(upper)
+        and 0 <= lower <= upper <= CASE_TIMEOUT_SECONDS,
+        "Native timeout transition offsets are invalid",
+    )
+    return transition
+
+
+def load_transition(path):
+    def unique_object(pairs):
+        values = {}
+        for key, value in pairs:
+            if key in values:
+                raise ValueError("Duplicate transition key")
+            values[key] = value
+        return values
+
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(513)
+        require(len(payload) <= 512, "Native timeout transition payload is oversized")
+        transition = json.loads(
+            payload.decode("utf-8"), object_pairs_hook=unique_object
+        )
+    except (OSError, UnicodeError, ValueError):
+        raise AssertionError(
+            "Native timeout transition payload could not be read"
+        ) from None
+    return validate_transition(transition)
+
+
+def assert_transition_timing(
+    transition, anchor_lower, anchor_upper, request_at, case, timing
+):
+    validate_transition(transition)
+    require(
+        all(finite_number(value) for value in (anchor_lower, anchor_upper, request_at))
+        and request_at <= anchor_lower <= anchor_upper,
+        "Native timeout monotonic anchor bracket is invalid",
+    )
+    lower = anchor_lower + transition["last_leased_start_seconds"] - request_at
+    upper = anchor_upper + transition["first_terminal_end_seconds"] - request_at
+    require(
+        0 <= lower <= upper <= timing["outcome_max_seconds"],
+        "Native timeout transition interval exceeded its observation budget",
+    )
+    if case["name"] == "application_delayed_headers":
+        require(
+            timing["application_timeout_min_seconds"]
+            <= lower
+            <= upper
+            <= timing["application_timeout_max_seconds"],
+            "Native application transition interval differs from the source window",
+        )
+    return lower, upper
+
+
+def assert_transition_before_release(elapsed_upper, received_at, released_at, case):
+    require(
+        all(
+            finite_number(value) for value in (elapsed_upper, received_at, released_at)
+        ),
+        "Native timeout transition release sample is invalid",
+    )
+    if case["name"] == "application_delayed_headers":
+        require(
+            received_at + elapsed_upper < released_at,
+            "Native application transition interval does not precede release",
+        )
+
+
 def assert_release_timing(fixture, case, timing):
     require(
         all(
-            type(value) in (int, float) and math.isfinite(value)
-            for value in (fixture.received_at, fixture.released_at)
+            finite_number(value) for value in (fixture.received_at, fixture.released_at)
         ),
         "Invalid native timeout release timing sample",
     )
@@ -246,10 +339,7 @@ def assert_release_timing(fixture, case, timing):
 
 def assert_outcome_order(outcome_at, released_at, case):
     require(
-        all(
-            type(value) in (int, float) and math.isfinite(value)
-            for value in (outcome_at, released_at)
-        ),
+        all(finite_number(value) for value in (outcome_at, released_at)),
         "Native timeout release was not observed",
     )
     require(
@@ -322,6 +412,10 @@ def run_case(executable, matrix, case, reference, response):
                 not fixture.release.is_set(),
                 "Timeout response preceded the held snapshot",
             )
+            # The child captures its Instant origin after seeing this marker,
+            # before the initial leased query. The following acknowledgment
+            # therefore brackets that origin without sharing clock epochs.
+            anchor_lower = time.monotonic()
             write_marker(control, known, phase)
             phase = "before-release-verified"
             receive_marker(
@@ -332,6 +426,7 @@ def run_case(executable, matrix, case, reference, response):
                 remaining(stop_at, 2),
                 guard=lambda: assert_requests(fixture, reference),
             )
+            anchor_upper = time.monotonic()
             require(
                 not fixture.release.is_set(),
                 "Timeout response preceded the held snapshot",
@@ -350,6 +445,15 @@ def run_case(executable, matrix, case, reference, response):
             )
             outcome_at = time.monotonic()
             assert_outcome_timing(fixture.received_at, outcome_at, case, timing)
+            transition = load_transition(control / "outcome-observed")
+            _, transition_upper = assert_transition_timing(
+                transition,
+                anchor_lower,
+                anchor_upper,
+                fixture.received_at,
+                case,
+                timing,
+            )
             phase = "independent-release"
 
             def released():
@@ -360,6 +464,9 @@ def run_case(executable, matrix, case, reference, response):
             wait_for(child, released, remaining(stop_at, 20), phase)
             assert_release_timing(fixture, case, timing)
             assert_outcome_order(outcome_at, fixture.released_at, case)
+            assert_transition_before_release(
+                transition_upper, fixture.received_at, fixture.released_at, case
+            )
             late_end = max(
                 fixture.received_at + timing["observe_until_seconds"],
                 outcome_at + timing["after_outcome_seconds"],
