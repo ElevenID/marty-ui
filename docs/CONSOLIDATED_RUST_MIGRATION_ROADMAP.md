@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: latest fully qualified composed head `2d864723f` passed complete CI, including 146 configured published-schema tests and four worker/PostgreSQL tests. Current `afc8bd754` has passed native header, live-provider-expiry and BODY preflights; full current-head qualification remains running. Coordinated native consumer selection is prepared on a separate unmerged branch, not deployed. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: composed head `afc8bd754` passed complete CI, including 169 configured published-schema tests and 11 worker/PostgreSQL tests. Two explicit reference-capture tests and two manual repository diagnostics remain ignored, not parity gates. Coordinated native consumer selection and subsequent gateway acceptance work are prepared on separate unmerged branches, not deployed or qualified by that older head's CI. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -31,10 +31,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
-Draft PR #814 at `afc8bd754` is running
+Draft PR #814 at `afc8bd754` passed
 [CI34223397680](https://github.com/ElevenID/marty-ui/actions/runs/34223397680).
-Runtime job `102051657514` passed the header, lease-expiry and BODY preflight
-steps; mixed-roster and broader qualification are not inferred from those passes.
+Runtime job `102051657514` passed all four preflights and the complete database
+groups. The configured published-schema result was 169 passed, zero failed and
+two explicit capture tests ignored in 4089.75s. The worker/PostgreSQL target
+passed 11 tests with two manual repository diagnostics ignored in 95.92s.
+These terminal results do not qualify subsequent unpushed changes.
 The combined local Python suite passed **2,723 tests with three skips** in
 211.04s. A subsequent reviewed real-PostgreSQL warning regression passed in
 7.06s with Clippy passing, and is retained in unpushed `ccedce2f2`.
@@ -61,12 +64,30 @@ No consumer preparation authorizes source deletion, main merge or deployment.
 
 The checked-in issuance pin still selects published credentials `v0.1.72`, which
 predates the merged recovery migration. Binding it correctly does not close that
-release-artifact gap. A separate clean `0.1.73` preparation branch from protected
-`948bca` contains version fields only; 68 release tests passed. The bump is
-committed as `21ac54c9e0558fe47d626210cd72b38ab8116707` and pushed on clean
-`chore/release-0-1-73`; [PR #272](https://github.com/ElevenID/marty-credentials/pull/272)
-is open with checks running. No tag, publication or deployment has occurred;
-no new image availability, lock advancement or release qualification is implied.
+release-artifact gap. The version-only preparation passed 68 local release tests;
+[PR #272](https://github.com/ElevenID/marty-credentials/pull/272) merged through
+the protected queue at `9bd2747f040f203188529758ec38f0a5dce5ac5f`. All five
+configured exact-main release gates passed, including CI `34230259298`.
+Publication remains paused: GitHub rejected the preparation dispatch because
+the tag preparation, stable release and image-finalization workflows are manually
+disabled. Re-enabling those controls requires explicit approval. No preparation
+run, tag, publication or deployment was created; no new image availability or
+lock advancement is implied. The redundant local release branch was removed
+only after its entire source tree was verified identical to merged main; GitHub
+had already removed its remote branch.
+
+Separate local gateway work committed the actor-header sanitizer (`8f4289178`)
+and explicit-client transport seam (`3139e1869`). Red/green tests, 107 gateway
+unit tests, three executable smoke tests and strict gateway Clippy passed; one
+existing Redis integration test remains ignored, not qualified. The first
+configured gateway-to-issuance/PostgreSQL candidate test passed in 7.80s with
+owned-container cleanup verified. It covers all eight route selections, seven
+positive frozen cases, trusted dismiss actors/audits and denied/duplicate
+isolation. Identity providers are controlled ports; this is not the gateway
+binary or full lifecycle acceptance. Remaining error, foreign-object, recovery
+and lifecycle cases still precede route cutover and Python deletion. The new
+test is registered in the existing mandatory full database gate, but these
+local changes are not yet merged or qualified by hosted CI.
 
 Cleanup also found unique unmerged UI key-custody work in `827ab777b` on local
 main and the security branch. Both references are preserved. Backend

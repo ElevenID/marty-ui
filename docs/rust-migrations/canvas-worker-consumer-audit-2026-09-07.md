@@ -52,12 +52,15 @@ was performed.
 
 **The release-artifact gap remains:** published credentials `v0.1.72`, still
 selected by the checked-in lock, predates the merged recovery migration. Correct
-immutable binding cannot add that migration to an older image. A separate clean
-`0.1.73` release-preparation branch from protected `948bca` contains only version
-field changes; 68 release tests passed. The version bump is now committed as
-`21ac54c9e0558fe47d626210cd72b38ab8116707` and pushed on the clean
-`chore/release-0-1-73` branch. [PR #272](https://github.com/ElevenID/marty-credentials/pull/272)
-is open with checks running; no tag, publication or deployment has occurred.
+immutable binding cannot add that migration to an older image. The version-only
+`0.1.73` preparation passed 68 local release tests;
+[PR #272](https://github.com/ElevenID/marty-credentials/pull/272) merged through
+the protected queue at `9bd2747f040f203188529758ec38f0a5dce5ac5f`. All five
+configured exact-main release gates passed, including CI `34230259298`.
+GitHub rejected the subsequent preparation dispatch because all three publication
+workflows are manually disabled. Re-enabling them requires explicit approval;
+no preparation run, tag, publication or deployment occurred. The merged branch
+was cleaned up after complete source-tree retention on main was verified.
 This is not a new available image or a lock update. Publication,
 reviewed artifact selection, current-head qualification and cutover acceptance
 remain separate gates.
@@ -65,9 +68,12 @@ remain separate gates.
 At this checkpoint, remote `afc8bd754` CI `34223397680`, runtime job
 `102051657514`, reported successful header (12:02:35–12:04:30 UTC), expiry
 (12:04:30–12:06:20 UTC) and body (12:06:20–12:10:33 UTC) preflight steps.
-Mixed-roster verification was running from 12:10:33 UTC; full groups remained
-pending. These are step-success facts, not inferred test counts or a final CI
-result. That run does not include this separate branch's consumer selection.
+Mixed-roster verification and the complete CI subsequently passed. Terminal
+published-schema evidence reports 169 passed, zero failed and two explicit
+reference-capture tests ignored in 4089.75s. The worker/PostgreSQL target passed
+11 tests with two manual repository diagnostics ignored in 95.92s. These ignored
+capture/diagnostic paths are not native parity gates. That run does not include
+this separate branch's consumer selection or later gateway acceptance changes.
 This section neither qualifies the staged worker runtime nor authorizes
 deployment or Python deletion.
 All older selection descriptions and counts below are dated historical evidence,
