@@ -86,6 +86,12 @@ DIAGNOSTIC_CATEGORIES = frozenset(
         "FailurePostShutdownState",
         "FailureOutput",
         "FailureParity",
+        "OutputQuiet",
+        "OutputSqlxSlowQueries",
+        "OutputAuthenticationMaterial",
+        "OutputTooLarge",
+        "OutputOther",
+        "OutputReadFailure",
         "FailureUnknown",
     )
 )

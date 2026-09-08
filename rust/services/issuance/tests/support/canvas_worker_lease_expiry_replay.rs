@@ -1,7 +1,7 @@
 //! Real native worker/provider renewal-lock observation. Never changes runtime
 //! fences or live job/lease/clock values. A diagnostic mismatch is not parity.
 use super::{
-    canvas_worker_output::OwnedOutput,
+    canvas_worker_output::{OutputDiagnostic, OwnedOutput},
     canvas_worker_process_signals::OwnedWorker,
     canvas_worker_provider_signals_replay::snapshot,
     canvas_worker_rest_replay::{prepare, validation_scenarios, worker_environment, WorkerFixture},
@@ -67,6 +67,12 @@ enum Diagnostic {
     FailurePostShutdownState,
     FailureOutput,
     FailureParity,
+    OutputQuiet,
+    OutputSqlxSlowQueries,
+    OutputAuthenticationMaterial,
+    OutputTooLarge,
+    OutputOther,
+    OutputReadFailure,
     FailureUnknown,
 }
 
@@ -772,6 +778,20 @@ async fn run<'a>(
         output.assert_private_quiet(fixture.spec["token"].as_str().unwrap(), database_url)
     }))
     .is_ok();
+    if !quiet {
+        emit_diagnostic(
+            match output.diagnostic(fixture.spec["token"].as_str().unwrap(), database_url) {
+                OutputDiagnostic::Quiet => Diagnostic::OutputQuiet,
+                OutputDiagnostic::SqlxSlowQueries => Diagnostic::OutputSqlxSlowQueries,
+                OutputDiagnostic::AuthenticationMaterial => {
+                    Diagnostic::OutputAuthenticationMaterial
+                }
+                OutputDiagnostic::TooLarge => Diagnostic::OutputTooLarge,
+                OutputDiagnostic::Other => Diagnostic::OutputOther,
+                OutputDiagnostic::ReadFailure => Diagnostic::OutputReadFailure,
+            },
+        );
+    }
     mark(control, "child-done")?;
     require(
         quiet,

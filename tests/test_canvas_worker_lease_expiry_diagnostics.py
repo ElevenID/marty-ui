@@ -23,7 +23,7 @@ def test_every_rust_category_matches_closed_parser_inventory(native):
     ).read_text(encoding="utf-8")
     block = re.search(r"enum Diagnostic \{([^}]+)\}", source).group(1)
     categories = re.findall(r"^\s*([A-Za-z]+),\s*$", block, re.MULTILINE)
-    assert len(categories) == len(set(categories)) == 38
+    assert len(categories) == len(set(categories)) == 44
     assert {name.encode() for name in categories} == native.DIAGNOSTIC_CATEGORIES
     mapping = re.search(
         r"fn failure_diagnostic\(reason: &str\) -> Diagnostic \{(.*?)\n\}\n",

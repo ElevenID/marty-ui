@@ -9,7 +9,7 @@ All four actual header-timeout HTTPS cases, seven mixed-roster stages with
 55 actual HTTPS requests, and 104 operation-timeout/TLS cases passed.
 Unconfigured test counts are not database qualification evidence.
 
-Latest attempted head `3e552ccaef5dd4f42f79fe7d41c2cf42b316ffb0` failed
+Head `3e552ccaef5dd4f42f79fe7d41c2cf42b316ffb0` failed
 [CI34216248461](https://github.com/ElevenID/marty-ui/actions/runs/34216248461),
 runtime job `102028592657`, during expiry `child-done`. Header parity passed.
 The early case observed `succeeded`, terminal `succeeded`, renewal true and
@@ -20,6 +20,22 @@ wait, exit-status, post-shutdown state, output and final-parity categories while
 retaining all existing gates. Local validation: 274 focused Python tests,
 five Rust expiry controls, published-contract compilation (13.27s), and strict
 all-target Clippy (1.03s) passed. Actual native replay remains required.
+
+The subsequent head `67ee5c986e29ba81f311346797f37a937e947a8f` failed
+[CI34218409667](https://github.com/ElevenID/marty-ui/actions/runs/34218409667),
+runtime `102035585094`, with the now-specific `FailureOutput` after successful
+shutdown-status and post-shutdown-state checks. The same early-case succeeded/
+renewed result was observed; BODY/mixed/full groups were skipped. The new
+generated beta-image configuration gate passed in the separate image job.
+
+A bounded, payload-free output classifier now distinguishes the SQLx slow-query
+warning signature from authentication material, oversized capture and other
+output. This is diagnostic only: all nonempty output still fails the identical
+strict gate, including recognized SQLx warnings. Both real owned streams have
+regression coverage for classification plus rejection and later private appends.
+No logging filter, runtime SQL, frozen outcome or timing gate changes. The actual
+log signature remains to be observed; SQLx's default slow warning is only a
+source-derived hypothesis until then.
 
 The newer integrated `4fbe9fdcb` candidate and subsequent reference registration
 still require fresh-head hosted qualification; native BODY and actual native

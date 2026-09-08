@@ -539,6 +539,46 @@ mod tests {
     }
 
     #[test]
+    fn native_deadline_output_classified_sqlx_warnings_still_fail_strict_gate() {
+        use super::super::canvas_worker_output::OutputDiagnostic;
+        let record = serde_json::json!({"level":"WARN","target":"sqlx::query",
+            "fields":{"message":"slow statement: execution time exceeded alert threshold",
+                "db.statement":"synthetic-private-query"}});
+        let bytes = format!("{record}\n").into_bytes();
+        for stream in 0..2 {
+            let mut fixture = OutputFixture::new();
+            fixture.append(stream, &bytes);
+            for _ in 0..2 {
+                assert_eq!(
+                    fixture
+                        .output
+                        .as_mut()
+                        .unwrap()
+                        .diagnostic(OUTPUT_TOKEN, OUTPUT_DATABASE),
+                    OutputDiagnostic::SqlxSlowQueries
+                );
+                let message = fixture.rejected();
+                assert!(message.contains(&format!("stream={stream} bytes={}", bytes.len())));
+                assert!(!message.contains("synthetic-private-query"));
+            }
+            // A later private append cannot be hidden by a prior classification.
+            fixture.append(stream, OUTPUT_TOKEN.as_bytes());
+            assert_eq!(
+                fixture
+                    .output
+                    .as_mut()
+                    .unwrap()
+                    .diagnostic(OUTPUT_TOKEN, OUTPUT_DATABASE),
+                OutputDiagnostic::AuthenticationMaterial
+            );
+            assert_eq!(
+                fixture.rejected(),
+                "native worker output contained synthetic authentication material"
+            );
+        }
+    }
+
+    #[test]
     fn native_deadline_output_rejects_ordinary_bytes_in_either_stream_without_payload() {
         for stream in 0..2 {
             let mut fixture = OutputFixture::new();
