@@ -283,6 +283,7 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         "worker_lease_expiry_reference_matches_published_process",
         "worker_body_timeout_native_child",
         "worker_provider_recovery_first_native_child",
+        "operations_gateway_candidate_preserves_review_lifecycle",
     ],
 )
 def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, missing):

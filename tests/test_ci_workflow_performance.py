@@ -616,18 +616,35 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
 
 
-def _assert_gateway_operations_registration(published: str, source: str) -> None:
-    name = "operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes"
+GATEWAY_REGISTRATIONS = [
+    (
+        "operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes",
+        "canvas_operations_gateway_replay",
+        "start_with_review_recovery",
+        4,
+        "gateway operations replay must not deadlock",
+    ),
+    (
+        "operations_gateway_candidate_preserves_review_lifecycle",
+        "canvas_gateway_lifecycle_replay",
+        "start_with_status_provider",
+        5,
+        "gateway lifecycle replay must not deadlock",
+    ),
+]
+
+
+def _assert_gateway_operations_registration(
+    published: str, source: str, registration
+) -> None:
+    name, module, database, connections, message = registration
     inventory = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
         '"${executables[0]}" --nocapture --test-threads=1'
     )
-    assert (
-        '#[path = "support/canvas_operations_gateway_replay.rs"]\n'
-        "mod canvas_operations_gateway_replay;"
-    ) in source
+    assert (f'#[path = "support/{module}.rs"]\nmod {module};') in source
     matches = re.findall(
         r"((?:^#\[[^\n]+\]\s*\n)+)" + rf"^async fn {name}\(\) \{{(.*?)^\}}",
         source,
@@ -654,37 +671,73 @@ def _assert_gateway_operations_registration(published: str, source: str) -> None
         pool.close().await;
         owned.close().unwrap();
     """
+    expected = expected.replace("canvas_operations_gateway_replay", module)
+    expected = expected.replace("start_with_review_recovery", database)
+    expected = expected.replace("max_connections(4)", f"max_connections({connections})")
+    expected = expected.replace("gateway operations replay must not deadlock", message)
     assert re.sub(r"\s+", "", body) == re.sub(r"\s+", "", expected)
 
 
-def test_gateway_operations_candidate_is_required_and_not_dormant() -> None:
+@pytest.mark.parametrize("registration", GATEWAY_REGISTRATIONS)
+def test_gateway_operations_candidate_is_required_and_not_dormant(registration) -> None:
     published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
     )
     source = (
         ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
-    _assert_gateway_operations_registration(published, source)
+    _assert_gateway_operations_registration(published, source, registration)
 
 
 @pytest.mark.parametrize(
     "mutation",
-    ["inventory", "ignored", "extra-opt-in", "helper", "database", "cleanup"],
+    [
+        "inventory",
+        "duplicate-inventory",
+        "ignored",
+        "extra-opt-in",
+        "helper",
+        "database",
+        "wrong-specialized-database",
+        "cleanup",
+        "pool-cleanup",
+        "timeout",
+        "disabled-schema",
+        "filtered-full-run",
+    ],
 )
-def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(mutation):
+@pytest.mark.parametrize("registration", GATEWAY_REGISTRATIONS)
+def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
+    mutation, registration
+):
     published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
     )
     source = (
         ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
-    name = "operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes"
+    name, module, database, _connections, _message = registration
     if mutation == "inventory":
         published = "\n".join(
             line for line in published.splitlines() if name not in line
         )
     elif mutation == "ignored":
         source = source.replace(f"async fn {name}", f"#[ignore]\nasync fn {name}")
+    elif mutation == "duplicate-inventory":
+        line = next(
+            line for line in published.splitlines() if f"'{name}: test'" in line
+        )
+        published = published.replace(line, line + "\n" + line)
+    elif mutation == "disabled-schema":
+        published = published.replace(
+            'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"',
+            'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="0"',
+        )
+    elif mutation == "filtered-full-run":
+        published = published.replace(
+            '"${executables[0]}" --nocapture --test-threads=1',
+            '"${executables[0]}" unrelated_filter --nocapture --test-threads=1',
+        )
     else:
         start = source.index(f"async fn {name}")
         end = source.index("\n}", start)
@@ -694,14 +747,22 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(mut
                 "    let owned =",
                 "    if true { return; }\n    let owned =",
             ),
-            "helper": ("canvas_operations_gateway_replay::run", "unused_replay::run"),
-            "database": ("start_with_review_recovery()", "start()"),
+            "helper": (f"{module}::run", "unused_replay::run"),
+            "database": (f"{database}()", "start()"),
+            "wrong-specialized-database": (
+                f"{database}()",
+                "start_with_review_recovery()"
+                if database == "start_with_status_provider"
+                else "start_with_status_provider()",
+            ),
             "cleanup": ("    owned.close().unwrap();", ""),
+            "pool-cleanup": ("    pool.close().await;", ""),
+            "timeout": ("from_secs(300)", "from_secs(3000)"),
         }[mutation]
         assert original in body
         source = source[:start] + body.replace(original, changed) + source[end:]
     with pytest.raises(AssertionError):
-        _assert_gateway_operations_registration(published, source)
+        _assert_gateway_operations_registration(published, source, registration)
 
 
 def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:

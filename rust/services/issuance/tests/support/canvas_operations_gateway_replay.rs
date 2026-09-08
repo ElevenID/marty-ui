@@ -247,7 +247,7 @@ impl EventStreamProvider for UnusedProviders {
     }
 }
 
-struct CountedHttp {
+pub(super) struct CountedHttp {
     http: ReqwestUpstream,
     native: AtomicUsize,
     legacy: AtomicUsize,
@@ -290,12 +290,16 @@ impl UpstreamClient for CountedHttp {
 }
 
 impl CountedHttp {
-    fn counts(&self) -> (usize, usize) {
+    pub(super) fn counts(&self) -> (usize, usize) {
         (
             self.native.load(Ordering::SeqCst),
             self.legacy.load(Ordering::SeqCst),
         )
     }
+}
+
+pub(super) fn candidate_router(native_port: u16, legacy_port: u16) -> (Router, Arc<CountedHttp>) {
+    router(native_port, legacy_port, Routing::CandidateNative)
 }
 
 fn router(native_port: u16, legacy_port: u16, routing: Routing) -> (Router, Arc<CountedHttp>) {
@@ -418,7 +422,7 @@ impl Drop for LegacyTrap {
 }
 
 #[derive(Clone, Copy)]
-enum RequestBoundary {
+pub(super) enum RequestBoundary {
     Forwarded,
     DeniedBeforeProxy,
 }
@@ -443,7 +447,7 @@ fn check_response_headers(headers: &axum::http::HeaderMap, boundary: RequestBoun
     }
 }
 
-async fn request(
+pub(super) async fn request(
     router: &Router,
     case: &Value,
     auth: Option<(&str, &str)>,

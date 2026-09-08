@@ -1741,6 +1741,32 @@ async fn operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes(
     owned.close().unwrap();
 }
 
+#[path = "support/canvas_gateway_lifecycle_replay.rs"]
+mod canvas_gateway_lifecycle_replay;
+
+#[tokio::test]
+async fn operations_gateway_candidate_preserves_review_lifecycle() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        canvas_gateway_lifecycle_replay::run(&pool, &owned.url),
+    )
+    .await
+    .expect("gateway lifecycle replay must not deadlock");
+    pool.close().await;
+    owned.close().unwrap();
+}
+
 #[path = "support/canvas_status_provider_replay.rs"]
 mod canvas_status_provider_replay;
 

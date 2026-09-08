@@ -108,6 +108,7 @@ fi
 "${executables[0]}" --list | grep -Fx 'operations_resolution_matches_corrected_published_schema: test'
 "${executables[0]}" --list | grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'
 "${executables[0]}" --list | grep -Fx 'operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes: test'
+"${executables[0]}" --list | grep -Fx 'operations_gateway_candidate_preserves_review_lifecycle: test'
 "${executables[0]}" --list | grep -Fx 'review_inputs_match_published_python: test'
 "${executables[0]}" --list | grep -Fx 'review_lifecycle_matches_published_python: test'
 "${executables[0]}" --list | grep -Fx 'status_provider_matches_published_python: test'
