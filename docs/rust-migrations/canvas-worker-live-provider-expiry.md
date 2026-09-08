@@ -47,6 +47,30 @@ coordinator controls in 0.00s after 9.97s compilation, and strict all-target
 Clippy in 5.17s. Both frozen BODY/expiry raw hashes remain unchanged. These
 diagnostic tests do not identify the failure cause; a new native replay must.
 
+That replay ran at `ce19e030cc88907e1c19daefdddc16fef4525ad5` in
+[CI34214817411](https://github.com/ElevenID/marty-ui/actions/runs/34214817411),
+runtime job `102024020884`: header parity passed in 106.41s; expiry failed in
+15.14s with closed categories `AwaitRequest,VerifyInitial,LockHeld,FailureRenewalBlocker`.
+BODY/mixed/full groups were skipped. Source inspection identifies a harness bug:
+expiry added `application_name=canvas-native-expiry-worker`, then the shared
+launcher appended `application_name=worker-rest`. SQLx's ordered URL parser uses
+the last value, while the observer expected the first. The repository-only
+experiment used explicit connection options and bypassed this launcher, so its
+passes did not cover this identity composition. The repair uses one worker ID
+for launch and observation, retaining exact backend/query/row/fence/timing checks
+and adding a regression through the actual SQLx parser. This failure is not
+evidence that native lease renewal itself failed; whole-worker parity remains due.
+
+The identity repair passed independent review and three new pure Rust tests
+through SQLx's real parser and both frozen cases. Final compilation passed in
+7.96s and the three tests in 0.00s; four existing expiry controls also passed.
+The targeted Python controller/diagnostic suite passed 82 tests in 0.39s.
+Strict all-target Clippy passed in 3.24s after moving the unchanged test module
+to the file end. The prior full Python suite at `e93a419a5` passed 2,662 tests
+with three explicit skips in 191.74s; the identity follow-up changes Rust harness
+support and documentation only. Both raw frozen corpus hashes are unchanged.
+These local passes validate the repair composition, not actual provider parity.
+
 | Case | Identical actual observations in A and B |
 | --- | --- |
 | `renewal_lock_early_release` | One HTTPS request; all five body chunks flushed; queued renewal advanced the lease; job succeeded with one fact. |

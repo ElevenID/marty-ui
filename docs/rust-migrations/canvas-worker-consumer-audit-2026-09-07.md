@@ -10,6 +10,54 @@ not claims that current production or beta is broken.
 
 ## Missing or underspecified inventory entries
 
+### Reconciliation at `ce19e030c` (2026-09-08)
+
+The original findings below are retained as historical evidence. A parallel
+read-only re-audit now confirms the following current implementation boundaries:
+
+- The static renderer now covers all 15 inherited conformance/catalog/beta
+  compositions, in addition to its self-host checks. The earlier two-composition
+  limitation is repaired. Generated release/image overlays remain explicitly
+  outside that matrix: add full effective-model checks for both official and
+  local beta release modes before changing their worker artifact association.
+- Versioned worker-only rollback capture, validation and rendering are
+  implemented, as recorded in the follow-up below. The remaining launch gap is
+  narrower: the exact self-host secret-loader shell accepts Python, but not yet
+  the equivalent native executable form. Qualify that exact form without
+  accepting arbitrary shell text or dropping the retained Python rollback path.
+  This exact native form is now implemented at `e93a419a5`: 84 executable
+  PowerShell tests and 24 actual Compose 5.4.0 full-model merges passed, retaining
+  all prior 21 merges. Independent review passed. The complete repository Python
+  suite passed 2,662 tests with three explicit skips in 191.74s. These prove
+  rollback contract/configuration support, not live restore or worker cutover.
+- The three independent Python launch definitions are still base Compose,
+  self-host Compose and Kubernetes. Consumer switching must also update their
+  inherited compositions, generated artifact/provenance mapping, operational
+  validators and configuration tests together. No command or selector has been
+  changed by this audit.
+- Kubernetes currently supplies the worker's database, integration master key
+  and signing API key. Unlike the retained Python Compose definitions, its
+  manifest, secret template and deployment secret creation omit `TOKEN_HMAC_KEY`.
+  The deployment test currently pins that three-secret set. The Python repository
+  requires `TOKEN_HMAC_KEY` or its file at import; the native worker does not read
+  it and has the configured signing/API-key fallback. Treat this as a retained
+  Python/rollback source-wiring gap to verify and repair, not a proven native
+  startup failure or evidence of deployed production state. Reconcile the same
+  secret across issuance/worker rather than inventing an independent value.
+- The eight operations routes below remain a separate live-consumer cutover.
+  Preserve all UI actions, authorization, tenant hiding, public exports and
+  lifecycle effects. Worker selection cannot authorize deleting their Python
+  gateway fallback.
+
+For the eventual qualified cutover, preserve the full worker environment,
+secret-loader-before-exec ordering and URL expansion, both completed migration
+dependencies, headless health/database heartbeat, isolation and resources,
+30-second Kubernetes termination behavior, both rollback selectors and immutable
+artifact provenance. Keep the five frozen published dispatch observations and
+native compiler tests; remove active import selectors rather than emulating
+dynamic Python imports. A typed processor's heartbeat flag does not replace a
+missing-processor branch. None of this authorizes deployment before worker gates.
+
 | Inventory delta | Tracked evidence | Required future gate |
 | --- | --- | --- |
 | **Missing: isolated conformance worker consumer.** | [Conformance overlay](../../docker-compose.profile.conformance.yml#L124) changes only `canvas-sync-worker.container_name` to `!reset null`. It inherits the base Python image, command, environment, migration dependencies and headless health configuration. [Conformance runner](../../scripts/conformance_stack.py#L19) composes base + OIDF, a GHCR/immutable-infrastructure or local-build variant, optional HAIP/DIDComm overlays, and isolation last. Its `up` branches start the composed stack, not merely an API-only subset. | Render both runner image modes and the optional profile combinations without resolving real secrets. Compare the entire worker model except the intentional project-name reset. Retain isolated networks/volumes, no worker host ports, both completed-migration dependencies and database-heartbeat health. A conformance overlay is not a fourth independent Python command definition. |

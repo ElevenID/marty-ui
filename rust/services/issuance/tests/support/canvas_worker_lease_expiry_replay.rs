@@ -20,7 +20,9 @@ use std::{
 use tokio::time::{Duration, Instant};
 
 const JOB: &str = "worker-validation-job";
-const APPLICATION: &str = "canvas-native-expiry-worker";
+// The shared launcher also uses this ID as the PostgreSQL application name.
+// Keep the observer and frozen lease/target identity on that same owner.
+const WORKER_ID: &str = "worker-rest";
 const CASES: [&str; 2] = ["renewal_lock_early_release", "renewal_lock_crosses_expiry"];
 type Checked<T> = Result<T, &'static str>;
 
@@ -443,7 +445,7 @@ async fn blocked(pool: &PgPool, blocker: i32) -> Checked<Option<i32>> {
              AND wait_event_type='Lock' AND query LIKE 'UPDATE issuance_service.canvas_evidence_sync_jobs%'
              AND query LIKE '%SET lease_expires_at = $5%'), min(pid)
          FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))"
-    ).bind(blocker).bind(APPLICATION).fetch_one(pool)).await
+    ).bind(blocker).bind(WORKER_ID).fetch_one(pool)).await
         .map_err(|_| "native expiry blocker query timed out")?
         .map_err(|_| "native expiry blocker query failed")?;
     require(
@@ -511,7 +513,7 @@ async fn run<'a>(
             && initial.row["status"] == "leased"
             && initial.row["attempt_count"] == 1
             && initial.row["max_attempts"] == 8
-            && initial.row["lease_owner"] == "worker-rest"
+            && initial.row["lease_owner"] == WORKER_ID
             && initial.row["result"] == json!({"target_config_version":1})
             && expires > initial.now,
         "native expiry initial owned job differs",
@@ -786,18 +788,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
         environment.insert(key.clone(), value.as_str().unwrap().to_owned());
     }
     environment.insert("RUST_LOG".into(), "warn".into());
-    let mut worker_url =
-        url::Url::parse(database_url).expect("native expiry database configuration invalid");
-    let mut pairs: Vec<(String, String)> = worker_url
-        .query_pairs()
-        .filter(|(key, _)| key != "application_name")
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    pairs.push(("application_name".into(), APPLICATION.into()));
-    worker_url.query_pairs_mut().clear().extend_pairs(pairs);
     let mut worker = OwnedWorker::start_with_environment_and_output(
-        worker_url.as_str(),
-        "worker-rest",
+        database_url,
+        WORKER_ID,
         &environment,
         stdout,
         stderr,
@@ -866,6 +859,28 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expiry_observer_identity_matches_launcher_and_both_frozen_targets() {
+        use super::super::canvas_worker_process_signals::worker_database_url;
+        use sqlx::postgres::PgConnectOptions;
+        use std::str::FromStr;
+
+        for database_url in [
+            "postgres://synthetic-user@127.0.0.1/owned_test",
+            "postgres://synthetic-user@127.0.0.1/owned_test?application_name=canvas-native-expiry-worker",
+        ] {
+            let launched = worker_database_url(database_url, WORKER_ID);
+            let options = PgConnectOptions::from_str(launched.as_str()).unwrap();
+            assert_eq!(options.get_application_name(), Some(WORKER_ID));
+            for case in CASES {
+                let expected = reference(case).unwrap();
+                for state in ["initial_held", "before_release", "outcome"] {
+                    assert_eq!(expected[state]["target"]["metadata"]["worker_id"], WORKER_ID);
+                }
+            }
+        }
+    }
 
     #[test]
     fn diagnostic_failure_mapping_is_exact_and_payload_free() {
@@ -973,7 +988,7 @@ mod tests {
                 "id":JOB, "organization_id":"org-review", "target_id":"target-review",
                 "status":"leased", "attempt_count":1, "max_attempts":8,
                 "started_at":"2026-09-08T00:00:00Z", "created_at":"original-created",
-                "available_at":"original-available", "lease_owner":"worker-rest",
+                "available_at":"original-available", "lease_owner":WORKER_ID,
                 "lease_expires_at":"original-expiry", "updated_at":"original-updated",
                 "result":{"target_config_version":1}
             }),
@@ -1036,7 +1051,7 @@ mod tests {
             }
         }
         let mut uncleared = terminal("retry");
-        uncleared.row["lease_owner"] = json!("worker-rest");
+        uncleared.row["lease_owner"] = json!(WORKER_ID);
         assert_eq!(
             status(&uncleared, &original),
             Err("native expiry terminal lease was not cleared")

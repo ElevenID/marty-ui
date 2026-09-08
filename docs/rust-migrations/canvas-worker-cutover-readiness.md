@@ -73,6 +73,20 @@ The reviewed closed-diagnostic repair passed 2,648 Python tests with three
 explicit skips in 170.57s, four Rust coordinator controls in 0.00s (9.97s
 compilation), and strict all-target Clippy in 5.17s. It changes neither the
 frozen raw corpora nor any timing/state gate. Actual native replay remains due.
+
+The subsequent `ce19e030c` replay in
+[CI34214817411](https://github.com/ElevenID/marty-ui/actions/runs/34214817411)
+passed header parity in 106.41s but failed expiry in 15.14s with
+`FailureRenewalBlocker`. The observer expected a database application name that
+the shared launcher overwrote. This is a harness identity-composition bug, not
+proof of failed renewal. A single-identity repair and actual native rerun are
+required; preserve exact backend/query/fence checks and all frozen expectations.
+
+Local identity-repair validation passed independent review, three new SQLx/frozen
+identity controls plus four existing expiry controls, 82 Python regressions
+(0.39s), and strict all-target Clippy (3.24s). Final Rust compilation took 7.96s.
+The full Python suite passed 2,662 tests with three skips at `e93a419a5` before
+this Rust-only follow-up. Actual native provider replay remains the open gate.
 The early expiry preflight is integrated; the full configured suite remains required.
 Neither published nor native repository renewal revival authorizes weakening
 the stronger fresh-lock side-effect fences. PR #814 remains draft and

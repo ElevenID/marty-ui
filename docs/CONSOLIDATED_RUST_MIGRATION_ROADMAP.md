@@ -111,6 +111,24 @@ tests, three explicit skips, 170.57s), four Rust coordinator controls (0.00s
 after 9.97s compilation), and strict all-target Clippy (5.17s). The raw frozen
 BODY/expiry hashes are unchanged. Fresh hosted native replay is still required.
 
+At `ce19e030c`, [CI34214817411](https://github.com/ElevenID/marty-ui/actions/runs/34214817411)
+runtime job `102024020884` passed header parity (106.41s), then failed expiry
+(15.14s) with `FailureRenewalBlocker`. Closed diagnostics and source inspection
+identify a harness identity mismatch: the shared launcher overrides the database
+application name expected by the observer. A narrow single-identity repair and
+actual SQLx-parser regression are underway; no renewal fence or frozen outcome
+is weakened. BODY/mixed/full suites were skipped and remain unqualified at this head.
+
+The identity repair now passes independent review, three new SQLx/frozen identity
+controls, four retained expiry controls, 82 focused Python tests (0.39s), and
+strict all-target Clippy (3.24s). Final compilation took 7.96s; actual native
+replay remains required. Parallel consumer preparation at `e93a419a5` adds exact
+native self-host loader rollback support without switching current consumers:
+84 PowerShell tests, 24 actual config-only Compose merges and the full Python
+suite (2,662 passes, three skips, 191.74s) passed. The updated
+[consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md)
+retains generated-overlay, all-consumer, secret-wiring and operations-route gaps.
+
 Parallel work at `ceb5729a5` added an isolated DRY Rust signing diagnostic helper
 and explicit contract test target. All 45 frozen detail and six operation-message
 projections passed within 13 pure tests (0.01s after 33.64s compilation), with
