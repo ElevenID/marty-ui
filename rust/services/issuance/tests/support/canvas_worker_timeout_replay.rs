@@ -1,4 +1,4 @@
-//! Actual native worker delayed-header replay; no live job, lease or clock edits.
+//! Actual native worker header/body replay; no live job, lease or clock edits.
 //! Python owns the one-request transport/release clock; this owner proves every
 //! durable state and keeps the actual worker alive through the late window.
 use super::{
@@ -17,6 +17,66 @@ use std::{
     sync::OnceLock,
     time::{Duration, Instant},
 };
+
+pub(super) const BODY_CASES: &[&str] = &[
+    "application_body_prompt",
+    "roster_body_prompt",
+    "application_body_progress",
+    "roster_body_progress",
+    "application_body_stall",
+    "roster_body_stall",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayKind {
+    Header,
+    Body,
+}
+
+impl ReplayKind {
+    fn scenarios(self) -> &'static Value {
+        match self {
+            Self::Header => scenarios(),
+            Self::Body => body_scenarios(),
+        }
+    }
+
+    fn observations(self) -> &'static Value {
+        match self {
+            Self::Header => &reference()["observations"],
+            Self::Body => body_observations(),
+        }
+    }
+
+    fn control_environment(self) -> &'static str {
+        match self {
+            Self::Header => "MARTY_CANVAS_WORKER_TIMEOUT_CONTROL",
+            Self::Body => "MARTY_CANVAS_WORKER_BODY_TIMEOUT_CONTROL",
+        }
+    }
+
+    fn terminal_wait(self) -> Duration {
+        // Observation ceiling only. Python still requires the complete narrow
+        // interval and idle observation inside the original per-case windows.
+        Duration::from_secs(match self {
+            Self::Header => 25,
+            Self::Body => 35,
+        })
+    }
+
+    fn accepts(self, case: &str) -> bool {
+        match self {
+            Self::Header => matches!(
+                case,
+                "application_prompt"
+                    | "application_delayed_headers"
+                    | "roster_prompt"
+                    | "roster_delayed_headers"
+            ),
+            Self::Body => BODY_CASES.contains(&case),
+        }
+    }
+}
 
 // Coordinator diagnostics only: never format worker output, database values,
 // panic payloads, paths or dynamic field names. Python accepts exact enum lines.
@@ -91,6 +151,18 @@ fn outcome_diagnostics(actual: &Value, expected: &Value) -> Vec<Diagnostic> {
     categories
 }
 
+fn assert_outcome_matches(actual: &Value, expected: &Value, terminal_status: &str) {
+    emit_diagnostic(Diagnostic::CompareOutcome);
+    for category in outcome_diagnostics(actual, expected) {
+        emit_diagnostic(category);
+    }
+    assert_eq!(actual["jobs"][0]["status"], terminal_status);
+    assert!(
+        actual == expected,
+        "native timeout outcome differs from frozen published state"
+    );
+}
+
 fn scenarios() -> &'static Value {
     static MATRIX: OnceLock<Value> = OnceLock::new();
     MATRIX.get_or_init(|| {
@@ -116,6 +188,56 @@ fn reference() -> &'static Value {
             "../../../../../contracts/canvas-worker-timeout-oracle.json"
         ))
         .unwrap()
+    })
+}
+
+fn body_scenarios() -> &'static Value {
+    static MATRIX: OnceLock<Value> = OnceLock::new();
+    MATRIX.get_or_init(|| {
+        let mut matrix: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-body-timeout-scenarios.json"
+        ))
+        .unwrap();
+        for key in ["effect_rows_sql", "operational_rows_sql"] {
+            matrix[key] = scenarios()[key].clone();
+        }
+        matrix
+    })
+}
+
+fn body_reference_view(matrix: &Value, raw: &Value) -> Value {
+    assert_eq!(
+        matrix["schema"],
+        "marty.canvas-worker-body-timeout-scenarios/v1"
+    );
+    let cases = matrix["cases"].as_array().unwrap();
+    let reports = raw.as_array().unwrap();
+    assert_eq!(cases.len(), BODY_CASES.len());
+    assert_eq!(reports.len(), BODY_CASES.len());
+    let mut observations = Vec::new();
+    for ((case, report), name) in cases.iter().zip(reports).zip(BODY_CASES) {
+        let observation = &report["worker_body_timeout"];
+        assert_eq!(case["name"], *name);
+        assert_eq!(observation["case"], *name);
+        assert_eq!(
+            observation["schema"],
+            "marty.canvas-worker-body-timeout-observation/v1"
+        );
+        // An in-memory view only: preserve all original JSON numbers and fields.
+        // Never rewrite the frozen full report or synthesize native observations.
+        observations.push(observation.clone());
+    }
+    Value::Array(observations)
+}
+
+fn body_observations() -> &'static Value {
+    static OBSERVATIONS: OnceLock<Value> = OnceLock::new();
+    OBSERVATIONS.get_or_init(|| {
+        let raw: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-body-timeout-oracle.json"
+        ))
+        .unwrap();
+        body_reference_view(body_scenarios(), &raw)
     })
 }
 
@@ -149,8 +271,8 @@ async fn scalar(pool: &PgPool, query: &'static str) -> Value {
     sqlx::query_scalar(query).fetch_one(pool).await.unwrap()
 }
 
-fn control_directory() -> PathBuf {
-    let supplied = PathBuf::from(std::env::var("MARTY_CANVAS_WORKER_TIMEOUT_CONTROL").unwrap());
+fn control_directory(kind: ReplayKind) -> PathBuf {
+    let supplied = PathBuf::from(std::env::var(kind.control_environment()).unwrap());
     let directory = supplied.canonicalize().unwrap();
     assert!(directory.is_dir());
     assert_eq!(directory.file_name().unwrap(), "native-control");
@@ -310,18 +432,22 @@ async fn await_marker(control: &Path, name: &str, worker: &mut OwnedWorker) {
     .expect("native timeout parent handshake exceeded its fixed bound");
 }
 
-async fn observe(pool: &PgPool, fixture: &WorkerFixture) -> Value {
+async fn observe(pool: &PgPool, fixture: &WorkerFixture, kind: ReplayKind) -> Value {
     let mut state = snapshot(pool, fixture).await;
-    state["target"] = scalar(pool, scenarios()["target_sql"].as_str().unwrap()).await;
+    state["target"] = scalar(pool, kind.scenarios()["target_sql"].as_str().unwrap()).await;
     state
 }
 
-async fn effects(pool: &PgPool) -> Value {
-    scalar(pool, scenarios()["effect_rows_sql"].as_str().unwrap()).await
+async fn effects(pool: &PgPool, kind: ReplayKind) -> Value {
+    scalar(pool, kind.scenarios()["effect_rows_sql"].as_str().unwrap()).await
 }
 
-async fn operational(pool: &PgPool) -> Value {
-    scalar(pool, scenarios()["operational_rows_sql"].as_str().unwrap()).await
+async fn operational(pool: &PgPool, kind: ReplayKind) -> Value {
+    scalar(
+        pool,
+        kind.scenarios()["operational_rows_sql"].as_str().unwrap(),
+    )
+    .await
 }
 
 fn assert_unavailable_effects(before: &Value, after: &Value) {
@@ -348,32 +474,42 @@ async fn assert_stable(
     fixture: &WorkerFixture,
     outcome: &Value,
     rows: &(Value, Value),
+    kind: ReplayKind,
 ) {
     assert!(
-        observe(pool, fixture).await == *outcome,
+        observe(pool, fixture, kind).await == *outcome,
         "timeout outcome changed after completion"
     );
     assert!(
-        effects(pool).await == rows.0,
+        effects(pool, kind).await == rows.0,
         "late response changed raw business effects"
     );
     assert!(
-        operational(pool).await == rows.1,
+        operational(pool, kind).await == rows.1,
         "late response changed raw job or target"
     );
 }
 
-fn assert_reference(case: &Value, expected: &Value) {
-    let matrix = scenarios();
-    assert_eq!(
-        reference()["schema"],
-        "marty.canvas-worker-timeout-oracle/v1"
-    );
-    assert_eq!(matrix["schema"], "marty.canvas-worker-timeout-scenarios/v1");
-    assert_eq!(
-        expected["schema"],
-        "marty.canvas-worker-timeout-observation/v1"
-    );
+fn assert_reference(kind: ReplayKind, case: &Value, expected: &Value) {
+    let matrix = kind.scenarios();
+    let observation_schema = match kind {
+        ReplayKind::Header => {
+            assert_eq!(
+                reference()["schema"],
+                "marty.canvas-worker-timeout-oracle/v1"
+            );
+            assert_eq!(matrix["schema"], "marty.canvas-worker-timeout-scenarios/v1");
+            "marty.canvas-worker-timeout-observation/v1"
+        }
+        ReplayKind::Body => {
+            assert_eq!(
+                matrix["schema"],
+                "marty.canvas-worker-body-timeout-scenarios/v1"
+            );
+            "marty.canvas-worker-body-timeout-observation/v1"
+        }
+    };
+    assert_eq!(expected["schema"], observation_schema);
     assert_eq!(expected["case"], case["name"]);
     assert_eq!(
         expected["outcome"]["jobs"][0]["status"],
@@ -387,20 +523,32 @@ fn assert_reference(case: &Value, expected: &Value) {
             "CANVAS_SYNC_WORKER_POLL_SECONDS": "120", "LOG_LEVEL": "WARNING"
         })
     );
-    assert_eq!(
-        expected["timing"],
-        json!({
-            "outcome_within_declared_source_window": true,
-            "release_within_declared_band": true,
-            "outcome_before_release": case["expected_status"] == "retry",
-            "lease_current_while_response_held": true,
-            "original_lease_current_after_outcome": true
-        })
-    );
-    assert_eq!(
-        expected["stable_after_release_handler_join_and_interrupt"],
-        true
-    );
+    let (timing, stable_key) = match kind {
+        ReplayKind::Header => (
+            json!({
+                "outcome_within_declared_source_window": true,
+                "release_within_declared_band": true,
+                "outcome_before_release": case["expected_status"] == "retry",
+                "lease_current_while_response_held": true,
+                "original_lease_current_after_outcome": true
+            }),
+            "stable_after_release_handler_join_and_interrupt",
+        ),
+        ReplayKind::Body => (
+            json!({
+                "all_attempts_within_declared_schedule": true,
+                "first_terminal_interval_within_declared_window": true,
+                "idle_outcome_within_declared_window": true,
+                "initial_response_within_request_budget": true,
+                "late_window_completed": true,
+                "original_lease_current_through_join": true,
+                "outcome_before_final_attempt": case["expected_status"] == "retry",
+            }),
+            "stable_after_final_attempt_handler_join_and_interrupt",
+        ),
+    };
+    assert_eq!(expected["timing"], timing);
+    assert_eq!(expected[stable_key], true);
     assert_eq!(expected["exit_code_after_interrupt"], -2);
     for key in ["source_sha256", "http_source_sha256", "log_source_sha256"] {
         assert_eq!(expected[key], matrix[key]);
@@ -417,21 +565,63 @@ fn assert_reference(case: &Value, expected: &Value) {
             }, "other_output_empty": true
         })
     );
+    if kind == ReplayKind::Body {
+        assert_eq!(expected["runtime_versions"], matrix["runtime_versions"]);
+        assert_eq!(expected["requests"].as_array().unwrap().len(), 1);
+        assert_eq!(expected["requests"][0]["method"], "GET");
+        assert_eq!(
+            expected["requests"][0]["path"],
+            matrix["request_paths"][case["target_type"].as_str().unwrap()]
+        );
+        let shutdown = &expected["logs_after_interrupt"];
+        assert_eq!(
+            shutdown["pre_interrupt_profile"],
+            expected["logs_before_interrupt"]
+        );
+        assert_eq!(shutdown["python_version"], "3.12.13");
+        assert_eq!(
+            shutdown["shutdown"],
+            json!({
+                "exception_chain": ["asyncio.exceptions.CancelledError", "KeyboardInterrupt"],
+                "traceback_count": 2, "frame_count": 11, "trace_line_count": 31,
+                "caret_line_count": 4, "unexpected_output_empty": true,
+            })
+        );
+        assert_eq!(
+            shutdown["shutdown_source_sha256"]
+                .as_object()
+                .unwrap()
+                .len(),
+            6
+        );
+        assert_eq!(
+            shutdown["shutdown_source_sha256"]["/app/services/issuance/canvas_worker.py"],
+            matrix["source_sha256"]["issuance.canvas_worker"]
+        );
+    }
 }
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: &str) {
+    replay_kind(pool, database_url, origin, case_name, ReplayKind::Header).await;
+}
+
+pub async fn replay_body(pool: &PgPool, database_url: &str, origin: &str, case_name: &str) {
+    replay_kind(pool, database_url, origin, case_name, ReplayKind::Body).await;
+}
+
+async fn replay_kind(
+    pool: &PgPool,
+    database_url: &str,
+    origin: &str,
+    case_name: &str,
+    kind: ReplayKind,
+) {
     assert_eq!(std::env::consts::OS, "linux");
-    assert!(matches!(
-        case_name,
-        "application_prompt"
-            | "application_delayed_headers"
-            | "roster_prompt"
-            | "roster_delayed_headers"
-    ));
-    let matrix = scenarios();
+    assert!(kind.accepts(case_name), "unknown native timeout case");
+    let matrix = kind.scenarios();
     let case = select(&matrix["cases"], "name", case_name);
-    let expected = select(&reference()["observations"], "case", case_name);
-    assert_reference(case, expected);
+    let expected = select(kind.observations(), "case", case_name);
+    assert_reference(kind, case, expected);
 
     let fixture = prepare(pool, origin, "retry").await;
     // Exact published post-OAuth setup, before the worker process exists.
@@ -464,8 +654,8 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
         }
         "worker-validation-job"
     };
-    let initial_effects = effects(pool).await;
-    let control = control_directory();
+    let initial_effects = effects(pool, kind).await;
+    let control = control_directory(kind);
     let (mut output, stdout, stderr) = OwnedOutput::new(&control);
     let mut environment = worker_environment(origin);
     for (key, value) in matrix["environment"].as_object().unwrap() {
@@ -488,7 +678,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     assert_eq!(leased.verified_status(job_id, started, expires), "leased");
     assert_original_lease_current(pool, expires).await;
     assert_leased_state(
-        observe(pool, &fixture).await,
+        observe(pool, &fixture, kind).await,
         &expected["before_release"],
         1,
     );
@@ -498,23 +688,22 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     // query starts before its snapshot; the first terminal query finishes after
     // its snapshot. Together these bracket the actual durable transition.
     emit_diagnostic(Diagnostic::AwaitTerminal);
-    let (first_terminal_end, terminal_status) =
-        tokio::time::timeout(Duration::from_secs(25), async {
-            loop {
-                alive(&mut worker);
-                let query_start = Instant::now();
-                let observed = read_job(pool).await;
-                let query_end = Instant::now();
-                let status = observed.verified_status(job_id, started, expires);
-                if status != "leased" {
-                    break (query_end, status.to_owned());
-                }
-                last_leased_start = query_start;
-                tokio::time::sleep(Duration::from_millis(25)).await;
+    let (first_terminal_end, terminal_status) = tokio::time::timeout(kind.terminal_wait(), async {
+        loop {
+            alive(&mut worker);
+            let query_start = Instant::now();
+            let observed = read_job(pool).await;
+            let query_end = Instant::now();
+            let status = observed.verified_status(job_id, started, expires);
+            if status != "leased" {
+                break (query_end, status.to_owned());
             }
-        })
-        .await
-        .expect("native timeout worker must reach its first terminal job status");
+            last_leased_start = query_start;
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("native timeout worker must reach its first terminal job status");
     emit_diagnostic(terminal_diagnostic(&terminal_status));
     if case["expected_status"].as_str() != Some(terminal_status.as_str()) {
         emit_diagnostic(Diagnostic::TerminalMismatch);
@@ -531,7 +720,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     let outcome = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             alive(&mut worker);
-            let state = observe(pool, &fixture).await;
+            let state = observe(pool, &fixture, kind).await;
             let jobs = state["jobs"].as_array().unwrap();
             assert_eq!(jobs.len(), 1);
             if state["heartbeat"]["metadata"]["phase"] == "idle"
@@ -547,15 +736,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     })
     .await
     .expect("native timeout worker must become idle after its first terminal outcome");
-    emit_diagnostic(Diagnostic::CompareOutcome);
-    for category in outcome_diagnostics(&outcome, &expected["outcome"]) {
-        emit_diagnostic(category);
-    }
-    assert_eq!(outcome["jobs"][0]["status"], terminal_status);
-    assert!(
-        outcome == expected["outcome"],
-        "native timeout outcome differs from frozen published state"
-    );
+    assert_outcome_matches(&outcome, &expected["outcome"], &terminal_status);
     emit_diagnostic(Diagnostic::PublishTransition);
     publish_transition(&control, lo, hi).expect("native timeout transition publication failed");
     emit_diagnostic(Diagnostic::PostPublicationGeneration);
@@ -567,7 +748,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     emit_diagnostic(Diagnostic::PostPublicationLease);
     assert_original_lease_current(pool, expires).await;
     emit_diagnostic(Diagnostic::PostPublicationEffects);
-    let stable = (effects(pool).await, operational(pool).await);
+    let stable = (effects(pool, kind).await, operational(pool, kind).await);
     if case["expected_status"] == "retry" {
         assert_unavailable_effects(&initial_effects, &stable.0);
     }
@@ -577,7 +758,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     tokio::time::timeout(Duration::from_secs(30), async {
         while !marker(&control, "late-window-complete").is_file() {
             alive(&mut worker);
-            assert_stable(pool, &fixture, &outcome, &stable).await;
+            assert_stable(pool, &fixture, &outcome, &stable, kind).await;
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
@@ -585,7 +766,7 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     .expect("parent must complete the fixed timeout late-response window");
     emit_diagnostic(Diagnostic::VerifyLateState);
     alive(&mut worker);
-    assert_stable(pool, &fixture, &outcome, &stable).await;
+    assert_stable(pool, &fixture, &outcome, &stable, kind).await;
     // This is the original captured lease, not a later renewal or cleared
     // terminal field; it must still be current after the independent release.
     assert_original_lease_current(pool, expires).await;
@@ -593,13 +774,14 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
     emit_diagnostic(Diagnostic::AwaitHandlerJoin);
     await_marker(&control, "handlers-joined", &mut worker).await;
     emit_diagnostic(Diagnostic::VerifyJoinedState);
-    assert_stable(pool, &fixture, &outcome, &stable).await;
+    assert_stable(pool, &fixture, &outcome, &stable, kind).await;
+    assert_original_lease_current(pool, expires).await;
     output.assert_private_quiet(fixture.spec["token"].as_str().unwrap(), database_url);
     emit_diagnostic(Diagnostic::InterruptWorker);
     worker.signal("SIGINT");
     assert_eq!(worker.wait().await.code(), Some(130));
     emit_diagnostic(Diagnostic::VerifyShutdown);
-    assert_stable(pool, &fixture, &outcome, &stable).await;
+    assert_stable(pool, &fixture, &outcome, &stable, kind).await;
     output.assert_private_quiet(fixture.spec["token"].as_str().unwrap(), database_url);
     mark(&control, "child-done");
     emit_diagnostic(Diagnostic::Complete);
@@ -809,12 +991,128 @@ mod tests {
         for name in names {
             let case = select(&scenarios()["cases"], "name", name);
             let expected = select(&reference()["observations"], "case", name);
-            assert_reference(case, expected);
+            assert_reference(ReplayKind::Header, case, expected);
             let mut wrong = expected.clone();
             wrong["timing"]["outcome_before_release"] =
                 json!(name != "application_delayed_headers");
-            assert!(std::panic::catch_unwind(|| assert_reference(case, &wrong)).is_err());
+            assert!(std::panic::catch_unwind(|| assert_reference(
+                ReplayKind::Header,
+                case,
+                &wrong
+            ))
+            .is_err());
         }
+    }
+
+    #[test]
+    fn body_reference_view_rejects_missing_duplicate_or_cross_family_cases() {
+        let raw: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-body-timeout-oracle.json"
+        ))
+        .unwrap();
+        let matrix = body_scenarios();
+        let view = body_reference_view(matrix, &raw);
+        assert_eq!(view.as_array().unwrap().len(), 6);
+        assert_eq!(
+            view[0]["outcome"]["facts"][0]["assertion"]["score"],
+            json!(90.0)
+        );
+        for mutation in ["missing", "duplicate", "schema", "unknown", "order"] {
+            let mut changed = raw.clone();
+            match mutation {
+                "missing" => {
+                    changed.as_array_mut().unwrap().pop();
+                }
+                "duplicate" => changed[5] = changed[0].clone(),
+                "schema" => {
+                    changed[0]["worker_body_timeout"]["schema"] =
+                        json!("marty.canvas-worker-timeout-observation/v1")
+                }
+                "unknown" => {
+                    changed[5]["worker_body_timeout"]["case"] = json!("private-unknown-case")
+                }
+                "order" => changed.as_array_mut().unwrap().swap(0, 1),
+                _ => unreachable!(),
+            }
+            assert!(std::panic::catch_unwind(|| body_reference_view(matrix, &changed)).is_err());
+        }
+        let mut wrong_matrix = matrix.clone();
+        wrong_matrix["cases"][5]["name"] = json!("application_prompt");
+        assert!(std::panic::catch_unwind(|| body_reference_view(&wrong_matrix, &raw)).is_err());
+    }
+
+    #[test]
+    fn body_replay_preserves_frozen_outcomes_and_language_specific_log_provenance() {
+        let kind = ReplayKind::Body;
+        for name in BODY_CASES {
+            assert!(kind.accepts(name));
+            assert!(!ReplayKind::Header.accepts(name));
+            let case = select(&kind.scenarios()["cases"], "name", name);
+            let expected = select(kind.observations(), "case", name);
+            assert_reference(kind, case, expected);
+            let status = case["expected_status"].as_str().unwrap();
+            assert_outcome_matches(&expected["outcome"], &expected["outcome"], status);
+            for field in ["target", "oauth", "facts", "snapshot", "heartbeat", "jobs"] {
+                let mut wrong = expected["outcome"].clone();
+                wrong[field] = Value::Null;
+                assert!(std::panic::catch_unwind(|| assert_outcome_matches(
+                    &wrong,
+                    &expected["outcome"],
+                    status
+                ))
+                .is_err());
+            }
+            for field in [
+                "schema",
+                "logs_after_interrupt",
+                "timing",
+                "runtime_versions",
+            ] {
+                let mut wrong = expected.clone();
+                wrong[field] = Value::Null;
+                assert!(std::panic::catch_unwind(|| assert_reference(kind, case, &wrong)).is_err());
+            }
+        }
+        let application = select(kind.observations(), "case", "application_body_prompt");
+        let mut changed_number = application["outcome"].clone();
+        changed_number["facts"][0]["assertion"]["score"] = json!(90);
+        assert!(std::panic::catch_unwind(|| assert_outcome_matches(
+            &changed_number,
+            &application["outcome"],
+            "succeeded"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn body_extension_keeps_header_runtime_environment_seed_and_observation_bounds() {
+        assert_eq!(ReplayKind::Header.terminal_wait(), Duration::from_secs(25));
+        assert_eq!(ReplayKind::Body.terminal_wait(), Duration::from_secs(35));
+        assert_eq!(
+            ReplayKind::Header.control_environment(),
+            "MARTY_CANVAS_WORKER_TIMEOUT_CONTROL"
+        );
+        assert_eq!(
+            ReplayKind::Body.control_environment(),
+            "MARTY_CANVAS_WORKER_BODY_TIMEOUT_CONTROL"
+        );
+        assert!(!ReplayKind::Body.accepts("application_delayed_headers"));
+        assert!(!ReplayKind::Header.accepts("private-unknown-case"));
+        for key in [
+            "environment",
+            "application_seed",
+            "target_sql",
+            "effect_rows_sql",
+            "operational_rows_sql",
+        ] {
+            assert_eq!(body_scenarios()[key], scenarios()[key]);
+        }
+        assert_eq!(body_scenarios()["timing"]["prompt_outcome_max_seconds"], 2);
+        assert_eq!(
+            body_scenarios()["timing"]["progress_outcome_max_seconds"],
+            26
+        );
+        assert_eq!(body_scenarios()["timing"]["stall_outcome_max_seconds"], 30);
     }
 
     #[test]

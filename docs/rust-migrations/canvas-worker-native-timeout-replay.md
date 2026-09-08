@@ -1,6 +1,13 @@
 # Native worker timeout replay
 
-Status: actual native Linux diagnostic preflight at `cf5182ef7` established
+Status: repair `2d864723f74831d4338e1686c242b1bad534a4b9` passed the native
+four-case timeout preflight in
+[CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184),
+runtime job `101977399347`, at 2026-09-08T07:45:35Z. The mixed-roster preflight
+also passed at 07:51:41Z. The full configured suites are still running; the PR
+remains draft and unrouted. Body, consumer and deployment gates remain open.
+
+The earlier actual native Linux diagnostic preflight at `cf5182ef7` established
 application success instead of the required retry; the candidate remains
 unqualified. The narrow application REST repair is now implemented separately
 and compiled in 65s. After the additional malformed-header regression and test-spy

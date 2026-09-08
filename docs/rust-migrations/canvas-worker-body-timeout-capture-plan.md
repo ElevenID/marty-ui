@@ -5,7 +5,9 @@ six cases at input head `ffb515200c4611bbaa188d84c510074bb4a98c81`. Their full r
 reports are byte-identical and now retained in the
 [body reference corpus](../../contracts/canvas-worker-body-timeout-oracle.json).
 The ordinary published-reference regeneration gate is registered; its first
-configured run is in progress. Native body replay, runtime body-timeout parity,
+configured run passed all six cases and exact raw equality in 263.15 seconds
+at registration `c092509c79de5513382e16ac466a05a265367e05`.
+Native body replay, runtime body-timeout parity,
 consumer cutover, and deployment remain unqualified.
 
 The implementation is isolated on
@@ -32,7 +34,8 @@ closure control passed after a clean package build in 49.13 seconds; strict
 all-target Clippy passed in 27.38 seconds. A shared-cache metadata collision
 between worktrees was eliminated by rebuilding only generated issuance-package
 artifacts, without changing source or captured inputs. The configured six-case
-raw regeneration is a separate live gate and is not claimed passed here.
+raw regeneration subsequently passed in 263.15 seconds, with each fresh owned
+database/probe cleanup verified before comparison. It wrote no new artifact.
 
 This supplements the [provider timeout audit](canvas-worker-provider-timeout-audit-2026-09-07.md),
 [delayed-header capture](canvas-worker-timeout-capture-plan.md), and

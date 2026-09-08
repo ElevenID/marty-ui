@@ -33,13 +33,26 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
-Candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
+The application REST repair at `2d864723f74831d4338e1686c242b1bad534a4b9`
+is on draft PR #814. [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184),
+runtime job `101977399347`, passed the native four-case timeout preflight at
+07:45:35Z and mixed-roster preflight at 07:51:41Z on 2026-09-08. The full isolated
+database suites are still running. These passed preflights do not establish
+whole-worker qualification or authorize merging, routing, deletion or deployment.
+The separately registered body corpus passed exact six-case regeneration in
+263.15s at `c092509c7`; [native body replay](rust-migrations/canvas-worker-native-body-replay.md)
+is implemented and reviewed locally on `feat/canvas-worker-native-body-replay-v1`,
+with runtime policy unchanged. Local gates passed 2,365 Python tests / three
+explicit skips, ten shared coordinator controls, 354 issuance library tests and
+strict all-target Clippy. Actual native Linux body qualification remains pending.
+
+Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
 preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).
 Runtime job `101967919625` passed the prompt application control, then observed
 `TerminalSucceeded` instead of the required delayed-application retry, with
 job, fact, snapshot and target differences. This supersedes the earlier
 byte-count-only failure at `7ca035d03`. The roster cases and later configured
-suites were not reached. PR #814 remains draft and blocked: Rust Service Tests
+suites were not reached. At that historical head, PR #814 was blocked: Rust Service Tests
 and CI Gate failed; the other checks completed successfully apart from the
 expected scorecard skip. See the
 [native timeout record](rust-migrations/canvas-worker-native-timeout-replay.md).
@@ -58,8 +71,9 @@ Separately, body-reference A-v2 and independent B-v2 passed all six cases in
 265.68s and 266.63s at immutable input head
 `ffb515200c4611bbaa188d84c510074bb4a98c81`. Their 46,042 raw bytes agree exactly:
 SHA256 `e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
-Exact-owned cleanup passed. Permanent corpus registration and native body replay
-remain pending; this is published Python evidence, not worker cutover approval.
+Exact-owned cleanup passed. Permanent corpus registration and configured raw
+regeneration now pass; native body replay remains pending. This is published
+Python evidence, not worker cutover approval.
 
 Latest qualified composed worker checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`:

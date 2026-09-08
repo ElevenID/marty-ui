@@ -1,13 +1,20 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Newer unqualified candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` failed
+Current candidate `2d864723f74831d4338e1686c242b1bad534a4b9` passed native timeout
+and mixed-roster preflights in
+[CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184),
+runtime job `101977399347`, at 07:45:35Z and 07:51:41Z on 2026-09-08.
+The full isolated database suites remain in progress. PR #814 remains draft and
+unrouted; these preflights do not close the remaining qualification gates.
+
+Earlier unqualified candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` failed
 native timeout preflight in
 [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937),
 runtime job `101967919625`. The prompt application case passed; the delayed case
 observed `TerminalSucceeded` instead of the required retry, with job, fact,
 snapshot and target differences. This supersedes the earlier byte-count-only
 failure at `7ca035d03`. Roster cases and the later full configured suite were
-not reached. PR #814 remains draft and blocked by Rust Service Tests and CI Gate.
+not reached. At that historical head, Rust Service Tests and CI Gate failed.
 
 The narrow application REST repair is implemented in its separate worktree and
 compiled in 65s; after the additional malformed-header regression and test-spy
@@ -42,8 +49,12 @@ gates are recorded above. Body-reference A-v2 and independent B-v2 passed all si
 cases in 265.68s and 266.63s at `ffb515200c4611bbaa188d84c510074bb4a98c81`.
 Their 46,042 raw bytes agree exactly: SHA256
 `e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
-Exact-owned cleanup passed; permanent corpus registration and native body replay
-remain pending. This reference evidence does not establish native body parity.
+Exact-owned cleanup passed. Permanent corpus registration and all-six raw
+regeneration passed in 263.15s at `c092509c7`; native body replay is implemented
+and independently reviewed locally, with 2,365 Python tests / three explicit
+skips, ten shared coordinator controls, 354 library tests and strict Clippy
+passing. Actual Linux body replay is pending. Reference or synthetic evidence
+does not establish native body parity.
 PR #814 remains draft and unrouted. No Python feature deletion, deployment or
 restore occurred.
 

@@ -18,7 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 TARGET = "worker_mixed_roster_matches_frozen_published_process"
 TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
-PREFLIGHTS = [("mixed-roster-preflight", TARGET), ("timeout-preflight", TIMEOUT_TARGET)]
+BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
+PREFLIGHTS = [
+    ("mixed-roster-preflight", TARGET),
+    ("timeout-preflight", TIMEOUT_TARGET),
+    ("body-timeout-preflight", BODY_TIMEOUT_TARGET),
+]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
 PINS = [
     f"registry.invalid/{name}@sha256:{letter * 64}"
@@ -189,11 +194,15 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
         ["--help"],
         [TARGET],
         [TIMEOUT_TARGET],
+        [BODY_TIMEOUT_TARGET],
         ["full", "extra"],
         ["mixed-roster-preflight", "extra"],
         ["timeout-preflight", "extra"],
         ["timeout-preflight", ""],
         ["timeout-preflight; docker ps"],
+        ["body-timeout-preflight", "extra"],
+        ["body-timeout-preflight", ""],
+        ["body-timeout-preflight; docker ps"],
     ],
 )
 def test_invalid_mode_or_extra_argument_fails_before_any_external_work(
@@ -259,6 +268,9 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         "heartbeat_readiness_matches_published_python",
         TARGET,
         TIMEOUT_TARGET,
+        BODY_TIMEOUT_TARGET,
+        "worker_body_timeout_reference_matches_published_process",
+        "worker_body_timeout_native_child",
         "worker_provider_recovery_first_native_child",
     ],
 )
@@ -280,23 +292,30 @@ def test_workflow_runs_preflight_immediately_after_executable_preparation_and_ke
     names = [step.get("name") for step in steps]
     prepare = names.index("Prepare database contract executables")
     timeout = names.index("Preflight timeout published worker parity")
+    body = names.index("Preflight body-timeout published worker parity")
     preflight = names.index("Preflight mixed-roster published worker parity")
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
     assert prepare + 1 == timeout
-    assert timeout + 1 == preflight < databases < full
+    assert timeout + 1 == body
+    assert body + 1 == preflight < databases < full
     assert steps[timeout]["working-directory"] == "rust"
     assert steps[timeout]["shell"] == "bash"
     assert steps[timeout]["run"] == (
         "bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight"
     )
     assert steps[preflight]["working-directory"] == "rust"
+    assert steps[body]["working-directory"] == "rust"
+    assert steps[body]["shell"] == "bash"
+    assert steps[body]["run"] == (
+        "bash ../scripts/ci/run-published-canvas-contracts.sh body-timeout-preflight"
+    )
     assert (
         steps[preflight]["run"]
         == "bash ../scripts/ci/run-published-canvas-contracts.sh mixed-roster-preflight"
     )
     assert steps[full]["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
-    for index in (timeout, preflight, full):
+    for index in (timeout, body, preflight, full):
         assert "if" not in steps[index]
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]

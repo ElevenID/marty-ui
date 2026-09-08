@@ -4,13 +4,14 @@ set -euo pipefail
 # A narrow early diagnostic gate supplements, never replaces, the full suite.
 # Validate before any image/network work; arbitrary test filters are forbidden.
 mode="${1-full}"
-if (( $# > 1 )) || [[ "$mode" != full && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight ]]; then
-  echo "Usage: run-published-canvas-contracts.sh [full|timeout-preflight|mixed-roster-preflight]" >&2
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|timeout-preflight|body-timeout-preflight|mixed-roster-preflight]" >&2
   exit 2
 fi
 preflight_target=""
 case "$mode" in
   timeout-preflight) preflight_target=worker_timeout_matches_frozen_published_process ;;
+  body-timeout-preflight) preflight_target=worker_body_timeout_matches_frozen_published_process ;;
   mixed-roster-preflight) preflight_target=worker_mixed_roster_matches_frozen_published_process ;;
 esac
 # Reuse the frozen oracle pins, not mutable release tags. The test
@@ -153,6 +154,8 @@ fi
 "${executables[0]}" --list | grep -Fx 'canvas_published_borrowed_database::borrower_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_reference_matches_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_body_timeout_reference_matches_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_body_timeout_matches_frozen_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_body_timeout_native_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_matches_frozen_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_native_child: test'
 "${executables[0]}" --nocapture --test-threads=1

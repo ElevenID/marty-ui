@@ -39,6 +39,16 @@ async fn worker_timeout_matches_frozen_published_process() {
     .await;
 }
 
+#[tokio::test]
+async fn worker_body_timeout_matches_frozen_published_process() {
+    assert_borrowed_worker_cases(
+        "test_canvas_worker_body_timeout_https.py",
+        canvas_worker_timeout_replay::BODY_CASES,
+        "MARTY_CANVAS_WORKER_BODY_TIMEOUT_DATABASE",
+    )
+    .await;
+}
+
 async fn assert_borrowed_worker_cases(script: &str, cases: &[&str], descriptor_environment: &str) {
     assert!(matches!(
         (script, descriptor_environment),
@@ -48,6 +58,9 @@ async fn assert_borrowed_worker_cases(script: &str, cases: &[&str], descriptor_e
         ) | (
             "test_canvas_worker_timeout_https.py",
             "MARTY_CANVAS_WORKER_TIMEOUT_DATABASE"
+        ) | (
+            "test_canvas_worker_body_timeout_https.py",
+            "MARTY_CANVAS_WORKER_BODY_TIMEOUT_DATABASE"
         )
     ));
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
@@ -95,10 +108,24 @@ async fn worker_timeout_native_child() {
     pool.close().await;
 }
 
+#[tokio::test]
+async fn worker_body_timeout_native_child() {
+    let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_BODY_TIMEOUT_NATIVE_ORIGIN") else {
+        return;
+    };
+    let case = std::env::var("MARTY_CANVAS_WORKER_BODY_TIMEOUT_CASE").unwrap();
+    let (pool, database_url) =
+        borrowed_worker_pool("MARTY_CANVAS_WORKER_BODY_TIMEOUT_DATABASE").await;
+    canvas_worker_timeout_replay::replay_body(&pool, &database_url, &origin, &case).await;
+    pool.close().await;
+}
+
 async fn borrowed_worker_pool(descriptor_environment: &str) -> (sqlx::PgPool, String) {
     assert!(matches!(
         descriptor_environment,
-        "MARTY_CANVAS_WORKER_DEADLINE_DATABASE" | "MARTY_CANVAS_WORKER_TIMEOUT_DATABASE"
+        "MARTY_CANVAS_WORKER_DEADLINE_DATABASE"
+            | "MARTY_CANVAS_WORKER_TIMEOUT_DATABASE"
+            | "MARTY_CANVAS_WORKER_BODY_TIMEOUT_DATABASE"
     ));
     assert_eq!(std::env::consts::OS, "linux");
     assert_eq!(
@@ -877,6 +904,7 @@ fn assert_worker_https_script_with_environment(
             | "test_canvas_worker_mixed_roster_https.py"
             | "test_canvas_worker_deadline_https.py"
             | "test_canvas_worker_timeout_https.py"
+            | "test_canvas_worker_body_timeout_https.py"
     ));
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
