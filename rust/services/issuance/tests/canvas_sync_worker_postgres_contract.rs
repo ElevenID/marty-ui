@@ -32,10 +32,54 @@ mod canvas_worker_privacy_replay;
 #[path = "support/canvas_worker_projection_cycles.rs"]
 mod canvas_worker_projection_cycles;
 
+#[path = "support/canvas_worker_renewal_lock_wait.rs"]
+mod canvas_worker_renewal_lock_wait;
+
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
+}
+
+#[tokio::test]
+#[ignore = "manual real-time repository diagnostic; not process-parity qualification"]
+async fn renewal_lock_wait_early_release_diagnostic() {
+    renewal_lock_wait_diagnostic(false).await;
+}
+
+#[tokio::test]
+#[ignore = "manual real-time repository diagnostic; no preselected cross-expiry outcome"]
+async fn renewal_lock_wait_crosses_expiry_diagnostic() {
+    renewal_lock_wait_diagnostic(true).await;
+}
+
+async fn renewal_lock_wait_diagnostic(crosses_expiry: bool) {
+    let database_url =
+        database_url().expect("manual renewal diagnostic requires dedicated database URL");
+    assert!(
+        url::Url::parse(&database_url)
+            .expect("diagnostic URL must parse")
+            .path()
+            .ends_with("_test"),
+        "manual renewal diagnostic requires a dedicated *_test database"
+    );
+    let pool = marty_issuance_service::canvas_sync_worker_lifecycle::worker_pool_options()
+        .max_connections(6)
+        .connect(&database_url)
+        .await
+        .expect("manual renewal diagnostic database must connect");
+    setup_schema(&pool).await;
+    seed_target(&pool, "renewal-lock-target", 900).await;
+    let result = canvas_worker_renewal_lock_wait::run(&pool, &database_url, crosses_expiry).await;
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), pool.close())
+        .await
+        .is_ok();
+    let observation = result.expect("manual renewal diagnostic failed in a fixed phase");
+    assert!(
+        closed,
+        "manual renewal diagnostic observer pool did not close"
+    );
+    println!("MARTY_CANVAS_RENEWAL_LOCK_WAIT_DIAGNOSTIC={observation}");
 }
 
 #[tokio::test]

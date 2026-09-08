@@ -19,10 +19,12 @@ SCRIPT = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 TARGET = "worker_mixed_roster_matches_frozen_published_process"
 TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
 BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
+LEASE_EXPIRY_TARGET = "worker_lease_expiry_matches_frozen_published_process"
 PREFLIGHTS = [
     ("mixed-roster-preflight", TARGET),
     ("timeout-preflight", TIMEOUT_TARGET),
     ("body-timeout-preflight", BODY_TIMEOUT_TARGET),
+    ("lease-expiry-preflight", LEASE_EXPIRY_TARGET),
 ]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
 PINS = [
@@ -195,6 +197,7 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
         [TARGET],
         [TIMEOUT_TARGET],
         [BODY_TIMEOUT_TARGET],
+        [LEASE_EXPIRY_TARGET],
         ["full", "extra"],
         ["mixed-roster-preflight", "extra"],
         ["timeout-preflight", "extra"],
@@ -203,6 +206,11 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
         ["body-timeout-preflight", "extra"],
         ["body-timeout-preflight", ""],
         ["body-timeout-preflight; docker ps"],
+        ["lease-expiry-preflight", "extra"],
+        ["lease-expiry-preflight", ""],
+        ["lease-expiry-preflight; docker ps"],
+        ["lease-expiry-preflight "],
+        ["lease-expiry"],
     ],
 )
 def test_invalid_mode_or_extra_argument_fails_before_any_external_work(
@@ -269,6 +277,8 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         TARGET,
         TIMEOUT_TARGET,
         BODY_TIMEOUT_TARGET,
+        LEASE_EXPIRY_TARGET,
+        "worker_lease_expiry_native_child",
         "worker_body_timeout_reference_matches_published_process",
         "worker_lease_expiry_reference_matches_published_process",
         "worker_body_timeout_native_child",
@@ -293,17 +303,24 @@ def test_workflow_runs_preflight_immediately_after_executable_preparation_and_ke
     names = [step.get("name") for step in steps]
     prepare = names.index("Prepare database contract executables")
     timeout = names.index("Preflight timeout published worker parity")
+    expiry = names.index("Preflight lease-expiry published worker parity")
     body = names.index("Preflight body-timeout published worker parity")
     preflight = names.index("Preflight mixed-roster published worker parity")
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
     assert prepare + 1 == timeout
-    assert timeout + 1 == body
+    assert timeout + 1 == expiry
+    assert expiry + 1 == body
     assert body + 1 == preflight < databases < full
     assert steps[timeout]["working-directory"] == "rust"
     assert steps[timeout]["shell"] == "bash"
     assert steps[timeout]["run"] == (
         "bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight"
+    )
+    assert steps[expiry]["working-directory"] == "rust"
+    assert steps[expiry]["shell"] == "bash"
+    assert steps[expiry]["run"] == (
+        "bash ../scripts/ci/run-published-canvas-contracts.sh lease-expiry-preflight"
     )
     assert steps[preflight]["working-directory"] == "rust"
     assert steps[body]["working-directory"] == "rust"
@@ -316,7 +333,7 @@ def test_workflow_runs_preflight_immediately_after_executable_preparation_and_ke
         == "bash ../scripts/ci/run-published-canvas-contracts.sh mixed-roster-preflight"
     )
     assert steps[full]["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
-    for index in (timeout, body, preflight, full):
+    for index in (timeout, expiry, body, preflight, full):
         assert "if" not in steps[index]
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]

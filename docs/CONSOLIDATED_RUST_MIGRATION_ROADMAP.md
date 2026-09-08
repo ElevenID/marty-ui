@@ -53,9 +53,13 @@ passed independent A/B captures in 113.34s and 112.78s at `4fbe9fdcb`, with
 identical 19,575-byte reports. The exact corpus is frozen and its registered
 ordinary regeneration passed locally in 113.12s with exact-owned cleanup.
 Published queued renewal revived the lease after original expiry while provider
-input was pending; both cases then succeeded. Actual native expiry/lock-wait
-behavior remains unqualified and must not be inferred from this reference or
-used to weaken fences. Final local validation passed 2,538 Python tests with
+input was pending; both cases then succeeded. The separate native repository
+lock-wait diagnostic now passed two actual PostgreSQL cases and five pure
+controls in 43.35s. Both renewals returned true; the crossing case proved original
+expiry followed by a current lease, with exact identity checks and verified
+fixture removal. This
+is not full-worker provider/effect/recovery parity and does not permit weakening
+fresh-lock side-effect fences. The reference checkpoint's local validation passed 2,538 Python tests with
 three explicit skips in 170.56s, Rust compilation in 17.83s and strict all-target
 Clippy in 8.55s. Integrated head `ca1dcf00b` then failed
 [CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818):
@@ -65,6 +69,23 @@ ran; mixed/full configured suites were skipped. An isolated, pinned harness
 environment and import/input smoke check repair this setup boundary without
 changing runtime or frozen reference inputs. Fresh-head qualification is still
 required; local passes do not qualify actual BODY or live-provider expiry.
+
+Remote head `53468331f3018b05a0fd8c1c81f7a258b6e0714d` ran
+[CI34210124048](https://github.com/ElevenID/marty-ui/actions/runs/34210124048).
+Runtime job `102008916081` failed actual BODY parity after successful setup and
+header parity (104.99s). Application/roster prompt and application progress passed;
+roster progress observed `TerminalRetry` instead of success after the final 24s
+chunk. BODY preflight failed in 117.33s; later mixed/full groups were skipped.
+This supplies actual evidence for a scoped roster read-inactivity repair. In the separate LEASE
+worktree, the reviewed native expiry coordinator/controller are registered,
+with an early expiry preflight integrated before BODY and the full suite
+retained. Actual Linux native expiry parity has not run. Local compilation
+passed in 11.23s, three new Rust pure controls in 0.00s and strict all-target
+Clippy in 33.18s. The complete LEASE Python suite passed 2,627 tests with three
+explicit skips in 195.22s. The exact isolated workflow import smoke loaded all
+six BODY and two expiry cases without executing either reference worker.
+No runtime policy, frozen source, consumer routing or deployment
+changed in this harness lane.
 
 Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
 preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).
@@ -95,7 +116,7 @@ Exact-owned cleanup passed. Permanent corpus registration and configured raw
 regeneration now pass; native body replay remains pending. This is published
 Python evidence, not worker cutover approval.
 
-Latest qualified composed worker checkpoint:
+Historical qualified deadline/composition checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`:
 [CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
 completed successfully, with all required checks passing, including Rust CodeQL.

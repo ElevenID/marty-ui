@@ -41,7 +41,7 @@ def test_dependency_setup_precedes_compile_and_all_native_preflights():
         for index, step in enumerate(steps)
         if "run-published-canvas-contracts.sh" in step.get("run", "")
     ]
-    assert len(preflights) == 3 and all(setup < index for index in preflights)
+    assert len(preflights) == 4 and all(setup < index for index in preflights)
     assert setup < names.index("Run isolated database contract suites concurrently")
     interpreter = [
         step
@@ -197,7 +197,7 @@ def test_actual_isolated_smoke_imports_real_dependencies_and_frozen_controller()
     assert result.returncode == 0, result.stderr
     assert (
         result.stdout
-        == "Native Canvas BODY harness imports and frozen inputs verified\n"
+        == "Native Canvas BODY and lease-expiry harness imports and frozen inputs verified\n"
     )
     assert result.stderr == ""
 
@@ -207,14 +207,15 @@ def test_smoke_contains_no_capture_or_environment_mutation():
 
     tree = ast.parse(smoke_source())
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-    controller_calls = [
-        node.func.attr
-        for node in calls
-        if isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "controller"
-    ]
-    assert controller_calls == ["load_inputs"]
+    for controller in ("controller", "expiry_controller"):
+        controller_calls = [
+            node.func.attr
+            for node in calls
+            if isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == controller
+        ]
+        assert controller_calls == ["load_inputs"]
     # The immutable corpus and captured source inputs remain independently pinned.
     corpus = json.loads(
         (ROOT / "contracts/canvas-worker-body-timeout-oracle.json").read_bytes()

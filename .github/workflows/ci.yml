@@ -413,7 +413,11 @@ jobs:
           import test_canvas_worker_body_timeout_https as controller
           matrix, reports, responses = controller.load_inputs(root)
           assert len(matrix["cases"]) == len(reports) == len(responses) == 6
-          print("Native Canvas BODY harness imports and frozen inputs verified")
+          import test_canvas_worker_lease_expiry_https as expiry_controller
+          expiry_matrix, expiry_reports, expiry_response = expiry_controller.load_inputs(root)
+          assert len(expiry_matrix["cases"]) == len(expiry_reports) == 2
+          assert expiry_response["status"] == 200
+          print("Native Canvas BODY and lease-expiry harness imports and frozen inputs verified")
           PY
           # Rust invokes python3 by name in preflights AND the full suite.
           # Publish this interpreter only after both installation and smoke pass.
@@ -664,6 +668,10 @@ jobs:
         shell: bash
         working-directory: rust
         run: bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight
+      - name: Preflight lease-expiry published worker parity
+        shell: bash
+        working-directory: rust
+        run: bash ../scripts/ci/run-published-canvas-contracts.sh lease-expiry-preflight
       - name: Preflight body-timeout published worker parity
         shell: bash
         working-directory: rust

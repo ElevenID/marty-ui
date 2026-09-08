@@ -32,6 +32,17 @@ and typing_extensions 4.15.0 passed the exact import/input smoke and `pip check`
 Independent source review and Ruff passed. These are dependency/setup checks,
 not native body-parity results.
 
+The repaired setup passed on hosted head `53468331f` in
+[CI34210124048](https://github.com/ElevenID/marty-ui/actions/runs/34210124048).
+Runtime job `102008916081` passed header parity in 104.99s. Actual BODY replay
+passed application prompt, roster prompt and application progress, then failed
+roster progress with `TerminalRetry`, `TerminalMismatch`, `OutcomeJobs` and
+`OutcomeTarget`. This case requires success after its last chunk at 24s; the
+native coordinator instead observed retry around the roster's 20s total budget.
+BODY preflight failed in 117.33s and later mixed/full groups were skipped.
+This is actual evidence for repairing the scoped roster transport to preserve
+20s read inactivity, not permission to change frozen expected results.
+
 ## Independent authority
 
 [The body capture record](canvas-worker-body-timeout-capture-plan.md) records

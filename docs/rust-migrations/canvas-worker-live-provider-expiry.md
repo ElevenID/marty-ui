@@ -13,14 +13,20 @@ independently verified absent. The original bytes are frozen unchanged as
 `worker_lease_expiry_reference_matches_published_process` gate is registered;
 its first ordinary regeneration passed locally in **113.12s**, comparing the
 exact frozen bytes. All four fixture IDs were verified absent afterward.
-Final local validation passed **2,538 Python tests with three explicit skips in
+The reference-integration checkpoint's local validation passed **2,538 Python tests with three explicit skips in
 170.56s**, Rust compilation in **17.83s**, and strict all-target Clippy in
 **8.55s**. Integrated head `ca1dcf00b` subsequently failed hosted
 [CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818)
 at BODY controller import because its Python environment lacked SQLAlchemy;
-later full suites were skipped. The isolated harness dependency repair still
-requires fresh-head CI. Native BODY and live-provider expiry behavior remain
-unqualified.
+later full suites were skipped. The isolated harness dependency repair at
+`53468331f3018b05a0fd8c1c81f7a258b6e0714d` is now running in
+[CI34210124048](https://github.com/ElevenID/marty-ui/actions/runs/34210124048).
+Runtime job `102008916081` passed the isolated setup and header parity (104.99s),
+then failed BODY parity in 117.33s: both prompt cases and application progress
+passed, but roster progress retried instead of succeeding after its final 24s
+chunk. The later mixed/full groups were skipped. This is a separate runtime
+read-inactivity mismatch, not another dependency-import failure.
+Native BODY and full-worker live-provider expiry behavior remain unqualified.
 
 | Case | Identical actual observations in A and B |
 | --- | --- |
@@ -125,17 +131,45 @@ requests, and 104 operation-timeout/TLS cases passed. This qualification belongs
 to `2d864723f`: it does **not** qualify the new expiry capture, the integrated
 `4fbe9fdcb` candidate, or its still-unqualified native BODY replay.
 
+## Local native repository evidence and replay implementation
+
+The native renewal-lock-wait diagnostic passed **two actual PostgreSQL cases
+and five pure controls in 43.35s**. Both early release and crossing original
+expiry returned `renewed=true`; the crossing case observed actual original
+expiry, then a current advanced lease after release. Exact job, owner, generation
+and target identity checks passed, and the owned fixture was verified removed.
+See `canvas_worker_renewal_lock_wait.rs`. This is actual native repository
+behavior, **not a full-worker HTTPS replay**.
+
+The result closes the source-only question about whether this single blocked
+UPDATE can revive a lease. It does not establish provider effects, worker
+recovery or complete reference parity. The stronger side-effect `lock_current`
+path still locks first and performs a fresh check; no runtime fence was weakened.
+
+The reviewed native coordinator and HTTPS controller are implemented and
+registered as `worker_lease_expiry_matches_frozen_published_process` and
+`worker_lease_expiry_native_child`. They preserve diagnostic idle-leased outcomes,
+conservative release brackets, raw state comparison, late-handler stability and
+owned cleanup instead of synthesizing success. An early expiry preflight is
+integrated ahead of BODY; the full configured suite remains required.
+**Actual Linux native expiry parity has not run.**
+
+Local implementation checks passed compilation in **11.23s**, three new Rust
+pure controls in **0.00s**, and strict all-target Clippy in **33.18s**. The complete
+LEASE Python suite passed **2,627 tests with three explicit skips in 195.22s**.
+This includes the 61 controller controls and early-gate routing checks. The exact
+workflow smoke also passed under the separate three-dependency Python environment,
+loading six BODY and two expiry inputs without running either reference worker.
+
 ## Remaining work
 
-- Complete current-head hosted CI; full local validation passed as recorded above.
+- Repair the observed roster mismatch and complete fresh-head hosted CI.
   Exact-byte registration, A/B equality, ordinary regeneration (113.12s) and
   exact-owned cleanup are complete;
   neither reference capture is native expiry qualification.
-- Execute the actual native worker against the reviewed reference. Native
-  `renew_lease` uses a single UPDATE with a `clock_timestamp()` predicate;
-  side-effect `lock_current` locks first and then performs a fresh check. That
-  source distinction alone does not prove blocked native renewal is stronger:
-  the queued-update behavior needs an actual native experiment.
+- Execute the registered actual native worker replay against the reviewed
+  reference. The local repository experiment above does not substitute for
+  provider-pending expiry, full effects, recovery and shutdown parity.
 - Preserve explicit gate 4 scope, investigate any unsafe discrepancy, and retain
   fresh-head CI, signing/consumer reconciliation and beta acceptance separately.
 
