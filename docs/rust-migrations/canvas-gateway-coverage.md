@@ -7,7 +7,7 @@ route cutover, Python deletion or deployment is established by this document.
 
 ## Evidence boundary
 
-The tested `724122012` candidate controls (integrated at `718a72776`) live in
+The tested `42ae6825f` candidate controls (integrated at `1cce2d3c4`) live in
 [canvas_operations_gateway_replay.rs](../../rust/services/issuance/tests/support/canvas_operations_gateway_replay.rs).
 They compose the actual gateway router/proxy and bounded HTTP client with the
 actual issuance executable and owned PostgreSQL. Identity and membership ports
@@ -19,9 +19,11 @@ Both real runtime and proxy route tables are used. Candidate construction change
 only the eight operation service selections; methods, paths, authentication and
 other policy fields must remain identical. The published-table control makes
 eight requests to a separately served legacy trap, with zero native effects.
-The candidate gate counts 38 native requests and zero legacy requests: one
-against an actual rollout-disabled process and 37 against the enabled process.
-This does not mean 38 frozen cases. The seven-entry `NON_MANUAL_CASES` list supplies
+The candidate gate counts 41 native requests and zero legacy requests: one
+against an actual rollout-disabled process, 37 existing enabled requests, and
+three additional tenant controls. Four additional public auth/tenant denials
+make no upstream call. This does not mean 41 frozen cases. The seven-entry
+`NON_MANUAL_CASES` list supplies
 one request for each nonmanual route, not an exhaustive replay inventory.
 
 The new registered
@@ -39,16 +41,16 @@ not a copied lifecycle service graph. It requires ten requests, nine native
 forwards and zero legacy forwards. Its legacy endpoint is a distinct owned,
 unserved reservation, not another executed legacy-trap test.
 
-## Base operations: 46 names, 35 represented, 11 remaining
+## Base operations: 46 names, 39 represented, seven remaining
 
 The authority is [canvas-operations-oracle.json](../../contracts/canvas-operations-oracle.json)
 with [its scenarios](../../contracts/canvas-operations-scenarios.json).
-The following **35 distinct corpus names are represented by source-derived
-checks**, not 35 exact unadapted replays. The seven-case state expansion passed
-configured PostgreSQL qualification in 7.97 seconds, retaining the preceding
-31 native requests and all eight legacy-route controls. Eight pure controls and
+The following **39 distinct corpus names are represented by source-derived
+checks**, not 39 exact unadapted replays. The public authentication expansion
+passed configured PostgreSQL qualification in 7.84 seconds, retaining all prior
+38 native requests and eight legacy-route controls. Eleven pure controls and
 strict scoped Clippy passed; the shared gateway lifecycle regression passed in
-5.63 seconds. All four owned containers were verified absent after cleanup.
+5.29 seconds. All four owned containers were verified absent after cleanup.
 
 | Coverage form | Corpus names | Boundary |
 | --- | --- | --- |
@@ -60,14 +62,14 @@ strict scoped Clippy passed; the shared gateway lifecycle regression passed in
 | Additional list validation | `jobs_zero_limit`, `jobs_excess_limit`, `candidates_invalid_status`, `candidates_zero_limit`, `candidates_excess_limit`, `reviews_invalid_status`, `reviews_zero_limit`, `reviews_excess_limit` | Frozen status strings/complete bound arrays checked before explicit public MIP projection; raw state unchanged. |
 | Rollout, foreign tenant and repeated job transitions | `retry_rollout_closed`, `retry_foreign`, `retry_again`, `resolve_queued`, `resolve_again`, `enqueue_foreign` | Real disabled startup and frozen transition ordering; explicit public MIP errors and exact unchanged raw state. Foreign cases use an authenticated foreign principal, not untrusted tenant headers. |
 | Duplicate enqueue | `enqueue_duplicate` | Frozen existing-job response and snapshot; only the matched target's two nondecreasing timestamps and request-source metadata may refresh. All jobs and unrelated raw rows remain exact. Mutation controls reject extra effects. |
+| Public authentication/tenant adaptations | `missing_management_key`, `wrong_management_key`, `missing_tenant`, `foreign_query` | Seven controls: missing/invalid public identity yields exact 401 MIP; omitted client tenant uses session/API tenant for two frozen successful reads; an authenticated org-less identity reaches native 400; exact foreign query yields session/API-specific pre-proxy 403. Direct-service frozen 401/400/404 obligations remain distinct and unchanged. |
 
-Six additional auth/RBAC denials check zero upstream calls and unchanged raw
-state, but are not exact replays of the four base authentication/tenant cases.
-The remaining **11 base names** are:
+Six earlier auth/RBAC denials also check zero upstream calls and unchanged raw
+state. Neither they nor the seven new controls are unchanged direct-service
+replays. The remaining **seven base names** are:
 
 | Required family | Names still outside the represented base-name set |
 | --- | --- |
-| Authentication/tenant precedence (4) | `missing_management_key`, `wrong_management_key`, `missing_tenant`, `foreign_query` |
 | Manual review, effects and recovery (7) | `review_note_limit`, `review_suspend`, `review_revoke`, `review_failed`, `review_recovered_failure`, `review_recovered_success`, `review_concurrent` |
 
 New lifecycle outcomes do not silently mark the seven base manual-review names
@@ -123,11 +125,11 @@ lifecycle 17 observations.
    route-selection assertion independent of the growing replay list. Compare
    full DTOs, null/omitted fields, safe error/result projections and durable
    state; a successful status alone is insufficient.
-2. Give tenant/auth/precedence cases a deliberate request construction path.
-   The current gateway `tenant_path` always appends exactly one approved tenant
-   query and rejects existing/encoded duplicates; it cannot express missing
-   tenant or every frozen conflicting-query case. Preserve that strict default
-   while making specific negatives explicit, rather than silently dropping them.
+2. Preserve the deliberate auth/tenant construction path: the default gateway
+   `tenant_path` appends exactly one approved tenant and rejects existing/encoded
+   duplicates. Only the dedicated negative/fallback controls use untouched paths
+   and closed expected-header modes. Do not relax this default for further
+   precedence inputs or conflate trusted fallback with missing-tenant rejection.
 3. Preserve request bytes and input controls. The current gateway request helper
    serializes `body` as JSON with a fixed content type; unlike the direct helper,
    it does not interpret `note_length`, `raw_body`, `omit_headers` or alternate

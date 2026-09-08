@@ -1,9 +1,9 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Latest local integration `718a72776` includes qualified gateway state parity
-from `724122012`: 38 native forwards, zero legacy, eight pure controls and the
-actual-process lifecycle regression passed. Base coverage is 35 represented
-names with 11 remaining; lifecycle still has 13 full cases remaining.
+Latest local integration `1cce2d3c4` includes qualified gateway authentication
+parity from `42ae6825f`: 41 native forwards, zero legacy, eleven pure controls
+and the actual-process lifecycle regression passed. Base coverage is 39
+represented names with seven remaining; lifecycle still has 13 full cases remaining.
 Earlier `9a292d9cd` passed 2,924 root tests (three skips) and 118 service tests.
 Subsequent unused webhook-helper retirement transferred both Python tests to
 Rust: six native auth tests, 13 ownership/composition tests and all 116 retained

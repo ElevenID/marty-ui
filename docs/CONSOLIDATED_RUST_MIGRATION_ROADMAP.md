@@ -31,12 +31,12 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
-Latest local integration `718a72776` includes the qualified seven-case gateway
-state expansion `724122012`: 38 native forwards, zero legacy forwards, eight
-pure controls and strict scoped Clippy passed. The configured candidate took
-7.97 seconds and its shared actual-process lifecycle regression took 5.63 seconds.
-The base corpus now has 35 represented names and 11 remaining; these are not
-35 exact unadapted replays. Thirteen full lifecycle cases remain. See the
+Latest local integration `1cce2d3c4` includes the qualified gateway authentication
+expansion `42ae6825f`: 41 native forwards, zero legacy forwards, eleven pure
+controls and strict scoped Clippy passed. The configured candidate took
+7.84 seconds and its shared actual-process lifecycle regression took 5.29 seconds.
+The base corpus now has 39 represented names and seven remaining; these are not
+39 exact unadapted replays. Thirteen full lifecycle cases remain. See the
 [coverage inventory](rust-migrations/canvas-gateway-coverage.md).
 Earlier `9a292d9cd` passed 2,924 root tests (three platform skips) and all 118
 separately collected service tests. Subsequent webhook-helper retirement
