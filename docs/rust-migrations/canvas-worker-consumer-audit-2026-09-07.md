@@ -10,6 +10,28 @@ not claims that current production or beta is broken.
 
 ## Missing or underspecified inventory entries
 
+### Generated release image follow-up (2026-09-08)
+
+The generated-overlay gap is now implemented using one pure image plan shared
+by the actual runner's overlay rendering, 17 local builds and 19-service image
+evidence. Independent review found a mutable-tag provenance race: local
+verification could record a newly retagged image instead of the image pinned
+before rehearsal. The final plan now retains that original immutable image ID
+for the last verification overlay and evidence; other selection is unchanged.
+
+Validation passed 76 focused Python/PowerShell tests and five actual Compose
+5.4.0 comparisons: three complete tracked-source models (local, pinned local,
+official) and two synthetic image-variable binding models, each with 19
+application services. Real secret expressions are not interpolated. Tests check
+the actual runner's generation/build/pin/rehearsal/evidence wiring, preservation
+of all non-selection fields, and a tag-moving-after-rehearsal negative control.
+The generated configuration gate is mandatory before image builds in CI; the
+existing 15 consumer and 24 rollback cases remain intact. These are configuration
+checks, not a deployment, live rollback or native worker selection qualification.
+The complete local repository suite subsequently passed 2,693 Python tests with
+three explicit skips in 202.24s; an independent repeat of the five config-model
+comparisons passed in 1.77s.
+
 ### Reconciliation at `ce19e030c` (2026-09-08)
 
 The original findings below are retained as historical evidence. A parallel
