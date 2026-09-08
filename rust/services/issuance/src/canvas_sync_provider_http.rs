@@ -49,9 +49,10 @@ const TOKEN_RESPONSE_BYTES: usize = 65_536;
 const COLLECTION_PAGE_BYTES: usize = 8_388_608;
 const COLLECTION_MAX_PAGES: usize = 200;
 
-// Application REST evidence uses the published HTTPX per-operation/inactivity
-// budget. This is deliberately not the shared roster/OAuth/LTI client policy.
+// Scoped REST evidence uses published HTTPX per-operation/inactivity budgets.
+// Neither scope changes the unscoped/OAuth/LTI total-client policy.
 const APPLICATION_REST_TIMEOUT_SECONDS: f64 = 15.0;
+const ROSTER_REST_TIMEOUT_SECONDS: f64 = 20.0;
 
 enum RestReadClient {
     Operation(CanvasOperationHttpClient),
@@ -64,6 +65,15 @@ impl RestReadClient {
         url: Url,
         token: &str,
     ) -> Result<ProviderResponse, CanvasProviderReadError> {
+        self.get_accept(url, token, "application/json").await
+    }
+
+    async fn get_accept(
+        &self,
+        url: Url,
+        token: &str,
+        accept: &str,
+    ) -> Result<ProviderResponse, CanvasProviderReadError> {
         let mut headers = http::HeaderMap::new();
         let mut authorization = http::HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| CanvasProviderReadError::Unavailable)?;
@@ -71,7 +81,8 @@ impl RestReadClient {
         headers.insert(http::header::AUTHORIZATION, authorization);
         headers.insert(
             http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
+            http::HeaderValue::from_str(accept)
+                .map_err(|_| CanvasProviderReadError::Unavailable)?,
         );
         match self {
             Self::Operation(client) => client
@@ -298,18 +309,36 @@ impl HttpCanvasAuthoritativeProvider {
         }
     }
 
+    fn rest_timeout_seconds(&self) -> Option<f64> {
+        match self.run_scope {
+            Some(CanvasProviderRunScope::Application) => Some(APPLICATION_REST_TIMEOUT_SECONDS),
+            Some(CanvasProviderRunScope::BackgroundRoster) => Some(ROSTER_REST_TIMEOUT_SECONDS),
+            None => None,
+        }
+    }
+
     async fn rest_client(
         &self,
         canvas_base_url: &str,
     ) -> Result<(RestReadClient, Url), CanvasProviderReadError> {
-        if self.run_scope == Some(CanvasProviderRunScope::Application) {
+        if let Some(timeout) = self.rest_timeout_seconds() {
             let policy = CanvasOriginPolicy::from(&self.policy);
+            if self.run_scope == Some(CanvasProviderRunScope::BackgroundRoster) {
+                let (client, base) = CanvasOperationHttpClient::prepare(
+                    policy,
+                    CanvasNetworkTimeout::from_seconds(timeout),
+                    canvas_base_url,
+                )
+                .await
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+                return Ok((RestReadClient::Operation(client), base));
+            }
             let base = validate_canvas_origin(canvas_base_url, &policy)
                 .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
             Ok((
                 RestReadClient::Operation(CanvasOperationHttpClient::new(
                     policy,
-                    CanvasNetworkTimeout::from_seconds(APPLICATION_REST_TIMEOUT_SECONDS),
+                    CanvasNetworkTimeout::from_seconds(timeout),
                 )),
                 base,
             ))
@@ -319,6 +348,22 @@ impl HttpCanvasAuthoritativeProvider {
                 .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
             Ok((RestReadClient::Total(client), base))
         }
+    }
+
+    async fn collection_client(
+        &self,
+        origin: &str,
+        protocol: CollectionProtocol,
+    ) -> Result<RestReadClient, CanvasProviderReadError> {
+        if protocol == CollectionProtocol::CanvasRest
+            && self.run_scope == Some(CanvasProviderRunScope::BackgroundRoster)
+        {
+            return self.rest_client(origin).await.map(|(client, _)| client);
+        }
+        let (client, _) = client_for_canvas_origin(origin, &self.policy)
+            .await
+            .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        Ok(RestReadClient::Total(client))
     }
 
     async fn oauth_token(
@@ -497,7 +542,7 @@ impl HttpCanvasAuthoritativeProvider {
 
     async fn collection(
         &self,
-        mut next: Url,
+        next: Url,
         token: &str,
         accept: &str,
         limit: usize,
@@ -506,44 +551,87 @@ impl HttpCanvasAuthoritativeProvider {
     ) -> Result<Vec<Value>, CanvasProviderReadError> {
         let expected_origin = origin_url(&next)?;
         reject_embedded_credentials(&next)?;
-        let (client, _) = client_for_canvas_origin(expected_origin.as_str(), &self.policy)
-            .await
-            .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
-        let mut output = Vec::new();
-        let mut visited = BTreeSet::new();
-        next = protocol.first_page(next, limit);
-        for _page in 0..COLLECTION_MAX_PAGES {
-            if !visited.insert(next.to_string()) {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            if origin_url(&next)? != expected_origin {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            let (payload, link) =
-                request_collection_page(&client, next.clone(), token, accept, protocol).await?;
-            let rows = protocol
-                .rows(&payload)
-                .ok_or(CanvasProviderReadError::Unavailable)?;
-            if rows.iter().any(|row| !valid_collection_item(row)) {
-                return Err(CanvasProviderReadError::Unavailable);
-            }
-            let remaining = limit.saturating_sub(output.len());
-            if rows.len() > remaining {
-                return Err(limit_error);
-            }
-            output.extend(rows.iter().cloned());
-            let Some(candidate) = next_link(&link)? else {
-                return Ok(output);
-            };
-            if output.len() >= limit {
-                return Err(limit_error);
-            }
-            next = Url::parse(&candidate)
-                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
-            reject_embedded_credentials(&next)?;
-        }
-        Err(limit_error)
+        let client = self
+            .collection_client(expected_origin.as_str(), protocol)
+            .await?;
+        collect_pages(&client, next, token, accept, limit, limit_error, protocol).await
     }
+
+    async fn roster_pages(
+        &self,
+        prepared: Option<&RestReadClient>,
+        next: Url,
+        token: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>, CanvasProviderReadError> {
+        let fallback;
+        let client = match prepared {
+            Some(client) => client,
+            None => {
+                reject_embedded_credentials(&next)?;
+                fallback = self
+                    .collection_client(origin_url(&next)?.as_str(), CollectionProtocol::CanvasRest)
+                    .await?;
+                &fallback
+            }
+        };
+        collect_pages(
+            client,
+            next,
+            token,
+            "application/json",
+            limit,
+            CanvasProviderReadError::RosterCollectionTooLarge,
+            CollectionProtocol::CanvasRest,
+        )
+        .await
+    }
+}
+
+async fn collect_pages(
+    client: &RestReadClient,
+    mut next: Url,
+    token: &str,
+    accept: &str,
+    limit: usize,
+    limit_error: CanvasProviderReadError,
+    protocol: CollectionProtocol,
+) -> Result<Vec<Value>, CanvasProviderReadError> {
+    let expected_origin = origin_url(&next)?;
+    reject_embedded_credentials(&next)?;
+    let mut output = Vec::new();
+    let mut visited = BTreeSet::new();
+    next = protocol.first_page(next, limit);
+    for _page in 0..COLLECTION_MAX_PAGES {
+        if !visited.insert(next.to_string()) {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        if origin_url(&next)? != expected_origin {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        let (payload, link) =
+            request_collection_page(client, next.clone(), token, accept, protocol).await?;
+        let rows = protocol
+            .rows(&payload)
+            .ok_or(CanvasProviderReadError::Unavailable)?;
+        if rows.iter().any(|row| !valid_collection_item(row)) {
+            return Err(CanvasProviderReadError::Unavailable);
+        }
+        let remaining = limit.saturating_sub(output.len());
+        if rows.len() > remaining {
+            return Err(limit_error);
+        }
+        output.extend(rows.iter().cloned());
+        let Some(candidate) = next_link(&link)? else {
+            return Ok(output);
+        };
+        if output.len() >= limit {
+            return Err(limit_error);
+        }
+        next = Url::parse(&candidate).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        reject_embedded_credentials(&next)?;
+    }
+    Err(limit_error)
 }
 
 #[async_trait]
@@ -637,10 +725,20 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 CanvasProviderReadError::RateLimited { .. } => error,
                 _ => CanvasProviderReadError::RosterOAuthUnavailable,
             })?;
-            let (_, base) =
-                client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
-                    .await
-                    .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            let (prepared, base) =
+                if self.run_scope == Some(CanvasProviderRunScope::BackgroundRoster) {
+                    let (client, base) = self
+                        .rest_client(&resources.platform.canvas_base_url)
+                        .await?;
+                    (Some(client), base)
+                } else {
+                    // Retain the existing unscoped setup and per-collection policy.
+                    let (_, base) =
+                        client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
+                            .await
+                            .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+                    (None, base)
+                };
             let courses = requirements
                 .iter()
                 .filter(|value| text(value.get("source")) == "canvas_rest")
@@ -653,14 +751,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 url.query_pairs_mut()
                     .append_pair("enrollment_type[]", "student");
                 for user in self
-                    .collection(
-                        url,
-                        &token,
-                        "application/json",
-                        limit,
-                        CanvasProviderReadError::RosterCollectionTooLarge,
-                        CollectionProtocol::CanvasRest,
-                    )
+                    .roster_pages(prepared.as_ref(), url, &token, limit)
                     .await?
                 {
                     if let Some(id) = user.get("id").and_then(value_identifier) {
@@ -687,14 +778,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     &format!("courses/{}/bulk_user_progress", encoded(course)?),
                 )?;
                 let rows = self
-                    .collection(
-                        url,
-                        &token,
-                        "application/json",
-                        limit,
-                        CanvasProviderReadError::RosterCollectionTooLarge,
-                        CollectionProtocol::CanvasRest,
-                    )
+                    .roster_pages(prepared.as_ref(), url, &token, limit)
                     .await?;
                 let by_user = validated_course_completion_by_user(rows)?;
                 for user in &snapshot.canvas_user_ids {
@@ -839,28 +923,23 @@ async fn request_lti_token(
 }
 
 async fn request_collection_page(
-    client: &reqwest::Client,
+    client: &RestReadClient,
     url: Url,
     token: &str,
     accept: &str,
     protocol: CollectionProtocol,
 ) -> Result<(Value, Vec<String>), CanvasProviderReadError> {
-    let response = client
-        .get(url)
-        .bearer_auth(token)
-        .header("Accept", accept)
-        .send()
-        .await
-        .map_err(|_| CanvasProviderReadError::Unavailable)?;
+    let response = client.get_accept(url, token, accept).await?;
+    let status = response.response().status();
     // The REST collection helper wraps ordinary HTTP status failures in
     // HTTPException; LTI and the existing 401/403/429 classifications differ.
     if protocol == CollectionProtocol::CanvasRest
-        && (response.status().is_client_error() || response.status().is_server_error())
-        && !matches!(response.status().as_u16(), 401 | 403 | 429)
+        && (status.is_client_error() || status.is_server_error())
+        && !matches!(status.as_u16(), 401 | 403 | 429)
     {
         return Err(CanvasProviderReadError::RosterHttpStatusFailure);
     }
-    let link = link_header_values(response.headers());
+    let link = link_header_values(response.response().headers());
     let payload = read_json_response(response, COLLECTION_PAGE_BYTES).await?;
     Ok((payload, link?))
 }
@@ -1391,7 +1470,7 @@ mod tests {
 
         async fn collection(&self, token: &str) -> Result<Value, CanvasProviderReadError> {
             request_collection_page(
-                &self.client,
+                &RestReadClient::Total(self.client.clone()),
                 Url::parse(&format!("{}/collection", self.origin)).unwrap(),
                 token,
                 AGS_RESULT_ACCEPT,
@@ -1821,7 +1900,7 @@ mod tests {
 
         assert_eq!(
             request_collection_page(
-                &client,
+                &RestReadClient::Total(client.clone()),
                 Url::parse(&format!("http://{address}/collection")).unwrap(),
                 "token",
                 NRPS_MEMBERSHIP_ACCEPT,
@@ -1891,7 +1970,7 @@ mod tests {
         for code in [400, 401, 403, 429, 503] {
             for protocol in [CollectionProtocol::CanvasRest, CollectionProtocol::Lti] {
                 let actual = request_collection_page(
-                    &client,
+                    &RestReadClient::Total(client.clone()),
                     Url::parse(&format!("http://{address}/{code}")).unwrap(),
                     "synthetic-token",
                     "application/json",
@@ -2095,7 +2174,7 @@ mod tests {
         assert_eq!(token, "bounded-token");
         for (path, accept) in [("ags", AGS_RESULT_ACCEPT), ("nrps", NRPS_MEMBERSHIP_ACCEPT)] {
             let (payload, _) = request_collection_page(
-                &client,
+                &RestReadClient::Total(client.clone()),
                 Url::parse(&format!("http://{address}/{path}")).unwrap(),
                 &token,
                 accept,

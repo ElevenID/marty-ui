@@ -30,14 +30,22 @@ Integrated head `ca1dcf00b` failed
 before native BODY replay: SQLAlchemy was missing in the Rust job's Python
 environment. Header parity passed in 107.46s; BODY setup failed in 3.80s and
 mixed/full suites were skipped. The isolated harness dependency setup repair
-does not change runtime or frozen inputs. Current remote head
-`53468331f3018b05a0fd8c1c81f7a258b6e0714d` is running
+does not change runtime or frozen inputs. Head
+`53468331f3018b05a0fd8c1c81f7a258b6e0714d` completed with failure in
 [CI34210124048](https://github.com/ElevenID/marty-ui/actions/runs/34210124048):
 runtime job `102008916081` passed setup and header parity (104.99s), then failed
 BODY parity in 117.33s. Application/roster prompt and application progress passed;
 roster progress retried instead of succeeding after its final 24s chunk.
 Mixed/full groups were skipped. A scoped roster read-inactivity repair and
 fresh-head native BODY/expiry qualification remain required.
+
+The candidate roster repair now selects shared 20s operation/read-inactivity
+transport with one validated prepared DNS pin. Application 15s and unscoped,
+LTI, OAuth and signing policies remain unchanged. Independent review passed;
+local checks passed 362 issuance library tests in 15.89s, strict all-target
+Clippy in 24.50s and all 104 actual TLS transport cases. The worker contract
+executable compiled in 38.55s. Fresh-head worker BODY/expiry parity remains
+unproven; these are not deployment acceptance gates.
 
 The new local native repository lock-wait diagnostic passed two actual
 PostgreSQL cases and five pure controls in 43.35s. Both early and expiry-crossing

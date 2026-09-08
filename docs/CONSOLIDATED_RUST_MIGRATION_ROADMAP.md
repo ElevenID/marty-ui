@@ -87,6 +87,15 @@ six BODY and two expiry cases without executing either reference worker.
 No runtime policy, frozen source, consumer routing or deployment
 changed in this harness lane.
 
+The subsequent scoped roster repair uses the shared operation transport with a
+20s inactivity budget and a private prepared origin/address, preserving a single
+validated DNS pin without changing application 15s or unscoped/LTI/OAuth/signing
+policies. Independent review passed. Local validation passed 362 issuance library
+tests in 15.89s, strict all-target Clippy in 24.50s and all 104 frozen actual TLS
+transport cases; the full worker contract executable compiled in 38.55s.
+This repair still needs fresh-head hosted BODY and expiry parity; neither local
+checks nor the three previously passing BODY cases authorize cutover.
+
 Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
 preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).
 Runtime job `101967919625` passed the prompt application control, then observed

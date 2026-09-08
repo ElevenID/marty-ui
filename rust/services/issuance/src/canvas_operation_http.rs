@@ -5,6 +5,7 @@
 use std::{
     future::Future,
     io,
+    net::SocketAddr,
     pin::Pin,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -26,6 +27,10 @@ use crate::{
     canvas_network_timeout::{CanvasNetworkBudget, CanvasNetworkPhase, CanvasNetworkTimeout},
     canvas_provider_http::{resolve_canvas_origin, CanvasOriginPolicy},
 };
+
+#[cfg(test)]
+#[path = "canvas_operation_http_prepared_tests.rs"]
+mod prepared_tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CanvasOperationHttpError {
@@ -263,11 +268,24 @@ impl CanvasOperationResponse {
     }
 }
 
+#[derive(Clone)]
+struct PreparedOrigin {
+    origin: Url,
+    address: SocketAddr,
+}
+
+impl std::fmt::Debug for PreparedOrigin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PreparedOrigin([redacted])")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CanvasOperationHttpClient {
     policy: CanvasOriginPolicy,
     timeout: CanvasNetworkTimeout,
     tls: Option<Arc<rustls::ClientConfig>>,
+    prepared: Option<PreparedOrigin>,
 }
 
 impl CanvasOperationHttpClient {
@@ -276,7 +294,26 @@ impl CanvasOperationHttpClient {
             policy,
             timeout,
             tls: None,
+            prepared: None,
         }
+    }
+
+    /// Resolve a validated persisted root once, before callers construct headers.
+    /// The private result cannot be repointed to an unchecked address or origin.
+    pub async fn prepare(
+        policy: CanvasOriginPolicy,
+        timeout: CanvasNetworkTimeout,
+        base: &str,
+    ) -> Result<(Self, Url), CanvasOperationHttpError> {
+        let (origin, address) = resolve_canvas_origin(base, &policy)
+            .await
+            .map_err(|_| CanvasOperationHttpError::Origin)?;
+        let mut client = Self::new(policy, timeout);
+        client.prepared = Some(PreparedOrigin {
+            origin: origin.clone(),
+            address,
+        });
+        Ok((client, origin))
     }
 
     pub async fn send(
@@ -289,10 +326,16 @@ impl CanvasOperationHttpClient {
         if !url.username().is_empty() || url.password().is_some() {
             return Err(CanvasOperationHttpError::Origin);
         }
-        let (origin, pinned) =
+        let (origin, pinned) = if let Some(prepared) = &self.prepared {
+            if url.origin() != prepared.origin.origin() {
+                return Err(CanvasOperationHttpError::Origin);
+            }
+            (prepared.origin.clone(), prepared.address)
+        } else {
             resolve_canvas_origin(&url.origin().ascii_serialization(), &self.policy)
                 .await
-                .map_err(|_| CanvasOperationHttpError::Origin)?;
+                .map_err(|_| CanvasOperationHttpError::Origin)?
+        };
         let tcp = self
             .timeout
             .run(

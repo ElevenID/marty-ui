@@ -1,10 +1,10 @@
 # Native worker response-body replay
 
-Status, 2026-09-08: implementation and independent negative-test review are
-complete locally on `feat/canvas-worker-native-body-replay-v1`. No actual native body
-result is claimed. The published reference is frozen independently; no runtime
-timeout policy, captured input, oracle, routing or deployment changes belong
-to this harness implementation.
+Status, 2026-09-08: the original harness is implemented and reviewed. Hosted
+execution passed three cases and exposed the roster-progress mismatch recorded
+below. Its scoped Rust repair is locally validated but still needs fresh-head
+worker parity. Frozen reference inputs, consumer routing and deployment remain
+unchanged.
 
 Local verification passed: complete Python suite 2,365 tests / three explicit
 skips in 161.34s; ten shared header/body Rust controls in 0.01s after 51.22s
@@ -42,6 +42,30 @@ native coordinator instead observed retry around the roster's 20s total budget.
 BODY preflight failed in 117.33s and later mixed/full groups were skipped.
 This is actual evidence for repairing the scoped roster transport to preserve
 20s read inactivity, not permission to change frozen expected results.
+
+## Scoped roster repair
+
+The candidate repair selects the existing operation transport for explicit
+background-roster REST reads with a 20s inactivity budget. Application REST
+retains 15s; unscoped REST, LTI, OAuth and signing policies are unchanged.
+Collections and candidate reads use the same bounded response reader, preserving
+status, Retry-After, pagination, item-count and response-size handling.
+
+A prepared client validates and resolves its persisted root once before header
+construction, then keeps the resulting address private. Same-origin roster
+pagination reuses that pin; cross-origin reuse is rejected before connection.
+The original hostname still owns Host/SNI and certificate verification. Existing
+lazy operation callers are unchanged. No extra preliminary DNS lookup, redirect,
+proxy, relaxed private-origin policy or published-reference change is introduced.
+Prepared-address Debug output is redacted.
+
+Local repair validation passed all **362 issuance library tests in 15.89s**
+after 31.11s compilation, strict all-target Clippy in **24.50s**, and the unchanged
+**104-case actual loopback TLS transport matrix**. The full worker contract
+executable also compiled in 38.55s. Five prepared-origin tests and three adapter
+tests add pin/privacy, protocol, pagination and progressive-read coverage.
+The 240ms adapter control proves transport selection, not exact 20s worker
+timing; fresh-head hosted BODY/expiry parity is still required.
 
 ## Independent authority
 

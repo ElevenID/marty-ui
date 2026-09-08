@@ -108,12 +108,14 @@ fn persisted_origins_keep_path_query_fragment_and_credential_rejections() {
 }
 
 #[tokio::test]
-async fn only_explicit_application_scope_selects_operation_transport() {
+async fn explicit_rest_scopes_select_distinct_operation_budgets_without_changing_lti() {
     let (mut template, pool) = run_provider_without_database_io();
     pool.close().await;
     template.policy.allow_http_localhost = true;
     template.policy.timeout = Duration::from_secs(20);
     assert_eq!(APPLICATION_REST_TIMEOUT_SECONDS, 15.0);
+    assert_eq!(ROSTER_REST_TIMEOUT_SECONDS, 20.0);
+    assert_eq!(template.rest_timeout_seconds(), None);
     let (default_client, _) = template.rest_client("http://127.0.0.1:1").await.unwrap();
     assert!(matches!(default_client, RestReadClient::Total(_)));
     for scope in [
@@ -122,11 +124,26 @@ async fn only_explicit_application_scope_selects_operation_transport() {
     ] {
         let provider = template.fresh_run(scope);
         let (client, _) = provider.rest_client("http://127.0.0.1:1").await.unwrap();
+        assert!(matches!(client, RestReadClient::Operation(_)));
         assert_eq!(
-            matches!(client, RestReadClient::Operation(_)),
-            scope == CanvasProviderRunScope::Application
+            provider.rest_timeout_seconds(),
+            Some(match scope {
+                CanvasProviderRunScope::Application => 15.0,
+                CanvasProviderRunScope::BackgroundRoster => 20.0,
+            })
         );
-        // Retaining this policy does not qualify roster inactivity semantics.
+        for protocol in [CollectionProtocol::CanvasRest, CollectionProtocol::Lti] {
+            let client = provider
+                .collection_client("http://127.0.0.1:1", protocol)
+                .await
+                .unwrap();
+            assert_eq!(
+                matches!(client, RestReadClient::Operation(_)),
+                scope == CanvasProviderRunScope::BackgroundRoster
+                    && protocol == CollectionProtocol::CanvasRest
+            );
+        }
+        // The shared policy and nested LTI cache still belong to their old owner.
         assert_eq!(provider.policy.timeout, Duration::from_secs(20));
         for base in [
             "http://127.0.0.1:1/base",
@@ -139,6 +156,15 @@ async fn only_explicit_application_scope_selects_operation_transport() {
                 Err(CanvasProviderReadError::InvalidConfiguration)
             ));
         }
+    }
+    for protocol in [CollectionProtocol::CanvasRest, CollectionProtocol::Lti] {
+        assert!(matches!(
+            template
+                .collection_client("http://127.0.0.1:1", protocol)
+                .await
+                .unwrap(),
+            RestReadClient::Total(_)
+        ));
     }
 }
 
@@ -216,6 +242,10 @@ impl Drop for ResponseServer {
 
 impl ResponseServer {
     async fn start(response: Vec<u8>) -> Self {
+        Self::start_parts(vec![(Duration::ZERO, response)]).await
+    }
+
+    async fn start_parts(parts: Vec<(Duration, Vec<u8>)>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let (sender, request) = tokio::sync::oneshot::channel();
@@ -233,7 +263,13 @@ impl ResponseServer {
                 let _ = sender.send(request);
                 // A rejected status/length can legitimately close before the
                 // synthetic responder's final write. It never starts another request.
-                let _ = stream.write_all(&response).await;
+                let start = tokio::time::Instant::now();
+                for (offset, bytes) in parts {
+                    tokio::time::sleep_until(start + offset).await;
+                    if stream.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
             })
             .await
             .expect("Synthetic response server exceeded its bound");
@@ -290,6 +326,185 @@ fn wire_response(status: u16, headers: &str, body: &[u8]) -> Vec<u8> {
     let mut bytes = format!("HTTP/1.1 {status} Synthetic\r\nConnection: close\r\nContent-Type: application/json\r\n{headers}\r\n").into_bytes();
     bytes.extend_from_slice(body);
     bytes
+}
+
+#[tokio::test]
+async fn roster_collection_progress_outlives_total_policy_without_changing_lti_or_template() {
+    let (mut template, pool) = run_provider_without_database_io();
+    pool.close().await;
+    template.policy.allow_http_localhost = true;
+    template.policy.timeout = Duration::from_millis(50);
+    for (scope, protocol, success) in [
+        (None, CollectionProtocol::CanvasRest, false),
+        (
+            Some(CanvasProviderRunScope::BackgroundRoster),
+            CollectionProtocol::Lti,
+            false,
+        ),
+        (
+            Some(CanvasProviderRunScope::BackgroundRoster),
+            CollectionProtocol::CanvasRest,
+            true,
+        ),
+    ] {
+        let server = ResponseServer::start_parts(vec![
+            (
+                Duration::ZERO,
+                wire_response(200, "Content-Length: 4\r\n", b"["),
+            ),
+            (Duration::from_millis(80), b" ".to_vec()),
+            (Duration::from_millis(160), b" ".to_vec()),
+            (Duration::from_millis(240), b"]".to_vec()),
+        ])
+        .await;
+        let provider = scope.map_or_else(|| template.clone(), |scope| template.fresh_run(scope));
+        let start = tokio::time::Instant::now();
+        let result = provider
+            .collection(
+                Url::parse(&format!("{}/owned", server.origin)).unwrap(),
+                "synthetic-token",
+                "application/json",
+                10,
+                CanvasProviderReadError::RosterCollectionTooLarge,
+                protocol,
+            )
+            .await;
+        if success {
+            assert_eq!(result, Ok(Vec::new()));
+            assert!(start.elapsed() >= Duration::from_millis(200));
+        } else {
+            assert_eq!(result, Err(CanvasProviderReadError::Unavailable));
+        }
+        server.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn prepared_roster_collection_preserves_status_accept_and_link_classification() {
+    let (mut template, pool) = run_provider_without_database_io();
+    pool.close().await;
+    template.policy.allow_http_localhost = true;
+    let provider = template.fresh_run(CanvasProviderRunScope::BackgroundRoster);
+    for protocol in [CollectionProtocol::CanvasRest, CollectionProtocol::Lti] {
+        for status in [200, 302, 400, 401, 403, 429, 503] {
+            let mut server = ResponseServer::start(wire_response(status,
+                "Content-Length: 2\r\nRetry-After: 37\r\nLink: <https://canvas.example.invalid/page>; rel=next\r\n", b"[]")).await;
+            let client = provider
+                .collection_client(&server.origin, protocol)
+                .await
+                .unwrap();
+            let result = request_collection_page(
+                &client,
+                Url::parse(&format!("{}/owned", server.origin)).unwrap(),
+                "synthetic-token",
+                NRPS_MEMBERSHIP_ACCEPT,
+                protocol,
+            )
+            .await;
+            match status {
+                200 => assert_eq!(
+                    result.unwrap(),
+                    (
+                        json!([]),
+                        vec!["<https://canvas.example.invalid/page>; rel=next".to_owned()]
+                    )
+                ),
+                302 => assert_eq!(result, Err(CanvasProviderReadError::InvalidConfiguration)),
+                401 | 403 => assert_eq!(result, Err(CanvasProviderReadError::Unavailable)),
+                429 => assert_eq!(
+                    result,
+                    Err(CanvasProviderReadError::RateLimited {
+                        retry_after_seconds: 37
+                    })
+                ),
+                _ if protocol == CollectionProtocol::CanvasRest => assert_eq!(
+                    result,
+                    Err(CanvasProviderReadError::RosterHttpStatusFailure)
+                ),
+                _ => assert_eq!(result, Err(CanvasProviderReadError::Unavailable)),
+            }
+            let request =
+                tokio::time::timeout(Duration::from_secs(1), server.request.take().unwrap())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+            assert!(request.contains(&format!("\r\naccept: {NRPS_MEMBERSHIP_ACCEPT}\r\n")));
+            assert!(request.contains("\r\nauthorization: bearer synthetic-token\r\n"));
+            server.finish().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn prepared_roster_pages_preserve_pagination_and_reject_cross_origin_or_cycles() {
+    use axum::{routing::get, Json, Router};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (mut template, pool) = run_provider_without_database_io();
+    pool.close().await;
+    template.policy.allow_http_localhost = true;
+    let provider = template.fresh_run(CanvasProviderRunScope::BackgroundRoster);
+    let forbidden = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    for mode in ["next", "foreign", "repeat"] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let next = match mode {
+            "next" => format!("{origin}/second"),
+            "repeat" => format!("{origin}/first?per_page=10"),
+            _ => format!("http://{}/second", forbidden.local_addr().unwrap()),
+        };
+        let count = Arc::new(AtomicUsize::new(0));
+        let first_count = count.clone();
+        let second_count = count.clone();
+        let app = Router::new()
+            .route(
+                "/first",
+                get(move || {
+                    let link = format!("<{next}>; rel=next");
+                    first_count.fetch_add(1, Ordering::SeqCst);
+                    async move { ([("link", link)], Json(json!([{"id": "7"}]))) }
+                }),
+            )
+            .route(
+                "/second",
+                get(move || {
+                    second_count.fetch_add(1, Ordering::SeqCst);
+                    async { Json(json!([{"id": "8"}])) }
+                }),
+            );
+        let server = ResponseServer {
+            origin: origin.clone(),
+            request: None,
+            task: Some(tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            })),
+        };
+        let (client, _) = provider.rest_client(&origin).await.unwrap();
+        let result = provider
+            .roster_pages(
+                Some(&client),
+                Url::parse(&format!("{origin}/first")).unwrap(),
+                "synthetic-token",
+                10,
+            )
+            .await;
+        if mode == "next" {
+            assert_eq!(result, Ok(vec![json!({"id": "7"}), json!({"id": "8"})]));
+            assert_eq!(count.load(Ordering::SeqCst), 2);
+        } else {
+            assert_eq!(result, Err(CanvasProviderReadError::InvalidConfiguration));
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
+        let mut server = server;
+        let task = server.task.take().unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), forbidden.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

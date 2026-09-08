@@ -19,7 +19,7 @@ The reference-integration checkpoint's local validation passed **2,538 Python te
 [CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818)
 at BODY controller import because its Python environment lacked SQLAlchemy;
 later full suites were skipped. The isolated harness dependency repair at
-`53468331f3018b05a0fd8c1c81f7a258b6e0714d` is now running in
+`53468331f3018b05a0fd8c1c81f7a258b6e0714d` completed with failure in
 [CI34210124048](https://github.com/ElevenID/marty-ui/actions/runs/34210124048).
 Runtime job `102008916081` passed the isolated setup and header parity (104.99s),
 then failed BODY parity in 117.33s: both prompt cases and application progress
