@@ -1611,6 +1611,94 @@ mod tests {
         path
     }
 
+    fn authcrypt_parties() -> (DidDocument, [u8; 32], DidDocument, [u8; 32]) {
+        // Public values independently derived from the synthetic repeated-byte
+        // secrets. Production envelope/key binding remains entirely in Core.
+        let document = |did: &str, public_hex: &str| {
+            let mut document = recipient_document();
+            document.id = did.to_owned();
+            let key_id = format!("{did}#key-1");
+            document.key_agreement = vec![json!(key_id)];
+            document.verification_method[0].id = key_id;
+            document.verification_method[0].controller = did.to_owned();
+            document.verification_method[0]
+                .public_key_jwk
+                .as_mut()
+                .unwrap()
+                .x = Some(URL_SAFE_NO_PAD.encode(hex::decode(public_hex).unwrap()));
+            // The managed resolver also requires an authentication/assertion
+            // relationship; use a separate synthetic signing key, not X25519.
+            let mut signing_method = document.verification_method[0].clone();
+            signing_method.id = format!("{did}#signing-1");
+            let signing_jwk = signing_method.public_key_jwk.as_mut().unwrap();
+            signing_jwk.crv = Some("Ed25519".to_owned());
+            signing_jwk.x = Some(
+                URL_SAFE_NO_PAD.encode(
+                    ed25519_dalek::SigningKey::from_bytes(&[11_u8; 32])
+                        .verifying_key()
+                        .to_bytes(),
+                ),
+            );
+            document.assertion_method = vec![json!(signing_method.id)];
+            document.verification_method.push(signing_method);
+            document
+        };
+        (
+            document(
+                "did:web:issuer.example",
+                "57db4b359f23ae5e146e4e2512056704722506348c150c14753d0c933d04d421",
+            ),
+            [9_u8; 32],
+            document(
+                "did:example:holder",
+                "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d",
+            ),
+            [7_u8; 32],
+        )
+    }
+
+    fn authcrypt_policy_file(issuer_did: &str, secret: &[u8; 32]) -> PathBuf {
+        policy_file(
+            &json!({
+                "version": 1,
+                "issuers": {(issuer_did): {
+                    "mode": "authcrypt",
+                    "sender_x25519_private_key": URL_SAFE_NO_PAD.encode(secret),
+                }},
+            })
+            .to_string(),
+        )
+    }
+
+    async fn serve_sender_document_once(
+        document: &DidDocument,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        // Same managed did:web path exercised by Core's resolver tests. The
+        // listener is dropped after exactly one request, before final encryption.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = serde_json::to_string(document).unwrap();
+        let server = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(5), async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    assert!(request.len() < 8_192, "bounded synthetic resolver request");
+                    request.push(stream.read_u8().await.unwrap());
+                }
+                assert!(request.starts_with(b"GET /.well-known/did.json "));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/did+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            })
+            .await
+            .expect("synthetic resolver must complete within five seconds");
+        });
+        (format!("http://{address}"), server)
+    }
+
     type Order = Arc<Mutex<Vec<&'static str>>>;
 
     fn record(order: &Order, stage: &'static str) {
@@ -2945,6 +3033,88 @@ mod tests {
         assert!(!packed.message_id.is_empty());
         assert!(!format!("{prepared:?}").contains("did:example:holder"));
         assert!(!format!("{packed:?}").contains("signed-credential"));
+    }
+
+    #[tokio::test]
+    async fn authcrypt_preflight_freezes_real_crypto_context_after_policy_and_resolver_change() {
+        let (sender, sender_secret, recipient, recipient_secret) = authcrypt_parties();
+        let (resolver_url, server) = serve_sender_document_once(&sender).await;
+        let policy = authcrypt_policy_file(&sender.id, &sender_secret);
+        let envelope =
+            NativeDidcommEnvelope::new(None, Some(&resolver_url), Some(policy.to_str().unwrap()));
+        let prepared = envelope
+            .prepare_encryption(&sender.id, recipient.clone())
+            .await;
+        server.await.unwrap(); // The managed resolver no longer accepts requests.
+        let prepared = prepared.unwrap();
+        std::fs::write(
+            &policy,
+            json!({"version": 1, "issuers": {(sender.id.clone()): {"mode": "anoncrypt"}}})
+                .to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            load_active_policy(Some(&policy), &sender.id).unwrap(),
+            ActiveEncryptionPolicy::Anoncrypt
+        ));
+
+        let packed = envelope
+            .pack_credential(
+                "synthetic-signed-credential",
+                "w3c_vcdm_v2_sd_jwt",
+                &sender.id,
+                &recipient.id,
+                "transaction-1",
+                "credential-1",
+            )
+            .unwrap();
+        let encrypted = envelope.encrypt_prepared(&packed.plaintext, &prepared);
+        std::fs::remove_file(policy).unwrap();
+        let encrypted = encrypted.unwrap();
+        let decrypted = marty_didcomm::decrypt_authenticated_jwe(
+            &encrypted,
+            &recipient_secret,
+            &recipient,
+            &sender,
+        )
+        .unwrap();
+        assert_eq!(decrypted.plaintext, packed.plaintext);
+        assert_eq!(decrypted.sender_kid, format!("{}#key-1", sender.id));
+        assert_eq!(decrypted.recipient_kid, format!("{}#key-1", recipient.id));
+        let message: serde_json::Value = serde_json::from_str(&decrypted.plaintext).unwrap();
+        assert_eq!(message["from"], sender.id);
+        assert_eq!(message["to"], json!([recipient.id]));
+        assert_eq!(message["id"], packed.message_id);
+        assert_eq!(
+            format!("{prepared:?}"),
+            "PreparedDidcommEncryption { issuer_configured: true, mode: \"authcrypt\", .. }"
+        );
+        assert_eq!(
+            format!("{packed:?}"),
+            "PackedDidcommCredential { message_id_configured: true, .. }"
+        );
+    }
+
+    #[tokio::test]
+    async fn authcrypt_preflight_rejects_wrong_sender_key_without_anoncrypt_fallback() {
+        let (sender, _, recipient, wrong_sender_secret) = authcrypt_parties();
+        let anoncrypt = NativeDidcommEnvelope::new(None, None, None);
+        assert!(anoncrypt
+            .prepare_encryption(&sender.id, recipient.clone())
+            .await
+            .is_ok());
+        let (resolver_url, server) = serve_sender_document_once(&sender).await;
+        let policy = authcrypt_policy_file(&sender.id, &wrong_sender_secret);
+        let envelope =
+            NativeDidcommEnvelope::new(None, Some(&resolver_url), Some(policy.to_str().unwrap()));
+        let result = envelope.prepare_encryption(&sender.id, recipient).await;
+        server.await.unwrap();
+        std::fs::remove_file(policy).unwrap();
+        assert_eq!(
+            result.err(),
+            Some(NativeDidcommError::SenderAuthenticationUnavailable),
+            "a recipient that supports anoncrypt must not permit sender-key failure to downgrade"
+        );
     }
 
     #[test]
