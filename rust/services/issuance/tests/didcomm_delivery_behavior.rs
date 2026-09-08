@@ -5,7 +5,7 @@ use axum::{body::Body, http::Request};
 use marty_issuance_service::{
     http::router_with_didcomm_delivery,
     initiation_didcomm::{
-        NativeDidcommDeliveryStatus, NativeInitiationDidcommDeliveryError,
+        NativeDidcommDeliveryStatus, NativeDidcommError, NativeInitiationDidcommDeliveryError,
         NativeInitiationDidcommDeliveryReceipt, DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS,
         DIDCOMM_TRANSPORT_READY_STATUS, DIDCOMM_TRANSPORT_RETRYABLE_STATUS,
     },
@@ -194,6 +194,62 @@ async fn direct_didcomm_route_matches_the_language_neutral_contract() {
         delivery.calls.lock().unwrap().as_slice(),
         [contract["expected_request"].clone()]
     );
+}
+
+#[tokio::test]
+async fn direct_didcomm_prerequisite_errors_match_captured_python_without_private_details() {
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/didcomm-public-error-python-reference.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        frozen["schema"],
+        "marty.didcomm-public-error-python-reference/v1"
+    );
+    let cases = frozen["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 8);
+    let reasons = [
+        NativeDidcommError::MissingEndpoint,
+        NativeDidcommError::InvalidEndpoint,
+        NativeDidcommError::HttpsRequired,
+        NativeDidcommError::EndpointUnresolvable,
+        NativeDidcommError::EndpointNotPublic,
+        NativeDidcommError::IncompatibleKeyAgreement,
+        NativeDidcommError::EncryptionPolicyUnavailable,
+        NativeDidcommError::SenderAuthenticationUnavailable,
+    ];
+    let input = contract()["valid_request"].clone();
+    for (case, reason) in cases.iter().zip(reasons) {
+        assert_eq!(case["reason"], format!("{reason:?}"));
+        let response = error_app(NativeInitiationDidcommDeliveryError::Prerequisite(reason))
+            .oneshot(request(input.clone(), Some("test-api-key")))
+            .await
+            .unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            case["status"].as_u64().unwrap()
+        );
+        assert_eq!(body(response).await, case["body"]);
+    }
+    // No arbitrary resolver/packing/TLS/transport diagnostic is public. These
+    // reasons were not captured as equivalent Python preflight responses.
+    for reason in [
+        NativeDidcommError::ResolutionUnavailable,
+        NativeDidcommError::MismatchedDocument,
+        NativeDidcommError::PackUnavailable,
+        NativeDidcommError::TlsUnavailable,
+        NativeDidcommError::TransportUnavailable,
+    ] {
+        let response = error_app(NativeInitiationDidcommDeliveryError::Prerequisite(reason))
+            .oneshot(request(input.clone(), Some("test-api-key")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503);
+        assert_eq!(
+            body(response).await,
+            json!({"detail": "DIDComm delivery is unavailable"})
+        );
+    }
 }
 
 #[tokio::test]

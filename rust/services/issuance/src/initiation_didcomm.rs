@@ -825,6 +825,9 @@ pub enum NativeInitiationDidcommDeliveryError {
     InvalidTransactionState,
     #[error("DIDComm delivery prerequisites are unavailable")]
     DidcommUnavailable,
+    /// Closed prerequisite reason; never carries remote bodies or exception text.
+    #[error("DIDComm delivery prerequisite failed: {0}")]
+    Prerequisite(NativeDidcommError),
     #[error("credential materialization is unavailable")]
     CredentialUnavailable,
     #[error("another delivery attempt owns the issuance transaction")]
@@ -953,7 +956,7 @@ impl NativeInitiationDidcommDelivery {
                     .await
                 {
                     Ok(endpoint) => endpoint,
-                    Err(_) => {
+                    Err(reason) => {
                         self.ports
                             .repository
                             .mark_transport_unattempted(&claim)
@@ -961,7 +964,7 @@ impl NativeInitiationDidcommDelivery {
                             .map_err(|_| {
                                 NativeInitiationDidcommDeliveryError::RetryStateUnavailable
                             })?;
-                        return Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable);
+                        return Err(NativeInitiationDidcommDeliveryError::Prerequisite(reason));
                     }
                 };
                 return self.deliver_claimed(claim, endpoint).await;
@@ -998,13 +1001,13 @@ impl NativeInitiationDidcommDelivery {
             .envelope
             .resolve_recipient(holder_did)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            .map_err(NativeInitiationDidcommDeliveryError::Prerequisite)?;
         let endpoint = self
             .ports
             .endpoints
             .validate(&recipient.endpoint)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            .map_err(NativeInitiationDidcommDeliveryError::Prerequisite)?;
 
         let mut prepared_transaction = transaction.clone();
         let initial_issuer = self
@@ -1031,7 +1034,7 @@ impl NativeInitiationDidcommDelivery {
             .envelope
             .prepare_encryption(&issuer.issuer_did, recipient.document)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            .map_err(NativeInitiationDidcommDeliveryError::Prerequisite)?;
 
         let credential_id = reserved_credential_id(&prepared_transaction);
         let claim = self
@@ -1820,6 +1823,7 @@ mod tests {
         delivery: Arc<Mutex<Option<InitiationDidcommDeliveryState>>>,
         transport_claim: Mutex<HarnessTransportClaimState>,
         fail_transport_success_once: AtomicBool,
+        fail_transport_unattempted: AtomicBool,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1852,6 +1856,7 @@ mod tests {
                 delivery: Arc::new(Mutex::new(None)),
                 transport_claim: Mutex::new(HarnessTransportClaimState::Idle),
                 fail_transport_success_once: AtomicBool::new(false),
+                fail_transport_unattempted: AtomicBool::new(false),
             }
         }
     }
@@ -2055,6 +2060,9 @@ mod tests {
             &self,
             claim: &InitiationDidcommTransportClaim,
         ) -> Result<(), CredentialIssuanceError> {
+            if self.fail_transport_unattempted.load(Ordering::SeqCst) {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             {
                 let mut state = self.transport_claim.lock().unwrap();
                 if *state != harness_claim_state(claim) {
@@ -2199,6 +2207,10 @@ mod tests {
 
     struct HarnessEnvelope {
         order: Order,
+        resolve_error: Option<NativeDidcommError>,
+        prepare_error: Option<NativeDidcommError>,
+        pack_error: Option<NativeDidcommError>,
+        encrypt_error: Option<NativeDidcommError>,
     }
 
     #[async_trait]
@@ -2208,6 +2220,9 @@ mod tests {
             _holder_did: &str,
         ) -> Result<ResolvedDidcommRecipient, NativeDidcommError> {
             record(&self.order, "resolve-recipient");
+            if let Some(error) = self.resolve_error {
+                return Err(error);
+            }
             Ok(ResolvedDidcommRecipient {
                 document: recipient_document(),
                 endpoint: "https://wallet.example/inbox".to_owned(),
@@ -2220,6 +2235,9 @@ mod tests {
             recipient_document: DidDocument,
         ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
             record(&self.order, "prepare-encryption");
+            if let Some(error) = self.prepare_error {
+                return Err(error);
+            }
             Ok(PreparedDidcommEncryption {
                 issuer_did: "did:example:issuer".to_owned(),
                 recipient_document,
@@ -2237,6 +2255,9 @@ mod tests {
             _credential_id: &str,
         ) -> Result<PackedDidcommCredential, NativeDidcommError> {
             record(&self.order, "pack");
+            if let Some(error) = self.pack_error {
+                return Err(error);
+            }
             assert_eq!(credential, "signed-credential");
             Ok(PackedDidcommCredential {
                 plaintext: "packed-credential".to_owned(),
@@ -2250,6 +2271,9 @@ mod tests {
             _prepared: &PreparedDidcommEncryption,
         ) -> Result<String, NativeDidcommError> {
             record(&self.order, "encrypt");
+            if let Some(error) = self.encrypt_error {
+                return Err(error);
+            }
             assert_eq!(plaintext, "packed-credential");
             Ok("encrypted-credential".to_owned())
         }
@@ -2346,6 +2370,10 @@ mod tests {
                 }),
                 envelope: Arc::new(HarnessEnvelope {
                     order: order.clone(),
+                    resolve_error: None,
+                    prepare_error: None,
+                    pack_error: None,
+                    encrypt_error: None,
                 }),
                 endpoints: Arc::new(HarnessEndpoint {
                     order: order.clone(),
@@ -2682,7 +2710,9 @@ mod tests {
             delivery
                 .deliver_native(&transaction(), "did:example:holder")
                 .await,
-            Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable)
+            Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::EndpointNotPublic
+            ))
         );
         assert_eq!(
             *order.lock().unwrap(),
@@ -2690,6 +2720,144 @@ mod tests {
         );
         assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn prerequisite_reasons_survive_before_claim_allocation_signing_or_transport() {
+        for (reason, resolving) in [
+            (NativeDidcommError::MissingEndpoint, true),
+            (NativeDidcommError::ResolutionUnavailable, true),
+            (NativeDidcommError::MismatchedDocument, true),
+            (NativeDidcommError::IncompatibleKeyAgreement, false),
+            (NativeDidcommError::EncryptionPolicyUnavailable, false),
+            (NativeDidcommError::SenderAuthenticationUnavailable, false),
+        ] {
+            let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            delivery.ports.envelope = Arc::new(HarnessEnvelope {
+                order: order.clone(),
+                resolve_error: resolving.then_some(reason),
+                prepare_error: (!resolving).then_some(reason),
+                pack_error: None,
+                encrypt_error: None,
+            });
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::Prerequisite(reason))
+            );
+            let expected: &[&str] = if resolving {
+                &["resolve-recipient"]
+            } else {
+                &[
+                    "resolve-recipient",
+                    "validate-endpoint",
+                    "resolve-issuer",
+                    "resolve-issuer",
+                    "ensure-ready",
+                    "prepare-encryption",
+                ]
+            };
+            assert_eq!(order.lock().unwrap().as_slice(), expected);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert!(repository.delivery.lock().unwrap().is_none());
+            assert_eq!(
+                *repository.transport_claim.lock().unwrap(),
+                HarnessTransportClaimState::Idle
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn post_preflight_crypto_failures_stay_generic_and_release_before_retry() {
+        for packing in [false, true] {
+            let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            delivery.ports.envelope = Arc::new(HarnessEnvelope {
+                order: order.clone(),
+                resolve_error: None,
+                prepare_error: None,
+                pack_error: packing.then_some(NativeDidcommError::PackUnavailable),
+                encrypt_error: (!packing)
+                    .then_some(NativeDidcommError::SenderAuthenticationUnavailable),
+            });
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable)
+            );
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert!(repository.delivery.lock().unwrap().is_none());
+            let observed = order.lock().unwrap();
+            assert_eq!(observed.last(), Some(&"release"));
+            assert!(observed.contains(&"claim"));
+            assert!(observed.contains(&"build"));
+            assert!(!observed.contains(&"transport"));
+            assert_eq!(observed.contains(&"encrypt"), !packing);
+        }
+    }
+
+    #[tokio::test]
+    async fn claimed_endpoint_failure_preserves_staging_and_releases_only_when_recorded() {
+        for release_fails in [false, true] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: true,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let staged =
+                InitiationDidcommDeliveryState::Pending(Box::new(staged_pending_delivery()));
+            *repository.delivery.lock().unwrap() = Some(staged.clone());
+            repository
+                .fail_transport_unattempted
+                .store(release_fails, Ordering::SeqCst);
+            let expected_error = if release_fails {
+                NativeInitiationDidcommDeliveryError::RetryStateUnavailable
+            } else {
+                NativeInitiationDidcommDeliveryError::Prerequisite(
+                    NativeDidcommError::EndpointNotPublic,
+                )
+            };
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(expected_error)
+            );
+            let expected: &[&str] = if release_fails {
+                &["validate-endpoint"]
+            } else {
+                &["validate-endpoint", "mark-transport-failed"]
+            };
+            assert_eq!(order.lock().unwrap().as_slice(), expected);
+            assert_eq!(*repository.delivery.lock().unwrap(), Some(staged));
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            let next = repository
+                .claim_transport("org-a", "transaction-1", "did:example:holder")
+                .await
+                .unwrap();
+            if release_fails {
+                assert!(matches!(next, InitiationDidcommTransportClaimOutcome::Busy));
+            } else {
+                assert!(matches!(
+                    next,
+                    InitiationDidcommTransportClaimOutcome::Claimed(_)
+                ));
+            }
+        }
     }
 
     #[tokio::test]

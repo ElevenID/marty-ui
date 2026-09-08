@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::{
     initiation_didcomm::{
-        NativeInitiationDidcommDelivery, NativeInitiationDidcommDeliveryError,
+        NativeDidcommError, NativeInitiationDidcommDelivery, NativeInitiationDidcommDeliveryError,
         NativeInitiationDidcommDeliveryReceipt,
     },
     management_security::ManagementSecurity,
@@ -182,6 +182,43 @@ impl InitiationDidcommHttpError {
             ),
             Self::Delivery(NativeInitiationDidcommDeliveryError::TransportFailed) => {
                 (StatusCode::BAD_GATEWAY, "DIDComm delivery failed")
+            }
+            Self::Delivery(NativeInitiationDidcommDeliveryError::Prerequisite(reason)) => {
+                match reason {
+                    NativeDidcommError::MissingEndpoint => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "Holder DID has no DIDComm service endpoint",
+                    ),
+                    NativeDidcommError::InvalidEndpoint => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint is invalid",
+                    ),
+                    NativeDidcommError::HttpsRequired => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint must use HTTPS",
+                    ),
+                    NativeDidcommError::EndpointUnresolvable => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint could not be resolved",
+                    ),
+                    NativeDidcommError::EndpointNotPublic => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "DIDComm service endpoint is not publicly routable",
+                    ),
+                    NativeDidcommError::IncompatibleKeyAgreement => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "Holder DID does not provide a compatible DIDComm key agreement method",
+                    ),
+                    NativeDidcommError::EncryptionPolicyUnavailable
+                    | NativeDidcommError::SenderAuthenticationUnavailable => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "DIDComm sender-authentication configuration is unavailable",
+                    ),
+                    _ => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "DIDComm delivery is unavailable",
+                    ),
+                }
             }
             Self::Delivery(
                 NativeInitiationDidcommDeliveryError::InvalidConfiguration

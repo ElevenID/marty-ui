@@ -1,0 +1,22 @@
+{
+  "schema": "marty.didcomm-public-error-python-reference/v1",
+  "reference": {
+    "repository": "ElevenID/marty-credentials",
+    "source_commit": "9bd2747f040f203188529758ec38f0a5dce5ac5f",
+    "source_path": "services/issuance/infrastructure/api/routes.py",
+    "source_blob": "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a",
+    "function": "_didcomm_sign_and_deliver",
+    "capture": "Executed unchanged async helper using existing test_didcomm_boundary.py synthetic setup (blob f373c4d1762f916b616e4b83a38101112ec78e85). Real endpoint validator with controlled DNS failure and private-address policy. Controlled resolver and encryption failures; real HTTPException status/detail captured. All cases assert zero allocation, signing and packing calls.",
+    "scope": "Eight fixed preflight error responses only; not live cryptography, PostgreSQL, transport, wallet, KMS or full Python route equivalence. Unrelated failures retain the native generic fail-closed response."
+  },
+  "cases": [
+    {"reason": "MissingEndpoint", "status": 422, "body": {"detail": "Holder DID has no DIDComm service endpoint"}},
+    {"reason": "InvalidEndpoint", "status": 422, "body": {"detail": "DIDComm service endpoint is invalid"}},
+    {"reason": "HttpsRequired", "status": 422, "body": {"detail": "DIDComm service endpoint must use HTTPS"}},
+    {"reason": "EndpointUnresolvable", "status": 422, "body": {"detail": "DIDComm service endpoint could not be resolved"}},
+    {"reason": "EndpointNotPublic", "status": 422, "body": {"detail": "DIDComm service endpoint is not publicly routable"}},
+    {"reason": "IncompatibleKeyAgreement", "status": 422, "body": {"detail": "Holder DID does not provide a compatible DIDComm key agreement method"}},
+    {"reason": "EncryptionPolicyUnavailable", "status": 503, "body": {"detail": "DIDComm sender-authentication configuration is unavailable"}},
+    {"reason": "SenderAuthenticationUnavailable", "status": 503, "body": {"detail": "DIDComm sender-authentication configuration is unavailable"}}
+  ]
+}
