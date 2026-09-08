@@ -1,6 +1,44 @@
 # Local marty-ui worktree cleanup inventory — 2026-09-07
 
-## Authoritative update — 2026-09-08
+## Current cleanup checkpoint — 2026-09-08
+
+Current local inventory is **eight worktrees and four branches**. The reviewed
+body reference and application REST repair are composed into retained native
+body replay head `fd65082f9424d1fb402cd52d566ffdf2de7581c5`. PR #814 remains at
+`2d864723f` while its hosted full CI runs. Neither statement claims a main merge,
+whole-worker qualification, feature deletion or deployment.
+
+Three superseded worktrees and their local branch names were removed normally
+after independent audit and parent revalidation. Every tip is an ancestor of
+retained `fd65082f9` and was additionally archived before removal:
+
+| Removed worktree suffix | Preserved exact head | Archive suffix | Generated caches discarded |
+| --- | --- | --- | ---: |
+| `marty-ui-canvas-timeout-replay-v1` | `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` | `timeout-reference` | 19 |
+| `marty-ui-canvas-body-timeout-reference-v1` | `acbf9609b2e5ffbc2bc8dd1e2687776fbe49550c` | `body-reference` | 31 |
+| `marty-ui-canvas-operation-timeout-repair-v1` | `2d864723f74831d4338e1686c242b1bad534a4b9` | `operation-repair` | 0 |
+
+Worktree paths were below workspace `_codex-worktrees/`; archive refs are under
+`refs/archive/worktree-cleanup-20260908/`. Clean tracked/untracked status, exact
+heads, ancestor retention, ignored-file inventories and resolved paths were
+verified. No live process references or matching mount sources among 206
+running/stopped containers were found. Target directories and descendants had
+no reparse points. The existing workspace parents carry a non-name-surrogate
+Microsoft directory reparse tag, not a link target; the entire ancestor chain
+is not described as reparse-free. No force or recursive shell deletion was used.
+
+Only the 50 audited Python/pytest/Ruff cache files were discarded. Source and
+history remain recoverable from the retained branch and archive refs. External
+raw captures and generated executable evidence remain under `_codex-tmp`.
+
+Remaining branches are `main`, `security/kms-boundary-hardening-v1`,
+`feat/canvas-review-resolution-v1`, and `feat/canvas-worker-native-body-replay-v1`.
+Keep the two active Canvas worktrees, the main/crypto worktrees and all four
+release checkouts 114–117 with their backups and recordings. Crypto ownership
+and approved archival/recoverability remain unresolved cleanup requirements.
+No claim is made that all repositories are clean or all branches are merged.
+
+## Earlier update — 2026-09-08 (historical, superseded above)
 
 This update supersedes the counts, heads, current ownership and cleanup status
 in the dated historical audit below. Scope remains this repository only. The

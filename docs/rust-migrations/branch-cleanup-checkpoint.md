@@ -1,6 +1,22 @@
 # Feature-preserving branch cleanup — 2026-09-06
 
-## Follow-up — 2026-09-08
+## Current follow-up — 2026-09-08
+
+The superseded timeout, body-reference and operation-repair worktrees and their
+three local branch names are now retired. All commits are ancestors of retained
+`fd65082f9424d1fb402cd52d566ffdf2de7581c5` and have additional local archive refs.
+Only 50 verified generated cache files were discarded after clean-status, path,
+ancestry and live-use checks; no source feature or retained capture was lost.
+The [current inventory](marty-ui-worktree-cleanup-inventory-2026-09-07.md) records
+the exact tips, archive names and retention boundaries.
+
+Current counts are eight worktrees and four local branches: active PR #814,
+native body replay, main and crypto. Release checkouts 114–117 remain intact.
+The new native replay is locally tested but awaits hosted qualification; its
+ancestors being consolidated does not mean they are merged into main. This is
+not all-repository cleanup completion or deployment approval.
+
+## Earlier follow-up — 2026-09-08 (historical)
 
 The three detached CI/timing checkouts below and release checkout 113 have now
 been removed after source-equivalence, ignored-cache and live-use checks. All
