@@ -2,11 +2,11 @@
 //! Only canonical status publication is controlled; the mirror uses a local server.
 use async_trait::async_trait;
 use axum::{
-    Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
+    Json, Router,
 };
 use marty_issuance_service::{
     canvas_credentials_status::CanvasCredentialsStatusService,
@@ -21,11 +21,11 @@ use marty_issuance_service::{
     credential_management_postgres::PostgresCredentialManagementRepository,
     integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 
 struct RuntimeState {
@@ -389,12 +389,10 @@ impl ReviewRequests {
         let mut expected = frozen.clone();
         if phase == ReviewResponsePhase::Outcome && expected["status"].as_u64().unwrap() < 400 {
             if let Some(actor) = self.expectations.trusted_actor() {
-                assert!(
-                    expected["body"]
-                        .as_object()
-                        .unwrap()
-                        .contains_key("resolved_by")
-                );
+                assert!(expected["body"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("resolved_by"));
                 assert!(expected["body"]["resolved_by"].is_null());
                 expected["body"]["resolved_by"] = json!(actor);
             }
@@ -584,13 +582,13 @@ async fn review_cases(
                 .unwrap();
             let mut denied = case.clone();
             denied["headers"] = json!({"X-API-Key":"wrong-synthetic-key"});
-            let wrong_key_expected =
-                super::canvas_operations_read_replay::fixtures()[2]["observations"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|case| case["name"] == "wrong_management_key")
-                    .unwrap();
+            let wrong_key_expected = super::canvas_operations_read_replay::fixtures()[2]
+                ["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == "wrong_management_key")
+                .unwrap();
             requests.assert_response(
                 ReviewResponsePhase::AuthenticationDenied,
                 &denied,
@@ -839,13 +837,13 @@ async fn review_cases(
             .unwrap();
         let lifecycle_events = state.events.lock().unwrap().clone();
         // Already-resolved requests must not repeat publication or provider I/O.
-        let duplicate_expected =
-            super::canvas_operations_read_replay::fixtures()[2]["observations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|case| case["name"] == "review_dismiss_again")
-                .unwrap();
+        let duplicate_expected = super::canvas_operations_read_replay::fixtures()[2]
+            ["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "review_dismiss_again")
+            .unwrap();
         requests.assert_response(
             ReviewResponsePhase::DuplicateResolved,
             case,
@@ -933,12 +931,12 @@ async fn run_body(
     depth: bool,
 ) {
     use axum::{
-        body::{Body, to_bytes},
+        body::{to_bytes, Body},
         http::Request,
     };
     use marty_issuance_service::{
-        IssuanceRuntime, credential_management_http::CredentialManagementHttpService,
-        http::router_with_credential_management, transport::TransportPolicy,
+        credential_management_http::CredentialManagementHttpService,
+        http::router_with_credential_management, transport::TransportPolicy, IssuanceRuntime,
     };
     use marty_oid4vci::discovery::StaticDiscoveryDocuments;
     use tower::ServiceExt;
@@ -1161,12 +1159,10 @@ async fn run_body(
                     after["metadata"]["status_sync_attempts"],
                     previous_attempts + 1
                 );
-                assert!(
-                    after["last_error"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("Canvas Credentials status sync failed (HTTP 403): ")
-                );
+                assert!(after["last_error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Canvas Credentials status sync failed (HTTP 403): "));
                 assert_eq!(*state.events.lock().unwrap(), vec!["reinstated"]);
                 let calls = state.calls.lock().unwrap().clone();
                 assert_eq!(calls.len(), 2);
@@ -1398,8 +1394,8 @@ pub(super) async fn run_review_operations_main_with_transport<F>(
     F: FnOnce(u16, reqwest::Client) -> ReviewTransportPorts,
 {
     use super::issuance_process::{
-        ChildGuard, bounded_http_client, isolated_smoke_command, reserve_port,
-        wait_for_health_with_client,
+        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
+        ChildGuard,
     };
     use std::time::Duration;
     let database = url::Url::parse(database_url).unwrap();
@@ -1700,13 +1696,11 @@ mod review_transport_tests {
         wrong_code["details"]["code"] = json!("different_code");
         mutations.push(wrong_code);
         for changed in mutations {
-            assert!(
-                std::panic::catch_unwind(|| assert_review_response(
-                    (409, "application/json".into(), changed),
-                    mip_expected()
-                ))
-                .is_err()
-            );
+            assert!(std::panic::catch_unwind(|| assert_review_response(
+                (409, "application/json".into(), changed),
+                mip_expected()
+            ))
+            .is_err());
         }
     }
 
