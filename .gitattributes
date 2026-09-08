@@ -2,3 +2,4 @@
 *.svg text eol=lf
 *.vtt text eol=lf
 release/stack-lock*.json text eol=lf
+contracts/canvas-worker-body-timeout-oracle.json text eol=lf

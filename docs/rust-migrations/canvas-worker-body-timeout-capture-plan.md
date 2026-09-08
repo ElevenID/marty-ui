@@ -1,15 +1,18 @@
 # Canvas worker response-body timeout capture plan
 
-Status, 2026-09-08: reviewed reference fixture, runner, and explicit capture
-wiring are implemented. No whole-worker body-progress or body-stall capture
-has been performed for this plan. The declared schedules and expected outcomes
-remain source-derived, not frozen observations, passing native replay, or
-permission to change a timeout or deployment consumer.
+Status, 2026-09-08: two independent actual published-worker captures passed all
+six cases at input head `ffb515200c4611bbaa188d84c510074bb4a98c81`. Their full raw
+reports are byte-identical and now retained in the
+[body reference corpus](../../contracts/canvas-worker-body-timeout-oracle.json).
+The ordinary published-reference regeneration gate is registered; its first
+configured run is in progress. Native body replay, runtime body-timeout parity,
+consumer cutover, and deployment remain unqualified.
 
 The implementation is isolated on
 `feat/canvas-worker-body-timeout-reference-v1`, based on `395cab656`. Its isolated
 worktree lets the already-tested delayed-header branch proceed independently.
-Preparing the fixture does not establish any of the worker outcomes below.
+The capture evidence below is separate from local harness validation and from
+the application REST repair on another branch.
 The pre-provenance-fix local checkpoint passed: 76 fixture tests, 190
 runner/contract controls, and the combined 266 tests in 15.87 seconds. Root-owned verification
 passed: full Python suite 2,100 passed / 3 skipped in 155.86 seconds; Rust closed
@@ -18,7 +21,18 @@ build in 5.53 seconds. Independent capture-wiring review found no blockers.
 These totals precede the local capture-source newline canonicalization fix.
 That fix subsequently passed independent review and 199 focused tests (nine
 provenance regressions plus 190 runner controls) in 0.34 seconds, with Ruff
-passing. These are not an actual published-worker capture or native body replay.
+passing. After the separately reviewed shutdown classifier, the final
+pre-capture full Python suite passed 2,215 tests with three explicit skips in
+158.55 seconds. These local checks do not qualify native body replay or cover
+the newly added permanent-regeneration wiring.
+
+The permanent-registration checkpoint passed the complete local Python suite:
+2,234 tests with three explicit skips in 148.61 seconds. The new Rust scenario
+closure control passed after a clean package build in 49.13 seconds; strict
+all-target Clippy passed in 27.38 seconds. A shared-cache metadata collision
+between worktrees was eliminated by rebuilding only generated issuance-package
+artifacts, without changing source or captured inputs. The configured six-case
+raw regeneration is a separate live gate and is not claimed passed here.
 
 This supplements the [provider timeout audit](canvas-worker-provider-timeout-audit-2026-09-07.md),
 [delayed-header capture](canvas-worker-timeout-capture-plan.md), and
@@ -26,6 +40,41 @@ This supplements the [provider timeout audit](canvas-worker-provider-timeout-aud
 fixtures, oracles, tolerances, and cutover gates remain unchanged.
 
 ## Verified authority and existing coverage
+
+### Independent six-case published captures
+
+Final A-v2 passed in 265.68 seconds; independent B-v2 passed in 266.63 seconds.
+Both files are 46,042 bytes with SHA-256
+`e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
+Byte-by-byte equality was checked independently by the capture owner and parent.
+The original files remain under workspace `_codex-tmp` as
+`canvas-body-timeout-capture-a-20260908-v2.json` and
+`canvas-body-timeout-capture-b-20260908-v2.json`; earlier failed evidence is retained.
+
+Each capture used six fresh synthetic databases and the unchanged pinned worker.
+Every case passed exact-owned cleanup. All twelve B PostgreSQL/probe IDs were
+additionally inspected after terminal success and confirmed absent. B used an
+independent copy of the BODY-embedded executable while the shared cache was
+available for unrelated compilation; its source/copy SHA-256 matched
+`e4167523e08ca1855640d9ff649ba5d689dd25e53175c0dc2827aa1d448dc08e`.
+No mounted capture input changed between A and B.
+
+| Observed case | Actual terminal status | HTTPS requests | Body attempts |
+| --- | --- | --- | --- |
+| `application_body_prompt` | `succeeded` | 1 | 2 |
+| `roster_body_prompt` | `succeeded` | 1 | 2 |
+| `application_body_progress` | `succeeded` | 1 | 4 |
+| `roster_body_progress` | `succeeded` | 1 | 4 |
+| `application_body_stall` | `retry` | 1 | 3 |
+| `roster_body_stall` | `retry` | 1 | 3 |
+
+All six retained the declared conservative transition/idle windows, original
+lease checks, and unchanged state through the final attempt, handler join and
+worker interruption. Each shutdown returned `-2` with the source-pinned two
+tracebacks/eleven frames and no unexpected output. The two stalled cases retain
+their distinct application/roster error codes and target metadata; success
+observations retain actual numeric representations and roster counters. These
+are published Python observations, not inferred Rust outcomes.
 
 ### First attempted capture: diagnostic failure, not a reference
 
@@ -277,19 +326,41 @@ including a concurrently created destination, are rejected. An output-write
 failure is not capture success; retain any partial new file as failed evidence
 and choose a different new path for a later run.
 
-This wiring has not yet produced a body capture. A and B must use distinct new
-absolute output paths and the same frozen inputs; raw full-report equality and
-cleanup evidence are required before deriving any frozen corpus.
+This wiring produced the independent A-v2/B-v2 evidence above. Future explicit
+captures still require distinct new absolute output paths and fixed inputs.
+No failed or partial output is a replacement reference.
 
-Before freezing any reference:
+### Permanent published-reference gate
+
+`worker_body_timeout_reference_matches_published_process` is an ordinary test
+enabled by `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1` and required by the published
+contract CI inventory. It shares the raw-report capture/cleanup helper with the
+ignored capture entrypoint, but does not create or overwrite any artifact.
+Before creating a database, it rejects invalid scenario schema/count/name types,
+duplicates, unknown cases and ordering changes against the six frozen cases.
+Each complete report is bounded to one MiB and its observation schema/identity
+is verified before exact-owned cleanup. Only then is the original array framing
+assembled and compared byte-for-byte with the frozen file; diagnostics do not
+dump raw mismatches. Its first configured regeneration has not yet run.
+Independent registration review found no blockers. Nineteen new corpus-integrity
+controls verify the fixed raw hash, LF attribute, case/state distinctions and all
+sixteen recorded local-input hashes; combined with provenance/shutdown checks,
+134 tests passed in 0.35 seconds, with Ruff passing. Compilation and a configured
+regeneration remain separate evidence.
+
+The corpus is the complete original six-report JSON array, not a reserialized
+`observations` wrapper. Access a case through `[index].worker_body_timeout`.
+One exact `.gitattributes` rule pins this corpus to LF so Windows checkout cannot
+rewrite captured bytes. Registration, tests, documentation and this new corpus
+are not mounted capture inputs: no fixture/runner/scenario behavior, installed
+source pin, or recorded local-input hash changes in this registration slice.
+
+Completed capture steps and remaining qualification:
 
 1. Review new scenario/fixture/runner/tests, including real loopback transport,
    schedule failures, incomplete-body handling, extra requests, cancellation,
    bounded output, handler joining, and failure cleanup. Focused review and
-   controls and aggregate validation passed at the pre-provenance-fix checkpoint
-   above; newline canonicalization and the distinct shutdown profile have their
-   separate reviewed focused evidence. Retain updated aggregate validation
-   before capture.
+   controls and updated aggregate validation passed before A-v2 as recorded above.
 2. Register the immutable-image mounts and fresh published-database capture
    entrypoint (implemented above). Verify installed source hashes and dependencies; freeze all
    inputs while a capture is running.
@@ -300,9 +371,11 @@ Before freezing any reference:
    Require exact raw A/B equality and provenance before freezing; no JSON
    numeric reserialization, timestamp surgery, or tolerance changes after the
    fact. A source/fixture repair requires restarting the reviewed A/B sequence.
-5. Add permanent immutable-reference regeneration, native whole-worker replay,
-   and mandatory registration. Only actual Linux execution may qualify native
-   behavior. Existing header/deadline and transport gates remain mandatory.
+5. Permanent immutable-reference regeneration and its mandatory registration
+   are now implemented; verify the new gate against a fresh six-case run.
+   Native whole-worker body replay remains to implement and execute. Only actual
+   Linux execution may qualify native behavior. Existing header/deadline and
+   transport gates remain mandatory.
 
-There is no body oracle, actual-worker pass, runtime repair, deployment change,
-or cutover authorization produced by this plan.
+This reference work produces no runtime repair, native body-parity claim,
+deployment change, Python deletion, or cutover authorization.

@@ -429,6 +429,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "canvas_published_borrowed_database::outer_database_owner_survives_forced_borrower_exit",
         "canvas_published_borrowed_database::borrower_child",
         "worker_timeout_reference_matches_published_process",
+        "worker_body_timeout_reference_matches_published_process",
         "worker_timeout_matches_frozen_published_process",
         "worker_timeout_native_child",
         "worker_mixed_roster_reference_matches_published_process",

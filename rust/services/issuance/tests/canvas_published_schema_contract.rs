@@ -134,6 +134,127 @@ async fn body_capture_rejects_non_matrix_cases_before_resource_creation() {
     }
 }
 
+fn body_timeout_reference_cases(scenarios: &serde_json::Value) -> Result<Vec<&str>, &'static str> {
+    if scenarios["schema"] != "marty.canvas-worker-body-timeout-scenarios/v1" {
+        return Err("unexpected published body scenario schema");
+    }
+    let cases = scenarios["cases"]
+        .as_array()
+        .ok_or("missing published body cases")?;
+    if cases.len() != 6 {
+        return Err("published body reference requires six cases");
+    }
+    let names = cases
+        .iter()
+        .map(|case| {
+            case["name"]
+                .as_str()
+                .ok_or("invalid published body case name")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if names
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != 6
+    {
+        return Err("duplicate published body case");
+    }
+    let frozen: Vec<serde_json::Value> = serde_json::from_slice(include_bytes!(
+        "../../../../contracts/canvas-worker-body-timeout-oracle.json"
+    ))
+    .map_err(|_| "invalid frozen body reference")?;
+    let frozen_names = frozen
+        .iter()
+        .map(|report| {
+            report["worker_body_timeout"]["case"]
+                .as_str()
+                .ok_or("invalid frozen body case")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if names != frozen_names {
+        return Err("published body cases differ from frozen order");
+    }
+    Ok(names)
+}
+
+#[test]
+fn body_timeout_reference_rejects_invalid_scenario_closure() {
+    let original: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-body-timeout-scenarios.json"
+    ))
+    .unwrap();
+    assert_eq!(body_timeout_reference_cases(&original).unwrap().len(), 6);
+    for mutation in [
+        "schema",
+        "missing",
+        "count",
+        "duplicate",
+        "name_type",
+        "unknown",
+        "reordered",
+    ] {
+        let mut invalid = original.clone();
+        match mutation {
+            "schema" => invalid["schema"] = serde_json::json!("other-schema"),
+            "missing" => invalid["cases"] = serde_json::Value::Null,
+            "count" => {
+                invalid["cases"].as_array_mut().unwrap().pop();
+            }
+            "duplicate" => invalid["cases"][1]["name"] = invalid["cases"][0]["name"].clone(),
+            "name_type" => invalid["cases"][0]["name"] = serde_json::json!(1),
+            "unknown" => invalid["cases"][5]["name"] = serde_json::json!("unknown-body-case"),
+            "reordered" => invalid["cases"].as_array_mut().unwrap().swap(0, 1),
+            _ => unreachable!(),
+        }
+        assert!(body_timeout_reference_cases(&invalid).is_err());
+    }
+}
+
+async fn body_timeout_raw_published_reports() -> String {
+    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-body-timeout-scenarios.json"
+    ))
+    .unwrap();
+    // Reject malformed/duplicate selectors before creating any owned resource.
+    let cases = body_timeout_reference_cases(&scenarios).unwrap();
+    let mut raw_reports = Vec::new();
+    for name in cases {
+        let owned =
+            canvas_published_database::PublishedDatabase::start_with_worker_body_timeout(name)
+                .await
+                .unwrap();
+        let raw = owned.raw_probe_report().unwrap();
+        assert!(raw.len() <= 1_048_576, "body capture report exceeds limit");
+        let report: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["worker_body_timeout"]["case"], name);
+        assert_eq!(
+            report["worker_body_timeout"]["schema"],
+            "marty.canvas-worker-body-timeout-observation/v1"
+        );
+        owned.close_verified().unwrap();
+        raw_reports.push(raw);
+        eprintln!("Published body capture and exact-owned cleanup passed: {name}");
+    }
+    // Preserve every original numeric token and complete probe report. This is
+    // only the same array framing used by the independently equal A/B captures.
+    format!("[{}]\n", raw_reports.join(",\n"))
+}
+
+#[tokio::test]
+async fn worker_body_timeout_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let actual = body_timeout_raw_published_reports().await;
+    let expected = include_bytes!("../../../../contracts/canvas-worker-body-timeout-oracle.json");
+    assert!(
+        actual.as_bytes() == expected,
+        "published body reference differs from independently frozen raw reports"
+    );
+}
+
 #[tokio::test]
 #[ignore = "explicit reviewed reference capture only; not a native parity gate"]
 async fn capture_worker_body_timeout_published_process() {
@@ -149,30 +270,11 @@ async fn capture_worker_body_timeout_published_process() {
     );
     assert!(destination.is_absolute(), "capture file must be absolute");
     assert!(!destination.exists(), "capture file must not already exist");
-    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-body-timeout-scenarios.json"
-    ))
-    .unwrap();
-    assert_eq!(scenarios["cases"].as_array().unwrap().len(), 6);
-    let mut raw_reports = Vec::new();
-    for case in scenarios["cases"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let owned =
-            canvas_published_database::PublishedDatabase::start_with_worker_body_timeout(name)
-                .await
-                .unwrap();
-        let raw = owned.raw_probe_report().unwrap();
-        assert!(raw.len() <= 1_048_576, "body capture report exceeds limit");
-        let report: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(report["worker_body_timeout"]["case"], name);
-        owned.close_verified().unwrap();
-        raw_reports.push(raw);
-        eprintln!("Published body capture and exact-owned cleanup passed: {name}");
-    }
+    let raw = body_timeout_raw_published_reports().await;
     // Emit only after all six observations and cleanups pass. create_new also
     // rejects a destination created concurrently; no existing evidence is lost.
     let mut output = std::fs::File::create_new(destination).unwrap();
-    writeln!(output, "[{}]", raw_reports.join(",\n")).unwrap();
+    output.write_all(raw.as_bytes()).unwrap();
     output.sync_all().unwrap();
 }
 
