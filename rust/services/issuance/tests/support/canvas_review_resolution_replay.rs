@@ -1,11 +1,11 @@
 //! All46 actual HTTP/state cases on corrected official schema. External
 //! lifecycle effects are controlled exactly as in the published oracle.
 use super::canvas_operations_read_replay::{
-    fixtures, generated_ids, insert_review, request_case, seed, timestamps,
+    fixtures, generated_ids, insert_review, request_case, runtime_router, seed, timestamps,
 };
 use async_trait::async_trait;
 use marty_issuance_service::{
-    canvas_operations::{candidate_router, CanvasOperationsService, OperationsError},
+    canvas_operations::{CanvasOperationsService, OperationsError},
     canvas_review_resolution::CanvasReviewLifecycle,
     credential_management::CredentialLifecycleAction,
 };
@@ -122,7 +122,7 @@ async fn replay_cases(
                 .await
                 .unwrap();
         }
-        let router = candidate_router(
+        let router = runtime_router(
             CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
                 .with_job_operations(
                     case["rollout"].as_bool().unwrap_or(true),

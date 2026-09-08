@@ -492,6 +492,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'status_runtime_composes_review_resolution_with_configured_http: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
         in published
     )

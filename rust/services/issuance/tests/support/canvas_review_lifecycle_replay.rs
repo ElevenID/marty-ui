@@ -1,7 +1,7 @@
 //! Real Rust review + credential service + PostgreSQL replay. Only external
 //! status publication and mirror ports are controlled, matching published Python.
 use super::canvas_operations_read_replay::{
-    fixtures, insert_review, request_case, seed, timestamps,
+    fixtures, insert_review, request_case, runtime_router, seed, timestamps,
 };
 use async_trait::async_trait;
 use marty_issuance_service::{
@@ -10,7 +10,7 @@ use marty_issuance_service::{
 };
 use marty_issuance_service::{
     canvas_lifecycle_delivery::{CanvasLifecycleCredential, CanvasLifecycleStatusProvider},
-    canvas_operations::{candidate_router, CanvasOperationsService},
+    canvas_operations::CanvasOperationsService,
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
         CredentialManagementPortError, CredentialManagementService, CredentialStatusPublisher,
@@ -142,7 +142,7 @@ pub async fn replay(pool: &PgPool, expected: &Value, use_candidate: bool) {
     }
     let service =
         CredentialManagementService::new(Arc::new(repository), ports.clone(), ports.clone());
-    let router = candidate_router(
+    let router = runtime_router(
         CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
             .with_review_operations(Some(Arc::new(service))),
     );

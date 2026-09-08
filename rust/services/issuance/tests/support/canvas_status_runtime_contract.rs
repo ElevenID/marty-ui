@@ -35,6 +35,20 @@ struct RuntimeState {
     remove_delivery_before_response: AtomicBool,
     responses: Responses,
     response_override: Mutex<Option<Value>>,
+    observe_review_claim: AtomicBool,
+}
+
+impl RuntimeState {
+    async fn check_review_claim(&self, action: &str) {
+        if self.observe_review_claim.load(Ordering::SeqCst) {
+            let active: bool = sqlx::query_scalar("SELECT status='open' AND resolution_claim_token IS NOT NULL AND resolution_claim_action=$1 FROM issuance_service.evidence_policy_reviews WHERE id='review-lifecycle' AND organization_id='org-review'")
+                .bind(action).fetch_one(&self.pool).await.unwrap();
+            assert!(
+                active,
+                "review claim must span publication and real HTTP mirror"
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -80,6 +94,7 @@ impl CredentialStatusPublisher for RuntimeState {
         action: CredentialLifecycleAction,
         _: Option<&str>,
     ) -> Result<(), CredentialManagementPortError> {
+        self.check_review_claim(action.as_str()).await;
         self.calls.lock().unwrap().push(json!({"port":"publication","action":action.as_str(),"status":credential.status.as_str()}));
         Ok(())
     }
@@ -97,6 +112,9 @@ async fn mirror(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> axum::response::Response {
+    state
+        .check_review_claim(body["lifecycle_action"].as_str().unwrap())
+        .await;
     let status: String = sqlx::query_scalar(
         "SELECT status FROM issuance_service.issued_credentials WHERE id='credential-review'",
     )
@@ -177,6 +195,229 @@ impl Drop for AbortServer {
 
 pub async fn run(pool: &PgPool) {
     run_scenario(pool, Responses::Baseline).await;
+}
+
+/// Compose two independently frozen boundaries: review resolution and configured
+/// provider HTTP. This is not a new captured whole-route Python observation.
+pub async fn run_review_operations(pool: &PgPool) {
+    use super::canvas_operations_read_replay::{
+        insert_review, request_case, runtime_router, timestamps,
+    };
+    use marty_issuance_service::canvas_operations::CanvasOperationsService;
+
+    // The SQL comes only from this compiled-in frozen corpus. Retain its static
+    // lifetime, as in the existing lifecycle replay, for SQLx's safe-string API.
+    static SCENARIOS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let scenarios = SCENARIOS.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-lifecycle-scenarios.json"
+        ))
+        .unwrap()
+    });
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-review-lifecycle-oracle.json"
+    ))
+    .unwrap();
+    let provider_cases: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-status-provider-scenarios.json"
+    ))
+    .unwrap();
+    let provider_frozen = super::canvas_status_provider_replay::frozen();
+    let refusal_name = "utf-16_bom_403";
+    let refusal = provider_cases["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == refusal_name)
+        .unwrap();
+    let refusal_expected = provider_frozen["observations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == refusal_name)
+        .unwrap();
+    assert_eq!(refusal_expected["error_class"], "RuntimeError");
+    let RuntimeFixture {
+        state,
+        service,
+        stop,
+        server,
+        _cleanup,
+        ..
+    } = start_runtime(pool, Responses::Baseline).await;
+    state.observe_review_claim.store(true, Ordering::SeqCst);
+    let router = runtime_router(
+        CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
+            .with_review_operations(Some(Arc::new(service))),
+    );
+    let preserved_sql = "SELECT jsonb_build_object('transactions',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t),'applications',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM issuance_service.applications a),'other_credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c WHERE id<>'credential-review'),'other_deliveries',(SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM issuance_service.credential_delivery_records d WHERE id<>'delivery-provider'))";
+    let preserved: Value = sqlx::query_scalar(preserved_sql)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    for name in ["suspend_delivered", "revoke_delivered", "mirror_failure"] {
+        let case = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let expected = frozen["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let action = case["body"]["action"].as_str().unwrap();
+        sqlx::query("DELETE FROM issuance_service.evidence_policy_reviews WHERE id='review-lifecycle' AND organization_id='org-review'").execute(pool).await.unwrap();
+        insert_review(pool, "review-lifecycle").await;
+        sqlx::query("UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review' AND organization_id='org-review'").execute(pool).await.unwrap();
+        sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,last_error=NULL WHERE id='delivery-provider' AND organization_id='org-review'")
+            .bind(json!({"canvas_program_binding_id":"binding-review","unrelated_marker":44})).execute(pool).await.unwrap();
+        let credential_before = credential_row(pool).await;
+        let delivery_before = delivery_row(pool).await;
+        let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'").fetch_one(pool).await.unwrap();
+        *state.response_override.lock().unwrap() =
+            (name == "mirror_failure").then(|| refusal.clone());
+        state.calls.lock().unwrap().clear();
+        state.events.lock().unwrap().clear();
+
+        let (status, content_type, mut body) = request_case(&router, case).await;
+        timestamps(&mut body);
+        assert_eq!(json!(status), expected["status"], "{name}");
+        assert_eq!(content_type, expected["content_type"]);
+        assert_eq!(body, expected["body"], "{name} review response");
+        let mut snapshot: Value = sqlx::query_scalar(scenarios["snapshot_sql"].as_str().unwrap())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        timestamps(&mut snapshot);
+        assert_eq!(snapshot["credential"], expected["snapshot"]["credential"]);
+        assert_eq!(snapshot["review"], expected["snapshot"]["review"]);
+        assert_eq!(snapshot["resolved_events"], event_count + 1);
+        let credential_after = credential_row(pool).await;
+        for (key, value) in credential_before.as_object().unwrap() {
+            if !expected["snapshot"]["credential"]
+                .as_object()
+                .unwrap()
+                .contains_key(key)
+            {
+                assert_eq!(
+                    &credential_after[key], value,
+                    "{name} preserves credential {key}"
+                );
+            }
+        }
+        let delivery = delivery_row(pool).await;
+        for (key, value) in delivery_before.as_object().unwrap() {
+            if !["metadata", "last_error", "updated_at", "canvas_account_id"]
+                .contains(&key.as_str())
+            {
+                assert_eq!(&delivery[key], value, "{name} preserves delivery {key}");
+            }
+        }
+        assert_eq!(delivery["canvas_account_id"], "account");
+        assert_eq!(delivery["metadata"]["unrelated_marker"], 44);
+        assert_eq!(
+            delivery["metadata"]["canvas_program_binding_id"],
+            "binding-review"
+        );
+        assert_eq!(
+            delivery["metadata"]["canvas_platform_id"],
+            "platform-review"
+        );
+        assert_eq!(delivery["metadata"]["status_sync_attempts"], 1);
+        assert_eq!(delivery["metadata"]["last_status_sync_action"], action);
+        assert_eq!(
+            delivery["metadata"]["last_synced_credential_status"],
+            snapshot["credential"]["status"]
+        );
+        if name == "mirror_failure" {
+            assert_eq!(delivery["last_error"], refusal_expected["error"]);
+            assert_eq!(
+                delivery["metadata"]["last_status_sync_error"],
+                refusal_expected["error"]
+            );
+            assert!(delivery["metadata"]["status_sync_response"].is_null());
+            chrono::DateTime::parse_from_rfc3339(
+                delivery["metadata"]["last_status_sync_error_at"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+        } else {
+            assert!(delivery["last_error"].is_null());
+            assert!(delivery["metadata"]["last_status_sync_error"].is_null());
+            assert_eq!(
+                delivery["metadata"]["status_sync_response"],
+                json!({"accepted":true})
+            );
+            assert_eq!(
+                delivery["metadata"]["status_sync_request_id"],
+                "synthetic-runtime-request"
+            );
+        }
+        let calls = state.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2, "one publication and one actual HTTP mirror");
+        assert_eq!(
+            calls[0],
+            json!({"port":"publication","action":action,"status":"active"})
+        );
+        assert_eq!(calls[1]["port"], "mirror");
+        assert_eq!(
+            calls[1]["persisted_status"],
+            snapshot["credential"]["status"]
+        );
+        assert_eq!(
+            calls[1]["body"]["credential"]["status"],
+            snapshot["credential"]["status"]
+        );
+        assert_eq!(calls[1]["body"]["lifecycle_action"], action);
+        assert_eq!(
+            calls[1]["body"]["credential"]["reason"],
+            case["body"]["note"]
+        );
+        assert_eq!(
+            calls[1]["authorization"],
+            "Bearer synthetic-runtime-tenant-token"
+        );
+        assert_eq!(
+            *state.events.lock().unwrap(),
+            [snapshot["credential"]["status"].as_str().unwrap()]
+        );
+        let used: bool = sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
+        assert!(used);
+        // Retain raw review/event rows too: a duplicate must not refresh a
+        // timestamp, append a resolution event, or emit a lifecycle event.
+        let duplicate_preserved_sql = "SELECT jsonb_build_object('reviews',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM issuance_service.evidence_policy_reviews r),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM issuance_service.issuance_events e))";
+        let duplicate_preserved: Value = sqlx::query_scalar(duplicate_preserved_sql)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let lifecycle_events = state.events.lock().unwrap().clone();
+        // Already-resolved requests must not repeat publication or provider I/O.
+        assert_eq!(request_case(&router, case).await.0, 409);
+        assert_eq!(*state.calls.lock().unwrap(), calls);
+        assert_eq!(*state.events.lock().unwrap(), lifecycle_events);
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>(duplicate_preserved_sql)
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+            duplicate_preserved
+        );
+        assert_eq!(credential_row(pool).await, credential_after);
+        assert_eq!(delivery_row(pool).await, delivery);
+        assert_eq!(
+            sqlx::query_scalar::<_, Value>(preserved_sql)
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+            preserved
+        );
+    }
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
 }
 
 pub async fn run_unicode(pool: &PgPool) {
@@ -571,6 +812,7 @@ async fn start_runtime(pool: &PgPool, responses: Responses) -> RuntimeFixture {
         remove_delivery_before_response: AtomicBool::new(false),
         responses,
         response_override: Mutex::new(None),
+        observe_review_claim: AtomicBool::new(false),
     });
     let application = Router::new()
         .route("/status", post(mirror))

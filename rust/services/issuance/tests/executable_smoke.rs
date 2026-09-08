@@ -1,6 +1,6 @@
 use std::{
     net::TcpListener,
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     time::Duration,
 };
 
@@ -77,6 +77,10 @@ fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
 
 async fn wait_for_health(port: u16) -> Option<Value> {
     let client = reqwest::Client::new();
+    wait_for_health_with_client(port, &client).await
+}
+
+async fn wait_for_health_with_client(port: u16, client: &reqwest::Client) -> Option<Value> {
     for _ in 0..50 {
         if let Ok(response) = client
             .get(format!("http://127.0.0.1:{port}/health"))
@@ -236,4 +240,138 @@ async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
         Some(json!({"status":"healthy", "service":"issuance-service"}))
     );
     drop(grpc_reservation);
+}
+
+/// Exercise main -> CanvasServices.with_operations -> router_with_all_services.
+/// Authentication must finish before database access; this does not qualify the
+/// authenticated lifecycle, provider effects, or gateway cutover.
+#[tokio::test]
+async fn executable_canvas_operations_preserve_auth_and_common_transport() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-canvas-operations.json"
+    ))
+    .unwrap();
+    let routes = contract["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 8);
+    let (http_reservation, port) = reserve_port();
+    let (_grpc_reservation, grpc_port) = reserve_port();
+    // No PostgreSQL instance is needed or contacted. This owned listener never
+    // accepts connections, and its empty accept queue is asserted after exit.
+    let (database_denied, database_port) = reserve_port();
+    database_denied.set_nonblocking(true).unwrap();
+    let mut command = smoke_command(port, grpc_port);
+    // Retain only the existing launcher's explicit synthetic settings, not the
+    // ambient database, *_FILE secrets, proxies, or service credentials.
+    let explicit: Vec<_> = command
+        .get_envs()
+        .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+        .collect();
+    command
+        .env_clear()
+        .envs(explicit)
+        .env("ISSUANCE_GRPC_ENABLED", "false")
+        .env("ISSUANCE_API_KEY", "synthetic-process-operations-key")
+        .env(
+            "DATABASE_URL",
+            format!("postgres://synthetic@127.0.0.1:{database_port}/operations_auth_test"),
+        )
+        .env("RUST_LOG", "error")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", system_root);
+    }
+    drop(http_reservation);
+    let child = ChildGuard(command.spawn().expect("start actual issuance process"));
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_health_with_client(port, &client)
+        )
+        .await
+        .expect("bounded native process readiness"),
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+    let base = format!("http://127.0.0.1:{port}");
+    let mut covered = std::collections::BTreeSet::new();
+    for (index, route) in routes.iter().enumerate() {
+        let method = route["method"].as_str().unwrap();
+        let path = route["path"]
+            .as_str()
+            .unwrap()
+            .replace("{application_id}", "synthetic-application")
+            .replace("{job_id}", "synthetic-job")
+            .replace("{review_id}", "synthetic-review");
+        assert!(!path.contains(['{', '}']));
+        assert!(covered.insert((method.to_owned(), path.clone())));
+        for wrong_key in [false, true] {
+            let request_id = format!("operations-auth-{index}-{wrong_key}");
+            let mut request = client
+                .request(
+                    method.parse().unwrap(),
+                    format!("{base}{}{path}", contract["route_prefix"].as_str().unwrap()),
+                )
+                .header("origin", "https://wallet.example")
+                .header("x-request-id", &request_id)
+                .header("x-organization-id", "synthetic-organization");
+            if method == "POST" {
+                // Valid JSON avoids exercising the separate pre-auth syntax
+                // error path on review resolution.
+                request = request.json(&json!({"action":"dismiss"}));
+            }
+            if wrong_key {
+                request = request.header("x-api-key", "synthetic-wrong-key");
+            }
+            let response = request.send().await.expect("owned process auth response");
+            assert_eq!(response.status(), 401, "route {index}");
+            assert_eq!(response.headers()["x-request-id"], request_id.as_str());
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                "https://wallet.example"
+            );
+            assert_eq!(
+                response.headers()["access-control-allow-credentials"],
+                "true"
+            );
+            assert_eq!(response.headers()["vary"], "Origin");
+            assert_eq!(
+                response.json::<Value>().await.unwrap(),
+                json!({"detail": if wrong_key { "Invalid API Key" } else { "X-API-Key header is missing" }})
+            );
+        }
+    }
+    assert_eq!(covered.len(), 8);
+    let missing = client
+        .get(format!(
+            "{base}/v1/integrations/canvas/synthetic-unregistered-route"
+        ))
+        .header("x-api-key", "synthetic-process-operations-key")
+        .header("origin", "https://wallet.example")
+        .header("x-request-id", "operations-negative-route")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(
+        missing.headers()["x-request-id"],
+        "operations-negative-route"
+    );
+    assert_eq!(
+        missing.headers()["access-control-allow-origin"],
+        "https://wallet.example"
+    );
+    drop(child);
+    assert_eq!(
+        database_denied.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "auth-only process must not contact PostgreSQL"
+    );
 }

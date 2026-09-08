@@ -1,4 +1,5 @@
-//! Canvas operations candidate. Not registered in the production router yet.
+//! Canvas operations handlers with explicit native runtime composition.
+//! Gateway routing and consumer cutover remain separately qualified.
 //!
 //! Read projections never serialize raw rows. Filtering deliberately follows
 //! the published 500-row pre-filter window rather than pushing every filter
@@ -35,6 +36,16 @@ pub struct CanvasOperationsService {
     security: ManagementSecurity,
     jobs: Option<PostgresCanvasLtiBootstrapSyncEnqueuer>,
     reviews: Option<crate::canvas_review_resolution::CanvasReviewResolver>,
+}
+
+impl std::fmt::Debug for CanvasOperationsService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasOperationsService")
+            .field("job_operations_configured", &self.jobs.is_some())
+            .field("review_operations_configured", &self.reviews.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CanvasOperationsService {
@@ -322,7 +333,8 @@ impl CanvasOperationsService {
     }
 }
 
-/// Deliberately separate from the live issuance/gateway route registration.
+/// Shared handlers for isolated replay and explicit native runtime composition.
+/// This function does not alter the gateway's native route allowlist.
 pub fn candidate_router(service: CanvasOperationsService) -> Router {
     Router::new()
         .route(
@@ -911,7 +923,13 @@ mod tests {
 
     #[tokio::test]
     async fn every_frozen_operation_is_mounted_and_rejects_unauthenticated_access() {
+        assert_operations_transport(false).await;
+        assert_operations_transport(true).await;
+    }
+
+    async fn assert_operations_transport(composed: bool) {
         use axum::{body::Body, http::Request};
+        use marty_oid4vci::discovery::StaticDiscoveryDocuments;
         use tower::ServiceExt;
 
         let contract: Value = serde_json::from_str(include_str!(
@@ -923,10 +941,25 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
             .unwrap();
-        let router = candidate_router(CanvasOperationsService::new(
-            pool.clone(),
-            Some("synthetic-operations-key"),
-        ));
+        let service = CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"));
+        let config =
+            crate::IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+                .unwrap();
+        let runtime = crate::IssuanceRuntime::new(&config).unwrap();
+        let documents =
+            StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name);
+        let router = if composed {
+            crate::http::router_with_canvas_operations(
+                runtime.state(),
+                documents.clone(),
+                crate::transport::TransportPolicy::new([
+                    "https://console.example.invalid".to_owned()
+                ]),
+                service,
+            )
+        } else {
+            candidate_router(service)
+        };
         for route in routes {
             let path = format!(
                 "{}{}",
@@ -947,6 +980,8 @@ mod tests {
                 let mut request = Request::builder()
                     .method(route["method"].as_str().unwrap())
                     .uri(&path)
+                    .header("origin", "https://console.example.invalid")
+                    .header("x-request-id", "synthetic-operation-request")
                     .header("content-type", "application/json");
                 if let Some(key) = key {
                     request = request.header("x-api-key", key);
@@ -961,6 +996,74 @@ mod tests {
                 .expect("management rejection must not wait for database access")
                 .unwrap();
                 assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+                if composed {
+                    assert_eq!(
+                        response.headers()["x-request-id"],
+                        "synthetic-operation-request"
+                    );
+                    assert_eq!(
+                        response.headers()["access-control-allow-origin"],
+                        "https://console.example.invalid"
+                    );
+                    assert_eq!(
+                        response.headers()["access-control-allow-credentials"],
+                        "true"
+                    );
+                }
+            }
+            if composed {
+                for (origin, status) in [
+                    ("https://console.example.invalid", StatusCode::OK),
+                    ("https://foreign.example.invalid", StatusCode::BAD_REQUEST),
+                ] {
+                    let response = router
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .method("OPTIONS")
+                                .uri(&path)
+                                .header("origin", origin)
+                                .header(
+                                    "access-control-request-method",
+                                    route["method"].as_str().unwrap(),
+                                )
+                                .header(
+                                    "access-control-request-headers",
+                                    "x-api-key,x-organization-id",
+                                )
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), status, "{path}");
+                    assert!(response.headers().contains_key("x-request-id"));
+                    assert_eq!(
+                        response
+                            .headers()
+                            .contains_key("access-control-allow-origin"),
+                        status == StatusCode::OK
+                    );
+                }
+                let response = crate::http::router(
+                    runtime.state(),
+                    documents.clone(),
+                    crate::transport::TransportPolicy::new(std::iter::empty::<String>()),
+                )
+                .oneshot(
+                    Request::builder()
+                        .method(route["method"].as_str().unwrap())
+                        .uri(&path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NOT_FOUND,
+                    "operations must remain optional: {path}"
+                );
             }
         }
         // Negative route control: a missing registration must not look like a
