@@ -4,10 +4,15 @@ set -euo pipefail
 # A narrow early diagnostic gate supplements, never replaces, the full suite.
 # Validate before any image/network work; arbitrary test filters are forbidden.
 mode="${1-full}"
-if (( $# > 1 )) || [[ "$mode" != full && "$mode" != mixed-roster-preflight ]]; then
-  echo "Usage: run-published-canvas-contracts.sh [full|mixed-roster-preflight]" >&2
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|timeout-preflight|mixed-roster-preflight]" >&2
   exit 2
 fi
+preflight_target=""
+case "$mode" in
+  timeout-preflight) preflight_target=worker_timeout_matches_frozen_published_process ;;
+  mixed-roster-preflight) preflight_target=worker_mixed_roster_matches_frozen_published_process ;;
+esac
 # Reuse the frozen oracle pins, not mutable release tags. The test
 # owns a separate tmpfs database; it never receives a deployment URL.
 mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' ../contracts/canvas-worker-consumer-range-oracle.json)
@@ -23,9 +28,9 @@ mapfile -t executables < <(jq -r '
   | select(.executable != null) | .executable
 ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
 [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
-if [[ "$mode" == mixed-roster-preflight ]]; then
-  "${executables[0]}" --list | grep -Fx 'worker_mixed_roster_matches_frozen_published_process: test'
-  "${executables[0]}" worker_mixed_roster_matches_frozen_published_process --exact --nocapture --test-threads=1
+if [[ -n "$preflight_target" ]]; then
+  "${executables[0]}" --list | grep -Fx "$preflight_target: test"
+  "${executables[0]}" "$preflight_target" --exact --nocapture --test-threads=1
   exit 0
 fi
 "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'

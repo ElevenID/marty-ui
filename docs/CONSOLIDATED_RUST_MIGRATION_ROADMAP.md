@@ -71,10 +71,21 @@ The fixed timing bounds remain unchanged. The combined focused suite now passes
 Independent parallel review identified a forced-coordinator-exit cleanup gap;
 the repair now retains database ownership in the outer Rust test and uses a
 verified, non-reaping Linux process-group owner. The actual forced-borrower
-database regression passed in 5.55s; real Linux child/grandchild containment
-tests remain a landing gate. The full local Python run passed 1,691 tests with
-three explicit skips in 131.91s before a final CI dependency check was added;
-all issuance Rust tests and strict Clippy passed. A separate
+database regression passed in 5.55s. At pushed head
+`f0b60073093a89567e43a6fd6452100b2ddc67ec`, hosted Release checks passed **1,694
+tests with one existing skip**, including both actual Linux child/grandchild
+containment cases. Rust Images and Rust CodeQL succeeded. The larger runtime
+job in [CI run 34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
+was still running its isolated phase at 2026-09-08 05:33 UTC; these scoped successes
+do not qualify native deadline replay or the full updated worker suite.
+
+The separate local commit `c17f1e1fa66af86cbd4392c0921540e1d260ef57` adds the
+[four-case native timeout replay](rust-migrations/canvas-worker-native-timeout-replay.md)
+with shared database, process and output owners. Its full local Python suite
+passed **1,760 tests with three explicit skips** in 116.55s; compiled Rust
+controls and strict Clippy passed. Actual native timeout execution remains
+pending, and the predicted application 15s-versus-20s mismatch has not been
+observed by that replay. No runtime timeout policy was changed. A separate
 [clock audit](rust-migrations/canvas-worker-local-clock-audit-2026-09-07.md)
 reproduced an environment-level wall-clock step without worker code. Actual
 Linux deadline qualification and native timeout replay remain open. These

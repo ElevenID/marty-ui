@@ -109,8 +109,8 @@ The earlier freeze/fixture/CI checks passed 194 tests in 10.56s; the new
 driver's 58 focused protocol/privacy/cleanup tests passed in 0.46s. Independent
 review subsequently identified an additional forced-coordinator-exit cleanup
 gap: direct-child reaping does not establish cleanup of its worker and database.
-The repair is now implemented with the ownership boundary below; its actual
-Linux process-group cases remain a landing gate. Native
+The repair is now implemented with the ownership boundary below; both actual
+Linux process-group cases passed hosted Release checks at `f0b600730`. Native
 whole-worker deadline replay is implemented locally but remains
 **unqualified** pending actual Linux replay and the full updated suite.
 Failed preliminary and diagnostic runs supply neither frozen
@@ -140,14 +140,26 @@ negative controls also pass. The Windows driver/containment suite passed 97
 controls; two real Linux child/grandchild tests remain explicitly skipped there.
 Those tests retain an unrelated process and prove both owned reaps, not merely
 that processes became zombies. The existing pinned local image has no pytest;
-no packages were installed to change that reference image. Mandatory Linux CI
-must execute these cases before process containment is qualified.
+no packages were installed to change that reference image. Hosted Release
+checks at `f0b60073093a89567e43a6fd6452100b2ddc67ec` subsequently passed **1,694
+tests with one existing skip**, including both real Linux cases. This proves
+the stated surviving-controller containment boundary, not whole-worker parity.
+Rust Images and Rust CodeQL succeeded at that head. The larger runtime job
+in [CI run 34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
+was still running its isolated phase at 2026-09-08 05:33 UTC; its result remains pending.
 
 The full local Python suite passed 1,691 tests with three explicit skips in
 131.91s before the final CI dependency regression was added. All issuance Rust
 tests (including 347 unit and five documentation tests) and strict Clippy passed;
 the unconfigured 137-entry published-schema run is **not** database qualification.
 The release-test CI job now explicitly installs SQLAlchemy for fixture imports.
+
+The separate local commit `c17f1e1fa66af86cbd4392c0921540e1d260ef57` reuses these
+owners for the [four-case native timeout replay](canvas-worker-native-timeout-replay.md).
+Its local Python suite passed 1,760 tests with three explicit skips in 116.55s,
+with compiled Rust controls and strict Clippy also passing. No actual native
+timeout replay has run, and no runtime timeout policy or frozen expectation was
+changed. Those local checks do not close this deadline qualification gate.
 
 A separate [local clock audit](canvas-worker-local-clock-audit-2026-09-07.md)
 reproduced a roughly -0.945s wall-clock step without importing worker code.

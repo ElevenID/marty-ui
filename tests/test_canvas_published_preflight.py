@@ -17,6 +17,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 TARGET = "worker_mixed_roster_matches_frozen_published_process"
+TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
+PREFLIGHTS = [("mixed-roster-preflight", TARGET), ("timeout-preflight", TIMEOUT_TARGET)]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
 PINS = [
     f"registry.invalid/{name}@sha256:{letter * 64}"
@@ -28,8 +30,8 @@ def required_registrations():
     # The existing CI-workflow suite pins the mandatory inventory. Here derive
     # it to exercise every current check without copying another long roster.
     names = re.findall(r"grep -Fx '([^']+): test'", SCRIPT.read_text(encoding="utf-8"))
-    assert names and TARGET in names
-    # The early target is repeated in the full roster; keep its full-mode place.
+    assert names and all(target in names for _, target in PREFLIGHTS)
+    # Keep each mandatory registration's full-mode place without copying it.
     return [name for index, name in enumerate(names) if name not in names[index + 1 :]]
 
 
@@ -164,19 +166,18 @@ def test_default_and_explicit_full_keep_all_registrations_and_unfiltered_run(
     ]
 
 
+@pytest.mark.parametrize("mode,target", PREFLIGHTS)
 def test_preflight_requires_only_exact_target_and_forces_configured_serial_execution(
-    shell_case,
+    shell_case, mode, target
 ):
-    result, calls = shell_case(
-        ["mixed-roster-preflight"], registrations=[f"{TARGET}: test"]
-    )
+    result, calls = shell_case([mode], registrations=[f"{target}: test"])
     assert result.returncode == 0, result.stderr
     assert [call for call in calls if call[0] == "grep"] == [
-        ["grep", "-Fx", f"{TARGET}: test"]
+        ["grep", "-Fx", f"{target}: test"]
     ]
     assert [call for call in calls if call[0] == "child"] == [
         ["child", "1", "--list"],
-        ["child", "1", TARGET, "--exact", "--nocapture", "--test-threads=1"],
+        ["child", "1", target, "--exact", "--nocapture", "--test-threads=1"],
     ]
 
 
@@ -187,8 +188,12 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
         ["unknown"],
         ["--help"],
         [TARGET],
+        [TIMEOUT_TARGET],
         ["full", "extra"],
         ["mixed-roster-preflight", "extra"],
+        ["timeout-preflight", "extra"],
+        ["timeout-preflight", ""],
+        ["timeout-preflight; docker ps"],
     ],
 )
 def test_invalid_mode_or_extra_argument_fails_before_any_external_work(
@@ -199,13 +204,21 @@ def test_invalid_mode_or_extra_argument_fails_before_any_external_work(
     assert calls == []
 
 
+@pytest.mark.parametrize("mode,target", PREFLIGHTS)
 @pytest.mark.parametrize(
-    "registration", ["", TARGET, f"prefix::{TARGET}: test", f"{TARGET}_suffix: test"]
+    "shape", ["missing", "bare", "prefix", "suffix", "other-preflight"]
 )
 def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
-    shell_case, registration
+    shell_case, mode, target, shape
 ):
-    result, calls = shell_case(["mixed-roster-preflight"], registrations=[registration])
+    registration = {
+        "missing": "",
+        "bare": target,
+        "prefix": f"prefix::{target}: test",
+        "suffix": f"{target}_suffix: test",
+        "other-preflight": f"{TIMEOUT_TARGET if target == TARGET else TARGET}: test",
+    }[shape]
+    result, calls = shell_case([mode], registrations=[registration])
     assert result.returncode != 0
     assert [call for call in calls if call[0] == "child"] == [["child", "1", "--list"]]
 
@@ -222,10 +235,11 @@ def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
         "execute",
     ],
 )
+@pytest.mark.parametrize("mode,target", PREFLIGHTS)
 def test_preflight_propagates_preparation_listing_and_test_failures(
-    shell_case, failure
+    shell_case, mode, target, failure
 ):
-    result, calls = shell_case(["mixed-roster-preflight"], failure=failure)
+    result, calls = shell_case([mode], failure=failure)
     assert result.returncode != 0
     children = [call for call in calls if call[0] == "child"]
     expected = []
@@ -233,7 +247,7 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         expected.append(["child", "1", "--list"])
     if failure == "execute":
         expected.append(
-            ["child", "1", TARGET, "--exact", "--nocapture", "--test-threads=1"]
+            ["child", "1", target, "--exact", "--nocapture", "--test-threads=1"]
         )
         assert result.returncode == 23
     assert children == expected
@@ -244,6 +258,7 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
     [
         "heartbeat_readiness_matches_published_python",
         TARGET,
+        TIMEOUT_TARGET,
         "worker_provider_recovery_first_native_child",
     ],
 )
@@ -264,17 +279,24 @@ def test_workflow_runs_preflight_immediately_after_executable_preparation_and_ke
     steps = workflow["jobs"]["test-rust-services"]["steps"]
     names = [step.get("name") for step in steps]
     prepare = names.index("Prepare database contract executables")
+    timeout = names.index("Preflight timeout published worker parity")
     preflight = names.index("Preflight mixed-roster published worker parity")
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
-    assert prepare + 1 == preflight < databases < full
+    assert prepare + 1 == timeout
+    assert timeout + 1 == preflight < databases < full
+    assert steps[timeout]["working-directory"] == "rust"
+    assert steps[timeout]["shell"] == "bash"
+    assert steps[timeout]["run"] == (
+        "bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight"
+    )
     assert steps[preflight]["working-directory"] == "rust"
     assert (
         steps[preflight]["run"]
         == "bash ../scripts/ci/run-published-canvas-contracts.sh mixed-roster-preflight"
     )
     assert steps[full]["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
-    for index in (preflight, full):
+    for index in (timeout, preflight, full):
         assert "if" not in steps[index]
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]
