@@ -728,6 +728,20 @@
     ],
     "text_rules": [
       {
+        "id": "no-retired-python-org-client-setup",
+        "glob": "services/common/di.py",
+        "pattern": "\\A",
+        "expected_matches": {},
+        "reason": "Unused helper retired after service migration: no repository callers or runtime image copy. Retained common adapters and their tests are not removed."
+      },
+      {
+        "id": "no-retired-python-metrics-bootstrap",
+        "glob": "services/common/metrics.py",
+        "pattern": "\\A",
+        "expected_matches": {},
+        "reason": "Unused helper retired: no repository callers or runtime image copy. This is unreachable-code cleanup, not a claim of Python/Rust telemetry parity."
+      },
+      {
         "id": "unsigned-oidc-decoder-baseline",
         "glob": "services/auth/**/*.py",
         "pattern": "(?<![A-Za-z0-9_])(?:_?decode_jwt_claims|parse_id_token)(?![A-Za-z0-9_])",

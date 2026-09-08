@@ -11,6 +11,33 @@ def test_current_repository_matches_rust_ownership_manifest() -> None:
     assert scan_repository(REPO_ROOT) == []
 
 
+def test_retired_helpers_cannot_return_even_as_empty_files(tmp_path: Path) -> None:
+    manifest = json.loads(
+        (REPO_ROOT / "docs" / "rust-migration-ownership.json").read_text(encoding="utf-8")
+    )
+    manifest["guardrails"]["approved_imports"] = []
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source_root = tmp_path / "services" / "common"
+    source_root.mkdir(parents=True)
+    # The guard must not ban the still-retained common adapter namespace.
+    (source_root / "retained_adapter.py").write_text("VALUE = 1\n", encoding="utf-8")
+    assert scan_repository(tmp_path, manifest_path) == []
+    for filename, rule in (
+        ("di.py", "no-retired-python-org-client-setup"),
+        ("metrics.py", "no-retired-python-metrics-bootstrap"),
+    ):
+        source = source_root / filename
+        for contents in ("", "def legacy_helper(): return True\n"):
+            source.write_text(contents, encoding="utf-8")
+            assert scan_repository(tmp_path, manifest_path) == [
+                f"text guard {rule} changed: expected {{}}, found "
+                f"{{'services/common/{filename}': 1}}"
+            ]
+        source.unlink()
+        assert scan_repository(tmp_path, manifest_path) == []
+
+
 def test_guard_rejects_new_python_crypto_import(tmp_path: Path) -> None:
     manifest = json.loads(
         (REPO_ROOT / "docs" / "rust-migration-ownership.json").read_text(encoding="utf-8")
