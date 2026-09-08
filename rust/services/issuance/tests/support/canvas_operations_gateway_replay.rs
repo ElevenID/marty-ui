@@ -6,17 +6,17 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::Duration,
 };
 
 use async_trait::async_trait;
 use axum::{
-    Router,
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
+    Router,
 };
 use marty_gateway::{
     authorization::{OrganizationMembership, OrganizationMembershipProvider},
@@ -25,9 +25,9 @@ use marty_gateway::{
     middleware::{ApiKeyIdentity, GatewayIdentityProvider, GatewayRateLimiter, SessionIdentity},
     registry::StaticServiceRegistry,
     runtime::{
-        EventStreamProvider, EventStreamSubscription, GatewayDomainEventStream,
+        gateway_router, EventStreamProvider, EventStreamSubscription, GatewayDomainEventStream,
         GatewayRuntimeState, ReadinessProvider, ReadinessServiceStatus, ResourceOwnerContext,
-        ResourceOwnerProvider, gateway_router,
+        ResourceOwnerProvider,
     },
     transport::ReqwestUpstream,
 };
@@ -36,15 +36,15 @@ use mmf_platform::{
     PlatformError, ProxyConfig, RouteTable, ServiceInstance, UpstreamClient,
 };
 use mmf_security::{InMemoryRateLimiter, SecurityError};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
 use super::{
     canvas_operations_read_replay::{fixtures, generated_ids, insert_review, seed, timestamps},
     issuance_process::{
-        ChildGuard, bounded_http_client, isolated_smoke_command, reserve_port,
-        wait_for_health_with_client,
+        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
+        ChildGuard,
     },
 };
 
