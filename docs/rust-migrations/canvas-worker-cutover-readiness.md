@@ -10,10 +10,10 @@ formatting is repaired in `cca487a73`. Nine focused tests, 118 service tests and
 229 target format checks passed. The separate root `tests/` run passed 2,891
 tests but did not collect the service suite. Hosted repair qualification is
 pending, and the independently reviewed next gateway lifecycle helper still
-awaits execution/integration. No gateway route cutover, Python deletion or
+awaits execution/integration. No gateway route cutover, reachable Canvas Python endpoint deletion or
 deployment has been performed in this lane; those actions remain gated by the
-required evidence. Enabling the disabled release workflows still requires
-explicit new approval.
+required evidence. Credentials release preparation has passed after explicit
+workflow activation approval; released-image qualification remains pending.
 See the [current roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08).
 
 Earlier qualified composed checkpoint (historical; later failures and pending

@@ -82,11 +82,14 @@ release-artifact gap. The version-only preparation passed 68 local release tests
 [PR #272](https://github.com/ElevenID/marty-credentials/pull/272) merged through
 the protected queue at `9bd2747f040f203188529758ec38f0a5dce5ac5f`. All five
 configured exact-main release gates passed, including CI `34230259298`.
-Publication remains paused: GitHub rejected the preparation dispatch because
-the tag preparation, stable release and image-finalization workflows are manually
-disabled. Re-enabling those controls requires explicit approval. No preparation
-run, tag, publication or deployment was created; no new image availability or
-lock advancement is implied. The redundant local release branch was removed
+The initial dispatch was rejected because publication workflows were manually
+disabled. After explicit user approval, the three required workflows were
+re-enabled. [Preparation 34236062000](https://github.com/ElevenID/marty-credentials/actions/runs/34236062000)
+passed and created annotated `v0.1.73` at the exact green main commit.
+[Release 34236090229](https://github.com/ElevenID/marty-credentials/actions/runs/34236090229)
+is building; completed image publication, artifact qualification and lock
+advancement remain pending. The separate PyPI publication workflow stays disabled.
+No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub
 had already removed its remote branch.
 
@@ -109,9 +112,10 @@ refusal and publication refusal, including the held-claim conflict and durable
 duplicate guards. Its execution and integration are still pending. Its explicit
 public error expectations do not replace the frozen direct-response contract;
 candidate routing and controlled identity ports are not production route
-cutover. No gateway route change, Python deletion or deployment has been
+cutover. No gateway route change, reachable Canvas Python endpoint deletion or deployment has been
 performed in this lane; those actions remain gated by the required evidence.
-Enabling the disabled release workflows still requires explicit new approval.
+The credentials release is now explicitly authorized and in progress above;
+that does not replace the remaining migration and deployment gates.
 
 Cleanup also found unique unmerged UI key-custody work in `827ab777b` on local
 main and the security branch. Both references are preserved. Backend

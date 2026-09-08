@@ -15,7 +15,7 @@ service suite passed 118 tests, including nine image-strategy tests; the root
 2,891-test run did not include services. All 229 target format checks passed.
 Image, browser and UI jobs completed successfully. The
 [roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08)
-retains the release-workflow approval hold and outstanding qualification gates.
+records the now-authorized credentials release and outstanding qualification gates.
 
 The next candidate gateway lifecycle helper is independently source-reviewed,
 but execution and integration remain pending. It reuses the actual-main owner
@@ -24,9 +24,10 @@ with trusted actor persistence, tenant/auth denial and durable duplicate checks.
 Public MIP errors have explicit expected-only projections; direct frozen
 responses are not weakened. Controlled identity ports and candidate route
 selection do not qualify production routing, recovery or cancellation behavior.
-No gateway route cutover, Python deletion or deployment has been performed in
-this lane; those actions remain gated by the required evidence. Enabling the
-disabled release workflows still requires explicit new approval.
+No gateway route cutover, reachable Canvas Python endpoint deletion or deployment has been performed in
+this lane; those actions remain gated by the required evidence. Credentials
+release preparation has passed after explicit workflow activation approval;
+released-image qualification remains pending.
 
 ## Native composition checkpoint — 2026-09-08
 
