@@ -132,6 +132,88 @@ def _workflow(path: Path) -> tuple[str, dict[str, object]]:
     return source, yaml.safe_load(source)
 
 
+def _assert_python_service_job_preserves_full_suite(document) -> None:
+    job = document["jobs"]["test-services"]
+    assert job["needs"] == "changes"
+    assert job["if"] == "needs.changes.outputs.python == 'true'"
+    assert not job.get("continue-on-error", False)
+    assert not job.get("services")
+    assert not job.get("env")
+    tests = [step for step in job["steps"] if step.get("name") == "Run tests"]
+    assert len(tests) == 1
+    assert tests[0] == {
+        "name": "Run tests",
+        "working-directory": "services",
+        "run": "python -m pytest -v --tb=short -x",
+    }
+    rust = document["jobs"]["test-rust-services"]
+    assert set(rust["services"]) == {"postgres", "redis"}
+    for service, port in (("postgres", 5432), ("redis", 6379)):
+        fixture = rust["services"][service]
+        assert fixture["image"].startswith(f"{service}:")
+        assert "@sha256:" in fixture["image"]
+        assert fixture["ports"] == [f"{port}:{port}"]
+        assert "--health-cmd" in fixture["options"]
+    assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
+        "localhost:5432/marty_atomic_test"
+    )
+    assert rust["env"]["VERIFICATION_SESSION_TEST_DATABASE_URL"].endswith(
+        "localhost:5432/marty_atomic_test"
+    )
+
+
+def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
+    _assert_python_service_job_preserves_full_suite(_workflow(CI_PATH)[1])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "drop-tests",
+        "narrow-tests",
+        "ignore-tests",
+        "skip-step",
+        "skip-job",
+        "tolerate-failure",
+        "restore-fixture",
+        "restore-url",
+        "drop-rust-postgres",
+        "drop-rust-redis",
+        "wrong-directory",
+    ],
+)
+def test_python_service_cleanup_guard_rejects_weakened_coverage(mutation) -> None:
+    document = _workflow(CI_PATH)[1]
+    job = document["jobs"]["test-services"]
+    step = next(step for step in job["steps"] if step.get("name") == "Run tests")
+    if mutation == "drop-tests":
+        job["steps"].remove(step)
+    elif mutation == "narrow-tests":
+        step["run"] += " -k image_strategy"
+    elif mutation == "ignore-tests":
+        step["run"] += " --ignore=common/tests"
+    elif mutation == "skip-step":
+        step["if"] = "false"
+    elif mutation == "skip-job":
+        job["if"] = "false"
+    elif mutation == "tolerate-failure":
+        step["continue-on-error"] = True
+    elif mutation == "restore-fixture":
+        job["services"] = {"redis": {"image": "redis:7"}}
+    elif mutation == "restore-url":
+        job["env"] = {"FLOW_POSTGRES_TEST_URL": "postgresql://localhost:5432/unused"}
+    elif mutation.startswith("drop-rust-"):
+        del document["jobs"]["test-rust-services"]["services"][
+            mutation.removeprefix("drop-rust-")
+        ]
+    elif mutation == "wrong-directory":
+        step["working-directory"] = "tests"
+    else:
+        raise AssertionError("unreviewed mutation")
+    with pytest.raises(AssertionError):
+        _assert_python_service_job_preserves_full_suite(document)
+
+
 def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -> None:
     source, document = _workflow(CI_PATH)
     jobs = document["jobs"]
