@@ -98,3 +98,63 @@ changing only a total-request deadline does not prove HTTPX phase/inactivity par
 Pagination, progressing/stalled bodies, token refresh, AGS, revocation, candidate
 issuance, signing, whole-worker cutover, UI/demo acceptance and aggregate beta
 deployment remain separately gated work.
+
+## Reviewed repair constraints: design only
+
+The following is a source-reviewed design, not an implemented runtime repair or
+qualified parity result. Observe the actual native delayed-header failure before
+changing policy; do not alter the frozen reference to accommodate native behavior.
+The [provider source audit](canvas-worker-provider-timeout-audit-2026-09-07.md)
+records the pinned published client ownership and its separate timeout values.
+
+Select the target scope explicitly at the existing processor/provider `for_run`
+boundary: learner application and active issued drift use the application scope;
+background roster uses the roster scope. Preserve a fresh job-local token cache
+on every invocation, including when starting from an already scoped provider.
+Unsupported targets still fail before provider I/O. Do not infer target scope
+from optional application resources. Application reads and roster candidate reads
+both call `read_requirement`, which shares `rest_record`: an unconditional 15s
+change in that helper would also change roster evidence processing. The published
+application budget is 15s; roster collection and candidate evidence retain 20s.
+
+After the observed failure, keep the first repair narrow to application REST
+evidence and reuse `CanvasOperationHttpClient` / `CanvasNetworkTimeout` for actual
+operation/inactivity budgets. A total-response timer set to 15s is insufficient.
+Retain the shared origin and transport owners rather than duplicating networking
+or timeout logic. Any response adapter must retain these compatibility boundaries:
+
+- Preserve OAuth lookup and rejection side effects, encoded paths and queries,
+  bearer/Accept headers, status precedence, Retry-After parsing, JSON validation,
+  declared/incremental body limits and collection pagination protections.
+- Read operation responses through `CanvasOperationResponse.chunk()` so decoding,
+  timeout classification and cancellation remain attached. Do not bypass it via
+  the underlying response or replace bounded accumulation with unbounded `bytes()`.
+- Preserve validation of the persisted Canvas base URL, including rejection of
+  non-root paths, query strings, fragments and credentials. Validating only the
+  derived request origin is not equivalent. Retain DNS/private-origin checks,
+  destination pinning, no-proxy/no-redirect behavior and verified TLS/SNI.
+- Qualify the actual worker's configured CA trust and the operation transport's
+  single-request HTTP/1 connections. Its gzip/deflate negotiation and decoded-body
+  behavior are not an incidental codec-policy change; compressed responses and
+  size/error handling need explicit checks. Decoder allocation before the consumer
+  cap is not established to be bounded by this design.
+- Preserve cancellation-by-drop and connection-driver cleanup, including after
+  header/body stalls and the enclosing worker deadline. DNS resolution currently
+  sits outside the operation timeout; this proposal does not claim to fix that
+  boundary or establish complete DNS-timeout parity.
+
+OAuth refresh/revocation, LTI grants and collections, and internal signing have
+independent ownership and qualification requirements. Do not change those paths
+as an incidental consequence of the REST repair. In particular, the source-derived
+application AGS 15s requirement is separate from proving application REST parity;
+existing trust checks and per-run token reuse must remain intact.
+
+Required evidence includes the unchanged four-case worker replay, explicit
+application/drift-versus-roster candidate scope tests, and the forthcoming
+[whole-worker body-timeout capture plan](canvas-worker-body-timeout-capture-plan.md).
+Progressing bodies must be allowed to exceed one total interval, while stalled
+reads must fail at the applicable inactivity boundary. Existing transport-level
+body fixtures support reuse but do not qualify worker durable effects. Retain the
+exact mixed-roster Canvas/token/signer ledgers and the deadline replay's committed
+prefix, current-lease, no-late-effect and cleanup gates. None of these proposed
+steps authorizes consumer cutover or deployment.

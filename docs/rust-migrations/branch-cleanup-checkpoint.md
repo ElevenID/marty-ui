@@ -1,5 +1,23 @@
 # Feature-preserving branch cleanup — 2026-09-06
 
+## Follow-up — 2026-09-08
+
+The three detached CI/timing checkouts below and release checkout 113 have now
+been removed after source-equivalence, ignored-cache and live-use checks. All
+four original commits remain in local `refs/archive/worktree-cleanup-20260908/`
+refs; no intermediate history or feature was lost. Only 39 generated cache
+files were discarded. See the [current inventory](marty-ui-worktree-cleanup-inventory-2026-09-07.md)
+for exact archive refs, checks and retained release backups/recordings.
+
+The removal checkpoint left eight worktrees and four local branches. Both Canvas branches retain
+their unlanded qualification work; local main and the separate crypto branch
+remain unchanged. A subsequent clean body-timeout reference worktree/branch was
+created at `395cab656` for parallel fixture preparation, bringing current totals
+to nine worktrees and five local branches. That active work must be preserved.
+This is still not an all-repository cleanup completion claim.
+
+## Historical branch-name retirement — 2026-09-06
+
 Scope: local `marty-ui` Git branch inventory only. This is not an all-repository
 cleanup completion claim. No source files, ignored files, demo evidence, release
 worktrees, tags or commits were deleted.
