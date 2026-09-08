@@ -188,6 +188,22 @@ release and failed-release fencing, and generic post-preflight packing/encryptio
 failure with release before retry. Existing successful replay, unknown-outcome
 and concurrent-claim behavior is retained. Combined-tree qualification passed
 as recorded above; this is not full wallet/PostgreSQL consumer cutover evidence.
+Automatic-response integration `29beef466` fixes successful DIDComm issuance
+reporting the old pending status. Seven unchanged Python observations precede
+the repair; the actual native delivery/projector regression failed pending
+versus issued before correction. Only pending/authorized response statuses are
+promoted after durable success; replay preserves issued/revoked/expired/failed/
+signing statuses. Missing endpoints, failures and native no-resend behavior
+remain unchanged. The isolated author tree passed 47 initiation tests, nine
+gRPC tests, 17 HTTP/delivery integration tests and strict package Clippy;
+combined `29beef466` then passed all 372 issuance unit tests in 16.54 seconds,
+eight DIDComm/initiation HTTP and legacy-fence integration tests, and strict
+package Clippy with all test targets. Only documentation changed during that
+combined run. See the
+[DIDComm consumer cutover gates](rust-migrations/didcomm-consumer-cutover-readiness.md)
+for actual-wallet/PostgreSQL, gateway, deployment-consumer and Python-retirement
+requirements. Existing Python failed-receipt URI and repeated-wallet-send
+observations are explicitly not claimed equivalent to safer native behavior.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub

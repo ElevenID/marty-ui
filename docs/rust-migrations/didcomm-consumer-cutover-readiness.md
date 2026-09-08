@@ -39,7 +39,18 @@ independent-wallet or PostgreSQL acceptance.
 
 The automatic response audit found that Python reports `issued` after successful
 delivery while the original native projector reports the reservation's old
-status. A narrow shared-projector repair is being qualified separately.
+status. Reviewed integration `29beef466` repairs that shared projector without
+adding a second receipt flag or mutating the reservation: only pending/authorized
+responses become issued after successful durable delivery. Existing issued,
+revoked, expired, failed and signing statuses remain unchanged on delivered
+replay. The selected author tree passed 47 initiation tests, nine gRPC tests,
+17 HTTP/delivery integration tests and strict package Clippy. An actual native
+delivery owner with controlled ports proves single-send multi-wallet/repeated
+projection and failure non-promotion; this is not an actual PostgreSQL or wallet
+acceptance test. Its regression first reproduced pending versus issued.
+The combined `29beef466` tree subsequently passed all 372 issuance unit tests,
+eight DIDComm/initiation HTTP and legacy-fence integration tests, and strict
+package Clippy with all test targets. Only documentation changed during that run.
 Seven actual Python observations also expose two differences that must not be
 silently called equivalent: Python maps a failed HTTP transport receipt to an
 endpoint URI, and multiple DIDComm wallet entries can repeat signing/transport.
@@ -54,6 +65,24 @@ an unscoped lookup. Peer method 0 and abbreviated peer service encoding remain
 unqualified, distinct from the tested peer2 full service representation.
 
 ## Gates before Python retirement
+
+The next missing proof is composition, not a new cryptographic kernel. Existing
+`credential_postgres_contract.rs` exercises real repository/lifecycle durability
+with literal credential/JWE strings. The test named `didcomm_delivery_atomicity`
+uses an in-memory legacy repository to prove zero sends without durable claims;
+it is not PostgreSQL atomicity evidence. HTTP contract tests use controlled
+delivery ports, and crypto roundtrips are separately qualified.
+
+Reuse the owned `PublishedDatabase` and published migrations for four composed
+cases: anoncrypt/authcrypt crossed with direct/automatic delivery. Share the
+actual native repository, lifecycle, envelope, endpoint validator and HTTPS
+transport owner, then decrypt the captured POST through canonical Core. Check
+complete responses, durable transaction/delivery/audit state and one-send replay.
+Signing/control-plane fixtures may remain controlled but must be labeled.
+Reuse the existing loopback-certificate helper with an explicit test CA; add a
+bounded wallet POST fixture without globally changing the worker fixture's
+GET/DELETE-only contract. Negative gates include wrong sender, untrusted TLS,
+concurrent ownership and post-transport recovery. None requires a KMS redesign.
 
 1. Qualify direct and automatic delivery through the shared actual native owner,
    including whole response fields, true crypto, durable finalization, failure,
