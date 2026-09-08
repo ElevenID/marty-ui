@@ -59,6 +59,26 @@ const NON_MANUAL_CASES: [&str; 7] = [
     "resolve_dead_letter",
     "enqueue",
 ];
+// Additional read cases are not route exemplars: keep the eight-route legacy
+// trap proof independent from the number of frozen behaviors replayed.
+const READ_FILTER_CASES: [&str; 6] = [
+    "jobs_filtered",
+    "jobs_unmatched_binding",
+    "candidates_filtered",
+    "candidates_unmatched_binding",
+    "reviews_filtered",
+    "reviews_unmatched_binding",
+];
+const READ_VALIDATION_CASES: [&str; 8] = [
+    "jobs_zero_limit",
+    "jobs_excess_limit",
+    "candidates_invalid_status",
+    "candidates_zero_limit",
+    "candidates_excess_limit",
+    "reviews_invalid_status",
+    "reviews_zero_limit",
+    "reviews_excess_limit",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Routing {
@@ -559,6 +579,14 @@ fn public_error_expected(name: &str) -> (u16, Value) {
             Some("canvas_review_already_resolved"),
         ),
         "jobs_invalid_status" => (422, "Invalid Canvas sync job status", None),
+        "candidates_invalid_status" => (422, "Invalid Canvas award candidate status", None),
+        "reviews_invalid_status" => (422, "Invalid evidence policy review status", None),
+        "jobs_zero_limit"
+        | "jobs_excess_limit"
+        | "candidates_zero_limit"
+        | "candidates_excess_limit"
+        | "reviews_zero_limit"
+        | "reviews_excess_limit" => (422, "Downstream service request failed", None),
         "review_invalid_action" => (422, "Downstream service request failed", None),
         _ => panic!("unreviewed public error case"),
     };
@@ -567,6 +595,31 @@ fn public_error_expected(name: &str) -> (u16, Value) {
     assert_eq!(frozen["content_type"], "application/json");
     if name == "review_invalid_action" {
         assert!(frozen["body"]["detail"].is_array());
+    } else if READ_VALIDATION_CASES.contains(&name) && name.ends_with("_limit") {
+        // Check the complete source observation before applying the pinned
+        // public array-detail projection. Do not manufacture public details
+        // that the actual MMF normalizer does not preserve.
+        let (input, context, kind, message) = if name.ends_with("_zero_limit") {
+            (
+                "0",
+                json!({"ge":1}),
+                "greater_than_equal",
+                "Input should be greater than or equal to 1",
+            )
+        } else {
+            (
+                "501",
+                json!({"le":500}),
+                "less_than_equal",
+                "Input should be less than or equal to 500",
+            )
+        };
+        assert_eq!(
+            frozen["body"],
+            json!({"detail":[{"ctx":context,"input":input,"loc":["query","limit"],
+                "msg":message,"type":kind,
+                "url":format!("https://errors.pydantic.dev/2.11/v/{kind}")} ]})
+        );
     } else if let Some(code) = code {
         assert_eq!(
             frozen["body"],
@@ -678,12 +731,15 @@ async fn public_error_cases(pool: &PgPool, router: &Router, http: &CountedHttp) 
     .await;
     assert_eq!(foreign, missing);
 
-    for name in ["jobs_invalid_status", "review_invalid_action"] {
+    for name in ["jobs_invalid_status", "review_invalid_action"]
+        .into_iter()
+        .chain(READ_VALIDATION_CASES)
+    {
         unchanged_public_error(pool, router, http, frozen_case(name).0, "org-review", name).await;
     }
 }
 
-async fn frozen_matrix(pool: &PgPool, router: &Router) {
+async fn frozen_matrix(pool: &PgPool, router: &Router, http: &CountedHttp) {
     let [shared, scenarios, _] = fixtures();
     let preserved: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
         .fetch_one(pool)
@@ -694,7 +750,9 @@ async fn frozen_matrix(pool: &PgPool, router: &Router) {
         .await
         .unwrap();
     let mut aliases = BTreeMap::new();
-    for name in NON_MANUAL_CASES {
+    // The frozen filtered reads observe the seed before retry/resolve/enqueue
+    // mutate it. Reuse the same DTO/snapshot comparator, not another fixture.
+    for name in READ_FILTER_CASES.into_iter().chain(NON_MANUAL_CASES) {
         let (case, expected) = frozen_case(name);
         for sql in case["sql"].as_array().into_iter().flatten() {
             sqlx::query(sql.as_str().unwrap())
@@ -702,6 +760,13 @@ async fn frozen_matrix(pool: &PgPool, router: &Router) {
                 .await
                 .unwrap();
         }
+        let unchanged = if case["method"] == "GET" {
+            Some(raw_state(pool).await)
+        } else {
+            None
+        };
+        let calls = http.counts();
+        assert_eq!(calls.1, 0);
         let (status, content_type, mut body) = request(
             router,
             case,
@@ -710,6 +775,17 @@ async fn frozen_matrix(pool: &PgPool, router: &Router) {
             RequestBoundary::Forwarded,
         )
         .await;
+        assert_eq!(
+            http.counts(),
+            (calls.0 + 1, 0),
+            "{name}: native request count"
+        );
+        if let Some(before) = unchanged {
+            assert!(
+                raw_state(pool).await == before,
+                "{name}: read changed raw state"
+            );
+        }
         timestamps(&mut body);
         generated_ids(&mut body, &mut aliases);
         assert_eq!(
@@ -939,11 +1015,12 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     );
 
     let (candidate, candidate_http) = router(http_port, trap.port, Routing::CandidateNative);
-    frozen_matrix(pool, &candidate).await;
+    frozen_matrix(pool, &candidate, &candidate_http).await;
     public_error_cases(pool, &candidate, &candidate_http).await;
     actor_cases(pool, &candidate, &candidate_http).await;
-    // Seven positive routes, six public-error controls, two dismisses and duplicates.
-    assert_eq!(candidate_http.counts(), (17, 0));
+    // Seven positive routes, six filtered reads, fourteen public-error controls,
+    // and two dismisses with their duplicates. Legacy selection stays at zero.
+    assert_eq!(candidate_http.counts(), (31, 0));
     assert_eq!(trap.calls.load(Ordering::SeqCst), 8);
     assert!(
         child.0.try_wait().unwrap().is_none(),
@@ -988,7 +1065,10 @@ mod tests {
             "review_dismiss_again",
             "jobs_invalid_status",
             "review_invalid_action",
-        ] {
+        ]
+        .into_iter()
+        .chain(READ_VALIDATION_CASES)
+        {
             let (status, expected) = public_error_expected(name);
             let mut actual = expected.clone();
             actual["message_id"] = json!("11111111-1111-4111-8111-111111111111");
@@ -1049,6 +1129,31 @@ mod tests {
             .1
             .get("details")
             .is_none());
+    }
+
+    #[test]
+    fn additional_read_cases_are_closed_and_do_not_replace_route_exemplars() {
+        let names: BTreeSet<_> = READ_FILTER_CASES
+            .into_iter()
+            .chain(READ_VALIDATION_CASES)
+            .collect();
+        assert_eq!(names.len(), 14);
+        for name in names {
+            assert!(!NON_MANUAL_CASES.contains(&name));
+            let (case, expected) = frozen_case(name);
+            assert_eq!(case["method"], "GET");
+            assert!(case.get("sql").is_none());
+            assert!(case.get("body").is_none());
+            assert!(case.get("headers").is_none());
+            assert_eq!(expected["lifecycle_calls"], json!([]));
+            if READ_FILTER_CASES.contains(&name) {
+                assert_eq!(expected["status"], 200);
+                assert!(case["path"].as_str().unwrap().contains("binding_id="));
+                assert_eq!(expected["snapshot"], frozen_case("jobs_list").1["snapshot"]);
+            } else {
+                assert_eq!(public_error_expected(name).0, 422);
+            }
+        }
     }
 
     #[test]
