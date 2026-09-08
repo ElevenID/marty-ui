@@ -480,6 +480,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_body_timeout(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-body-timeout-scenarios.json"),
+            "worker_body_timeout",
+            "worker-body-timeout",
+            "MARTY_CANVAS_WORKER_BODY_TIMEOUT_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_dispatch(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -961,6 +972,7 @@ impl PublishedDatabase {
                 | "worker_dispatch"
                 | "worker_deadline"
                 | "worker_timeout"
+                | "worker_body_timeout"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -1055,6 +1067,7 @@ impl PublishedDatabase {
                 | "worker_dispatch"
                 | "worker_deadline"
                 | "worker_timeout"
+                | "worker_body_timeout"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -1123,6 +1136,16 @@ impl PublishedDatabase {
             ],
             "worker_timeout" => &[
                 "scripts/canvas_worker_timeout_https_fixture.py",
+                "scripts/canvas_worker_output_capture.py",
+                "contracts/canvas-worker-deadline-scenarios.json",
+                "contracts/canvas-worker-retry-scenarios.json",
+                "contracts/canvas-worker-validation-scenarios.json",
+                "contracts/canvas-worker-roster-failure-scenarios.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
+            "worker_body_timeout" => &[
+                "scripts/canvas_worker_body_timeout_https_fixture.py",
                 "scripts/canvas_worker_output_capture.py",
                 "contracts/canvas-worker-deadline-scenarios.json",
                 "contracts/canvas-worker-retry-scenarios.json",
@@ -1350,6 +1373,22 @@ impl PublishedDatabase {
             self.postgres = None;
         }
         Ok(())
+    }
+
+    /// Preserve published JSON number spelling during reference capture. The
+    /// probe has already passed provenance/state validation; never serialize
+    /// the parsed oracle to manufacture a supposedly raw capture.
+    pub fn raw_probe_report(&self) -> Result<String, String> {
+        let probe = self.probe.as_deref().ok_or("Missing owned capture probe")?;
+        let info = inspect(probe)?;
+        if info["Id"] != probe
+            || info["Config"]["Labels"][LABEL] != self.scope
+            || info["State"]["Running"] != false
+            || info["State"]["ExitCode"] != 0
+        {
+            return Err("Refusing raw capture from an unverified probe".into());
+        }
+        docker(&["logs", probe])
     }
 
     pub fn close(mut self) -> Result<(), String> {

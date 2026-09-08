@@ -483,3 +483,81 @@ def test_actual_unexpected_tls_send_failure_reaches_static_owner_ledger(
         assert not fixture.schedule_completed.is_set()
     finally:
         fixture.close()
+
+
+@pytest.mark.parametrize("after_close", [False, True])
+def test_single_use_rejects_active_or_closed_reentry_without_replacing_owners(
+    modules, monkeypatch, after_close
+):
+    module, base = modules
+    fixture = module.BodyTimeoutHttpsFixture(
+        expected_request(), {"status": 200, "body": []}, chunk_offsets=[0, 0.01]
+    )
+    entries = []
+    original_enter = base.WorkerHttpsFixture.__enter__
+
+    def enter(owner):
+        entries.append(owner)
+        return original_enter(owner)
+
+    monkeypatch.setattr(base.WorkerHttpsFixture, "__enter__", enter)
+    fixture.__enter__()
+    server, thread, certificates = fixture.server, fixture.thread, fixture.certificates
+    directory = fixture.cert.parent
+    try:
+        if after_close:
+            fixture.close()
+        with pytest.raises(AssertionError, match="single-use"):
+            fixture.__enter__()
+        assert entries == [fixture]
+        assert fixture.server is server and fixture.thread is thread
+        assert fixture.certificates is certificates
+        assert thread.is_alive() is not after_close
+    finally:
+        fixture.close()
+    assert not thread.is_alive() and not directory.exists()
+
+
+def test_single_use_rejects_entry_after_close_before_any_allocation(
+    modules, monkeypatch
+):
+    module, base = modules
+    fixture = module.BodyTimeoutHttpsFixture(
+        expected_request(), {"status": 200, "body": []}, chunk_offsets=[0, 0.01]
+    )
+    entries = []
+    monkeypatch.setattr(
+        base.WorkerHttpsFixture, "__enter__", lambda owner: entries.append(owner)
+    )
+    fixture.close()
+    with pytest.raises(AssertionError, match="single-use"):
+        fixture.__enter__()
+    assert entries == []
+    assert fixture.server is fixture.thread is fixture.certificates is None
+
+
+def test_partial_entry_failure_cleans_up_and_cannot_retry_allocations(
+    modules, monkeypatch
+):
+    module, base = modules
+    fixture = module.BodyTimeoutHttpsFixture(
+        expected_request(), {"status": 200, "body": []}, chunk_offsets=[0, 0.01]
+    )
+    directories = []
+    original_error = RuntimeError("synthetic-certificate-allocation-failure")
+
+    def fail_certificate(directory):
+        directories.append(directory)
+        assert directory.is_dir()
+        raise original_error
+
+    monkeypatch.setattr(base, "create_loopback_certificate", fail_certificate)
+    with pytest.raises(RuntimeError) as caught:
+        fixture.__enter__()
+    assert caught.value is original_error
+    assert len(directories) == 1 and not directories[0].exists()
+    assert fixture.server is fixture.thread is None
+    with pytest.raises(AssertionError, match="single-use"):
+        fixture.__enter__()
+    fixture.close()
+    assert len(directories) == 1

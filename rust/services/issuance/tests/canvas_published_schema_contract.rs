@@ -117,6 +117,66 @@ async fn borrowed_worker_pool(descriptor_environment: &str) -> (sqlx::PgPool, St
 }
 
 #[tokio::test]
+async fn body_capture_rejects_non_matrix_cases_before_resource_creation() {
+    for invalid in [
+        "",
+        "application_prompt",
+        "roster_delayed_headers",
+        "../escape",
+        "application_body_prompt\n",
+    ] {
+        let result =
+            canvas_published_database::PublishedDatabase::start_with_worker_body_timeout(invalid)
+                .await;
+        assert!(
+            matches!(result, Err(message) if message == "unsupported owned worker matrix case")
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "explicit reviewed reference capture only; not a native parity gate"]
+async fn capture_worker_body_timeout_published_process() {
+    use std::io::Write;
+
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let destination = std::path::PathBuf::from(
+        std::env::var_os("MARTY_CANVAS_BODY_CAPTURE_FILE")
+            .expect("explicit new capture file required"),
+    );
+    assert!(destination.is_absolute(), "capture file must be absolute");
+    assert!(!destination.exists(), "capture file must not already exist");
+    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-body-timeout-scenarios.json"
+    ))
+    .unwrap();
+    assert_eq!(scenarios["cases"].as_array().unwrap().len(), 6);
+    let mut raw_reports = Vec::new();
+    for case in scenarios["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let owned =
+            canvas_published_database::PublishedDatabase::start_with_worker_body_timeout(name)
+                .await
+                .unwrap();
+        let raw = owned.raw_probe_report().unwrap();
+        assert!(raw.len() <= 1_048_576, "body capture report exceeds limit");
+        let report: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["worker_body_timeout"]["case"], name);
+        owned.close_verified().unwrap();
+        raw_reports.push(raw);
+        eprintln!("Published body capture and exact-owned cleanup passed: {name}");
+    }
+    // Emit only after all six observations and cleanups pass. create_new also
+    // rejects a destination created concurrently; no existing evidence is lost.
+    let mut output = std::fs::File::create_new(destination).unwrap();
+    writeln!(output, "[{}]", raw_reports.join(",\n")).unwrap();
+    output.sync_all().unwrap();
+}
+
+#[tokio::test]
 async fn worker_timeout_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

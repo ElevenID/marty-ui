@@ -9,7 +9,7 @@ import copy
 import json
 import math
 import ssl
-from threading import Event, Lock
+from threading import Event, Lock, RLock
 import time
 
 from canvas_worker_https_fixture import WorkerHttpsFixture
@@ -124,8 +124,22 @@ class BodyTimeoutHttpsFixture(WorkerHttpsFixture):
         self.body_started_at = None
         self.chunk_observations = []
         self._observation_lock = Lock()
-        self._close_lock = Lock()
+        # Base entry can call self.close() on partial allocation failure.
+        # Reentrancy preserves that cleanup while serializing entry and close.
+        self._close_lock = RLock()
+        self._entry_started = False
         self._closed = False
+
+    def __enter__(self):
+        with self._close_lock:
+            _require(
+                not self._entry_started and not self._closed,
+                "Owned body fixture is single-use",
+            )
+            # Failed entry is single-use too: never overwrite partially owned
+            # handles or reopen an object whose cancellation events are set.
+            self._entry_started = True
+            return super().__enter__()
 
     def wait_for_response(self, index, path, stage):
         _require(

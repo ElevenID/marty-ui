@@ -134,6 +134,15 @@ def prepare():
             report["review_recovery_overlay"] = overlay
         dispatch_case = os.environ.get("MARTY_CANVAS_WORKER_DISPATCH_CASE")
         timeout_case = os.environ.get("MARTY_CANVAS_WORKER_TIMEOUT_CASE")
+        body_timeout_case = os.environ.get("MARTY_CANVAS_WORKER_BODY_TIMEOUT_CASE")
+        if body_timeout_case is not None:
+            from run_canvas_worker_body_timeout_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_body_timeout"] = run(body_timeout_case)
         if timeout_case is not None:
             from run_canvas_worker_timeout_oracle import run
 

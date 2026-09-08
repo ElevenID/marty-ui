@@ -1,14 +1,24 @@
 # Canvas worker response-body timeout capture plan
 
-Status, 2026-09-08: proposed reference work only. No whole-worker body-progress
-or body-stall capture has been performed for this plan. The schedules and
-outcomes below are source-derived proposals, not frozen observations, passing
-native replay, or permission to change a timeout or deployment consumer.
+Status, 2026-09-08: reviewed reference fixture, runner, and explicit capture
+wiring are implemented. No whole-worker body-progress or body-stall capture
+has been performed for this plan. The declared schedules and expected outcomes
+remain source-derived, not frozen observations, passing native replay, or
+permission to change a timeout or deployment consumer.
 
-Fixture preparation is now in progress separately on
+The implementation is isolated on
 `feat/canvas-worker-body-timeout-reference-v1`, based on `395cab656`. Its isolated
 worktree lets the already-tested delayed-header branch proceed independently.
 Preparing the fixture does not establish any of the worker outcomes below.
+The pre-provenance-fix local checkpoint passed: 76 fixture tests, 190
+runner/contract controls, and the combined 266 tests in 15.87 seconds. Root-owned verification
+passed: full Python suite 2,100 passed / 3 skipped in 155.86 seconds; Rust closed
+selector control 1 passed; strict all-target Clippy in 6.65 seconds; final test
+build in 5.53 seconds. Independent capture-wiring review found no blockers.
+These totals precede the local capture-source newline canonicalization fix.
+That fix subsequently passed independent review and 199 focused tests (nine
+provenance regressions plus 190 runner controls) in 0.34 seconds, with Ruff
+passing. These are not an actual published-worker capture or native body replay.
 
 This supplements the [provider timeout audit](canvas-worker-provider-timeout-audit-2026-09-07.md),
 [delayed-header capture](canvas-worker-timeout-capture-plan.md), and
@@ -57,19 +67,19 @@ Current evidence has three distinct scopes:
   headers and then writes the complete body. It does not qualify body progress,
   read-budget resets, or partial-body failure.
 
-## Proposed minimum: six actual-worker controls
+## Declared minimum: six actual-worker controls
 
 Use the existing learner-application assignment and authenticated empty-roster
 seeds. Capture each target's prompt control again through the new body writer,
 so framing and complete JSON parsing have positive controls in this corpus.
-Times below are proposed offsets from a promptly established body-stream start,
+Times below are declared offsets from a promptly established body-stream start,
 after the initial held-request/leased-state handshake. Record request-relative
 times separately; do not hide setup time by redefining the request receipt.
 
-| Proposed case | Body schedule | Source-derived expectation to capture |
+| Case | Body schedule | Source-derived expectation to capture |
 | --- | --- | --- |
-| `application_body_prompt` | Complete valid JSON promptly | Successful assignment evidence |
-| `roster_body_prompt` | Complete valid empty-array JSON promptly | Successful empty roster |
+| `application_body_prompt` | Flush valid JSON pieces at 0 and 0.05 seconds | Successful assignment evidence |
+| `roster_body_prompt` | Same 0 and 0.05 schedule | Successful empty roster |
 | `application_body_progress` | Flush bounded pieces at 0, 8, 16, 24 seconds | Success: all gaps below 15s although total duration exceeds 15s |
 | `roster_body_progress` | Same 0, 8, 16, 24 schedule | Success: all gaps below 20s although total duration exceeds 20s |
 | `application_body_stall` | Flush partial JSON at 0 and 8; independently attempt remainder at 31 | Read inactivity failure near 23s, before the final attempt |
@@ -77,8 +87,8 @@ times separately; do not hide setup time by redefining the request receipt.
 
 Send correct `Content-Length`, bounded uncompressed JSON, and flushed headers.
 Keep the JSON incomplete until the last piece. Split the existing assignment
-response without changing its meaning; for the empty roster, bounded whitespace
-inside an array permits multiple real chunks without manufacturing candidates.
+response without changing its meaning; for the empty roster, bounded leading
+JSON whitespace permits multiple real chunks without manufacturing candidates.
 Do not use socket chunks as evidence of application-level partial success.
 
 These schedules distinguish progressing reads from both a total-response
@@ -86,7 +96,7 @@ deadline and a permanently disabled timeout. They do not qualify compressed
 bodies, pagination, nonempty candidate processing, OAuth refresh, LTI grant/body
 handling, revocation, signing, or lease-expiry-during-provider-I/O behavior.
 
-## Reuse boundaries and required fixture work
+## Implemented reuse boundaries
 
 Reuse the shared seed and exact-worker startup owners used by
 [`run_canvas_worker_timeout_oracle.py`](../../scripts/run_canvas_worker_timeout_oracle.py),
@@ -96,19 +106,24 @@ job timeout, lease, and poll settings at 120/90/120 seconds unless separately
 reviewed before capture; they must outlast the proposed body/late-write windows.
 Never edit a running job, lease, schedule, clock, or worker callback.
 
-The current [`WorkerHttpsFixture`](../../scripts/canvas_worker_https_fixture.py)
-has a pre-header `wait_for_response` hook but writes the whole body directly.
-Streaming needs an explicitly reviewed body-writer extension or equivalent
-owned fixture seam. Do not treat a longer pre-header wait as a body-stall test.
-Do not duplicate certificate, request-observation, or server/process cleanup
-owners merely to obtain a streaming handler. Any shared extension must preserve
-the default single-write behavior and all existing GET/DELETE, unsupported-verb,
-header, release, and cleanup tests. Obtain ownership before changing shared
-inputs; no live capture may read files being edited.
+The [`body fixture`](../../scripts/canvas_worker_body_timeout_https_fixture.py)
+reuses [`WorkerHttpsFixture`](../../scripts/canvas_worker_https_fixture.py)
+through default-preserving response encoding/writing and request-connection
+configuration hooks. Existing GET/DELETE framing and default single-write
+behavior remain unchanged. The body fixture is single-use, including after
+partial entry failure, and sets a two-second connection timeout before HTTP
+request parsing and response headers. This does not qualify the inherited
+pre-handler TLS accept/handshake boundary.
 
-A new body fixture must independently schedule writes, without consulting job
-outcomes. Record only bounded chunk indices, byte counts, successful-flush
-timings, final-attempt timing, and static transport classifications. A scheduled
+The existing request handler independently schedules body writes; there is no
+additional controller thread and no outcome-driven release. The initial held
+request is released only after exact leased-state verification. Cancellation
+and server close join owned handlers. Only the explicitly declared final stall
+slot may classify an expected peer-close; header, early-write, and unrelated
+TLS failures remain failures. No live capture may read inputs being edited.
+
+The fixture records bounded chunk indices, byte counts, successful-flush
+start/end bounds, final-attempt timing, and static transport classifications. A scheduled
 write is not a successful flush, and a flush is not an exact client-read
 timestamp. Reject missed schedule bounds rather than repairing the record.
 
@@ -126,12 +141,24 @@ Retain both kinds of timing evidence:
    Require the entire conservative interval within the declared case window,
    not midpoint or overlap acceptance. Preserve request/anchor uncertainty.
 
-Declare new body-case observer and transition bounds before capture A. The
+The [scenario](../../contracts/canvas-worker-body-timeout-scenarios.json) and
+[runner](../../scripts/run_canvas_worker_body_timeout_oracle.py) now declare
+fixed bounds before capture A. The
 existing request-relative 14.5-16.5s header window is not automatically a
 request-relative body-stall window after eight seconds of successful progress.
-The proposed 23s/28s outcomes are source-derived centers, not already-approved
-tolerances. Include early-terminal/late-marker and early-terminal/late-idle
-negative controls, malformed timing payloads, and broad-interval rejection.
+23s/28s outcomes are source-derived centers, not observations. For stalls,
+the whole conservative inactivity interval is
+`[last leased query START - last successful flush END,
+first terminal query END - last successful flush START]`, contained within
+14.5–16.5 seconds for applications or 19.5–21.5 seconds for rosters.
+For prompt/progress success, the whole first-terminal interval must be contained
+within `[actual final write START - 0.5s, actual final write END + 2s]`, with its
+upper bound at or after final write start. The separate idle observation and
+overall request/body budgets remain mandatory. A broad interval merely
+overlapping the window cannot pass. Queries and scheduled-write lateness each
+have a 0.5-second maximum; timing uncertainty fails the capture rather than
+causing a tolerance adjustment. Negative tests cover early terminal/late idle,
+stale broad intervals, exact boundaries, and malformed timing observations.
 
 Require exactly one authenticated GET with the existing path, authorization,
 and Accept contract; reject extra/unsupported traffic. Verify the original
@@ -162,7 +189,7 @@ Distinguish the expected closed-connection result from unexpected handler
 failure without emitting payloads. Observe unchanged durable state through a
 declared window after the final write attempt and beyond the relevant pending
 read budgets; retain an after-observed-outcome margin as well. Then join the
-controller and handlers, compare the final request ledger, interrupt only the
+owned handlers, compare the final request ledger, interrupt only the
 owned worker, and compare durable state again after its bounded exit.
 
 Keep control and output directories alive through HTTPS shutdown. Every wait
@@ -170,16 +197,59 @@ and cleanup path must be bounded and ownership-checked. Reuse exact process
 containment and the surviving disposable-database owner for native replay;
 do not claim protection against uncatchable death of that surviving owner.
 Check both raw streams with the strict published warning profile and synthetic
-secret exclusions; new unexpected output must fail capture, not be silently
-removed. Native output remains separately classified.
+secret exclusions before interruption and again after the bounded SIGINT wait
+and expected Python exit `-2`. Retain separate `logs_before_interrupt` and
+`logs_after_interrupt` observations. The final check uses the same strict
+profile, not a shutdown exception: legitimate unexpected shutdown output must
+first receive separate source review; secrets or unknown output cannot be
+silently removed. Native output remains separately classified.
+
+## Explicit immutable capture wiring
+
+The ignored Rust entrypoint
+`capture_worker_body_timeout_published_process` is available only for explicit
+reference capture, not as a passing native parity gate. It requires
+`MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1` and
+`MARTY_CANVAS_BODY_CAPTURE_FILE` naming a new absolute output path. Select it
+with `--exact --ignored --nocapture`; do not enable it during ordinary tests.
+The published-database constructor, probe dispatch, and immutable-image mounts
+are wired for all six declared cases. Installed source hashes, runtime versions,
+and hashes of fixture/runner/shared contract inputs are checked by the runner.
+
+Local textual input provenance now uses explicit UTF-8/LF
+canonicalization (CRLF and standalone CR become LF) so a Windows CRLF checkout and the same Git/Linux LF source
+have the same hash. This applies only to local fixture/runner/shared contract
+source text. It is not JSON parsing or numeric reserialization: whitespace
+other than line endings, JSON numeric spelling, and source content remain
+significant. Installed-source hash values and their existing verification
+conventions remain unchanged; in particular, the immutable HTTP factory is
+still hashed from raw bytes. Invalid UTF-8 fails rather than being replaced.
+Full raw observation reports are not newline-normalized or edited.
+
+Each case gets a fresh synthetic database. The entrypoint retains each full raw
+JSON probe report, checks the case identity and one-MiB report bound, and requires
+verified exact-owned cleanup before retaining that case. Only after all six
+cases and cleanups succeed does it create the output with `create_new`, write
+an array of those raw reports, and sync the file. Parsing for validation does
+not reserialize the reports or their numeric tokens. Existing destinations,
+including a concurrently created destination, are rejected. An output-write
+failure is not capture success; retain any partial new file as failed evidence
+and choose a different new path for a later run.
+
+This wiring has not yet produced a body capture. A and B must use distinct new
+absolute output paths and the same frozen inputs; raw full-report equality and
+cleanup evidence are required before deriving any frozen corpus.
 
 Before freezing any reference:
 
 1. Review new scenario/fixture/runner/tests, including real loopback transport,
    schedule failures, incomplete-body handling, extra requests, cancellation,
-   bounded output, controller/handler joining, and failure cleanup.
+   bounded output, handler joining, and failure cleanup. Focused review and
+   controls and aggregate validation passed at the pre-provenance-fix checkpoint
+   above; the subsequent newline-canonicalization change requires its own review
+   and verification before capture.
 2. Register the immutable-image mounts and fresh published-database capture
-   entrypoint. Verify installed source hashes and dependencies; freeze all
+   entrypoint (implemented above). Verify installed source hashes and dependencies; freeze all
    inputs while a capture is running.
 3. Run A for all six cases against the actual unchanged Python worker, each in
    a fresh synthetic database. Preserve raw output and exact owned cleanup
