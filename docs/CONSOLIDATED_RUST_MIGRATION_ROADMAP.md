@@ -31,6 +31,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
+The eight operations handlers are now composed into the native executable with
+one shared credential lifecycle service; gateway routing remains unchanged.
+Actual-process auth/transport, ten configured operations/lifecycle test entries,
+362 issuance unit tests and independent review passed at `211ae9d8b`. This does
+not yet qualify actual-main authenticated publication or the public gateway path.
+See the [composition checkpoint](rust-migrations/canvas-review-resolution.md#native-composition-checkpoint-2026-09-08).
+The combined draft passed 2,699 Python tests (three skips) in 202.58s and all
+four executable smoke tests in 7.03s. Worker CI at `67ee5c986` identified strict
+output rejection after successful early renewal and shutdown checks; bounded
+output classification is added without allowing that output or changing runtime
+logging. Full native BODY/expiry qualification remains open.
+
 Parallel consumer hardening now includes a shared generated-release image plan
 and complete effective-model checks for all 19 application services. The local
 verification rehearsal pin also owns recorded provenance, fixing a mutable-tag
