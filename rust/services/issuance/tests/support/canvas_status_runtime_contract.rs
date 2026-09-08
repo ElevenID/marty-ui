@@ -2,11 +2,11 @@
 //! Only canonical status publication is controlled; the mirror uses a local server.
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
 };
 use marty_issuance_service::{
     canvas_credentials_status::CanvasCredentialsStatusService,
@@ -21,11 +21,11 @@ use marty_issuance_service::{
     credential_management_postgres::PostgresCredentialManagementRepository,
     integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 struct RuntimeState {
@@ -253,13 +253,193 @@ pub async fn run_review_operations(pool: &PgPool) {
         CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
             .with_review_operations(Some(Arc::new(service))),
     );
-    review_cases(pool, &state, &ReviewRequests::Router(router)).await;
+    review_cases(
+        pool,
+        &state,
+        &ReviewRequests::direct(DirectReviewRequests::Router(router)),
+        ReviewCapabilities::ControlledPublisher,
+    )
+    .await;
     let _ = stop.send(());
     server.await.unwrap().unwrap();
 }
 
+pub(super) type ReviewResponse = (u16, String, Value);
+
+/// The transport owns authentication/header behavior at its declared boundary.
+/// It must return the observed response, not a normalized direct-issuance DTO.
+#[async_trait]
+pub(super) trait ReviewRequestTransport: Send + Sync {
+    async fn request(&self, case: &Value) -> ReviewResponse;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReviewResponsePhase {
+    AuthenticationDenied,
+    ForeignTenant,
+    ConcurrentClaim,
+    Outcome,
+    DuplicateResolved,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReviewMessageIdPolicy {
+    None,
+    RequireUuid,
+}
+
+pub(super) const REVIEW_MESSAGE_ID_SENTINEL: &str = "$gateway-message-id";
+
+pub(super) struct ReviewExpectedResponse {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Value,
+    pub message_id: ReviewMessageIdPolicy,
+}
+
+/// A future gateway adapter supplies an independently reviewed public contract.
+/// This port never sees the actual response and cannot alter durable assertions.
+pub(super) trait ReviewResponseExpectations: Send + Sync {
+    fn response(
+        &self,
+        phase: ReviewResponsePhase,
+        case: &Value,
+        frozen_expected: &Value,
+    ) -> ReviewExpectedResponse;
+
+    /// Only the two successful-resolution actor fields are adapted by the
+    /// shared owner. Failed publication must retain the frozen open/null actor.
+    fn trusted_actor(&self) -> Option<&str>;
+}
+
+struct DirectExpectations;
+
+impl ReviewResponseExpectations for DirectExpectations {
+    fn response(
+        &self,
+        _: ReviewResponsePhase,
+        _: &Value,
+        expected: &Value,
+    ) -> ReviewExpectedResponse {
+        ReviewExpectedResponse {
+            status: expected["status"].as_u64().unwrap().try_into().unwrap(),
+            content_type: expected["content_type"].as_str().unwrap().into(),
+            body: expected["body"].clone(),
+            message_id: ReviewMessageIdPolicy::None,
+        }
+    }
+    fn trusted_actor(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// Publisher capabilities belong to the fixture setup, not the request type.
+/// In particular a gateway Router around an actual binary still has every real
+/// HTTP publication failure/claim-hold check and no in-process event subscriber.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewCapabilities {
+    ControlledPublisher,
+    RealHttpPublisher,
+}
+
+impl ReviewCapabilities {
+    fn real_http_publication(self) -> bool {
+        self == Self::RealHttpPublisher
+    }
+    fn cases(self) -> &'static [&'static str] {
+        match self {
+            Self::ControlledPublisher => {
+                &["suspend_delivered", "revoke_delivered", "mirror_failure"]
+            }
+            Self::RealHttpPublisher => &[
+                "suspend_delivered",
+                "revoke_delivered",
+                "mirror_failure",
+                "publication_failure",
+            ],
+        }
+    }
+}
+
 #[derive(Clone)]
-enum ReviewRequests {
+struct ReviewRequests {
+    transport: Arc<dyn ReviewRequestTransport>,
+    expectations: Arc<dyn ReviewResponseExpectations>,
+}
+
+impl ReviewRequests {
+    fn direct(transport: DirectReviewRequests) -> Self {
+        Self {
+            transport: Arc::new(transport),
+            expectations: Arc::new(DirectExpectations),
+        }
+    }
+
+    async fn request(&self, case: &Value) -> ReviewResponse {
+        self.transport.request(case).await
+    }
+
+    fn assert_response(
+        &self,
+        phase: ReviewResponsePhase,
+        case: &Value,
+        frozen: &Value,
+        actual: ReviewResponse,
+    ) {
+        let mut expected = frozen.clone();
+        if phase == ReviewResponsePhase::Outcome && expected["status"].as_u64().unwrap() < 400 {
+            if let Some(actor) = self.expectations.trusted_actor() {
+                assert!(
+                    expected["body"]
+                        .as_object()
+                        .unwrap()
+                        .contains_key("resolved_by")
+                );
+                assert!(expected["body"]["resolved_by"].is_null());
+                expected["body"]["resolved_by"] = json!(actor);
+            }
+        }
+        let expected = self.expectations.response(phase, case, &expected);
+        assert_review_response(actual, expected);
+    }
+
+    fn expected_review(&self, frozen: &Value, successful: bool) -> Value {
+        let mut expected = frozen.clone();
+        if successful {
+            if let Some(actor) = self.expectations.trusted_actor() {
+                assert!(expected.as_object().unwrap().contains_key("actor"));
+                assert!(expected["actor"].is_null());
+                expected["actor"] = json!(actor);
+            }
+        }
+        expected
+    }
+}
+
+fn assert_review_response(actual: ReviewResponse, expected: ReviewExpectedResponse) {
+    let (status, content_type, mut body) = actual;
+    assert_eq!(status, expected.status);
+    assert_eq!(content_type, expected.content_type);
+    if expected.message_id == ReviewMessageIdPolicy::RequireUuid {
+        let identifier = body
+            .get("message_id")
+            .and_then(Value::as_str)
+            .expect("explicit MIP message_id");
+        assert!(
+            uuid::Uuid::parse_str(identifier).is_ok(),
+            "MIP message_id must be a UUID"
+        );
+        assert_eq!(expected.body["message_id"], REVIEW_MESSAGE_ID_SENTINEL);
+        body["message_id"] = json!(REVIEW_MESSAGE_ID_SENTINEL);
+    }
+    // No fields, error details, status or content type are dropped or rewritten.
+    assert!(
+        body == expected.body,
+        "review response differs from explicit boundary contract"
+    );
+}
+
+enum DirectReviewRequests {
     Router(Router),
     Process {
         client: reqwest::Client,
@@ -267,12 +447,9 @@ enum ReviewRequests {
     },
 }
 
-impl ReviewRequests {
-    fn actual_process(&self) -> bool {
-        matches!(self, Self::Process { .. })
-    }
-
-    async fn request(&self, case: &Value) -> (u16, String, Value) {
+#[async_trait]
+impl ReviewRequestTransport for DirectReviewRequests {
+    async fn request(&self, case: &Value) -> ReviewResponse {
         match self {
             Self::Router(router) => {
                 super::canvas_operations_read_replay::request_case(router, case).await
@@ -323,7 +500,12 @@ impl ReviewRequests {
     }
 }
 
-async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &ReviewRequests) {
+async fn review_cases(
+    pool: &PgPool,
+    state: &Arc<RuntimeState>,
+    requests: &ReviewRequests,
+    capabilities: ReviewCapabilities,
+) {
     use super::canvas_operations_read_replay::{insert_review, timestamps};
 
     // The SQL comes only from this compiled-in frozen corpus. Retain its static
@@ -364,11 +546,7 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
         .fetch_one(pool)
         .await
         .unwrap();
-    let mut names = vec!["suspend_delivered", "revoke_delivered", "mirror_failure"];
-    if requests.actual_process() {
-        names.push("publication_failure");
-    }
-    for name in names {
+    for &name in capabilities.cases() {
         let case = scenarios["cases"]
             .as_array()
             .unwrap()
@@ -398,7 +576,7 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
         state.calls.lock().unwrap().clear();
         state.events.lock().unwrap().clear();
 
-        if requests.actual_process() && name == "suspend_delivered" {
+        if capabilities.real_http_publication() && name == "suspend_delivered" {
             let denied_sql = "SELECT jsonb_build_object('reviews',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM issuance_service.evidence_policy_reviews r),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c),'deliveries',(SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM issuance_service.credential_delivery_records d),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM issuance_service.issuance_events e),'secret_usage',(SELECT last_used_at FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'))";
             let before: Value = sqlx::query_scalar(denied_sql)
                 .fetch_one(pool)
@@ -406,7 +584,19 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
                 .unwrap();
             let mut denied = case.clone();
             denied["headers"] = json!({"X-API-Key":"wrong-synthetic-key"});
-            assert_eq!(requests.request(&denied).await.0, 401);
+            let wrong_key_expected =
+                super::canvas_operations_read_replay::fixtures()[2]["observations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|case| case["name"] == "wrong_management_key")
+                    .unwrap();
+            requests.assert_response(
+                ReviewResponsePhase::AuthenticationDenied,
+                &denied,
+                wrong_key_expected,
+                requests.request(&denied).await,
+            );
             denied["headers"] = json!({"X-Organization-ID":"foreign"});
             let (status, content_type, body) = requests.request(&denied).await;
             let input_frozen: Value = serde_json::from_str(include_str!(
@@ -421,9 +611,12 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
                 .unwrap();
             // Same tenant-isolation projection, adapted to the suspend request;
             // not a replay of that corpus's dismiss request.
-            assert_eq!(json!(status), expected["status"]);
-            assert_eq!(content_type, expected["content_type"]);
-            assert_eq!(body, expected["body"]);
+            requests.assert_response(
+                ReviewResponsePhase::ForeignTenant,
+                &denied,
+                expected,
+                (status, content_type, body),
+            );
             assert!(state.calls.lock().unwrap().is_empty());
             assert_eq!(
                 sqlx::query_scalar::<_, Value>(denied_sql)
@@ -434,7 +627,7 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
             );
         }
 
-        let (status, content_type, mut body) = if requests.actual_process()
+        let (status, content_type, mut body) = if capabilities.real_http_publication()
             && name == "suspend_delivered"
         {
             // Exercise the existing concurrent-at-publication contract through
@@ -463,9 +656,11 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
                 .iter()
                 .find(|case| case["name"] == "concurrent_at_publication")
                 .unwrap();
-            assert_eq!(
-                json!({"status":status,"content_type":content_type,"body":body}),
-                concurrent["competing_response"]
+            requests.assert_response(
+                ReviewResponsePhase::ConcurrentClaim,
+                case,
+                &concurrent["competing_response"],
+                (status, content_type, body),
             );
             assert_eq!(
                 sqlx::query_scalar::<_, Value>(held_sql)
@@ -485,16 +680,25 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
             requests.request(case).await
         };
         timestamps(&mut body);
-        assert_eq!(json!(status), expected["status"], "{name}");
-        assert_eq!(content_type, expected["content_type"]);
-        assert_eq!(body, expected["body"], "{name} review response");
+        requests.assert_response(
+            ReviewResponsePhase::Outcome,
+            case,
+            expected,
+            (status, content_type, body),
+        );
         let mut snapshot: Value = sqlx::query_scalar(scenarios["snapshot_sql"].as_str().unwrap())
             .fetch_one(pool)
             .await
             .unwrap();
         timestamps(&mut snapshot);
         assert_eq!(snapshot["credential"], expected["snapshot"]["credential"]);
-        assert_eq!(snapshot["review"], expected["snapshot"]["review"]);
+        assert_eq!(
+            snapshot["review"],
+            requests.expected_review(
+                &expected["snapshot"]["review"],
+                name != "publication_failure"
+            )
+        );
         assert_eq!(
             snapshot["resolved_events"],
             event_count + i64::from(name != "publication_failure")
@@ -517,7 +721,7 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
         assert_eq!(calls[0]["port"], "publication");
         assert_eq!(calls[0]["action"], action);
         assert_eq!(calls[0]["status"], "active");
-        if requests.actual_process() {
+        if capabilities.real_http_publication() {
             assert_eq!(
                 calls[0]["service_token"],
                 "synthetic-main-service-token-at-least-32-bytes"
@@ -618,7 +822,7 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
             calls[1]["authorization"],
             "Bearer synthetic-runtime-tenant-token"
         );
-        if !requests.actual_process() {
+        if !capabilities.real_http_publication() {
             assert_eq!(
                 *state.events.lock().unwrap(),
                 [snapshot["credential"]["status"].as_str().unwrap()]
@@ -635,9 +839,21 @@ async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &Revie
             .unwrap();
         let lifecycle_events = state.events.lock().unwrap().clone();
         // Already-resolved requests must not repeat publication or provider I/O.
-        assert_eq!(requests.request(case).await.0, 409);
+        let duplicate_expected =
+            super::canvas_operations_read_replay::fixtures()[2]["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == "review_dismiss_again")
+                .unwrap();
+        requests.assert_response(
+            ReviewResponsePhase::DuplicateResolved,
+            case,
+            duplicate_expected,
+            requests.request(case).await,
+        );
         assert_eq!(*state.calls.lock().unwrap(), calls);
-        if !requests.actual_process() {
+        if !capabilities.real_http_publication() {
             assert_eq!(*state.events.lock().unwrap(), lifecycle_events);
         }
         assert_eq!(
@@ -717,12 +933,12 @@ async fn run_body(
     depth: bool,
 ) {
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::Request,
     };
     use marty_issuance_service::{
-        credential_management_http::CredentialManagementHttpService,
-        http::router_with_credential_management, transport::TransportPolicy, IssuanceRuntime,
+        IssuanceRuntime, credential_management_http::CredentialManagementHttpService,
+        http::router_with_credential_management, transport::TransportPolicy,
     };
     use marty_oid4vci::discovery::StaticDiscoveryDocuments;
     use tower::ServiceExt;
@@ -945,10 +1161,12 @@ async fn run_body(
                     after["metadata"]["status_sync_attempts"],
                     previous_attempts + 1
                 );
-                assert!(after["last_error"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("Canvas Credentials status sync failed (HTTP 403): "));
+                assert!(
+                    after["last_error"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("Canvas Credentials status sync failed (HTTP 403): ")
+                );
                 assert_eq!(*state.events.lock().unwrap(), vec!["reinstated"]);
                 let calls = state.calls.lock().unwrap().clone();
                 assert_eq!(calls.len(), 2);
@@ -1151,9 +1369,37 @@ async fn start_dependencies(pool: &PgPool, responses: Responses) -> RuntimeDepen
 /// lifecycle publisher, repository and Canvas service. Only external HTTP peers
 /// are controlled here; no signing or production policy is replaced.
 pub async fn run_review_operations_main(pool: &PgPool, database_url: &str) {
+    run_review_operations_main_with_transport(pool, database_url, |port, client| {
+        (
+            Arc::new(DirectReviewRequests::Process {
+                client,
+                base: format!("http://127.0.0.1:{port}"),
+            }),
+            Arc::new(DirectExpectations),
+        )
+    })
+    .await;
+}
+
+pub(super) type ReviewTransportPorts = (
+    Arc<dyn ReviewRequestTransport>,
+    Arc<dyn ReviewResponseExpectations>,
+);
+
+/// Reuse the real main-process/dependency owner with a new request boundary.
+/// The factory is invoked only after the exact owned process becomes healthy.
+/// Its ports cannot opt out of the four real-publication cases, claim-hold,
+/// token/body checks, raw persistence/duplicate checks or owned cleanup.
+pub(super) async fn run_review_operations_main_with_transport<F>(
+    pool: &PgPool,
+    database_url: &str,
+    factory: F,
+) where
+    F: FnOnce(u16, reqwest::Client) -> ReviewTransportPorts,
+{
     use super::issuance_process::{
-        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
-        ChildGuard,
+        ChildGuard, bounded_http_client, isolated_smoke_command, reserve_port,
+        wait_for_health_with_client,
     };
     use std::time::Duration;
     let database = url::Url::parse(database_url).unwrap();
@@ -1215,13 +1461,15 @@ pub async fn run_review_operations_main(pool: &PgPool, database_url: &str) {
         Some(json!({"status":"healthy","service":"issuance-service"}))
     );
     assert!(child.0.try_wait().unwrap().is_none());
+    let (transport, expectations) = factory(http_port, client);
     review_cases(
         pool,
         &state,
-        &ReviewRequests::Process {
-            client,
-            base: format!("http://127.0.0.1:{http_port}"),
+        &ReviewRequests {
+            transport,
+            expectations,
         },
+        ReviewCapabilities::RealHttpPublisher,
     )
     .await;
     assert!(child.0.try_wait().unwrap().is_none());
@@ -1385,4 +1633,173 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
         deliveries[2]["metadata"]["status_sync_request_id"],
         "synthetic-runtime-request"
     );
+}
+
+#[cfg(test)]
+mod review_transport_tests {
+    use super::*;
+
+    #[test]
+    fn publisher_capabilities_keep_all_real_process_cases() {
+        assert_eq!(
+            ReviewCapabilities::RealHttpPublisher.cases(),
+            [
+                "suspend_delivered",
+                "revoke_delivered",
+                "mirror_failure",
+                "publication_failure"
+            ]
+        );
+        assert!(ReviewCapabilities::RealHttpPublisher.real_http_publication());
+        assert_eq!(
+            ReviewCapabilities::ControlledPublisher.cases(),
+            ["suspend_delivered", "revoke_delivered", "mirror_failure"]
+        );
+        assert!(!ReviewCapabilities::ControlledPublisher.real_http_publication());
+    }
+
+    fn mip_expected() -> ReviewExpectedResponse {
+        ReviewExpectedResponse {
+            status: 409,
+            content_type: "application/json".into(),
+            body: json!({"error":"service_error", "error_description":"Review is claimed",
+                "details":{"code":"canvas_review_already_resolved"}, "message_id":REVIEW_MESSAGE_ID_SENTINEL}),
+            message_id: ReviewMessageIdPolicy::RequireUuid,
+        }
+    }
+
+    #[test]
+    fn explicit_mip_policy_preserves_every_field_except_validated_message_id() {
+        let mut body = mip_expected().body;
+        body["message_id"] = json!("11111111-1111-4111-8111-111111111111");
+        assert_review_response(
+            (409, "application/json".into(), body.clone()),
+            mip_expected(),
+        );
+        let mut mutations = Vec::new();
+        for replacement in [
+            Value::Null,
+            json!(12),
+            json!("invalid"),
+            json!(REVIEW_MESSAGE_ID_SENTINEL),
+        ] {
+            let mut changed = body.clone();
+            changed["message_id"] = replacement;
+            mutations.push(changed);
+        }
+        let mut missing = body.clone();
+        missing.as_object_mut().unwrap().remove("message_id");
+        mutations.push(missing);
+        let mut dropped = body.clone();
+        dropped.as_object_mut().unwrap().remove("details");
+        mutations.push(dropped);
+        let mut extra = body.clone();
+        extra["unexpected"] = json!(true);
+        mutations.push(extra);
+        let mut wrong_code = body;
+        wrong_code["details"]["code"] = json!("different_code");
+        mutations.push(wrong_code);
+        for changed in mutations {
+            assert!(
+                std::panic::catch_unwind(|| assert_review_response(
+                    (409, "application/json".into(), changed),
+                    mip_expected()
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn direct_expectations_keep_exact_status_content_type_and_body() {
+        let frozen = json!({"status":503, "content_type":"application/json",
+            "body":{"detail":"Revocation service unavailable"}});
+        let expected =
+            || DirectExpectations.response(ReviewResponsePhase::Outcome, &Value::Null, &frozen);
+        assert_review_response(
+            (503, "application/json".into(), frozen["body"].clone()),
+            expected(),
+        );
+        for actual in [
+            (200, "application/json".into(), frozen["body"].clone()),
+            (
+                503,
+                "application/problem+json".into(),
+                frozen["body"].clone(),
+            ),
+            (
+                503,
+                "application/json".into(),
+                json!({"detail":"different"}),
+            ),
+            (
+                503,
+                "application/json".into(),
+                json!({"detail":"Revocation service unavailable", "message_id":"11111111-1111-4111-8111-111111111111"}),
+            ),
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| assert_review_response(actual, expected())).is_err()
+            );
+        }
+    }
+
+    struct UnusedTransport;
+    #[async_trait]
+    impl ReviewRequestTransport for UnusedTransport {
+        async fn request(&self, _: &Value) -> ReviewResponse {
+            panic!("pure expectation test must not perform I/O")
+        }
+    }
+
+    struct ActorExpectations;
+    impl ReviewResponseExpectations for ActorExpectations {
+        fn response(
+            &self,
+            phase: ReviewResponsePhase,
+            case: &Value,
+            expected: &Value,
+        ) -> ReviewExpectedResponse {
+            DirectExpectations.response(phase, case, expected)
+        }
+        fn trusted_actor(&self) -> Option<&str> {
+            Some("trusted-test-actor")
+        }
+    }
+
+    #[test]
+    fn actor_adaptation_changes_only_successful_expected_fields() {
+        let requests = ReviewRequests {
+            transport: Arc::new(UnusedTransport),
+            expectations: Arc::new(ActorExpectations),
+        };
+        let frozen = json!({"status":200, "content_type":"application/json",
+            "body":{"resolved_by":null,"status":"suspended","unrelated":42}});
+        let retained = frozen.clone();
+        requests.assert_response(
+            ReviewResponsePhase::Outcome,
+            &Value::Null,
+            &frozen,
+            (
+                200,
+                "application/json".into(),
+                json!({"resolved_by":"trusted-test-actor","status":"suspended","unrelated":42}),
+            ),
+        );
+        assert_eq!(frozen, retained);
+        let review = json!({"actor":null,"status":"suspended","notes":"reason"});
+        assert_eq!(
+            requests.expected_review(&review, true),
+            json!({"actor":"trusted-test-actor","status":"suspended","notes":"reason"})
+        );
+        assert_eq!(review["actor"], Value::Null);
+        assert_eq!(requests.expected_review(&review, false), review);
+        let failed = json!({"status":503,"content_type":"application/json", "body":{"detail":"Revocation service unavailable"}});
+        requests.assert_response(
+            ReviewResponsePhase::Outcome,
+            &Value::Null,
+            &failed,
+            (503, "application/json".into(), failed["body"].clone()),
+        );
+    }
 }
