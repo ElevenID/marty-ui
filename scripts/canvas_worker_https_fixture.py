@@ -70,6 +70,21 @@ class WorkerHttpsFixture:
             return True
         return False
 
+    def encode_response_body(self, response):
+        """Default JSON bytes, shared unchanged by GET and DELETE."""
+        return (
+            b""
+            if response["status"] == 204
+            else json.dumps(response["body"], separators=(",", ":")).encode()
+        )
+
+    def configure_request_connection(self, handler):
+        """Optional per-handler socket setup; existing fixtures keep defaults."""
+
+    def write_response_body(self, handler, body, *, index, path, stage):
+        """Optional body schedule; default framing and write behavior are unchanged."""
+        handler.wfile.write(body)
+
     def __enter__(self):
         owner = self
 
@@ -82,6 +97,10 @@ class WorkerHttpsFixture:
         class Handler(ObservedRequestHandler):
             observed_requests = owner.requests
             request_observation_lock = Lock()
+
+            def setup(self):
+                super().setup()
+                owner.configure_request_connection(self)
 
             def log_message(self, *_):
                 pass
@@ -100,11 +119,7 @@ class WorkerHttpsFixture:
                 response = (
                     stage["responses"][self.path] if "responses" in stage else stage
                 )
-                body = (
-                    b""
-                    if response["status"] == 204
-                    else json.dumps(response["body"], separators=(",", ":")).encode()
-                )
+                body = owner.encode_response_body(response)
                 try:
                     self.send_response(response["status"])
                     self.send_header("Content-Type", "application/json")
@@ -115,7 +130,13 @@ class WorkerHttpsFixture:
                     for key, value in headers.items():
                         self.send_header(key, value)
                     self.end_headers()
-                    self.wfile.write(body)
+                    owner.write_response_body(
+                        self,
+                        body,
+                        index=self.observed_request_index,
+                        path=self.path,
+                        stage=stage,
+                    )
                 except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
                     if not held:
                         raise
