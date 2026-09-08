@@ -27,6 +27,8 @@ pub struct InitiationOfferResponse {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Successful delivery after durable completion, including an already-delivered
+/// replay. Failed or uncertain delivery must use the error result, not a receipt.
 pub struct InitiationDidcommDeliveryReceipt {
     pub service_endpoint: String,
 }
@@ -80,6 +82,7 @@ impl InitiationOfferProjector {
         request: &InitiationRequest,
     ) -> Result<InitiationOfferResponse, InitiationOfferProjectionError> {
         let transaction = reservation.transaction;
+        let mut response_status = transaction.status;
         let credential_type = transaction
             .credential_type
             .as_deref()
@@ -116,7 +119,8 @@ impl InitiationOfferProjector {
                 .get("format_variant")
                 .and_then(serde_json::Value::as_str);
             let uri = if variant == Some("didcomm_v2") {
-                self.didcomm_uri(&transaction, request).await
+                self.didcomm_uri(&transaction, request, &mut response_status)
+                    .await
             } else {
                 let configuration_id = credential_configuration_id_for_format(
                     credential_type,
@@ -152,7 +156,7 @@ impl InitiationOfferProjector {
             id: transaction.id,
             organization_id: transaction.organization_id,
             credential_template_id: transaction.credential_template_id,
-            status: transaction_status(transaction.status).to_owned(),
+            status: transaction_status(response_status).to_owned(),
             credential_offer_uri,
             credential_offer_uris,
             credential_offer_labels,
@@ -189,6 +193,7 @@ impl InitiationOfferProjector {
         &self,
         transaction: &CredentialTransaction,
         request: &InitiationRequest,
+        response_status: &mut CredentialTransactionStatus,
     ) -> String {
         let holder_did = request
             .holder_did
@@ -203,7 +208,18 @@ impl InitiationOfferProjector {
         if let Some(holder_did) = holder_did {
             match self.didcomm.deliver(transaction, holder_did).await {
                 Ok(receipt) if !receipt.service_endpoint.is_empty() => {
-                    return format!("didcomm://{}", receipt.service_endpoint)
+                    // The shared delivery owner returns success only after
+                    // projection or a durable delivered replay. Reflect that
+                    // completion without mutating/reloading the reservation or
+                    // weakening its transport-claim fences for later wallets.
+                    if matches!(
+                        *response_status,
+                        CredentialTransactionStatus::Pending
+                            | CredentialTransactionStatus::Authorized
+                    ) {
+                        *response_status = CredentialTransactionStatus::Issued;
+                    }
+                    return format!("didcomm://{}", receipt.service_endpoint);
                 }
                 Ok(_) | Err(_) => {
                     warn!(
@@ -357,7 +373,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status, "pending");
+        assert_eq!(response.status, "issued");
         assert_eq!(response.expires_at, "2026-09-06T12:00:00+00:00");
         assert!(response.credential_offer_uri.starts_with(
             "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/org-1%22"
@@ -401,6 +417,46 @@ mod tests {
             response.credential_offer_uris["didcomm"],
             "didcomm://pending?transaction_id=transaction-1"
         );
+        assert_eq!(response.status, "pending");
+    }
+
+    #[tokio::test]
+    async fn empty_endpoint_and_missing_holder_never_promote_response_status() {
+        for missing_holder in [false, true] {
+            let projector = InitiationOfferProjector::new(
+                "https://issuer.example",
+                Arc::new(TestDidcomm {
+                    receipt: Ok(InitiationDidcommDeliveryReceipt {
+                        service_endpoint: if missing_holder {
+                            "https://unused.example"
+                        } else {
+                            ""
+                        }
+                        .into(),
+                    }),
+                }),
+            )
+            .unwrap();
+            let mut request = request();
+            if missing_holder {
+                request.holder_did = None;
+                request.subject_did = None;
+            }
+            let response = projector
+                .project(
+                    reservation(vec![json!({
+                        "wallet_id":"didcomm", "format_variant":"didcomm_v2"
+                    })]),
+                    &request,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status, "pending");
+            assert_eq!(
+                response.credential_offer_uris["didcomm"],
+                "didcomm://pending?transaction_id=transaction-1"
+            );
+        }
     }
 
     #[test]

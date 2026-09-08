@@ -1568,7 +1568,7 @@ mod tests {
     };
     use chrono::{TimeZone, Utc};
     use marty_didcomm::types::{Jwk, VerificationMethod};
-    use serde_json::Map;
+    use serde_json::{Map, Value};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         sync::Notify,
@@ -1824,6 +1824,7 @@ mod tests {
         transport_claim: Mutex<HarnessTransportClaimState>,
         fail_transport_success_once: AtomicBool,
         fail_transport_unattempted: AtomicBool,
+        fail_staging: AtomicBool,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1857,6 +1858,7 @@ mod tests {
                 transport_claim: Mutex::new(HarnessTransportClaimState::Idle),
                 fail_transport_success_once: AtomicBool::new(false),
                 fail_transport_unattempted: AtomicBool::new(false),
+                fail_staging: AtomicBool::new(false),
             }
         }
     }
@@ -2009,6 +2011,9 @@ mod tests {
             credential: &IssuedCredential,
             delivery: &StagedInitiationDidcommDelivery,
         ) -> Result<(), CredentialIssuanceError> {
+            if self.fail_staging.load(Ordering::SeqCst) {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             self.finalize_delivered(transaction, credential).await?;
             let mut finalized = transaction.clone();
             finalized.status = CredentialTransactionStatus::Issued;
@@ -2389,6 +2394,305 @@ mod tests {
         )
         .unwrap();
         (delivery, repository, order)
+    }
+
+    fn automatic_reference() -> Value {
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/didcomm-automatic-response-python-reference.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            reference["schema"],
+            "marty.didcomm-automatic-response-python-reference/v1"
+        );
+        assert_eq!(
+            reference["reference"]["source_commit"],
+            "9bd2747f040f203188529758ec38f0a5dce5ac5f"
+        );
+        assert_eq!(
+            reference["reference"]["source_blob"],
+            "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a"
+        );
+        assert_eq!(
+            reference["reference"]["setup_blob"],
+            "f373c4d1762f916b616e4b83a38101112ec78e85"
+        );
+        assert_eq!(
+            reference["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| case["case"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "success_holder",
+                "missing_holder",
+                "preflight_failure",
+                "failed_receipt",
+                "subject_fallback",
+                "holder_precedes_subject",
+                "multiple_wallets"
+            ]
+        );
+        reference
+    }
+
+    fn automatic_input(
+        case: &Value,
+    ) -> (
+        crate::initiation::InitiationReservation,
+        crate::initiation::InitiationRequest,
+    ) {
+        let mut transaction = transaction();
+        transaction.id = case["response"]["id"].as_str().unwrap().into();
+        transaction.organization_id = case["response"]["organization_id"].as_str().unwrap().into();
+        transaction.credential_template_id = case["response"]["credential_template_id"]
+            .as_str()
+            .unwrap()
+            .into();
+        transaction.pre_authorized_code =
+            case["response"]["pre_auth_code"].as_str().unwrap().into();
+        transaction.expires_at =
+            chrono::DateTime::parse_from_rfc3339(case["response"]["expires_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&Utc);
+        transaction.wallet_configs = case["wallet_configs"].as_array().unwrap().clone();
+        let request = serde_json::from_value(json!({
+            "organization_id":transaction.organization_id,
+            "credential_template_id":transaction.credential_template_id,
+            "issuer_did":"did:web:issuer.example",
+            "holder_did":case["request"]["holder_did"],
+            "subject_did":case["request"]["subject_did"],
+        }))
+        .unwrap();
+        (
+            crate::initiation::InitiationReservation {
+                transaction,
+                created: true,
+            },
+            request,
+        )
+    }
+
+    #[tokio::test]
+    async fn automatic_success_projects_real_delivery_completion_without_repeated_send() {
+        use crate::initiation_response::InitiationOfferProjector;
+        let reference = automatic_reference();
+        let success_cases: Vec<_> = reference["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["response"]["status"] == "issued")
+            .collect();
+        assert_eq!(
+            success_cases
+                .iter()
+                .map(|case| case["case"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "success_holder",
+                "subject_fallback",
+                "holder_precedes_subject",
+                "multiple_wallets"
+            ]
+        );
+        for case in success_cases {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let projector =
+                InitiationOfferProjector::new("https://issuer.example", Arc::new(delivery))
+                    .unwrap();
+            let (reservation, request) = automatic_input(case);
+            let original = reservation.transaction.clone();
+            // The captured offer generator was a controlled port, so compare
+            // native real offer bytes to its own unchanged no-wallet projection.
+            let mut without_wallets = reservation.clone();
+            without_wallets.transaction.wallet_configs.clear();
+            let untouched = projector.project(without_wallets, &request).await.unwrap();
+            assert!(order.lock().unwrap().is_empty());
+            let response = projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap();
+            let serialized = serde_json::to_value(&response).unwrap();
+            for field in [
+                "id",
+                "organization_id",
+                "credential_template_id",
+                "status",
+                "credential_offer_uris",
+                "credential_offer_labels",
+                "pre_auth_code",
+                "expires_at",
+            ] {
+                assert_eq!(serialized[field], case["response"][field], "{field}");
+            }
+            assert_eq!(
+                response.credential_offer_uri,
+                untouched.credential_offer_uri
+            );
+            assert_eq!(reservation.transaction, original);
+            assert_eq!(original.status, CredentialTransactionStatus::Pending);
+            let stored = repository.delivery.lock().unwrap().clone().unwrap();
+            let InitiationDidcommDeliveryState::Delivered(delivered) = &stored else {
+                panic!("successful automatic offer requires delivered repository state")
+            };
+            assert_eq!(delivered.transaction_id, original.id);
+            assert_eq!(delivered.organization_id, original.organization_id);
+            assert_eq!(delivered.credential_id, reserved_credential_id(&original));
+            assert_eq!(
+                delivered.holder_did,
+                case["calls"]["holders"][0].as_str().unwrap()
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            let first_order = order.lock().unwrap().clone();
+            for stage in ["build", "allocate-status", "transport", "after-didcomm"] {
+                assert_eq!(
+                    first_order.iter().filter(|value| **value == stage).count(),
+                    1
+                );
+            }
+            // Python captured two sends for two wallets. This is deliberately
+            // NOT a parity assertion: retain native delivered replay/no-resend.
+            if case["case"] == "multiple_wallets" {
+                assert_eq!(case["calls"]["transport"], 2);
+            }
+            order.lock().unwrap().clear();
+            assert_eq!(
+                projector
+                    .project(reservation.clone(), &request)
+                    .await
+                    .unwrap(),
+                response
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(*repository.delivery.lock().unwrap(), Some(stored));
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            // A delivered receipt does not authorize rewriting an already
+            // noneligible reservation's status. Preserve pre-existing projection
+            // behavior while still exercising the real delivered replay branch.
+            for (status, expected_status) in [
+                (CredentialTransactionStatus::Issued, "issued"),
+                (CredentialTransactionStatus::Revoked, "revoked"),
+                (CredentialTransactionStatus::Expired, "expired"),
+                (CredentialTransactionStatus::Failed, "failed"),
+                (CredentialTransactionStatus::Signing, "signing"),
+            ] {
+                let mut recovered = reservation.clone();
+                recovered.transaction.status = status;
+                recovered.created = false;
+                let mut expected = response.clone();
+                expected.status = expected_status.into();
+                assert_eq!(
+                    projector.project(recovered, &request).await.unwrap(),
+                    expected
+                );
+                assert!(order.lock().unwrap().is_empty());
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+                assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_failure_never_promotes_even_when_materialization_is_durable() {
+        use crate::initiation_response::InitiationOfferProjector;
+        let reference = automatic_reference();
+        let success = &reference["cases"][0];
+        for failure in [
+            "preflight",
+            "staging",
+            "unattempted",
+            "unknown",
+            "projection",
+        ] {
+            let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: match failure {
+                    "unattempted" => DidcommTransportOutcome::Failed,
+                    "unknown" => DidcommTransportOutcome::OutcomeUnknown,
+                    _ => DidcommTransportOutcome::Delivered,
+                },
+                post_issuance_fail: failure == "projection",
+            });
+            if failure == "preflight" {
+                delivery.ports.envelope = Arc::new(HarnessEnvelope {
+                    order: order.clone(),
+                    resolve_error: None,
+                    prepare_error: Some(NativeDidcommError::IncompatibleKeyAgreement),
+                    pack_error: None,
+                    encrypt_error: None,
+                });
+            }
+            repository
+                .fail_staging
+                .store(failure == "staging", Ordering::SeqCst);
+            let projector =
+                InitiationOfferProjector::new("https://issuer.example", Arc::new(delivery))
+                    .unwrap();
+            let (reservation, request) = automatic_input(success);
+            let response = projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap();
+            assert_eq!(response.status, "pending");
+            assert_eq!(
+                response.credential_offer_uris["wallet-a"],
+                format!(
+                    "didcomm://pending?transaction_id={}",
+                    reservation.transaction.id
+                )
+            );
+            if failure == "preflight" {
+                assert_eq!(response.status, reference["cases"][2]["response"]["status"]);
+                assert_eq!(
+                    serde_json::to_value(&response.credential_offer_uris).unwrap(),
+                    reference["cases"][2]["response"]["credential_offer_uris"]
+                );
+            }
+            if failure == "unattempted" {
+                // The Python HTTP502 receipt produced an endpoint URI. Native
+                // definitely-unattempted failure is NOT the same transport case;
+                // retain the existing pending URI, without claiming parity.
+                assert_ne!(
+                    serde_json::to_value(&response.credential_offer_uris).unwrap(),
+                    reference["cases"][3]["response"]["credential_offer_uris"]
+                );
+            }
+            let first_order = order.lock().unwrap().clone();
+            if matches!(failure, "preflight" | "staging") {
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+                assert!(repository.delivery.lock().unwrap().is_none());
+                assert!(!first_order.contains(&"transport"));
+                assert_eq!(
+                    repository.releases.load(Ordering::SeqCst),
+                    usize::from(failure == "staging")
+                );
+            } else {
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+                assert!(matches!(
+                    *repository.delivery.lock().unwrap(),
+                    Some(InitiationDidcommDeliveryState::Pending(_))
+                ));
+            }
+            if matches!(failure, "unknown" | "projection") {
+                order.lock().unwrap().clear();
+                assert_eq!(
+                    projector.project(reservation, &request).await.unwrap(),
+                    response
+                );
+                let retry_order = order.lock().unwrap();
+                assert!(!retry_order.contains(&"transport"));
+                assert!(!retry_order.contains(&"build"));
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            }
+        }
     }
 
     #[tokio::test]
