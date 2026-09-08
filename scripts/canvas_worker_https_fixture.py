@@ -63,6 +63,13 @@ class WorkerHttpsFixture:
         self.thread = None
         self.certificates = None
 
+    def wait_for_response(self, index, path, stage):
+        """Optional owned response barrier; return whether cancellation is expected."""
+        if stage.get("hold_response"):
+            assert self.release.wait(30), "Owned response was never released"
+            return True
+        return False
+
     def __enter__(self):
         owner = self
 
@@ -87,8 +94,9 @@ class WorkerHttpsFixture:
 
             def do_GET(self):
                 stage = self.observed_stage
-                if stage.get("hold_response"):
-                    assert owner.release.wait(30), "Owned response was never released"
+                held = owner.wait_for_response(
+                    self.observed_request_index, self.path, stage
+                )
                 response = (
                     stage["responses"][self.path] if "responses" in stage else stage
                 )
@@ -109,7 +117,7 @@ class WorkerHttpsFixture:
                     self.end_headers()
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
-                    if not stage.get("hold_response"):
+                    if not held:
                         raise
 
             # Revocation uses DELETE; retain the same observation, response and

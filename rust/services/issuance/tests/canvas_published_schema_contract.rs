@@ -2,6 +2,117 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/canvas_worker_deadline_replay.rs"]
+mod canvas_worker_deadline_replay;
+
+#[path = "support/canvas_published_borrowed_database.rs"]
+mod canvas_published_borrowed_database;
+
+#[tokio::test]
+async fn worker_deadline_matches_frozen_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!("Actual deadline process containment requires the mandatory Linux gate");
+        return;
+    }
+    for case in ["early_release", "deadline_cancel"] {
+        // Keep Docker ownership outside the killable inner coordinator. Each
+        // case receives a fresh database and only a checked ownership descriptor.
+        let owned = canvas_published_database::PublishedDatabase::start()
+            .await
+            .unwrap();
+        let descriptor = owned.borrow_descriptor().unwrap();
+        assert_worker_https_script_with_environment(
+            "test_canvas_worker_deadline_https.py",
+            &[case],
+            &[("MARTY_CANVAS_WORKER_DEADLINE_DATABASE", descriptor.as_str())],
+        );
+        owned.close_verified().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn worker_deadline_native_child() {
+    let Ok(origin) = std::env::var("MARTY_CANVAS_WORKER_DEADLINE_NATIVE_ORIGIN") else {
+        return;
+    };
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let case = std::env::var("MARTY_CANVAS_WORKER_DEADLINE_CASE").unwrap();
+    let descriptor = std::env::var("MARTY_CANVAS_WORKER_DEADLINE_DATABASE").unwrap();
+    let database_url =
+        canvas_published_database::PublishedDatabase::borrowed_url(&descriptor).unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    canvas_worker_deadline_replay::replay(&pool, &database_url, &origin, &case).await;
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn worker_timeout_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let mut observations = Vec::new();
+    for case in [
+        "application_prompt",
+        "application_delayed_headers",
+        "roster_prompt",
+        "roster_delayed_headers",
+    ] {
+        let owned = canvas_published_database::PublishedDatabase::start_with_worker_timeout(case)
+            .await
+            .unwrap();
+        observations.push(owned.oracle.as_ref().unwrap().clone());
+        owned.close().unwrap();
+    }
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-timeout-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::json!({
+            "schema": "marty.canvas-worker-timeout-oracle/v1",
+            "observations": observations,
+        }),
+        reference,
+    );
+}
+
+#[tokio::test]
+async fn worker_deadline_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let mut observations = Vec::new();
+    for case in ["early_release", "deadline_cancel"] {
+        let owned = canvas_published_database::PublishedDatabase::start_with_worker_deadline(case)
+            .await
+            .unwrap();
+        observations.push(owned.oracle.as_ref().unwrap().clone());
+        owned.close().unwrap();
+    }
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-deadline-oracle.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::json!({
+            "schema": "marty.canvas-worker-deadline-oracle/v1",
+            "observations": observations,
+        }),
+        reference,
+    );
+}
+
 #[tokio::test]
 async fn worker_dispatch_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
@@ -530,9 +641,19 @@ fn assert_worker_provider_https(scenario: &str) {
 }
 
 fn assert_worker_https_script(script: &str, arguments: &[&str]) {
+    assert_worker_https_script_with_environment(script, arguments, &[]);
+}
+
+fn assert_worker_https_script_with_environment(
+    script: &str,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+) {
     assert!(matches!(
         script,
-        "test_canvas_worker_provider_signals_https.py" | "test_canvas_worker_mixed_roster_https.py"
+        "test_canvas_worker_provider_signals_https.py"
+            | "test_canvas_worker_mixed_roster_https.py"
+            | "test_canvas_worker_deadline_https.py"
     ));
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -549,6 +670,7 @@ fn assert_worker_https_script(script: &str, arguments: &[&str]) {
         .arg(root.join("scripts").join(script))
         .arg(std::env::current_exe().unwrap())
         .args(arguments)
+        .envs(environment.iter().copied())
         .output()
         .unwrap();
     assert!(

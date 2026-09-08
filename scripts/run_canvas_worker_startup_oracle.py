@@ -2,7 +2,7 @@
 
 No worker, database query, clock or processor is patched. Only synthetic inputs
 are supplied. Empty queues establish startup/heartbeat, not provider capability.
-Child logs are discarded; observations never contain credentials or tracebacks.
+Child logs default to discarded; opt-in fixtures own their capture and safe projections.
 """
 
 import hashlib
@@ -19,7 +19,9 @@ import time
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
 
 
-def start_worker(case, worker_id):
+def start_worker(
+    case, worker_id, *, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+):
     # The parent is the isolated immutable-image probe, not a host environment.
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("CANVAS_")
@@ -45,8 +47,8 @@ def start_worker(case, worker_id):
         else [sys.executable, "-m", "issuance.canvas_worker"],
         env=environment,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 

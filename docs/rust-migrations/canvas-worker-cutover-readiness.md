@@ -1,6 +1,32 @@
 # Canvas worker cutover readiness — 2026-09-07
 
-Status: latest qualified composed checkpoint `6914387e563d1043948aaea7a5cc514be6055038`:
+Status: latest qualified composed checkpoint
+`9cbba6b7bc687614e8c2d74ef78fab532e5888fb`: CI `34109922914` and Rust CodeQL
+`34109922824` succeeded. Runtime job `101703569433` passed **121 configured
+published-schema tests in 3319.49s**, and four configured worker/PostgreSQL
+tests in 96.40s. Exclude its unconfigured 121-test/0.34s and 4-test/0.01s results
+from database qualification.
+
+The mixed-roster early preflight passed seven stages and 55 actual HTTPS
+requests in 365.39s. The full configured suite repeated native replay and fresh
+published regeneration. Every stage's complete Canvas, token-scope, signer
+request and signer-operation ledger matched the frozen arrays: totals
+55/13/26/26. Stage 0 now matches 10/2/4/4, correcting the prior 12/4/8/8 failure
+without changing the reference. These are enforced array counts, not individually
+printed passing payloads. Synthetic signing does not qualify remote cryptography.
+
+Image job `101703569310` passed all builds, nine worker preflight cases,
+24 packaged startup cases and the 16-case published logging reference. It also
+passed the 17-service bundle, 21 synthetic rollback merges and 15 complete
+consumer-source compositions. The compiler-consumed examples remain packaged
+and compiled. Local deadline/timeout extensions are separate and unqualified;
+remaining whole-worker, loader/consumer, signing and beta acceptance gates stay
+open. PR #814 remains draft and unrouted; no Python features were removed and no
+deployment or restore occurred.
+
+## Historical checkpoint evidence
+
+Previously qualified composed checkpoint `6914387e563d1043948aaea7a5cc514be6055038`:
 115 configured runtime tests passed in 2444.37s (CI34089906961,
 runtime101641133956), with four configured worker/PostgreSQL entries in 95.63s.
 The configured result is logged at `2026-09-07T07:01:57.0655556Z`; ignore the

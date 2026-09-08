@@ -5,6 +5,53 @@ published worker processes, real loopback Canvas HTTPS and a scoped synthetic
 signer HTTP fixture. It does not qualify the remote signer or cryptographic
 service. Production and deployment consumers remain unchanged.
 
+## Current qualification — exact Linux checkpoint
+
+Commit `9cbba6b7bc687614e8c2d74ef78fab532e5888fb` passed
+[CI 34109922914](https://github.com/ElevenID/marty-ui/actions/runs/34109922914)
+and [Rust CodeQL 34109922824](https://github.com/ElevenID/marty-ui/actions/runs/34109922824).
+The [configured runtime job 101703569433](https://github.com/ElevenID/marty-ui/actions/runs/34109922914/job/101703569433)
+provides the following actual execution evidence:
+
+- Early mixed-roster preflight: **one passed**, 120 filtered out, in **365.39s**.
+  Its log explicitly reports all **seven stages and 55 actual Canvas HTTPS requests**.
+- Full configured published-schema suite: **121 passed**, zero failed or ignored,
+  in **3319.49s**. This includes another successful seven-stage native replay and
+  the fresh published-reference regeneration/comparison.
+- Configured worker PostgreSQL suite: **four passed** in **96.40s**, including the
+  database-backed scheduler/recovery/renewal/heartbeat vectors and helper controls.
+
+The workspace's earlier 121-test result in 0.34s and four-test worker PostgreSQL
+result in 0.01s are **not** database qualification: those invocations lack the
+database opt-in, so gated bodies return early while pure controls still run.
+The 121 configured suite entries are also not a claim of 121 independent
+whole-worker scenarios. Concurrent suite logs were buffered and emitted together;
+their printed wall timestamps are not individual test execution times.
+
+The passing driver compares complete ordered lists for Canvas requests, token
+scopes, signer requests and signer operations at every stage. The counts below
+come from the **exact commit's frozen reference arrays**, whose equality the
+successful run enforces; CI prints the seven-stage/55-request summary, not every
+passing ledger. Signer traffic remains synthetic HTTP fixture traffic.
+
+| Stage | Canvas requests | Token scopes | Signer requests | Signer operations |
+| --- | ---: | ---: | ---: | ---: |
+| `tail_positive_wrap` | 10 | 2 | 4 | 4 |
+| `head_identity_gates` | 3 | 1 | 2 | 2 |
+| `resumed_tail_negative` | 10 | 2 | 4 | 4 |
+| `head_active_membership` | 6 | 2 | 4 | 4 |
+| `tail_provider_outage` | 10 | 2 | 4 | 4 |
+| `head_duplicate_observations` | 6 | 2 | 4 | 4 |
+| `tail_positive_recovery` | 10 | 2 | 4 | 4 |
+| **Total** | **55** | **13** | **26** | **26** |
+
+This supersedes the metadata and excess-token failures recorded below for this
+seven-stage corpus. It qualifies its populated roster, identity/evidence states,
+natural cursor resume/wrap, specified idle restart and exact transport composition.
+It does **not** close every [worker cutover gate](canvas-worker-cutover-readiness.md),
+the separate global-deadline/provider-timeout work, remote signing/crypto,
+consumer cutover, deployment or beta acceptance.
+
 ## Behavioral capture
 
 The fixture seeds only a fresh, owned published-schema database before worker
@@ -43,8 +90,9 @@ transactions and ciphertext survived every stage and shutdown. Raw roster
 name/email sentinels were not retained in candidate/observation storage. The
 idle restart and final interrupt left durable projections and raw job rows
 unchanged in both runs. Seven frozen-corpus integrity tests and thirteen actual
-fixture transport tests passed together in 5.59 seconds. This is reproducible
-published behavior and fixture evidence, not native parity qualification.
+fixture transport tests passed together in 5.59 seconds. These capture-only
+results established reproducible published behavior, not native parity by
+themselves; the later Linux qualification is recorded above.
 
 The permanent configured published-reference comparison subsequently passed in
 366.31 seconds. An earlier comparison correctly caught a freezing-tool error:
@@ -59,32 +107,32 @@ The actual durable job result contains `candidates_seen`, `pending_claim`,
 `identity_link_required` and `observations_written`. Unlike the direct processor
 result, it excludes `roster_remaining`; that is the published worker's existing
 safe-result projection. The native safe-result allowlist already matches this
-source behavior, but actual native execution must still prove the composition.
+source behavior, and the seven-stage native run now proves this composition.
 The target's projected `worker_id` is null after roster saves. Do not normalize
 these observed values away to match a different test layer.
 
 NRPS uses one scoped token exchange per stage; stages reading AGS obtain one
 additional AGS token. The fixture verifies real resolver/signing HTTP shapes
 and generated assertion claims without storing dynamic claims or providing
-real signing keys. Both the native HTTP path and its scoped token reuse remain
-to be compared against the frozen request trace.
+real signing keys. The native HTTP path and its invocation-scoped token reuse
+now match this frozen request trace in the exact Linux checkpoint above.
 
 The initial capture attempt exposed a fixture setup omission: a self-managed
 Canvas origin needs its exact origin in `CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST`,
 in addition to private-origin HTTPS permission. The successful fixture supplies
 that exact loopback origin before startup. No runtime trust guard was relaxed.
 
-## Remaining qualification
+## Replay mechanics and remaining scope
 
 The frozen published reference now has a mandatory configured regeneration
-test. The native replay and Python transport driver are implemented and
-registered in the mandatory Linux suite; compilation and local fixture tests
-do not establish native runtime parity. Execute
-the same seven stages through a continuously running native worker, including
-the one specified restart. Reuse shared seed, snapshot, TLS and process owners;
-do not substitute direct processor calls or restart after every stage. Compare
-complete durable state and exact transport traces before changing any runtime
-behavior. Preserve the original twelve-stage corpus and all other
+test. The native replay and Python transport driver execute in the mandatory
+Linux suite. The successful checkpoint runs the same seven stages through a
+continuously running native worker with the one specified restart, reusing the
+shared seed, snapshot, TLS and process owners. It does not substitute direct
+processor calls or restart after every stage. Complete durable state and exact
+transport traces remain required before changing runtime behavior. Compilation
+and local fixture tests alone are not runtime qualification. Preserve the
+original twelve-stage corpus and all other
 [worker cutover gates](canvas-worker-cutover-readiness.md).
 
 The native driver compares the four exact transport ledgers before acknowledging
@@ -95,6 +143,8 @@ waiting for stage markers. Failure reports retain bounded diagnostic tails.
 Thirty-two driver tests include a real failing child that writes 256 KiB to each
 stream; failure remains prompt, cleanup completes, and no stage advances.
 
+## Historical failures and repairs — superseded for this corpus
+
 CI `34098106567` supplied actual native evidence at `8e7f66d46`: stage 0
 `tail_positive_wrap` failed target equality because `worker_id` remained
 `worker-rest` instead of the frozen null projection. The configured suite passed
@@ -103,7 +153,7 @@ hypothesis: the child stopped before the driver's transport comparison.
 
 The next head `f8670830b` passed stage-0 metadata assertions, then failed the
 early preflight in 25.79s (CI `34104771356`, job `101687206847`). Exact transport
-now proves the next difference: 12 requests versus 10, four token exchanges
+then proved the next difference: 12 requests versus 10, four token exchanges
 versus two, and eight synthetic signer calls versus four, with no fixture failures.
 The frozen Python roster creates one invocation-local AGS token slot and reuses
 successful acquisition across learners (`canvas_routes.py` lines 6041, 6115–6135);
@@ -111,15 +161,17 @@ application synchronization has the same invocation-local behavior at 5643–567
 The worker retains token values without expiry refresh within that invocation.
 The native repair therefore binds a fresh provider session per processor run,
 preserves owner/scope separation and trust checks, and memoizes successful grants
-without sharing tokens across jobs. Focused testing and the unchanged seven-stage
-Linux replay remain required; the transport ledgers are not normalized away.
+without sharing tokens across jobs. Focused tests and the unchanged seven-stage
+Linux replay subsequently passed at the current checkpoint; no transport ledger
+was normalized away to obtain that result.
 
 The narrow repair reconciles only the pre-touch snapshot's two heartbeat keys
 while retaining unrelated current metadata and all lease/generation fences.
 Ten configured fresh-database regression cases passed in 104.27s, including
 natural lease expiry before the write and during a blocked UPDATE. Extra
 preexisting/explicit-null snapshot cases are focused reconciliation coverage,
-not additional frozen published observations. Whole-worker replay remains open.
+not additional frozen published observations. The seven-stage whole-worker
+replay subsequently passed; broader worker qualification remains separately gated.
 Independent read-only inspection of the exact frozen issuance image confirmed
 the source semantics: `canvas_worker.py` fetches the target at line 432, touches
 the database heartbeat at 448–452, and passes the same snapshot at 474.
@@ -146,5 +198,6 @@ passed. No frozen equality or provider/signing implementation was changed.
 Historical reference-batch local checks: 1,201 Python tests passed with one existing skip in 62.16s;
 strict all-target Rust Clippy passed in 6.97s; Rustfmt, changed-file Ruff and
 shell syntax checks passed. That registration contained 119 entries, not 119
-qualified runtime passes. The last hosted checkpoint remains the recorded
-115-entry head until the new exact-head Linux run completes successfully.
+qualified runtime passes. The previously recorded 115-entry hosted checkpoint
+and the later failed heads are historical evidence, superseded by the exact
+121-entry configured Linux pass above without implying broader cutover approval.

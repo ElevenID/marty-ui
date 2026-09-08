@@ -141,4 +141,10 @@ fi
 "${executables[0]}" --list | grep -Fx 'worker_provider_recovery_first_preserves_terminal_winner: test'
 "${executables[0]}" --list | grep -Fx 'worker_provider_recovery_first_native_child: test'
 "${executables[0]}" --list | grep -Fx 'canvas_worker_provider_completion_replay::rejected_owner_check_rejects_unrelated_or_reference_drift: test'
+"${executables[0]}" --list | grep -Fx 'worker_deadline_reference_matches_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_deadline_matches_frozen_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_deadline_native_child: test'
+"${executables[0]}" --list | grep -Fx 'canvas_published_borrowed_database::outer_database_owner_survives_forced_borrower_exit: test'
+"${executables[0]}" --list | grep -Fx 'canvas_published_borrowed_database::borrower_child: test'
+"${executables[0]}" --list | grep -Fx 'worker_timeout_reference_matches_published_process: test'
 "${executables[0]}" --nocapture --test-threads=1

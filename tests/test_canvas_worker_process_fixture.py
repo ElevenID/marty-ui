@@ -15,6 +15,41 @@ def fixture_module(monkeypatch):
     return importlib.import_module("run_canvas_worker_startup_oracle")
 
 
+@pytest.mark.parametrize("capture", [False, True])
+def test_worker_output_is_discarded_by_default_or_owned_by_explicit_caller(
+    fixture_module, monkeypatch, capture
+):
+    observed = {}
+    child = object()
+
+    def launch(command, **options):
+        observed.update(command=command, **options)
+        return child
+
+    monkeypatch.setattr(fixture_module.subprocess, "Popen", launch)
+    stdout, stderr = object(), object()
+    streams = {"stdout": stdout, "stderr": stderr} if capture else {}
+    assert (
+        fixture_module.start_worker(
+            {"database_scheme": "postgresql", "environment": {}},
+            "synthetic-output-worker",
+            **streams,
+        )
+        is child
+    )
+    assert observed["command"] == [sys.executable, "-m", "issuance.canvas_worker"]
+    assert observed["stdin"] == fixture_module.subprocess.DEVNULL
+    if capture:
+        assert observed["stdout"] is stdout and observed["stderr"] is stderr
+    else:
+        assert (
+            observed["stdout"]
+            == observed["stderr"]
+            == fixture_module.subprocess.DEVNULL
+        )
+    assert observed["env"]["CANVAS_SYNC_WORKER_ID"] == "synthetic-output-worker"
+
+
 class Child:
     def __init__(self, returncode=None, fail_wait=False):
         self.returncode = returncode

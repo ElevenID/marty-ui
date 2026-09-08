@@ -41,6 +41,24 @@ impl OwnedWorker {
         worker_id: &str,
         environment: &BTreeMap<String, String>,
     ) -> Self {
+        Self::start_with_environment_and_output(
+            database_url,
+            worker_id,
+            environment,
+            Stdio::null(),
+            Stdio::null(),
+        )
+    }
+
+    /// Opt-in owned files only: callers retain independent read descriptors.
+    /// Existing signal/provider callers continue to discard both streams.
+    pub(super) fn start_with_environment_and_output(
+        database_url: &str,
+        worker_id: &str,
+        environment: &BTreeMap<String, String>,
+        stdout: Stdio,
+        stderr: Stdio,
+    ) -> Self {
         let mut database_url = url::Url::parse(database_url).unwrap();
         assert!(database_url.path().ends_with("_test"));
         database_url
@@ -62,8 +80,8 @@ impl OwnedWorker {
             .env("RUST_LOG", "error")
             .envs(environment)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(stdout)
+            .stderr(stderr);
         // Windows socket providers need the OS installation path even when
         // application configuration/credentials are intentionally cleared.
         #[cfg(windows)]

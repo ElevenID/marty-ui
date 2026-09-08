@@ -20,6 +20,25 @@ ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 
 
+def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependencies():
+    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
+        "test-release-contracts"
+    ]
+    assert job["runs-on"] == "ubuntu-latest"
+    steps = {step.get("name"): step for step in job["steps"]}
+    installation = steps["Install released test dependencies"]["run"]
+    command = next(
+        line
+        for line in installation.splitlines()
+        if "uv pip install --system pytest" in line
+    )
+    assert {"pytest", "sqlalchemy"} <= set(command.split())
+    assert (
+        steps["Run repository release checks"]["run"]
+        == "python -m pytest tests -v --tb=short"
+    )
+
+
 def test_canvas_native_oracle_decodes_artifacts_and_child_output_as_utf8() -> None:
     source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
         encoding="utf-8"
@@ -194,7 +213,11 @@ export BASE_SHA=synthetic-base
     # Windows' system bash launcher may point at an unconfigured WSL distro;
     # use the Git Bash already required for this checkout's shell workflows.
     git_bash = Path("C:/Program Files/Git/bin/bash.exe")
-    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    bash = (
+        str(git_bash)
+        if os.name == "nt" and git_bash.is_file()
+        else shutil.which("bash")
+    )
     assert bash, "Bash is required to execute the workflow classifier regression"
     environment = dict(os.environ)
     environment.pop("BASH_ENV", None)
@@ -216,7 +239,15 @@ export BASE_SHA=synthetic-base
     actual = dict(line.split("=", 1) for line in output.read_text().splitlines())
     expected = {
         key: str(all_selected).lower()
-        for key in ("all", "ui", "python", "rust", "release", "verification", "security")
+        for key in (
+            "all",
+            "ui",
+            "python",
+            "rust",
+            "release",
+            "verification",
+            "security",
+        )
     }
     expected["rust"] = str(rust_selected).lower()
     assert actual == expected
@@ -392,6 +423,12 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_provider_generation_native_child",
         "worker_final_completion_race_has_one_repository_winner",
         "worker_effect_transaction_obeys_real_database_lease_expiry",
+        "worker_deadline_reference_matches_published_process",
+        "worker_deadline_matches_frozen_published_process",
+        "worker_deadline_native_child",
+        "canvas_published_borrowed_database::outer_database_owner_survives_forced_borrower_exit",
+        "canvas_published_borrowed_database::borrower_child",
+        "worker_timeout_reference_matches_published_process",
         "worker_mixed_roster_reference_matches_published_process",
         "worker_mixed_roster_matches_frozen_published_process",
         "worker_mixed_roster_native_child",

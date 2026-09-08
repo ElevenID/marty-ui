@@ -10,13 +10,59 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
+import sys
 import traceback
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
 
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
+
+
+def safe_timing_diagnostics(failure):
+    # Do not import a new oracle while handling unrelated failures. The deadline
+    # branch already loaded this exact class through its normal named import.
+    owner = sys.modules.get("run_canvas_worker_deadline_oracle")
+    expected_type = getattr(owner, "DeadlineClockDisagreement", None)
+    if expected_type is None or type(failure) is not expected_type:
+        return None
+    values = failure.__dict__.get("timing_diagnostics")
+    fields = {
+        "database_elapsed_seconds",
+        "monotonic_lower_seconds",
+        "monotonic_upper_seconds",
+    }
+    if type(values) is not dict or set(values) != fields:
+        return None
+    if not all(
+        type(value) in (int, float) and abs(value) <= 300 and math.isfinite(value)
+        for value in values.values()
+    ):
+        return None
+    # These are relative seconds; lower/upper already contain the unchanged
+    # agreement tolerance. Never return exception args, messages, rows or notes.
+    return dict(values)
+
+
+def failure_report(failure):
+    report = {
+        "status": "failed",
+        "error_class": type(failure).__name__,
+        "frames": [
+            {
+                "file": Path(frame.filename).name,
+                "line": frame.lineno,
+                "function": frame.name,
+            }
+            for frame in traceback.extract_tb(failure.__traceback__)[-5:]
+        ],
+    }
+    timing = safe_timing_diagnostics(failure)
+    if timing is not None:
+        report["timing_diagnostics"] = timing
+    return report
 
 
 def prepare():
@@ -87,6 +133,24 @@ def prepare():
         if overlay is not None:
             report["review_recovery_overlay"] = overlay
         dispatch_case = os.environ.get("MARTY_CANVAS_WORKER_DISPATCH_CASE")
+        timeout_case = os.environ.get("MARTY_CANVAS_WORKER_TIMEOUT_CASE")
+        if timeout_case is not None:
+            from run_canvas_worker_timeout_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_timeout"] = run(timeout_case)
+        deadline_case = os.environ.get("MARTY_CANVAS_WORKER_DEADLINE_CASE")
+        if deadline_case is not None:
+            from run_canvas_worker_deadline_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_deadline"] = run(deadline_case)
         if dispatch_case is not None:
             from run_canvas_worker_dispatch_oracle import run
 
@@ -351,20 +415,5 @@ if __name__ == "__main__":
         print(json.dumps(prepare(), sort_keys=True))
     except BaseException as failure:
         # Never echo database parameters, SQL values, or exception messages.
-        print(
-            json.dumps(
-                {
-                    "status": "failed",
-                    "error_class": type(failure).__name__,
-                    "frames": [
-                        {
-                            "file": Path(frame.filename).name,
-                            "line": frame.lineno,
-                            "function": frame.name,
-                        }
-                        for frame in traceback.extract_tb(failure.__traceback__)[-5:]
-                    ],
-                }
-            )
-        )
+        print(json.dumps(failure_report(failure), allow_nan=False))
         raise SystemExit(1) from None

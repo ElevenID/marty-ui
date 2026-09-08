@@ -6,6 +6,27 @@ use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 
+fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
+    if report["error_class"] != "DeadlineClockDisagreement" {
+        return None;
+    }
+    let diagnostics = report.get("timing_diagnostics")?;
+    let fields = diagnostics.as_object()?;
+    let keys = [
+        "database_elapsed_seconds",
+        "monotonic_lower_seconds",
+        "monotonic_upper_seconds",
+    ];
+    (fields.len() == keys.len()
+        && keys.iter().all(|key| {
+            fields
+                .get(*key)
+                .and_then(Value::as_f64)
+                .is_some_and(|number| number.is_finite() && number.abs() <= 300.0)
+        }))
+    .then_some(diagnostics)
+}
+
 fn docker(arguments: &[&str]) -> Result<String, String> {
     let output = Command::new("docker")
         .args(arguments)
@@ -24,6 +45,102 @@ fn inspect(id: &str) -> Result<Value, String> {
         .map_err(|_| "Invalid container inspection".into())
 }
 
+fn checked_database_storage(info: &Value, id: &str, scope: &str) -> Result<(), String> {
+    if info["Id"] != id
+        || info["Config"]["Labels"][LABEL] != scope
+        || info["Mounts"]
+            .as_array()
+            .is_none_or(|mounts| !mounts.is_empty())
+        || info["HostConfig"]["Tmpfs"]["/var/lib/postgresql/data"] != "rw"
+        || info["HostConfig"]["Tmpfs"]["/var/run/postgresql"] != "rw"
+    {
+        return Err("Refusing database access: identity/storage mismatch".into());
+    }
+    Ok(())
+}
+
+fn checked_borrow_descriptor(descriptor: &str) -> Result<(String, String), String> {
+    // No database URL, credentials, arbitrary Docker arguments or host path can
+    // be supplied across this boundary. Errors never echo descriptor contents.
+    if descriptor.len() > 256 {
+        return Err("Invalid owned database descriptor".into());
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Descriptor {
+        postgres_id: String,
+        scope: String,
+    }
+    let value: Descriptor =
+        serde_json::from_str(descriptor).map_err(|_| "Invalid owned database descriptor")?;
+    let id = &value.postgres_id;
+    let scope = &value.scope;
+    PublishedDatabase::accept_id(id)?;
+    let parsed = Uuid::parse_str(scope).map_err(|_| "Invalid owned database scope")?;
+    if parsed.get_version_num() != 4
+        || parsed.get_variant() != uuid::Variant::RFC4122
+        || parsed.to_string() != *scope
+    {
+        return Err("Invalid owned database scope".into());
+    }
+    Ok((id.to_owned(), scope.to_owned()))
+}
+
+fn checked_borrowed_url(info: &Value, id: &str, scope: &str) -> Result<String, String> {
+    checked_database_storage(info, id, scope)?;
+    if info["HostConfig"]["Tmpfs"]
+        .as_object()
+        .is_none_or(|entries| entries.len() != 2)
+    {
+        return Err("Owned database requires its exact temporary storage topology".into());
+    }
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+    ))
+    .unwrap();
+    if info["State"]["Running"] != true
+        || info["Config"]["Image"] != fixture["observed_postgres_image"]
+    {
+        return Err("Owned database must retain its running pinned image".into());
+    }
+    let environment = info["Config"]["Env"]
+        .as_array()
+        .ok_or("Missing owned database configuration")?;
+    for (key, expected) in [
+        ("POSTGRES_USER", "oracle"),
+        ("POSTGRES_PASSWORD", "synthetic-local-only"),
+        ("POSTGRES_DB", "canvas_published_schema_test"),
+    ] {
+        let prefix = format!("{key}=");
+        let actual: Vec<_> = environment
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|value| value.starts_with(&prefix))
+            .collect();
+        if actual != [format!("{prefix}{expected}")] {
+            return Err("Owned database synthetic configuration mismatch".into());
+        }
+    }
+    let ports = info["NetworkSettings"]["Ports"]
+        .as_object()
+        .ok_or("Missing owned database ports")?;
+    let bindings = ports
+        .get("5432/tcp")
+        .and_then(Value::as_array)
+        .ok_or("Missing owned database binding")?;
+    if ports.len() != 1 || bindings.len() != 1 || bindings[0]["HostIp"] != "127.0.0.1" {
+        return Err("Owned database requires exactly one loopback binding".into());
+    }
+    let port = bindings[0]["HostPort"]
+        .as_str()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or("Invalid owned database port")?;
+    Ok(format!(
+        "postgresql://oracle:synthetic-local-only@127.0.0.1:{port}/canvas_published_schema_test"
+    ))
+}
+
 pub struct PublishedDatabase {
     scope: String,
     postgres: Option<String>,
@@ -33,6 +150,21 @@ pub struct PublishedDatabase {
 }
 
 impl PublishedDatabase {
+    pub fn borrow_descriptor(&self) -> Result<String, String> {
+        let id = self.postgres.as_deref().ok_or("Missing owned database")?;
+        let descriptor = serde_json::json!({"postgres_id": id, "scope": self.scope}).to_string();
+        if Self::borrowed_url(&descriptor)? != self.url {
+            return Err("Owned database binding changed before handoff".into());
+        }
+        Ok(descriptor)
+    }
+
+    /// Read-only handoff: only the surviving outer owner can remove resources.
+    pub fn borrowed_url(descriptor: &str) -> Result<String, String> {
+        let (id, scope) = checked_borrow_descriptor(descriptor)?;
+        checked_borrowed_url(&inspect(&id)?, &id, &scope)
+    }
+
     fn accept_id(id: &str) -> Result<(), String> {
         if id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
             Ok(())
@@ -322,6 +454,28 @@ impl PublishedDatabase {
             "worker_roster_failure",
             "worker-roster-failure",
             "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_deadline(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-deadline-scenarios.json"),
+            "worker_deadline",
+            "worker-deadline",
+            "MARTY_CANVAS_WORKER_DEADLINE_CASE",
+        )
+        .await
+    }
+
+    pub async fn start_with_worker_timeout(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-timeout-scenarios.json"),
+            "worker_timeout",
+            "worker-timeout",
+            "MARTY_CANVAS_WORKER_TIMEOUT_CASE",
         )
         .await
     }
@@ -805,6 +959,8 @@ impl PublishedDatabase {
                 | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
+                | "worker_deadline"
+                | "worker_timeout"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -897,6 +1053,8 @@ impl PublishedDatabase {
                 | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
+                | "worker_deadline"
+                | "worker_timeout"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -955,6 +1113,24 @@ impl PublishedDatabase {
             ));
         }
         let extra_scenarios: &[&str] = match script {
+            "worker_deadline" => &[
+                "scripts/canvas_worker_deadline_https_fixture.py",
+                "scripts/canvas_worker_output_capture.py",
+                "contracts/canvas-worker-facts-scenarios.json",
+                "contracts/canvas-worker-validation-scenarios.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
+            "worker_timeout" => &[
+                "scripts/canvas_worker_timeout_https_fixture.py",
+                "scripts/canvas_worker_output_capture.py",
+                "contracts/canvas-worker-deadline-scenarios.json",
+                "contracts/canvas-worker-retry-scenarios.json",
+                "contracts/canvas-worker-validation-scenarios.json",
+                "contracts/canvas-worker-roster-failure-scenarios.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
             "worker_dispatch" => &[
                 "scripts/canvas_worker_dispatch_hooks.py",
                 "contracts/canvas-worker-validation-scenarios.json",
@@ -1111,7 +1287,10 @@ impl PublishedDatabase {
                 if state["State"]["ExitCode"] != 0 {
                     let report: Value = serde_json::from_str(&docker(&["logs", &probe])?)
                         .map_err(|_| "Probe failed without a structured diagnostic")?;
-                    return Err(format!("Published probe failed: class={}, frames={} (exception messages suppressed)",
+                    let timing = safe_timing_diagnostics(&report)
+                        .map(|value| format!(", timing_diagnostics={value}"))
+                        .unwrap_or_default();
+                    return Err(format!("Published probe failed: class={}, frames={}{timing} (exception messages suppressed)",
                         report["error_class"], report["frames"]));
                 }
                 break;
@@ -1166,16 +1345,7 @@ impl PublishedDatabase {
         }
         if let Some(postgres) = &self.postgres {
             let info = inspect(postgres)?;
-            if info["Id"] != *postgres
-                || info["Config"]["Labels"][LABEL] != self.scope
-                || info["Mounts"]
-                    .as_array()
-                    .is_none_or(|mounts| !mounts.is_empty())
-                || info["HostConfig"]["Tmpfs"]["/var/lib/postgresql/data"] != "rw"
-                || info["HostConfig"]["Tmpfs"]["/var/run/postgresql"] != "rw"
-            {
-                return Err("Refusing database cleanup: identity/storage mismatch".into());
-            }
+            checked_database_storage(&info, postgres, &self.scope)?;
             docker(&["rm", "--force", postgres])?;
             self.postgres = None;
         }
@@ -1185,6 +1355,23 @@ impl PublishedDatabase {
     pub fn close(mut self) -> Result<(), String> {
         self.cleanup()
     }
+
+    pub fn close_verified(mut self) -> Result<(), String> {
+        let ids: Vec<_> = [&self.probe, &self.postgres]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+        self.cleanup()?;
+        for id in ids {
+            Self::accept_id(&id)?;
+            let filter = format!("id={id}");
+            if !docker(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &filter])?.is_empty() {
+                return Err("Exact owned database resource remained after cleanup".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for PublishedDatabase {
@@ -1192,5 +1379,165 @@ impl Drop for PublishedDatabase {
         if let Err(error) = self.cleanup() {
             eprintln!("Owned published-schema cleanup requires inspection: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn borrow_fixture() -> (Value, String, String) {
+        let id = "a".repeat(64);
+        let scope = "12345678-1234-4234-8234-123456789abc".to_owned();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let info = json!({
+            "Id": id,
+            "Config": { "Labels": { LABEL: scope }, "Image": fixture["observed_postgres_image"],
+                "Env": ["POSTGRES_USER=oracle", "POSTGRES_PASSWORD=synthetic-local-only", "POSTGRES_DB=canvas_published_schema_test"] },
+            "Mounts": [],
+            "HostConfig": {"Tmpfs": {"/var/lib/postgresql/data": "rw", "/var/run/postgresql": "rw"}},
+            "State": {"Running": true},
+            "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "25432"}]}}
+        });
+        (info, id, scope)
+    }
+
+    #[test]
+    fn borrowed_database_descriptor_is_closed_and_never_accepts_connection_strings() {
+        let (_, id, scope) = borrow_fixture();
+        let valid = json!({"postgres_id": id, "scope": scope});
+        assert_eq!(
+            checked_borrow_descriptor(&valid.to_string()).unwrap(),
+            (id, scope)
+        );
+        for rejected in [
+            json!("postgresql://private-sentinel@deployment.invalid/live"),
+            json!({"postgres_id": "--all", "scope": valid["scope"]}),
+            json!({"postgres_id": valid["postgres_id"], "scope": "private-sentinel"}),
+            json!({"postgres_id": valid["postgres_id"], "scope": "00000000-0000-0000-0000-000000000000"}),
+            json!({"postgres_id": valid["postgres_id"], "scope": valid["scope"], "url": "private-sentinel"}),
+            json!({"scope": valid["scope"]}),
+            json!([]),
+            json!(null),
+        ] {
+            let error = checked_borrow_descriptor(&rejected.to_string()).unwrap_err();
+            assert!(!error.contains("private-sentinel"));
+        }
+        assert!(checked_borrow_descriptor(&"x".repeat(257)).is_err());
+        let duplicate = format!(
+            "{{\"postgres_id\":{},\"scope\":{},\"scope\":{}}}",
+            valid["postgres_id"], valid["scope"], valid["scope"]
+        );
+        assert!(checked_borrow_descriptor(&duplicate).is_err());
+        let non_rfc = json!({"postgres_id": valid["postgres_id"], "scope": "12345678-1234-4234-1234-123456789abc"});
+        assert!(checked_borrow_descriptor(&non_rfc.to_string()).is_err());
+    }
+
+    #[test]
+    fn borrowed_database_requires_exact_identity_storage_image_and_loopback_configuration() {
+        let (valid, id, scope) = borrow_fixture();
+        assert_eq!(
+            checked_borrowed_url(&valid, &id, &scope).unwrap(),
+            "postgresql://oracle:synthetic-local-only@127.0.0.1:25432/canvas_published_schema_test"
+        );
+        for (pointer, value) in [
+            ("/Id", json!("b".repeat(64))),
+            ("/Config/Image", json!("wrong-image")),
+            ("/Config/Env", json!(["POSTGRES_USER=private-sentinel"])),
+            ("/State/Running", json!(false)),
+            ("/Mounts", json!([{"Source": "private-sentinel"}])),
+            ("/HostConfig/Tmpfs", json!({})),
+            (
+                "/NetworkSettings/Ports/5432~1tcp/0/HostIp",
+                json!("0.0.0.0"),
+            ),
+            ("/NetworkSettings/Ports/5432~1tcp/0/HostPort", json!("0")),
+            (
+                "/NetworkSettings/Ports/5432~1tcp/0/HostPort",
+                json!("65536"),
+            ),
+            (
+                "/NetworkSettings/Ports/5432~1tcp/0/HostPort",
+                json!("private-sentinel"),
+            ),
+            ("/NetworkSettings/Ports/5432~1tcp", json!([])),
+        ] {
+            let mut info = valid.clone();
+            *info.pointer_mut(pointer).unwrap() = value;
+            let error = checked_borrowed_url(&info, &id, &scope).unwrap_err();
+            assert!(!error.contains("private-sentinel"));
+        }
+        let mut wrong_scope = valid.clone();
+        wrong_scope["Config"]["Labels"][LABEL] = json!("wrong-scope");
+        assert!(checked_borrowed_url(&wrong_scope, &id, &scope).is_err());
+        let mut extra_tmpfs = valid.clone();
+        extra_tmpfs["HostConfig"]["Tmpfs"]["/unexpected"] = json!("rw");
+        assert!(checked_borrowed_url(&extra_tmpfs, &id, &scope).is_err());
+        let mut duplicate = valid.clone();
+        duplicate["Config"]["Env"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("POSTGRES_USER=oracle"));
+        assert!(checked_borrowed_url(&duplicate, &id, &scope).is_err());
+        let mut extra = valid.clone();
+        extra["NetworkSettings"]["Ports"]["1234/tcp"] = json!([]);
+        assert!(checked_borrowed_url(&extra, &id, &scope).is_err());
+        let mut doubled = valid.clone();
+        let binding = doubled["NetworkSettings"]["Ports"]["5432/tcp"][0].clone();
+        doubled["NetworkSettings"]["Ports"]["5432/tcp"]
+            .as_array_mut()
+            .unwrap()
+            .push(binding);
+        assert!(checked_borrowed_url(&doubled, &id, &scope).is_err());
+    }
+
+    #[test]
+    fn timing_diagnostic_forwarding_accepts_only_closed_bounded_numeric_fields() {
+        let valid = json!({
+            "error_class": "DeadlineClockDisagreement",
+            "timing_diagnostics": {
+                "database_elapsed_seconds": 30.1,
+                "monotonic_lower_seconds": 29.4,
+                "monotonic_upper_seconds": 30.5,
+            },
+        });
+        assert_eq!(
+            safe_timing_diagnostics(&valid),
+            valid.get("timing_diagnostics")
+        );
+        for rejected in [
+            json!(true),
+            json!("synthetic-secret"),
+            Value::Null,
+            json!([]),
+            json!({"payload": "synthetic-secret"}),
+            json!(300.001),
+            json!(-300.001),
+        ] {
+            let mut report = valid.clone();
+            report["timing_diagnostics"]["database_elapsed_seconds"] = rejected;
+            assert!(safe_timing_diagnostics(&report).is_none());
+        }
+        for boundary in [-300.0, 300.0] {
+            let mut report = valid.clone();
+            report["timing_diagnostics"]["database_elapsed_seconds"] = json!(boundary);
+            assert!(safe_timing_diagnostics(&report).is_some());
+        }
+        let mut extra = valid.clone();
+        extra["timing_diagnostics"]["unexpected"] = json!("synthetic-secret");
+        assert!(safe_timing_diagnostics(&extra).is_none());
+        let mut missing = valid.clone();
+        missing["timing_diagnostics"]
+            .as_object_mut()
+            .unwrap()
+            .remove("monotonic_lower_seconds");
+        assert!(safe_timing_diagnostics(&missing).is_none());
+        let mut wrong_class = valid;
+        wrong_class["error_class"] = json!("UnrelatedError");
+        assert!(safe_timing_diagnostics(&wrong_class).is_none());
     }
 }

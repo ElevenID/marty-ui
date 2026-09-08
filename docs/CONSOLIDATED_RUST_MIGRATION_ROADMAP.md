@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: exact head `6914387e5` passed 115 configured Linux runtime tests, including native resource-race and resources-unavailable replay, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: exact head `9cbba6b7b` passed 121 configured Linux runtime tests, including the complete seven-stage mixed-roster replay, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -34,6 +34,55 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ### Current transport integration and merge gates
 
 Latest qualified composed worker checkpoint:
+`9cbba6b7bc687614e8c2d74ef78fab532e5888fb`,
+[CI34109922914](https://github.com/ElevenID/marty-ui/actions/runs/34109922914).
+Runtime job `101703569433` passed **121 configured tests in 3319.49s** and
+four configured worker/PostgreSQL tests in 96.40s. Its early mixed-roster
+preflight passed seven stages and 55 actual HTTPS requests in 365.39s; the
+complete suite repeated that native replay and regenerated the published
+reference. All four ledgers matched their exact frozen arrays, enforcing totals
+of 55 Canvas requests, 13 token scopes and 26 synthetic signer requests/operations.
+The earlier stage-0 token-reuse mismatch is repaired without weakening the oracle.
+The fast unconfigured 121-test/0.34s and worker 4-test/0.01s results are not
+database qualification.
+
+Image job `101703569310` passed all image builds, nine worker preflight cases,
+24 packaged startup cases and the 16-case published logging reference. The
+17-service bundle, 21 synthetic rollback merges and 15 consumer-source
+compositions also passed. Rust CodeQL `34109922824` succeeded. Compiler examples
+remain intact in packaged source. No routing, Python deletion or deployment
+occurred. PR #814 remains draft: real-provider deadline/timeout comparisons,
+remaining consumer/loader and remote-signing boundaries, and beta acceptance
+are not closed by these scoped passes.
+
+Current local extensions use the shared disposable-schema, TLS and safe output
+owners. Their focused fixture suite passed 190 tests in 14.89s, including real
+child-output and loopback tests. Revised deadline A/B passed in 102.79s/98.95s;
+four-case target-specific timeout A/B passed in 110.30s/109.39s. Both corpora
+were frozen from byte-identical raw observations, preserving numeric tokens.
+Mandatory regeneration tests are registered locally; 194 freeze/fixture/CI
+checks passed in 10.56s. The permanent four-case timeout reference regeneration
+passed in 115.08s. Native deadline replay is implemented locally: compilation,
+two timing-boundary tests, strict Clippy and 58 driver tests passed. Fresh deadline
+reference runs rejected DB/monotonic clock disagreement three times; reviewed
+numeric diagnostics measured the mismatch without identifying its host/VM cause.
+The fixed timing bounds remain unchanged. The combined focused suite now passes
+297 tests, with seven Rust timing/output tests and strict Clippy also passing.
+Independent parallel review identified a forced-coordinator-exit cleanup gap;
+the repair now retains database ownership in the outer Rust test and uses a
+verified, non-reaping Linux process-group owner. The actual forced-borrower
+database regression passed in 5.55s; real Linux child/grandchild containment
+tests remain a landing gate. The full local Python run passed 1,691 tests with
+three explicit skips in 131.91s before a final CI dependency check was added;
+all issuance Rust tests and strict Clippy passed. A separate
+[clock audit](rust-migrations/canvas-worker-local-clock-audit-2026-09-07.md)
+reproduced an environment-level wall-clock step without worker code. Actual
+Linux deadline qualification and native timeout replay remain open. These
+extensions are not qualified by the hosted 121-entry checkpoint.
+
+#### Earlier checkpoint record (superseded by the evidence above)
+
+Previously qualified composed worker checkpoint:
 `6914387e563d1043948aaea7a5cc514be6055038`,
 [CI34089906961](https://github.com/ElevenID/marty-ui/actions/runs/34089906961).
 Runtime job `101641133956` passed **115 configured tests in 2444.37s** at

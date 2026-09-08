@@ -1390,7 +1390,9 @@ jobs:
           marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
           curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
           echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
-          uv pip install --system pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
+          # Fixture-integrity tests import the unchanged published SQL helpers;
+          # actual database execution remains in the isolated Rust/Docker gate.
+          uv pip install --system pytest pyyaml jsonschema cryptography playwright sqlalchemy "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |
