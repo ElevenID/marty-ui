@@ -9,7 +9,7 @@ Independent review approved the eight source files; PowerShell parser and Bash
 syntax checks passed. Configuration-test and validator qualification belong to
 their separate lanes and are not inferred from source approval.
 
-Final local validation passed **2,821 Python tests with three skips** in
+The preceding local validation passed **2,821 Python tests with three skips** in
 197.91s, plus 218 focused launch/validator controls. Actual Compose 5.4
 configuration-only checks passed for all 15 consumer compositions, five
 generated 19-service models and 24 rollback merges; the existing 17-service
@@ -24,16 +24,43 @@ It does not prohibit native-owned secret files or library-specific file settings
 Tests bind the three native secret-file readers to their actual Rust owners;
 accepting other file settings does not claim they are consumed or valid.
 
-**Remaining image-binding gate discovered during review:** the existing
-Kubernetes updater includes issuance in its application loop, while the registry
-publisher explicitly skips that external component. Moreover, the issuance API
-and migration manifests still name registry issuance tags, not a validated
-`MARTY_ISSUANCE_IMAGE` pin. No registry lookup or deployed failure is claimed.
-Before landing, make image-only updates preserve the running issuance artifact
-and bind full-manifest API/migration deployment to the same reviewed immutable
-external image, validated before any deployment mutation. Do not infer an image
-from the native services tag or invent a digest. This snapshot is not ready for
-cutover while that source gap remains.
+**Kubernetes issuance image binding is now implemented locally and independently
+reviewed.** Full deployment requires explicit `MARTY_ISSUANCE_IMAGE`; the new
+read-only preflight validates it against the eligible checked-in
+`release/stack-lock.json` issuance component before any deployment writes. It
+captures and exports one validated reference for both the issuance API and
+migration manifests. There is no default digest, alternative lock override or
+inference from `IMAGE_TAG`. Existing environment-file sourcing and prerequisite
+reads remain earlier steps; this is not a claim that all preflight activity is
+side-effect-free.
+
+Provider-neutral mirrors are accepted only as fully qualified immutable image
+references with the exact canonical issuance digest. The registry and repository
+path may differ; the content digest may not. This proves the configured source
+association, not mirror availability, a completed registry copy, remote
+attestation or a deployed image. The canonical release formatter retains its
+existing GHCR policy. Image-only updates now skip external issuance just like
+the publisher, preserving its running artifact and leaving migration advancement
+to full deployment. The existing native-worker launch guard still precedes every
+image write; it is a snapshot check, not a concurrent-operator lock.
+
+The binding repair passed **281 focused tests in 17.03s**. The independent full
+suite on the revised source subsequently passed **2,884 tests with three skips
+in 202.62s**. Hosted qualification, merge and publication remain pending; this
+local pass does not authorize deployment. No Kubernetes deployment, pull or copy
+was performed.
+
+**The release-artifact gap remains:** published credentials `v0.1.72`, still
+selected by the checked-in lock, predates the merged recovery migration. Correct
+immutable binding cannot add that migration to an older image. A separate clean
+`0.1.73` release-preparation branch from protected `948bca` contains only version
+field changes; 68 release tests passed. The version bump is now committed as
+`21ac54c9e0558fe47d626210cd72b38ab8116707` and pushed on the clean
+`chore/release-0-1-73` branch. [PR #272](https://github.com/ElevenID/marty-credentials/pull/272)
+is open with checks running; no tag, publication or deployment has occurred.
+This is not a new available image or a lock update. Publication,
+reviewed artifact selection, current-head qualification and cutover acceptance
+remain separate gates.
 
 At this checkpoint, remote `afc8bd754` CI `34223397680`, runtime job
 `102051657514`, reported successful header (12:02:35–12:04:30 UTC), expiry
@@ -88,9 +115,10 @@ worker-specific image/provenance checks, rather than removing validation. The
 beta capability path checks the running image ID against its configured image
 and release/source labels; coordinated local evidence binds the worker's own
 image ID to its release marker. Pilot, origin, signer, key and deadline guards
-remain required. Their final tests/review, the complete 15-consumer, five-generated
-model and 24-rollback configuration gates, and exact-head hosted qualification
-remain separate acceptance evidence; no new pass is claimed here.
+remain required. Their preceding local tests/review and the complete 15-consumer,
+five-generated-model and 24-rollback configuration gates are recorded above;
+the revised source's full suite result is also recorded above. Exact-head hosted
+qualification remains separate acceptance evidence.
 
 ## Historical audit scope and follow-ups
 

@@ -666,7 +666,7 @@ spec:
         - name: ocir-secret
       containers:
         - name: issuance
-          image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
+          image: ${MARTY_ISSUANCE_IMAGE}
           imagePullPolicy: Always
           envFrom:
             - configMapRef:

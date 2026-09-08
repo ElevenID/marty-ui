@@ -166,7 +166,7 @@ def test_deployments_migrate_issuance_from_the_released_credentials_image() -> N
     assert kubernetes["kind"] == "Job"
     assert kubernetes["metadata"]["name"] == "issuance-migrations"
     container = kubernetes["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"] == "${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}"
+    assert container["image"] == "${MARTY_ISSUANCE_IMAGE}"
     assert container["command"] == ["python", "manage_migrations.py", "upgrade"]
     assert (
         container["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"

@@ -225,6 +225,9 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
     }
+    assert "MARTY_ISSUANCE_IMAGE" not in env
+    catalog = json.loads((ROOT / "deploy-config/catalog/services.json").read_text())
+    assert "issuance" in catalog["groups"]["app"]
     if os.name == "nt":
         env["SystemRoot"] = os.environ["SystemRoot"]
     prelude = r"""
@@ -244,6 +247,7 @@ kubectl() {
       return "$GET_EXIT" ;;
     set:image)
       [[ $# == 6 && "$5" == -n && "$6" == "$NAMESPACE" ]] || return 93
+      [[ "$3" != deployment/issuance ]] || { printf 'FORBIDDEN-ISSUANCE-WRITE\n'; return 96; }
       if [[ "$3" == deployment/canvas-sync-worker ]]; then
         [[ "$4" == "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/canvas-sync-worker:${IMAGE_TAG}" ]] || return 95
       fi
@@ -269,7 +273,6 @@ readonly -f kubectl
         assert result.stdout.splitlines() == [
             "WRITE:deployment/gateway",
             "WRITE:deployment/canvas-sync-worker",
-            "WRITE:deployment/issuance",
             "WRITE:deployment/ui",
             "WRITE:deployment/cloudflared",
             "ROLLOUT",

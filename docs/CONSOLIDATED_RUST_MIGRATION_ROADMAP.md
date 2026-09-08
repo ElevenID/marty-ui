@@ -41,17 +41,32 @@ The combined local Python suite passed **2,723 tests with three skips** in
 
 The separate `feat/canvas-worker-native-consumer-cutover-v1` branch prepares
 all worker image/launch mappings, native-aware operational validators and full
-configuration preservation tests. The final local suite passed 2,821 tests with
+configuration preservation tests. The preceding local suite passed 2,821 tests with
 three skips; the 15-consumer, five-generated and 24-rollback model gates passed.
-Independent source/test review passed, but revealed a remaining Kubernetes
-issuance image-binding gap: image-only updates must preserve the external API,
-and full manifests must bind API and migrations to one validated immutable
-artifact. This repair and merge remain pending. Local beta builds now include the worker's own artifact
+Independent source/test review passed. The subsequently discovered Kubernetes
+issuance image-binding repair is now implemented locally and independently
+reviewed: full deployment validates one explicit immutable `MARTY_ISSUANCE_IMAGE`
+against the checked-in eligible stack lock before deployment writes, and uses
+that same reference for the API and migrations. Provider-neutral mirrors must
+retain the canonical digest; image-only updates skip the external issuance API.
+The repair passed 281 focused tests in 17.03s; the revised source's independent
+full suite then passed 2,884 tests with three skips in 202.62s. Hosted
+qualification, merge and publication remain pending; no deployment is authorized.
+Local beta builds now include the worker's own artifact
 (18 builds, 19 services); Kubernetes uses the per-service tag its publisher
 actually builds. Python issuance/migrations, both rollback runtimes and every
 non-selection setting remain required. See the
 [staged consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md#staged-native-consumer-selection-2026-09-08).
 No consumer preparation authorizes source deletion, main merge or deployment.
+
+The checked-in issuance pin still selects published credentials `v0.1.72`, which
+predates the merged recovery migration. Binding it correctly does not close that
+release-artifact gap. A separate clean `0.1.73` preparation branch from protected
+`948bca` contains version fields only; 68 release tests passed. The bump is
+committed as `21ac54c9e0558fe47d626210cd72b38ab8116707` and pushed on clean
+`chore/release-0-1-73`; [PR #272](https://github.com/ElevenID/marty-credentials/pull/272)
+is open with checks running. No tag, publication or deployment has occurred;
+no new image availability, lock advancement or release qualification is implied.
 
 Cleanup also found unique unmerged UI key-custody work in `827ab777b` on local
 main and the security branch. Both references are preserved. Backend

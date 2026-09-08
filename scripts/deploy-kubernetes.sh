@@ -147,6 +147,10 @@ catalog_services() {
   "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field k8s_deployment
 }
 
+resolve_kubernetes_issuance_image() {
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/check_kubernetes_issuance_image.py"
+}
+
 catalog_required_secret_envs() {
   "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" secrets "$1" --field env
 }
@@ -406,7 +410,9 @@ cmd_update_images() {
   fi
   step "Rolling image update — tag: ${IMAGE_TAG}"
   while IFS= read -r svc; do
-    [[ -z "$svc" ]] && continue
+    # The external Python API is not built by this repository's image loop.
+    # Advance it only with its matching migration image in a reviewed deploy.
+    [[ -z "$svc" || "$svc" == "issuance" ]] && continue
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
   done < <(catalog_services app)
@@ -418,6 +424,12 @@ cmd_update_images() {
 }
 
 cmd_deploy() {
+  local issuance_image
+  issuance_image="$(resolve_kubernetes_issuance_image)" || {
+    error "Kubernetes issuance image validation failed before deployment."
+    return 1
+  }
+  export MARTY_ISSUANCE_IMAGE="$issuance_image"
   step "Full Kubernetes Deploy"
 
   apply_manifest "${K8S_DIR}/00-namespace.yaml"
