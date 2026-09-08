@@ -33,16 +33,33 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ### Current transport integration and merge gates
 
-The next candidate `7ca035d03` ran actual native timeout preflight in
-[CI34195421549](https://github.com/ElevenID/marty-ui/actions/runs/34195421549)
-and failed: the prompt application control passed one HTTPS request, then the
-delayed application case exited during outcome observation. Its hidden child
-assertion is not established by the exposed byte counts; closed diagnostic
-categories are implemented for the next replay. The roster cases and later
-configured suites were not reached. See the
+Candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
+preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).
+Runtime job `101967919625` passed the prompt application control, then observed
+`TerminalSucceeded` instead of the required delayed-application retry, with
+job, fact, snapshot and target differences. This supersedes the earlier
+byte-count-only failure at `7ca035d03`. The roster cases and later configured
+suites were not reached. PR #814 remains draft and blocked: Rust Service Tests
+and CI Gate failed; the other checks completed successfully apart from the
+expected scorecard skip. See the
 [native timeout record](rust-migrations/canvas-worker-native-timeout-replay.md).
 This does not revoke the earlier scoped `f0` checkpoint below or qualify worker
-cutover. No runtime policy, frozen outcome, routing or deployment changed.
+cutover. The isolated application REST repair is implemented and compiled in
+65s; its first unit run passed 353 tests in 18.12s. After the added malformed-header
+regression and test-spy type alias, final unit execution passed 354 tests in
+15.73s (8.94s compilation). Strict all-target Clippy passed in 21.75s;
+hosted qualification remains required.
+Explicit application/issued-drift scope uses
+the shared 15s operation transport; roster, LTI and signing paths remain unchanged.
+Roster read-inactivity parity is still unqualified. No frozen outcome, routing
+or deployment changed.
+
+Separately, body-reference A-v2 and independent B-v2 passed all six cases in
+265.68s and 266.63s at immutable input head
+`ffb515200c4611bbaa188d84c510074bb4a98c81`. Their 46,042 raw bytes agree exactly:
+SHA256 `e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
+Exact-owned cleanup passed. Permanent corpus registration and native body replay
+remain pending; this is published Python evidence, not worker cutover approval.
 
 Latest qualified composed worker checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`:
@@ -62,9 +79,9 @@ qualifies the scoped deadline/renewal/prefix-preservation replay, not the whole
 worker, all consumer configurations, signing, UI/demo acceptance or deployment.
 PR #814 remains draft and unrouted. The later native timeout branch at
 `395cab656` and its later follow-ups, and the separate body-reference branch at
-`c5e77f260`, are **not qualified by this earlier head**. Actual native timeout
-execution remains pending; no runtime timeout policy or frozen outcome was
-changed to obtain the `f0` result.
+`c5e77f260`, are **not qualified by this earlier head**. The later native timeout
+failure and pending repair gates are recorded above; no runtime timeout policy
+or frozen outcome was changed to obtain the historical `f0` result.
 
 #### Historical 121-entry checkpoint and development evidence
 
@@ -117,9 +134,10 @@ The separate local commit `c17f1e1fa66af86cbd4392c0921540e1d260ef57` adds the
 [four-case native timeout replay](rust-migrations/canvas-worker-native-timeout-replay.md)
 with shared database, process and output owners. Its full local Python suite
 passed **1,760 tests with three explicit skips** in 116.55s; compiled Rust
-controls and strict Clippy passed. Actual native timeout execution remains
-pending, and the predicted application 15s-versus-20s mismatch has not been
-observed by that replay. No runtime timeout policy was changed. A separate
+controls and strict Clippy passed. At that historical checkpoint actual native
+timeout execution was pending; the later `cf5182ef7` diagnostic replay above
+established the application success-versus-retry mismatch. No runtime timeout
+policy was changed in that replay. A separate
 [clock audit](rust-migrations/canvas-worker-local-clock-audit-2026-09-07.md)
 reproduced an environment-level wall-clock step without worker code. Hosted
 Linux deadline qualification subsequently passed at `f0` without widening the

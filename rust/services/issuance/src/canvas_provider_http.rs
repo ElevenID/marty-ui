@@ -89,23 +89,10 @@ pub(crate) async fn resolve_canvas_origin(
     canvas_base_url: &str,
     policy: &CanvasOriginPolicy,
 ) -> Result<(Url, SocketAddr), ()> {
-    let origin = Url::parse(canvas_base_url).map_err(|_| ())?;
+    let origin = validate_canvas_origin(canvas_base_url, policy)?;
     let host = origin.host_str().ok_or(())?;
-    let http_localhost = origin.scheme() == "http"
-        && policy.allow_http_localhost
-        && matches!(
-            host.to_ascii_lowercase().as_str(),
-            "localhost" | "127.0.0.1" | "::1"
-        );
-    if !(origin.scheme() == "https" || http_localhost)
-        || !origin.username().is_empty()
-        || origin.password().is_some()
-        || origin.query().is_some()
-        || origin.fragment().is_some()
-        || !(origin.path().is_empty() || origin.path() == "/")
-    {
-        return Err(());
-    }
+    // The pure validator permits HTTP only for explicitly enabled localhost.
+    let http_localhost = origin.scheme() == "http";
     let port = origin.port_or_known_default().ok_or(())?;
     let addresses = tokio::net::lookup_host((host, port))
         .await
@@ -131,6 +118,32 @@ pub(crate) async fn resolve_canvas_origin(
     }
     let pinned = preferred_address(&addresses).ok_or(())?;
     Ok((origin, pinned))
+}
+
+/// Validate the persisted root before deriving a request URL. DNS/pinning stays
+/// with the transport owner, so operation clients resolve only once per request.
+pub(crate) fn validate_canvas_origin(
+    canvas_base_url: &str,
+    policy: &CanvasOriginPolicy,
+) -> Result<Url, ()> {
+    let origin = Url::parse(canvas_base_url).map_err(|_| ())?;
+    let host = origin.host_str().ok_or(())?;
+    let http_localhost = origin.scheme() == "http"
+        && policy.allow_http_localhost
+        && matches!(
+            host.to_ascii_lowercase().as_str(),
+            "localhost" | "127.0.0.1" | "::1"
+        );
+    if !(origin.scheme() == "https" || http_localhost)
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+        || !(origin.path().is_empty() || origin.path() == "/")
+    {
+        return Err(());
+    }
+    Ok(origin)
 }
 
 fn normalized_origin(url: &Url) -> Option<String> {

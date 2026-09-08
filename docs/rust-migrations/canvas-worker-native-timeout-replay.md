@@ -1,11 +1,37 @@
 # Native worker timeout replay
 
-Status: actual native Linux preflight at `7ca035d03` failed and remains
-unqualified; the prompt application control passed. No runtime timeout policy,
-published fixture, frozen outcome,
-live job, lease, clock, production consumer or deployment was changed.
+Status: actual native Linux diagnostic preflight at `cf5182ef7` established
+application success instead of the required retry; the candidate remains
+unqualified. The narrow application REST repair is now implemented separately
+and compiled in 65s. After the additional malformed-header regression and test-spy
+type alias, final unit execution passed 354 tests in 15.73s (8.94s compilation).
+Strict all-target Clippy passed in 21.75s. Hosted parity remains required. Published fixtures, frozen
+outcomes, live jobs, leases, clocks, consumer routing and deployments are unchanged.
 
 ## Actual Linux preflight — 2026-09-08
+
+### Diagnostic replay establishes the application status mismatch
+
+The follow-up at exact head `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d`
+executed in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937),
+runtime job `101967919625`. The prompt application control again passed with
+one actual HTTPS request. The delayed application control failed after observing
+`TerminalSucceeded`, `TerminalMismatch`, then `CompareOutcome` and differences
+in `OutcomeJobs`, `OutcomeFacts`, `OutcomeSnapshot`, and `OutcomeTarget`.
+The diagnostic ended at `2026-09-08T07:10:00Z`; the wrapper failed after 49.05s.
+No transition-publication category was emitted. Unlike the first byte-count-only
+failure below, this establishes success instead of the required retry and
+different durable business/target state before publication.
+
+This supplies the negative execution evidence for the reviewed application REST
+operation-timeout repair. Preserve the published 15s application/issued-drift
+budget, separate roster behavior, and all existing transport/state/cleanup
+gates; do not change the frozen reference to match the failing native outcome.
+Repair work is isolated on `feat/canvas-operation-timeout-repair-v1`. It is not
+yet qualified. Remaining roster cases and later full-suite gates were not
+reached by this failing preflight; no deployment or consumer routing changed.
+
+### Earlier byte-count-only preflight
 
 [CI 34195421549](https://github.com/ElevenID/marty-ui/actions/runs/34195421549),
 runtime job `101961994076`, executed the new native preflight at exact head
@@ -18,9 +44,9 @@ later mixed/full configured suites were not reached by this preflight.
 The failure note exposed only coordinator stdout/stderr byte counts (217/266),
 not the child's assertion or observed durable status. The controller can notice
 a nonzero child exit even if its marker has just been published. Consequently
-this proves a failed delayed-application replay, **not yet** the specific
+that earlier result proved a failed delayed-application replay, not by itself the
 predicted 20s-versus-15s cause, an observed `succeeded` status, or successful
-failure-path cleanup. Closed categorical diagnostics are the next step; do not
+failure-path cleanup. Closed categorical diagnostics were the next step; do not
 infer hidden state from timing or byte counts or weaken the equality/timing gate.
 
 The follow-up now emits fixed coordinator-only diagnostic categories for the
@@ -32,12 +58,14 @@ dynamic field names and worker output are never copied into diagnostic notes.
 The original output byte counts, failure, equality and timing checks remain.
 Independent review found no blockers. Final focused Python checks passed 201
 tests in 4.45s; both new Rust diagnostic controls passed, with strict all-target
-Clippy passing in 4.41s. The actual next Linux replay is still required to learn
-the failure category; these controls do not establish runtime parity.
+Clippy passing in 4.41s. The subsequent `cf5182ef7` Linux replay established the
+failure category as recorded above; these controls alone did not establish parity.
 
 The earlier `f0` 137-test/deadline qualification is retained. The PR stays draft
-and the worker remains unrouted; this failed candidate does not authorize a
-runtime policy change without further diagnosis, Python deletion or deployment.
+and the worker remains unrouted. The byte-count-only result did not justify a
+runtime policy change without further diagnosis. The later diagnostic supplied
+that evidence for the narrow repair; neither result authorizes Python deletion
+or deployment.
 
 The [published four-case reference](canvas-worker-timeout-capture-plan.md) remains
 the independent behavioral authority. The native replay does not derive its
@@ -105,7 +133,7 @@ in 138.21s, including 121 timeout controller tests. Five Rust timeout controls
 and all seven existing deadline timing/output controls passed; strict all-target
 Clippy passed in 8.50s. The two Linux process-containment controls remain skipped
 on Windows, with their separate hosted `f0` evidence below. Actual native Linux
-timeout replay has still not run.
+timeout replay had not run at that historical checkpoint.
 
 ### Prior local checkpoint
 
@@ -121,24 +149,27 @@ cleanup cases. That baseline's larger worker parity CI subsequently passed 137
 configured tests, including both native deadline cases, in run `34189450698`.
 Neither that earlier head nor those containment tests qualify this new replay.
 
-Current source predicts a failing `application_delayed_headers` replay: native
-authoritative and roster calls both use a 20s total-request timeout, so the
-application is expected to accept the 17s response instead of the published 15s
-timeout. This is **a prediction, not an observed native failure**. Run the actual
-replay before changing runtime policy. After observing the mismatch, reuse the
-existing `CanvasOperationHttpClient` / `CanvasNetworkTimeout` ownership and assess
-the narrow application-read path. A blanket 20s-to-15s change loses roster behavior;
+Before execution, source predicted a failing `application_delayed_headers`
+replay: native authoritative and roster calls both used a 20s total-request
+timeout, so the application was expected to accept the 17s response instead of
+the published 15s timeout. That was initially only a prediction; the later
+`cf5182ef7` diagnostic established success instead of retry. The narrow repair
+now reuses the existing `CanvasOperationHttpClient` / `CanvasNetworkTimeout`
+ownership for application REST. A blanket 20s-to-15s change loses roster behavior;
 changing only a total-request deadline does not prove HTTPX phase/inactivity parity.
 
 Pagination, progressing/stalled bodies, token refresh, AGS, revocation, candidate
 issuance, signing, whole-worker cutover, UI/demo acceptance and aggregate beta
 deployment remain separately gated work.
 
-## Reviewed repair constraints: design only
+## Historical pre-implementation design and retained repair constraints
 
-The following is a source-reviewed design, not an implemented runtime repair or
-qualified parity result. Observe the actual native delayed-header failure before
-changing policy; do not alter the frozen reference to accommodate native behavior.
+The following design was reviewed before the actual native delayed-header
+failure and implementation. The `cf5182ef7` diagnostic above now supplies that
+negative evidence. The narrow implementation retains these constraints but is
+not yet a qualified parity result; do not alter the frozen reference to
+accommodate native behavior. Roster and LTI still use their existing policies;
+roster inactivity is not qualified by the application REST repair.
 The [provider source audit](canvas-worker-provider-timeout-audit-2026-09-07.md)
 records the pinned published client ownership and its separate timeout values.
 
