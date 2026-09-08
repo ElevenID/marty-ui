@@ -46,6 +46,18 @@ pub(super) fn timestamps(value: &mut Value) {
     }
 }
 
+/// Shared body recipe; raw bytes retain precedence over generated JSON.
+pub(super) fn request_body(case: &Value) -> String {
+    let mut payload = case.get("body").cloned().unwrap_or_else(|| json!({}));
+    if let Some(length) = case["note_length"].as_u64() {
+        payload["note"] = json!("n".repeat(usize::try_from(length).unwrap()));
+    }
+    case["raw_body"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| payload.to_string())
+}
+
 pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, String, Value) {
     let mut headers = std::collections::BTreeMap::from([
         (
@@ -65,14 +77,7 @@ pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, S
     let mut request = Request::builder()
         .method(case["method"].as_str().unwrap_or("GET"))
         .uri(case["path"].as_str().unwrap());
-    let mut payload = case.get("body").cloned().unwrap_or_else(|| json!({}));
-    if let Some(length) = case["note_length"].as_u64() {
-        payload["note"] = json!("n".repeat(usize::try_from(length).unwrap()));
-    }
-    let body = case["raw_body"]
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| payload.to_string());
+    let body = request_body(case);
     if case["method"] == "POST" {
         let content_type = case
             .get("content_type")

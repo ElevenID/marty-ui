@@ -41,7 +41,9 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 
 use super::{
-    canvas_operations_read_replay::{fixtures, generated_ids, insert_review, seed, timestamps},
+    canvas_operations_read_replay::{
+        fixtures, generated_ids, insert_review, request_body, seed, timestamps,
+    },
     issuance_process::{
         bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
         ChildGuard,
@@ -565,6 +567,10 @@ async fn request_at_path(
     client_tenant: Option<&str>,
     boundary: RequestBoundary,
 ) -> (u16, String, Value) {
+    assert!(
+        case.get("content_type").is_none(),
+        "alternate media types require an explicit gateway request adapter"
+    );
     let mut builder = Request::builder()
         .method(case["method"].as_str().unwrap_or("GET"))
         .uri(path)
@@ -579,11 +585,7 @@ async fn request_at_path(
     if let Some((name, value)) = auth {
         builder = builder.header(name, value);
     }
-    let mut request = builder
-        .body(Body::from(
-            case.get("body").cloned().unwrap_or(json!({})).to_string(),
-        ))
-        .unwrap();
+    let mut request = builder.body(Body::from(request_body(case))).unwrap();
     for value in ["forged-priority-one", "forged-priority-two"] {
         request
             .headers_mut()
@@ -706,13 +708,25 @@ fn public_error_expected(name: &str) -> (u16, Value) {
         | "candidates_excess_limit"
         | "reviews_zero_limit"
         | "reviews_excess_limit" => (422, "Downstream service request failed", None),
-        "review_invalid_action" => (422, "Downstream service request failed", None),
+        "review_invalid_action" | "review_note_limit" => {
+            (422, "Downstream service request failed", None)
+        }
         _ => panic!("unreviewed public error case"),
     };
     let (_, frozen) = frozen_case(name);
     assert_eq!(frozen["status"], status);
     assert_eq!(frozen["content_type"], "application/json");
-    if name == "review_invalid_action" {
+    if name == "review_note_limit" {
+        let (case, _) = frozen_case(name);
+        assert_eq!(case["note_length"], 2001);
+        assert_eq!(case["body"], json!({"action":"dismiss"}));
+        assert_eq!(
+            frozen["body"],
+            json!({"detail":[{"ctx":{"max_length":2000},"input":"n".repeat(2001),
+                "loc":["body","note"],"msg":"String should have at most 2000 characters",
+                "type":"string_too_long","url":"https://errors.pydantic.dev/2.11/v/string_too_long"}]})
+        );
+    } else if name == "review_invalid_action" {
         assert!(frozen["body"]["detail"].is_array());
     } else if READ_VALIDATION_CASES.contains(&name) && name.ends_with("_limit") {
         // Check the complete source observation before applying the pinned
@@ -850,9 +864,13 @@ async fn public_error_cases(pool: &PgPool, router: &Router, http: &CountedHttp) 
     .await;
     assert_eq!(foreign, missing);
 
-    for name in ["jobs_invalid_status", "review_invalid_action"]
-        .into_iter()
-        .chain(READ_VALIDATION_CASES)
+    for name in [
+        "jobs_invalid_status",
+        "review_invalid_action",
+        "review_note_limit",
+    ]
+    .into_iter()
+    .chain(READ_VALIDATION_CASES)
     {
         unchanged_public_error(pool, router, http, frozen_case(name).0, "org-review", name).await;
     }
@@ -1433,13 +1451,12 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     frozen_matrix(pool, &candidate, &candidate_http).await;
     public_error_cases(pool, &candidate, &candidate_http).await;
     actor_cases(pool, &candidate, &candidate_http).await;
-    // Retain all 31 existing requests and add the six ordered job-state cases.
-    // The separate closed-rollout child contributes the 38th native request.
-    assert_eq!(candidate_http.counts(), (37, 0));
-    assert_eq!(closed_http.counts().0 + candidate_http.counts().0, 38);
+    // Retain the 37 earlier enabled requests and the real oversized-note denial.
+    assert_eq!(candidate_http.counts(), (38, 0));
+    assert_eq!(closed_http.counts().0 + candidate_http.counts().0, 39);
     assert_eq!(
         auth_native_calls + closed_http.counts().0 + candidate_http.counts().0,
-        41
+        42
     );
     assert_eq!(trap.calls.load(Ordering::SeqCst), 8);
     finish_native(child);
@@ -1449,6 +1466,59 @@ pub async fn run(pool: &PgPool, database_url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_body_recipe_preserves_frozen_note_and_raw_bytes_without_mutation() {
+        let (case, _) = frozen_case("review_note_limit");
+        let before = case.clone();
+        let generated: Value = serde_json::from_str(&request_body(case)).unwrap();
+        assert_eq!(
+            generated,
+            json!({"action":"dismiss","note":"n".repeat(2001)})
+        );
+        assert_eq!(case, &before);
+        assert_eq!(request_body(&json!({})), "{}");
+        let literal = json!({"body":{"note":"existing note","action":"dismiss"}});
+        assert_eq!(
+            serde_json::from_str::<Value>(&request_body(&literal)).unwrap(),
+            literal["body"]
+        );
+        let raw = " {\"action\": \"dismiss\",\"action\":";
+        assert_eq!(
+            request_body(&json!({"body":{"action":"revoke"},"note_length":2001,"raw_body":raw})),
+            raw
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_requests_reject_unadapted_content_type_fields() {
+        for content_type in [Value::Null, json!("text/plain"), json!("application/json")] {
+            let failure = tokio::spawn(async move {
+                request_at_path(
+                    &Router::new(),
+                    &json!({"method":"POST","content_type":content_type}),
+                    None,
+                    "/unused",
+                    None,
+                    RequestBoundary::Forwarded,
+                )
+                .await;
+            })
+            .await
+            .expect_err("unadapted content_type must be rejected before dispatch");
+            assert!(failure.is_panic());
+            let panic = failure.into_panic();
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+            assert_eq!(
+                message,
+                Some("alternate media types require an explicit gateway request adapter"),
+                "a later router/header failure must not satisfy the guard regression"
+            );
+        }
+    }
 
     #[test]
     fn tenant_query_is_explicit_unique_and_preserves_other_parameters() {
@@ -1491,6 +1561,7 @@ mod tests {
             "resolve_again",
             "enqueue_foreign",
             "missing_tenant",
+            "review_note_limit",
         ]) {
             let (status, expected) = public_error_expected(name);
             let mut actual = expected.clone();
