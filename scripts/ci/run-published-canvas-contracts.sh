@@ -147,4 +147,6 @@ fi
 "${executables[0]}" --list | grep -Fx 'canvas_published_borrowed_database::outer_database_owner_survives_forced_borrower_exit: test'
 "${executables[0]}" --list | grep -Fx 'canvas_published_borrowed_database::borrower_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_reference_matches_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_timeout_matches_frozen_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_timeout_native_child: test'
 "${executables[0]}" --nocapture --test-threads=1

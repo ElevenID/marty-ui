@@ -1,6 +1,7 @@
 //! Real native worker cancellation during the third HTTPS read, compared with
 //! independently frozen published state. No clock, live job or lease is edited.
 use super::{
+    canvas_worker_output::OwnedOutput,
     canvas_worker_process_signals::OwnedWorker,
     canvas_worker_provider_signals_replay::{assert_leased_state, snapshot},
     canvas_worker_rest_replay::{prepare, validation_scenarios, worker_environment, WorkerFixture},
@@ -9,10 +10,8 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use std::{
-    fs::{File, OpenOptions},
-    io::{Read, Seek, SeekFrom},
+    fs::File,
     path::{Path, PathBuf},
-    process::Stdio,
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -84,78 +83,6 @@ async fn await_marker(control: &Path, name: &str, worker: &mut OwnedWorker) {
     })
     .await
     .expect("native deadline parent handshake exceeded its fixed bound");
-}
-
-struct OwnedOutput {
-    readers: [File; 2],
-}
-
-impl OwnedOutput {
-    fn new(control: &Path) -> (Self, Stdio, Stdio) {
-        // The parent's protocol directory contains markers only. Its separately
-        // owned root removes this sibling after all child handles have closed.
-        let directory = control.parent().unwrap().join("native-worker-output");
-        std::fs::create_dir(&directory).unwrap();
-        let open = |name: &str| {
-            let path = directory.join(name);
-            let writer = OpenOptions::new()
-                .append(true)
-                .create_new(true)
-                .open(&path)
-                .unwrap();
-            let reader = File::open(path).unwrap();
-            (writer, reader)
-        };
-        let (stdout, stdout_reader) = open("worker-stdout.log");
-        let (stderr, stderr_reader) = open("worker-stderr.log");
-        (
-            Self {
-                readers: [stdout_reader, stderr_reader],
-            },
-            Stdio::from(stdout),
-            Stdio::from(stderr),
-        )
-    }
-
-    fn assert_private_quiet(&mut self, token: &str, database_url: &str) {
-        let database = url::Url::parse(database_url).unwrap();
-        let mut forbidden = vec![
-            token,
-            "synthetic-process-signal-key",
-            "synthetic-startup-api-key",
-            "synthetic-startup-hmac-key",
-            "synthetic-local-only",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        ];
-        if let Some(password) = database.password() {
-            forbidden.push(password);
-        }
-        for (index, reader) in self.readers.iter_mut().enumerate() {
-            reader.seek(SeekFrom::Start(0)).unwrap();
-            let mut bytes = Vec::new();
-            reader.take(65_537).read_to_end(&mut bytes).unwrap();
-            assert!(
-                bytes.len() <= 65_536,
-                "native worker output exceeded bounded capture"
-            );
-            for secret in forbidden.iter().filter(|secret| !secret.is_empty()) {
-                assert!(
-                    !bytes
-                        .windows(secret.len())
-                        .any(|window| window == secret.as_bytes()),
-                    "native worker output contained synthetic authentication material"
-                );
-            }
-            // Python's two unrelated API-import warnings are explicitly not
-            // manufactured here. At native WARN level any observed output must
-            // be reviewed; expose only fixed stream index and byte count.
-            assert!(
-                bytes.is_empty(),
-                "native worker output stream={index} bytes={}",
-                bytes.len()
-            );
-        }
-    }
 }
 
 struct Generation {
@@ -514,7 +441,10 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{
+        fs::OpenOptions,
+        io::{Read, Seek, SeekFrom, Write},
+    };
 
     const OUTPUT_TOKEN: &str = "synthetic-deadline-output-token";
     const OUTPUT_DATABASE: &str =
@@ -667,7 +597,13 @@ mod tests {
                 fixture.rejected(),
                 "native worker output contained synthetic authentication material"
             );
-            let reader = &mut fixture.output.as_mut().unwrap().readers[stream];
+            let mut reader = File::open(
+                fixture
+                    .root
+                    .join("native-worker-output")
+                    .join(["worker-stdout.log", "worker-stderr.log"][stream]),
+            )
+            .unwrap();
             reader.seek(SeekFrom::Start(0)).unwrap();
             let mut actual = String::new();
             reader.read_to_string(&mut actual).unwrap();

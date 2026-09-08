@@ -1,5 +1,10 @@
 # Target-specific Canvas worker timeout capture plan
 
+The separate [native replay](canvas-worker-native-timeout-replay.md) is now
+implemented and locally tested against this unchanged frozen corpus. Actual
+native Linux execution and any subsequent narrowly scoped runtime repair remain
+pending; no native timeout mismatch has yet been observed by that replay.
+
 Initial planning checkpoint: `30292f4b8`. The approved first four controls are
 implemented in separate scenario, fixture, runner and test files below, and now
 have a twice-captured frozen published reference. This is not a native timeout

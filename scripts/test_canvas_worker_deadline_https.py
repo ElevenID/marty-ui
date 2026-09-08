@@ -23,6 +23,7 @@ import time
 from canvas_worker_deadline_https_fixture import DeadlineHttpsFixture
 from canvas_worker_output_capture import owned_log_streams
 from canvas_worker_owned_process import OwnedProcess
+from canvas_worker_process_control import assert_control, output_counts, write_marker
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,26 +127,6 @@ def wait_for(child, predicate, timeout, phase, *, allow_exited=False):
         time.sleep(POLL_SECONDS)
 
 
-def assert_control(control, known, pending=None):
-    entries = list(control.iterdir())
-    if not all(entry.is_file() and not entry.is_symlink() for entry in entries):
-        raise AssertionError(
-            "Deadline control directory contains an unexpected entry type"
-        )
-    observed = {entry.name for entry in entries}
-    allowed = known | ({pending} if pending is not None else set())
-    if not known <= observed <= allowed:
-        raise AssertionError("Deadline control markers are missing or out of order")
-    return pending is not None and pending in observed
-
-
-def write_marker(control, known, name):
-    assert name not in known, "Duplicate deadline parent marker"
-    assert_control(control, known)
-    (control / name).touch(exist_ok=False)
-    known.add(name)
-
-
 def receive_marker(child, control, known, name, timeout, *, allow_exited=False):
     assert name not in known, "Duplicate deadline child marker"
     wait_for(
@@ -166,13 +147,6 @@ def assert_requests(fixture, reference, count=3):
         raise AssertionError(
             "Native deadline request transcript differs from the frozen reference"
         )
-
-
-def output_counts(stdout, stderr):
-    # No child payload, token, URL or panic body is ever echoed. Separate reader
-    # handles and append-only child files also avoid shared-offset corruption.
-    sizes = [stream.seek(0, os.SEEK_END) for stream in (stdout, stderr)]
-    return f"Owned deadline child output bytes: stdout={sizes[0]}, stderr={sizes[1]}"
 
 
 def remaining(deadline, maximum):
