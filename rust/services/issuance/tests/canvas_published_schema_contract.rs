@@ -305,21 +305,7 @@ async fn capture_worker_body_timeout_published_process() {
     output.sync_all().unwrap();
 }
 
-#[tokio::test]
-#[ignore = "explicit reviewed lease-expiry reference capture only; not native qualification"]
-async fn capture_worker_lease_expiry_published_process() {
-    use std::io::Write;
-
-    assert_eq!(
-        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
-        Ok("1")
-    );
-    let destination = std::path::PathBuf::from(
-        std::env::var_os("MARTY_CANVAS_LEASE_EXPIRY_CAPTURE_FILE")
-            .expect("explicit new lease-expiry capture file required"),
-    );
-    assert!(destination.is_absolute(), "capture file must be absolute");
-    assert!(!destination.exists(), "capture file must not already exist");
+async fn lease_expiry_raw_published_reports() -> String {
     let mut reports = Vec::new();
     for name in ["renewal_lock_early_release", "renewal_lock_crosses_expiry"] {
         let owned =
@@ -338,10 +324,41 @@ async fn capture_worker_lease_expiry_published_process() {
         reports.push(raw);
         eprintln!("Published lease-expiry observation and owned cleanup passed: {name}");
     }
+    format!("[{}]\n", reports.join(",\n"))
+}
+
+#[tokio::test]
+async fn worker_lease_expiry_reference_matches_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let raw = lease_expiry_raw_published_reports().await;
+    assert!(
+        raw.as_bytes()
+            == include_bytes!("../../../../contracts/canvas-worker-lease-expiry-oracle.json"),
+        "published lease-expiry reference differs from independent frozen reports"
+    );
+}
+
+#[tokio::test]
+#[ignore = "explicit reviewed lease-expiry reference capture only; not native qualification"]
+async fn capture_worker_lease_expiry_published_process() {
+    use std::io::Write;
+
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let destination = std::path::PathBuf::from(
+        std::env::var_os("MARTY_CANVAS_LEASE_EXPIRY_CAPTURE_FILE")
+            .expect("explicit new lease-expiry capture file required"),
+    );
+    assert!(destination.is_absolute(), "capture file must be absolute");
+    assert!(!destination.exists(), "capture file must not already exist");
+    let raw = lease_expiry_raw_published_reports().await;
     // Preserve raw numeric lexemes; publish only after both owned cleanups.
     // create_new never replaces evidence; a write/sync error may leave a new
     // partial failed capture, which is not a frozen or qualifying artifact.
-    let raw = format!("[{}]\n", reports.join(",\n"));
     let mut output = std::fs::File::create_new(destination).unwrap();
     output.write_all(raw.as_bytes()).unwrap();
     output.sync_all().unwrap();

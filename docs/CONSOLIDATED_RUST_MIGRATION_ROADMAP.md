@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: exact head `f0b600730` passed 137 configured Linux runtime tests, including both actual-worker deadline cases and the retained seven-stage mixed-roster replay. New native timeout/body work and whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: latest qualified head `2d864723f` passed complete CI, including 146 configured published-schema tests and four worker/PostgreSQL tests, all four native header-timeout HTTPS cases and seven mixed-roster stages with 55 HTTPS requests. New native BODY/live-provider-expiry qualification and whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -34,17 +34,31 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ### Current transport integration and merge gates
 
 The application REST repair at `2d864723f74831d4338e1686c242b1bad534a4b9`
-is on draft PR #814. [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184),
-runtime job `101977399347`, passed the native four-case timeout preflight at
-07:45:35Z and mixed-roster preflight at 07:51:41Z on 2026-09-08. The full isolated
-database suites are still running. These passed preflights do not establish
-whole-worker qualification or authorize merging, routing, deletion or deployment.
+is on draft PR #814. [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184)
+completed successfully with required checks passing. Runtime job `101977399347`
+passed 146 configured published-schema tests in 3379.26s and four
+worker/PostgreSQL tests in 98.32s. All four native header-timeout HTTPS cases,
+seven mixed-roster stages with 55 actual HTTPS requests and 104
+operation-timeout/TLS cases passed. This qualified checkpoint does not establish
+whole-worker cutover or qualify the newer integrated `4fbe9fdcb` candidate.
 The separately registered body corpus passed exact six-case regeneration in
 263.15s at `c092509c7`; [native body replay](rust-migrations/canvas-worker-native-body-replay.md)
 is implemented and reviewed locally on `feat/canvas-worker-native-body-replay-v1`,
 with runtime policy unchanged. Local gates passed 2,365 Python tests / three
 explicit skips, ten shared coordinator controls, 354 issuance library tests and
 strict all-target Clippy. Actual native Linux body qualification remains pending.
+
+The [live-provider expiry reference](rust-migrations/canvas-worker-live-provider-expiry.md)
+passed independent A/B captures in 113.34s and 112.78s at `4fbe9fdcb`, with
+identical 19,575-byte reports. The exact corpus is frozen and its registered
+ordinary regeneration passed locally in 113.12s with exact-owned cleanup.
+Published queued renewal revived the lease after original expiry while provider
+input was pending; both cases then succeeded. Actual native expiry/lock-wait
+behavior remains unqualified and must not be inferred from this reference or
+used to weaken fences. Final local validation passed 2,538 Python tests with
+three explicit skips in 170.56s, Rust compilation in 17.83s and strict all-target
+Clippy in 8.55s. Fresh-head hosted CI remains pending; these local passes do not
+qualify actual native BODY or live-provider lease-expiry behavior.
 
 Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
 preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).
@@ -61,7 +75,7 @@ cutover. The isolated application REST repair is implemented and compiled in
 65s; its first unit run passed 353 tests in 18.12s. After the added malformed-header
 regression and test-spy type alias, final unit execution passed 354 tests in
 15.73s (8.94s compilation). Strict all-target Clippy passed in 21.75s;
-hosted qualification remains required.
+the subsequent `2d864723f` hosted qualification passed as recorded above.
 Explicit application/issued-drift scope uses
 the shared 15s operation transport; roster, LTI and signing paths remain unchanged.
 Roster read-inactivity parity is still unqualified. No frozen outcome, routing

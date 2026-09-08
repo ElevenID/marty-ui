@@ -1,18 +1,35 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Gate audit at `a897c18d3`: named historical qualifications are retained below;
-fresh exact-head hosted qualification remains pending. The new gate 6/7
+Latest qualified composed checkpoint:
+`2d864723f74831d4338e1686c242b1bad534a4b9`.
+[CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184)
+completed successfully. Runtime job `101977399347` passed **146 configured
+published-schema tests in 3379.26s** and **four worker/PostgreSQL tests in 98.32s**.
+All four actual header-timeout HTTPS cases, seven mixed-roster stages with
+55 actual HTTPS requests, and 104 operation-timeout/TLS cases passed.
+Unconfigured test counts are not database qualification evidence.
+
+The newer integrated `4fbe9fdcb` candidate and subsequent reference registration
+still require fresh-head hosted qualification; native BODY and actual native
+live-provider lease-expiry behavior remain unqualified. The gate audit begun at
+`a897c18d3` retains named historical qualifications below. Its new gate 6/7
 composed regression passed the complete four-entry configured PostgreSQL suite
 locally on Windows in 94.81s, including the 21-value-class, empty-result and
 orphan marker. Mandatory Linux signal cases and fresh-head CI remain pending.
 No whole-worker cutover, Python deletion or deployment is approved by this audit.
 
-Earlier application-repair candidate `2d864723f74831d4338e1686c242b1bad534a4b9` passed native timeout
-and mixed-roster preflights in
-[CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184),
-runtime job `101977399347`, at 07:45:35Z and 07:51:41Z on 2026-09-08.
-At that recorded checkpoint the full isolated database suites were in progress. PR #814 remains draft and
-unrouted; these preflights do not close the remaining qualification gates.
+The [live-provider expiry reference](canvas-worker-live-provider-expiry.md)
+passed independent A/B captures in 113.34s and 112.78s: identical 19,575 bytes,
+SHA256 `455494bc6be253a73747116734c418c9c13e41d13eac09a1c31f721e5d44499d`.
+The corpus is frozen and its registered ordinary regeneration passed locally in
+113.12s with exact-byte equality; all four fixture IDs were verified absent.
+Final local validation passed 2,538 Python tests with three explicit skips in
+170.56s, Rust compilation in 17.83s and strict all-target Clippy in 8.55s.
+Current-head hosted CI and actual native BODY/expiry qualification remain pending.
+Published queued renewal revived the lease
+after observed original expiry. This is not evidence of native lock-wait
+behavior or authorization to weaken native fences. PR #814 remains draft and
+unrouted; the successful historical run does not close the remaining gates.
 
 Earlier unqualified candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` failed
 native timeout preflight in
@@ -25,13 +42,14 @@ not reached. At that historical head, Rust Service Tests and CI Gate failed.
 
 The narrow application REST repair compiled in 65s before integration; after the additional malformed-header regression and test-spy
 type alias, final unit execution passed 354 tests in 15.73s (8.94s compilation).
-Strict all-target Clippy passed in 21.75s. Hosted qualification is still required. Application/issued-drift
+Strict all-target Clippy passed in 21.75s, followed by the successful `2d864723f`
+hosted run above. Application/issued-drift
 scope selects the shared 15s operation transport; roster, LTI and signing paths
 remain unchanged, and roster inactivity remains unqualified. The scoped `f0`
 checkpoint below is unchanged. The worker remains unrouted; no frozen outcome,
 Python deletion or deployment changed.
 
-Status: latest qualified composed checkpoint
+Historical qualified deadline/composition checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`.
 [CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
 completed successfully; all required checks passed, including Rust CodeQL.
@@ -387,7 +405,7 @@ references, actual native HTTPS and consumer cutover remain distinct evidence.
 | 1. Environment parsing, bounds, malformed startup | Historically qualified: 133 configuration vectors, actual `worker_startup_matches_published_process_and_idle_heartbeat`, PostgreSQL consumer cycles and [LOG_LEVEL repair](canvas-worker-logging-configuration.md) with 16 frozen threshold cases and seven invalid-process checks; combined runtime/image qualification at `c3e51a4d5` | Fresh exact-head run pending. No additional parser behavior gap identified; deployed secret/entrypoint adoption remains a consumer cutover action, not missing configuration-factory evidence. |
 | 2. Legacy processor loader and removal | Retained Credentials `tests/unit/test_canvas_worker_loader_oracle.py`, five published dispatch observations and native typed construction; see [dispatch reconciliation](canvas-worker-dispatch-reconciliation.md) | At qualified cutover, remove active loader selection from every consumer, updating commands/images and operational validators together. Preserve frozen legacy evidence and Python rollback compatibility while supported; do not recreate dynamic imports in Rust. |
 | 3. Loop stop, cancellation, recovery, disposal | Historically qualified: `assert_owned_cycle_lifecycle`, `assert_initialized_pool_disposal`, privacy replay's failed-then-recovered actual `run_loop`, and actual-process signals. Both three-HTTPS deadline cases and reference regeneration qualified at `f0b600730` | Fresh exact-head run pending. Named lifecycle boundaries have evidence; controlled-processor awaited disposal is not inferred from process exit. The separate missing live-provider expiry composition is gate 4. |
-| 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations and lease-loss cancellation unit tests; actual provider renewal/recovery and two-renewal deadline composition qualified at `f0b600730` | Missing: actual lease expiry while a surviving worker's real provider I/O remains pending. Capture expiry, delayed renewal outcome, effects and recovery against frozen published behavior, with a valid-lease control; investigate any unsafe discrepancy explicitly. Python computes renewal expiry before a blocked save, so a queued renewal may revive the lease before provider completion: original expiry alone does not establish that all later writes must fail. Deadline tests require a current renewed lease; controlled fence edits and transaction expiry do not close this composition. |
+| 4. Renewal heartbeat and fence loss | `canvas_worker_renewal_oracle.rs`, 60 frozen renewal-job combinations and lease-loss cancellation unit tests; actual provider renewal/recovery and deadline composition qualified at `f0b600730`. [Live-provider expiry reference](canvas-worker-live-provider-expiry.md): independent A/B complete, exact raw corpus frozen, registered ordinary regeneration passed locally in 113.12s with exact-owned cleanup | Actual native provider-pending expiry and repository lock-wait behavior remain unqualified. Both published cases renewed and succeeded; the crossing case proved original expiry while locked before queued renewal revived it. Compare actual native renewal, effects and recovery without assuming original expiry prohibits all later writes; investigate unsafe discrepancies explicitly. Deadline/current-lease tests and controlled transaction expiry do not close this composition. |
 | 5. Scheduler, reclaim, final-attempt crash races | Historically qualified actual-process concurrent scheduler, retryable/final reclaimers, final-attempt crash, newer-target recovery and both terminal-race winners; [recovery-first fencing](canvas-worker-provider-recovery-first.md). [Effect transaction expiry](canvas-worker-effect-expiry.md) and valid-lease control additionally qualified at `9cbba6b7b` | Fresh exact-head run pending. The named scheduler/reclaim/crash requirements have composed evidence; retain them. Controlled-provider effect expiry is not the missing live-provider case in gate 4, nor whole-worker disposal proof. |
 | 6. Missing target and unexpected-error privacy | Unexpected runtime/429/503 durable and complete-log projections historically qualified in the twelve-case [privacy replay](canvas-worker-privacy.md) at `b02b77d13562db717d6e16cdf85ff430edbc2eeb`. New `assert_projection_cycles` composes a preseeded orphan and successful siblings through actual `run_cycle`/PostgreSQL | Complete four-entry configured PostgreSQL suite passed locally on Windows in 94.81s with the new marker. Mandatory Linux signal cases and fresh exact-head CI remain pending. The orphan is in the dedicated worker test schema, not a claim of published-schema FK/deletion reachability or actual-provider failure injection. |
 | 7. Safe-result types and truncation | `canvas_worker_result_oracle.rs`: 483 JSON field/value cases plus empty/full allowlists. New `assert_projection_cycles` passes all 21 frozen value classes plus an empty control through actual worker persistence and compares raw result lexemes | Complete four-entry configured PostgreSQL suite passed locally on Windows in 94.81s with the new marker; fresh exact-head CI remains pending. Retain exhaustive scalar/projection vectors alongside composed representatives; do not infer non-JSON Python host-value coverage, native-binary parity or Linux signal qualification from this run. |

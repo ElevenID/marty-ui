@@ -154,6 +154,7 @@ fi
 "${executables[0]}" --list | grep -Fx 'canvas_published_borrowed_database::borrower_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_reference_matches_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_body_timeout_reference_matches_published_process: test'
+"${executables[0]}" --list | grep -Fx 'worker_lease_expiry_reference_matches_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_body_timeout_matches_frozen_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_body_timeout_native_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_timeout_matches_frozen_published_process: test'
