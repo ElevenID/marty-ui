@@ -701,6 +701,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PUBLIC_API_URL
+            - name: TOKEN_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: TOKEN_HMAC_KEY
             - name: INTEGRATION_SECRET_MASTER_KEY
               valueFrom:
                 secretKeyRef:
@@ -915,6 +920,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: DATABASE_URL
+            - name: TOKEN_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: TOKEN_HMAC_KEY
             - name: INTEGRATION_SECRET_MASTER_KEY
               valueFrom:
                 secretKeyRef:

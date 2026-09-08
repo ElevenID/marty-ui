@@ -10,6 +10,31 @@ not claims that current production or beta is broken.
 
 ## Missing or underspecified inventory entries
 
+### Kubernetes shared token-key repair (2026-09-08)
+
+Both issuance and its retained Python worker now reference the same required
+`marty-secrets/TOKEN_HMAC_KEY`. The existing secret catalog entry also requires
+the value for Kubernetes; the template and deployment creation path are aligned.
+No key is generated or substituted: an eventual deployment must reuse the
+existing issuance token key through the supported environment/file input.
+
+The runner validates the exact captured token value before publishing it, in
+addition to retaining catalog validation. Synthetic tests cover file changes
+between reads: a captured placeholder cannot pass because a later file is valid;
+a valid captured value remains the published value if the file changes later.
+Both consumers select that same key. The historical three-key wiring snapshot
+is retained unchanged, with the test declaring this one explicit additive repair.
+
+Independent review passed, as did 156 focused tests (24 new synthetic controls,
+116 deployment checks, 12 frozen-worker contract checks and four existing
+Kubernetes checks) in 18.74s. No real Kubernetes commands, key reads, provisioning,
+worker selection changes or deployment occurred. Existing namespace/pull-secret
+setup still precedes validation; these tests do not claim mutation-free failure.
+Follow-up: other keys retain the older resolve/revalidate pattern; centralize
+validated snapshots for all keys before claiming race-safe secret publication
+for the entire deployer. That wider pre-existing issue is not fixed by this
+token-specific guard.
+
 ### Generated release image follow-up (2026-09-08)
 
 The generated-overlay gap is now implemented using one pure image plan shared
