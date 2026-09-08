@@ -198,13 +198,15 @@ impl GatewayIdentityProvider for Identities {
         &self,
         session: &str,
     ) -> Result<Option<SessionIdentity>, SecurityError> {
-        Ok(
-            matches!(session, "actor-primary" | "actor-denied").then(|| SessionIdentity {
-                user_id: session.into(),
-                organization_id: Some("org-review".into()),
-                ..SessionIdentity::default()
-            }),
+        Ok(matches!(
+            session,
+            "actor-primary" | "actor-denied" | "actor-no-tenant"
         )
+        .then(|| SessionIdentity {
+            user_id: session.into(),
+            organization_id: (session != "actor-no-tenant").then(|| "org-review".into()),
+            ..SessionIdentity::default()
+        }))
     }
 
     async fn validate_api_key(&self, key: &str) -> Result<Option<ApiKeyIdentity>, SecurityError> {
@@ -292,10 +294,54 @@ impl EventStreamProvider for UnusedProviders {
     }
 }
 
+#[derive(Clone, Copy)]
+enum UpstreamTenant {
+    ExplicitQuery,
+    SessionFallback,
+    ApiKeyFallback,
+    Absent,
+}
+
+impl UpstreamTenant {
+    fn assert_request(self, request: &GatewayRequest) {
+        match self {
+            Self::ExplicitQuery => {
+                let tenants = request.query.get("organization_id").unwrap();
+                assert_eq!(tenants.len(), 1);
+                assert_eq!(
+                    request.header("x-organization-id"),
+                    Some(tenants[0].as_str())
+                );
+                if tenants[0] == "org-other" {
+                    assert_eq!(request.header("x-api-key-id"), Some("trusted-key-id"));
+                    assert_eq!(request.header("x-user-id"), Some("api_key:trusted-key-id"));
+                }
+            }
+            Self::SessionFallback | Self::ApiKeyFallback | Self::Absent => {
+                assert!(!request.query.contains_key("organization_id"));
+                let (organization, user, key) = match self {
+                    Self::SessionFallback => (Some("org-review"), "actor-primary", None),
+                    Self::ApiKeyFallback => (
+                        Some("org-review"),
+                        "api_key:trusted-key-id",
+                        Some("trusted-key-id"),
+                    ),
+                    Self::Absent => (None, "actor-no-tenant", None),
+                    Self::ExplicitQuery => unreachable!(),
+                };
+                assert_eq!(request.header("x-organization-id"), organization);
+                assert_eq!(request.header("x-user-id"), Some(user));
+                assert_eq!(request.header("x-api-key-id"), key);
+            }
+        }
+    }
+}
+
 pub(super) struct CountedHttp {
     http: ReqwestUpstream,
     native: AtomicUsize,
     legacy: AtomicUsize,
+    tenant: UpstreamTenant,
 }
 
 #[async_trait]
@@ -320,16 +366,7 @@ impl UpstreamClient for CountedHttp {
             request.header("x-api-key"),
             Some("synthetic-operations-key")
         );
-        let tenants = request.query.get("organization_id").unwrap();
-        assert_eq!(tenants.len(), 1);
-        assert_eq!(
-            request.header("x-organization-id"),
-            Some(tenants[0].as_str())
-        );
-        if tenants[0] == "org-other" {
-            assert_eq!(request.header("x-api-key-id"), Some("trusted-key-id"));
-            assert_eq!(request.header("x-user-id"), Some("api_key:trusted-key-id"));
-        }
+        self.tenant.assert_request(&request);
         self.http.send(instance, request).await
     }
 }
@@ -348,6 +385,20 @@ pub(super) fn candidate_router(native_port: u16, legacy_port: u16) -> (Router, A
 }
 
 fn router(native_port: u16, legacy_port: u16, routing: Routing) -> (Router, Arc<CountedHttp>) {
+    router_with_tenant(
+        native_port,
+        legacy_port,
+        routing,
+        UpstreamTenant::ExplicitQuery,
+    )
+}
+
+fn router_with_tenant(
+    native_port: u16,
+    legacy_port: u16,
+    routing: Routing,
+    tenant: UpstreamTenant,
+) -> (Router, Arc<CountedHttp>) {
     assert_ne!(
         native_port, legacy_port,
         "legacy trap must not alias native service"
@@ -374,6 +425,7 @@ fn router(native_port: u16, legacy_port: u16, routing: Routing) -> (Router, Arc<
         http: ReqwestUpstream::with_client(LIMIT, client).unwrap(),
         native: AtomicUsize::new(0),
         legacy: AtomicUsize::new(0),
+        tenant,
     });
     let proxy = GatewayProxy::new(
         proxy_routes,
@@ -500,6 +552,19 @@ pub(super) async fn request(
     boundary: RequestBoundary,
 ) -> (u16, String, Value) {
     let path = tenant_path(case["path"].as_str().unwrap(), tenant);
+    request_at_path(router, case, auth, &path, Some("forged-org"), boundary).await
+}
+
+// Explicit seam for public authentication/tenant controls only. The default
+// request() still rejects existing tenant queries and injects all spoof probes.
+async fn request_at_path(
+    router: &Router,
+    case: &Value,
+    auth: Option<(&str, &str)>,
+    path: &str,
+    client_tenant: Option<&str>,
+    boundary: RequestBoundary,
+) -> (u16, String, Value) {
     let mut builder = Request::builder()
         .method(case["method"].as_str().unwrap_or("GET"))
         .uri(path)
@@ -507,8 +572,10 @@ pub(super) async fn request(
         .header("origin", ORIGIN)
         .header("x-request-id", "synthetic-gateway-operations")
         .header("x-user-id", "forged-user")
-        .header("x-api-key-id", "forged-key")
-        .header("x-organization-id", "forged-org");
+        .header("x-api-key-id", "forged-key");
+    if let Some(tenant) = client_tenant {
+        builder = builder.header("x-organization-id", tenant);
+    }
     if let Some((name, value)) = auth {
         builder = builder.header(name, value);
     }
@@ -614,6 +681,11 @@ fn public_error_expected(name: &str) -> (u16, Value) {
             404,
             "Canvas application not found",
             Some("canvas_application_not_found"),
+        ),
+        "missing_tenant" => (
+            400,
+            "X-Organization-ID is required for Canvas management",
+            None,
         ),
         "review_foreign" => (
             404,
@@ -823,6 +895,208 @@ fn assert_duplicate_enqueue(before: &Value, after: &Value, body: &Value) {
         after == &expected,
         "duplicate enqueue changed unexpected raw state"
     );
+}
+
+fn assert_auth_reference_inputs() {
+    // These remain DIRECT-service obligations, not invented frozen gateway
+    // observations. Public authentication replaces the client's management key,
+    // and authenticated organization state replaces an omitted client header.
+    for (name, status, detail) in [
+        ("missing_management_key", 401, "X-API-Key header is missing"),
+        ("wrong_management_key", 401, "Invalid API Key"),
+        (
+            "missing_tenant",
+            400,
+            "X-Organization-ID is required for Canvas management",
+        ),
+        ("foreign_query", 404, "Canvas resource not found"),
+    ] {
+        let (case, expected) = frozen_case(name);
+        assert_eq!(case["method"], "GET");
+        assert_eq!(expected["status"], status);
+        assert_eq!(expected["content_type"], "application/json");
+        assert_eq!(expected["body"], json!({"detail":detail}));
+        assert_eq!(expected["snapshot"], frozen_case("jobs_list").1["snapshot"]);
+        assert_eq!(expected["lifecycle_calls"], json!([]));
+    }
+    assert_eq!(
+        frozen_case("missing_management_key").0["omit_headers"],
+        json!(["X-API-Key"])
+    );
+    assert_eq!(
+        frozen_case("wrong_management_key").0["headers"],
+        json!({"X-API-Key":"synthetic-wrong-key"})
+    );
+    assert_eq!(
+        frozen_case("missing_tenant").0["omit_headers"],
+        json!(["X-Organization-ID"])
+    );
+    assert_eq!(
+        frozen_case("foreign_query").0["path"],
+        "/v1/integrations/canvas/canvas-sync-jobs?organization_id=org-foreign"
+    );
+}
+
+fn public_auth_expected(name: &str) -> (u16, Value) {
+    match name {
+        "no_public_auth" => (
+            401,
+            json!({"error":"unauthorized","error_description":"Authentication required","message_id":MESSAGE_ID_SENTINEL}),
+        ),
+        "invalid_public_key" => (
+            401,
+            json!({"error":"unauthorized","error_description":"Invalid or expired API key","message_id":MESSAGE_ID_SENTINEL}),
+        ),
+        "foreign_session_query" => (403, json!({"detail":"Not a member of this organization"})),
+        "foreign_api_key_query" => (
+            403,
+            json!({"detail":"API key does not have access to this organization"}),
+        ),
+        _ => panic!("unreviewed public authentication boundary"),
+    }
+}
+
+fn assert_public_auth_error(actual: (u16, String, Value), name: &str) {
+    let (status, content_type, mut body) = actual;
+    let (expected_status, expected) = public_auth_expected(name);
+    assert_eq!(status, expected_status);
+    assert_eq!(content_type, "application/json");
+    if expected.get("message_id").is_some() {
+        assert!(uuid::Uuid::parse_str(body["message_id"].as_str().unwrap()).is_ok());
+        body["message_id"] = json!(MESSAGE_ID_SENTINEL);
+    }
+    // Tenant middleware's detail object is deliberately not a MIP projection.
+    // No arbitrary extra fields or synthetic message IDs are accepted there.
+    assert!(
+        body == expected,
+        "public authentication response differs from its owner"
+    );
+}
+
+async fn public_auth_boundaries(pool: &PgPool, native_port: u16, legacy_port: u16) -> usize {
+    assert_auth_reference_inputs();
+    let before = raw_state(pool).await;
+    let (denied, denied_http) = candidate_router(native_port, legacy_port);
+    let mut requests = 0;
+    for (source, name, auth) in [
+        ("missing_management_key", "no_public_auth", None),
+        (
+            "wrong_management_key",
+            "invalid_public_key",
+            Some(("x-api-key", "synthetic-wrong-key")),
+        ),
+    ] {
+        let case = frozen_case(source).0;
+        let response = request_at_path(
+            &denied,
+            case,
+            auth,
+            case["path"].as_str().unwrap(),
+            None,
+            RequestBoundary::DeniedBeforeProxy,
+        )
+        .await;
+        assert_public_auth_error(response, name);
+        assert_eq!(denied_http.counts(), (0, 0));
+        assert!(
+            raw_state(pool).await == before,
+            "authentication denial changed raw state"
+        );
+        requests += 1;
+    }
+
+    let (missing_tenant, _) = frozen_case("missing_tenant");
+    let (_, expected_read) = frozen_case("jobs_list");
+    let mut native_calls = 0;
+    for (tenant, auth) in [
+        (
+            UpstreamTenant::SessionFallback,
+            ("cookie", "sessionId=actor-primary"),
+        ),
+        (UpstreamTenant::ApiKeyFallback, ("x-api-key", "actor-key")),
+    ] {
+        let (router, http) =
+            router_with_tenant(native_port, legacy_port, Routing::CandidateNative, tenant);
+        // No tenant header/query and no service management key from the client.
+        // CountedHttp proves the independently authenticated tenant/identity and
+        // the gateway-owned service key on the actual prepared HTTP request.
+        let (status, content_type, mut body) = request_at_path(
+            &router,
+            missing_tenant,
+            Some(auth),
+            missing_tenant["path"].as_str().unwrap(),
+            None,
+            RequestBoundary::Forwarded,
+        )
+        .await;
+        timestamps(&mut body);
+        assert_eq!(
+            json!({"status":status,"content_type":content_type,"body":body}),
+            json!({"status":expected_read["status"],"content_type":expected_read["content_type"],"body":expected_read["body"]})
+        );
+        assert_eq!(http.counts(), (1, 0));
+        assert!(
+            raw_state(pool).await == before,
+            "tenant fallback read changed raw state"
+        );
+        native_calls += http.counts().0;
+        requests += 1;
+    }
+
+    let (unscoped, unscoped_http) = router_with_tenant(
+        native_port,
+        legacy_port,
+        Routing::CandidateNative,
+        UpstreamTenant::Absent,
+    );
+    let response = request_at_path(
+        &unscoped,
+        missing_tenant,
+        Some(("cookie", "sessionId=actor-no-tenant")),
+        missing_tenant["path"].as_str().unwrap(),
+        None,
+        RequestBoundary::Forwarded,
+    )
+    .await;
+    assert_public_error(response, "missing_tenant");
+    assert_eq!(unscoped_http.counts(), (1, 0));
+    assert!(
+        raw_state(pool).await == before,
+        "missing trusted tenant changed raw state"
+    );
+    native_calls += unscoped_http.counts().0;
+    requests += 1;
+
+    let foreign = frozen_case("foreign_query").0;
+    for (name, auth) in [
+        (
+            "foreign_session_query",
+            ("cookie", "sessionId=actor-primary"),
+        ),
+        ("foreign_api_key_query", ("x-api-key", "actor-key")),
+    ] {
+        // Preserve the actual frozen foreign query. Do not replace it with a
+        // matching foreign principal or turn this into the direct-service 404.
+        let response = request_at_path(
+            &denied,
+            foreign,
+            Some(auth),
+            foreign["path"].as_str().unwrap(),
+            Some("org-review"),
+            RequestBoundary::DeniedBeforeProxy,
+        )
+        .await;
+        assert_public_auth_error(response, name);
+        assert_eq!(denied_http.counts(), (0, 0));
+        assert!(
+            raw_state(pool).await == before,
+            "foreign query denial changed raw state"
+        );
+        requests += 1;
+    }
+    assert_eq!(requests, 7);
+    assert_eq!(native_calls, 3);
+    native_calls
 }
 
 async fn frozen_matrix(pool: &PgPool, router: &Router, http: &CountedHttp) {
@@ -1132,6 +1406,7 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     finish_native(closed_child);
 
     let (child, http_port) = start_native(database_url, true).await;
+    let auth_native_calls = public_auth_boundaries(pool, http_port, trap.port).await;
 
     let (published, published_http) = router(http_port, trap.port, Routing::PublishedLegacy);
     let before = raw_state(pool).await;
@@ -1162,6 +1437,10 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     // The separate closed-rollout child contributes the 38th native request.
     assert_eq!(candidate_http.counts(), (37, 0));
     assert_eq!(closed_http.counts().0 + candidate_http.counts().0, 38);
+    assert_eq!(
+        auth_native_calls + closed_http.counts().0 + candidate_http.counts().0,
+        41
+    );
     assert_eq!(trap.calls.load(Ordering::SeqCst), 8);
     finish_native(child);
     trap.close().await;
@@ -1211,6 +1490,7 @@ mod tests {
             "resolve_queued",
             "resolve_again",
             "enqueue_foreign",
+            "missing_tenant",
         ]) {
             let (status, expected) = public_error_expected(name);
             let mut actual = expected.clone();
@@ -1296,6 +1576,153 @@ mod tests {
             } else {
                 assert_eq!(public_error_expected(name).0, 422);
             }
+        }
+    }
+
+    #[test]
+    fn public_auth_adaptations_retain_direct_frozen_obligations() {
+        assert_auth_reference_inputs();
+        for (direct, public) in [
+            ("missing_management_key", "no_public_auth"),
+            ("wrong_management_key", "invalid_public_key"),
+            ("foreign_query", "foreign_session_query"),
+            ("foreign_query", "foreign_api_key_query"),
+        ] {
+            assert_ne!(
+                frozen_case(direct).1["body"],
+                public_auth_expected(public).1
+            );
+        }
+        assert_eq!(frozen_case("foreign_query").1["status"], 404);
+        assert_eq!(public_auth_expected("foreign_session_query").0, 403);
+        assert_eq!(public_error_expected("missing_tenant").0, 400);
+        assert!(
+            std::panic::catch_unwind(|| public_auth_expected("missing_management_key")).is_err()
+        );
+    }
+
+    #[test]
+    fn public_auth_error_comparison_is_closed_and_owner_specific() {
+        for name in [
+            "no_public_auth",
+            "invalid_public_key",
+            "foreign_session_query",
+            "foreign_api_key_query",
+        ] {
+            let (status, mut expected) = public_auth_expected(name);
+            if expected.get("message_id").is_some() {
+                expected["message_id"] = json!("11111111-1111-4111-8111-111111111111");
+            }
+            assert_public_auth_error((status, "application/json".into(), expected.clone()), name);
+            for mutation in ["extra", "message", "wrong-description", "drop-field"] {
+                let mut changed = expected.clone();
+                match mutation {
+                    "extra" => changed["unexpected"] = json!(true),
+                    "message" => changed["message_id"] = json!(MESSAGE_ID_SENTINEL),
+                    "wrong-description" => {
+                        let field = if changed.get("detail").is_some() {
+                            "detail"
+                        } else {
+                            "error_description"
+                        };
+                        changed[field] = json!("different");
+                    }
+                    "drop-field" => {
+                        let field = if changed.get("detail").is_some() {
+                            "detail"
+                        } else {
+                            "error"
+                        };
+                        changed.as_object_mut().unwrap().remove(field);
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(std::panic::catch_unwind(|| assert_public_auth_error(
+                    (status, "application/json".into(), changed),
+                    name
+                ))
+                .is_err());
+            }
+            assert!(std::panic::catch_unwind(|| assert_public_auth_error(
+                (200, "application/json".into(), expected.clone()),
+                name
+            ))
+            .is_err());
+            assert!(std::panic::catch_unwind(|| assert_public_auth_error(
+                (status, "text/plain".into(), expected),
+                name
+            ))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn tenant_expectations_do_not_relax_default_explicit_query_contract() {
+        let mut explicit = GatewayRequest::new(
+            HttpMethod::Get,
+            "/v1/integrations/canvas/canvas-sync-jobs",
+            0,
+        );
+        explicit
+            .query
+            .insert("organization_id".into(), vec!["org-review".into()]);
+        explicit
+            .headers
+            .insert("x-organization-id".into(), "org-review".into());
+        UpstreamTenant::ExplicitQuery.assert_request(&explicit);
+        let mut duplicate = explicit.clone();
+        duplicate
+            .query
+            .get_mut("organization_id")
+            .unwrap()
+            .push("org-review".into());
+        assert!(std::panic::catch_unwind(
+            || UpstreamTenant::ExplicitQuery.assert_request(&duplicate)
+        )
+        .is_err());
+        for (tenant, organization, user, key) in [
+            (
+                UpstreamTenant::SessionFallback,
+                Some("org-review"),
+                "actor-primary",
+                None,
+            ),
+            (
+                UpstreamTenant::ApiKeyFallback,
+                Some("org-review"),
+                "api_key:trusted-key-id",
+                Some("trusted-key-id"),
+            ),
+            (UpstreamTenant::Absent, None, "actor-no-tenant", None),
+        ] {
+            let mut request = GatewayRequest::new(
+                HttpMethod::Get,
+                "/v1/integrations/canvas/canvas-sync-jobs",
+                0,
+            );
+            request.headers.insert("x-user-id".into(), user.into());
+            if let Some(organization) = organization {
+                request
+                    .headers
+                    .insert("x-organization-id".into(), organization.into());
+            }
+            if let Some(key) = key {
+                request.headers.insert("x-api-key-id".into(), key.into());
+            }
+            tenant.assert_request(&request);
+            assert!(std::panic::catch_unwind(
+                || UpstreamTenant::ExplicitQuery.assert_request(&request)
+            )
+            .is_err());
+            for field in ["x-organization-id", "x-user-id", "x-api-key-id"] {
+                let mut changed = request.clone();
+                changed.headers.insert(field.into(), "forged-value".into());
+                assert!(std::panic::catch_unwind(|| tenant.assert_request(&changed)).is_err());
+            }
+            request
+                .query
+                .insert("organization_id".into(), vec!["org-review".into()]);
+            assert!(std::panic::catch_unwind(|| tenant.assert_request(&request)).is_err());
         }
     }
 
