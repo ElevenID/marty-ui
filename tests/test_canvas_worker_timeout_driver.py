@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import importlib
+import io
 import json
 from pathlib import Path
 from threading import Event
@@ -17,6 +18,110 @@ CASE_NAMES = (
     "roster_prompt",
     "roster_delayed_headers",
 )
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        ["AwaitTerminal", "TerminalRetry", "AwaitIdle", "CompareOutcome"],
+        [
+            "AwaitTerminal",
+            "TerminalSucceeded",
+            "TerminalMismatch",
+            "CompareOutcome",
+            "OutcomeJobs",
+            "OutcomeFacts",
+        ],
+        [
+            "PublishTransition",
+            "PostPublicationGeneration",
+            "PostPublicationLease",
+            "PostPublicationEffects",
+            "PostPublicationOutput",
+        ],
+    ],
+)
+def test_closed_coordinator_records_distinguish_status_comparison_and_postpublication(
+    native, records
+):
+    payload = (
+        b"private unrelated panic details\n"
+        + b"\n".join(native.DIAGNOSTIC_PREFIX + item.encode() for item in records)
+        + b"\n"
+    )
+    assert native.coordinator_diagnostics(
+        io.BytesIO(payload)
+    ) == "Native timeout coordinator diagnostics: " + ",".join(records)
+
+
+@pytest.mark.parametrize(
+    "payload,category",
+    [
+        (b"", "unavailable"),
+        (b"private-secret-row-panic", "unavailable"),
+        (b"MARTY_TIMEOUT_DIAG_V1:private-secret\n", "invalid"),
+        (b"MARTY_TIMEOUT_DIAG_V1:TerminalSucceeded", "invalid"),
+        (b"MARTY_TIMEOUT_DIAG_V1:TerminalSucceeded private-secret\n", "invalid"),
+        (b"panic private-secret: MARTY_TIMEOUT_DIAG_V1:TerminalSucceeded\n", "invalid"),
+        (
+            b"MARTY_TIMEOUT_DIAG_V1:TerminalSucceeded\nMARTY_TIMEOUT_DIAG_V1:TerminalSucceeded\n",
+            "invalid",
+        ),
+        (
+            b"MARTY_TIMEOUT_DIAG_V1:TerminalSucceeded\nMARTY_TIMEOUT_DIAG_V1:private-secret\n",
+            "invalid",
+        ),
+        (b"MARTY_TIMEOUT_DIAG_V1:TerminalSucceeded\n" + b"x" * 65536, "oversized"),
+    ],
+    ids=[
+        "empty",
+        "private-panic",
+        "unknown",
+        "unterminated-record",
+        "dynamic-suffix",
+        "panic-fragment",
+        "duplicate",
+        "partial-valid",
+        "oversized",
+    ],
+)
+def test_unknown_private_partial_duplicate_and_oversized_diagnostics_are_not_echoed(
+    native, payload, category
+):
+    result = native.coordinator_diagnostics(io.BytesIO(payload))
+    assert result == f"Native timeout coordinator diagnostics {category}"
+    assert "private-secret" not in result
+
+
+@pytest.mark.parametrize("ending", [b"\n", b"\r\n"])
+def test_coordinator_diagnostic_read_is_bounded_and_uses_independent_reader(
+    native, ending
+):
+    class Reader(io.BytesIO):
+        def read(self, size=-1):
+            assert size == 65537
+            return super().read(size)
+
+    stream = Reader(b"MARTY_TIMEOUT_DIAG_V1:TerminalUnknown" + ending)
+    stream.seek(0, 2)
+    assert native.coordinator_diagnostics(stream).endswith(": TerminalUnknown")
+
+
+@pytest.mark.parametrize("operation", ["seek", "read"])
+def test_unreadable_coordinator_diagnostics_preserve_static_failure(native, operation):
+    class Reader(io.BytesIO):
+        def seek(self, *args):
+            if operation == "seek":
+                raise OSError("private-reader-sentinel")
+            return super().seek(*args)
+
+        def read(self, *args):
+            raise ValueError("private-reader-sentinel")
+
+    assert (
+        native.coordinator_diagnostics(Reader())
+        == "Native timeout coordinator diagnostics unavailable"
+    )
 
 
 def transition(lower=14.9, upper=15.1):
@@ -577,6 +682,12 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
             if failure == "premature-marker":
                 (model.control / "child-done").touch()
             if failure == "early-exit":
+                options["stderr"].write(
+                    b"private-sentinel panic details\n"
+                    b"MARTY_TIMEOUT_DIAG_V1:PublishTransition\n"
+                    b"MARTY_TIMEOUT_DIAG_V1:PostPublicationEffects\n"
+                )
+                options["stderr"].flush()
                 self.returncode = 1
 
         def poll(self):
@@ -663,6 +774,12 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
             getattr(caught.value, "__notes__", [])
         )
         assert "private-sentinel" not in diagnostic
+        if failure == "early-exit":
+            assert "Owned timeout child output bytes:" in diagnostic
+            assert (
+                "Native timeout coordinator diagnostics: PublishTransition,PostPublicationEffects"
+                in diagnostic
+            )
     assert model.fixture.closed and model.child.cleaned
     assert all(handle.closed for handle in handles)
     assert not model.control.parent.exists()

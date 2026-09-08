@@ -124,11 +124,32 @@ pub enum CanvasProviderReadError {
     RosterHttpStatusFailure,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanvasProviderRunScope {
+    Application,
+    BackgroundRoster,
+}
+
+impl CanvasProviderRunScope {
+    pub fn from_target_type(target_type: CanvasSyncTargetType) -> Option<Self> {
+        match target_type {
+            CanvasSyncTargetType::LearnerApplication | CanvasSyncTargetType::IssuedDrift => {
+                Some(Self::Application)
+            }
+            CanvasSyncTargetType::BackgroundRoster => Some(Self::BackgroundRoster),
+            CanvasSyncTargetType::AwardCandidate => None,
+        }
+    }
+}
+
 #[async_trait]
 pub trait CanvasAuthoritativeProvider: Send + Sync {
     /// Start one processor invocation. Stateful providers must return fresh
     /// run-local state; a shared provider must never retain another job's tokens.
-    fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider>;
+    fn for_run(
+        self: Arc<Self>,
+        scope: CanvasProviderRunScope,
+    ) -> Arc<dyn CanvasAuthoritativeProvider>;
 
     async fn read_requirement(
         &self,
@@ -759,7 +780,12 @@ impl CanvasSyncProcessor for NativeCanvasSyncProcessor {
         }
         let scoped = Self {
             repository: self.repository.clone().for_lease(lease.clone()),
-            provider: self.provider.clone().for_run(),
+            provider: match CanvasProviderRunScope::from_target_type(target.target_type) {
+                Some(scope) => self.provider.clone().for_run(scope),
+                // Preserve process_fields' rollout-before-unsupported ordering.
+                // Unsupported targets never execute provider reads or create a run.
+                None => self.provider.clone(),
+            },
             ..self.clone()
         };
         canvas_sync_result(scoped.process_fields(target).await?)
@@ -1367,7 +1393,10 @@ mod tests {
 
     #[async_trait]
     impl CanvasAuthoritativeProvider for SimulatorProvider {
-        fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
+        fn for_run(
+            self: Arc<Self>,
+            _scope: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
             self
         }
 
@@ -1526,17 +1555,30 @@ mod tests {
     struct RunCountingProvider {
         runs: Arc<std::sync::atomic::AtomicUsize>,
         calls: Arc<Mutex<Vec<usize>>>,
+        scoped_calls: Arc<Mutex<Vec<ScopedProviderCall>>>,
         run_id: Option<usize>,
+        run_scope: Option<CanvasProviderRunScope>,
     }
+
+    type ScopedProviderCall = (usize, CanvasProviderRunScope, &'static str);
 
     #[async_trait]
     impl CanvasAuthoritativeProvider for RunCountingProvider {
-        fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
+        fn for_run(
+            self: Arc<Self>,
+            scope: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
             let run_id = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.scoped_calls
+                .lock()
+                .unwrap()
+                .push((run_id, scope, "start"));
             Arc::new(Self {
                 runs: self.runs.clone(),
                 calls: self.calls.clone(),
+                scoped_calls: self.scoped_calls.clone(),
                 run_id: Some(run_id),
+                run_scope: Some(scope),
             })
         }
 
@@ -1547,6 +1589,11 @@ mod tests {
             canvas_user_id: Option<&str>,
             lti_subject: Option<&str>,
         ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            self.scoped_calls.lock().unwrap().push((
+                self.run_id.expect("read must use the run provider"),
+                self.run_scope.expect("read must retain the run scope"),
+                "read",
+            ));
             self.calls.lock().unwrap().push(
                 self.run_id
                     .expect("processor must use the returned run provider"),
@@ -1563,6 +1610,11 @@ mod tests {
             requirements: &[Value],
             limit: usize,
         ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            self.scoped_calls.lock().unwrap().push((
+                self.run_id.expect("roster must use the run provider"),
+                self.run_scope.expect("roster must retain the run scope"),
+                "roster",
+            ));
             assert!(
                 self.run_id.is_some(),
                 "roster must also use the run provider"
@@ -1577,10 +1629,10 @@ mod tests {
     async fn processor_scopes_trait_object_provider_once_per_valid_invocation() {
         let repository = Arc::new(SimulatorRepository {
             resources: simulator_resources(vec![requirement(
-                "quiz",
-                "ags_result",
-                "canvas.quiz_score",
-                json!({"course_id":"1","line_item_url":"https://canvas.test/lineitems/2"}),
+                "assignment",
+                "canvas_rest",
+                "canvas.assignment_score",
+                json!({"course_id":"1","activity_id":"2"}),
                 json!({"min_score_percent":70}),
             )]),
             facts: Mutex::new(Vec::new()),
@@ -1631,6 +1683,58 @@ mod tests {
         let mut calls = provider.calls.lock().unwrap().clone();
         calls.sort_unstable();
         assert_eq!(calls, vec![0, 1]);
+
+        run_simulated(&processor, target(CanvasSyncTargetType::IssuedDrift))
+            .await
+            .unwrap();
+        run_simulated(&processor, target(CanvasSyncTargetType::BackgroundRoster))
+            .await
+            .unwrap();
+        let scoped_calls = provider.scoped_calls.lock().unwrap().clone();
+        for run_id in 0..3 {
+            assert_eq!(
+                scoped_calls
+                    .iter()
+                    .filter(|entry| entry.0 == run_id)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![
+                    (run_id, CanvasProviderRunScope::Application, "start"),
+                    (run_id, CanvasProviderRunScope::Application, "read"),
+                ],
+            );
+        }
+        // Even with application resources present, collection and BOTH roster
+        // candidate evidence reads retain the explicitly selected roster scope.
+        assert_eq!(
+            scoped_calls
+                .iter()
+                .filter(|entry| entry.0 == 3)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![
+                (3, CanvasProviderRunScope::BackgroundRoster, "start"),
+                (3, CanvasProviderRunScope::BackgroundRoster, "roster"),
+                (3, CanvasProviderRunScope::BackgroundRoster, "read"),
+                (3, CanvasProviderRunScope::BackgroundRoster, "read"),
+            ],
+        );
+        assert_eq!(
+            run_simulated(&processor, target(CanvasSyncTargetType::AwardCandidate))
+                .await
+                .unwrap_err()
+                .code,
+            "canvas_sync_target_type_unsupported",
+        );
+        let mut closed = processor.clone();
+        closed.config.portable_enabled = false;
+        assert!(
+            run_simulated(&closed, target(CanvasSyncTargetType::AwardCandidate))
+                .await
+                .is_ok()
+        );
+        assert_eq!(provider.runs.load(std::sync::atomic::Ordering::SeqCst), 4);
+        assert_eq!(*provider.scoped_calls.lock().unwrap(), scoped_calls);
     }
 
     #[tokio::test]

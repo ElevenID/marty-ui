@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use marty_oid4vci::lti::{
     canvas_lti_trust_profile, validate_canvas_lti_service_url,
@@ -22,14 +23,19 @@ use uuid::Uuid;
 
 use crate::{
     canvas_lti_tool_signing::CanvasLtiToolJwtSigner,
+    canvas_network_timeout::CanvasNetworkTimeout,
     canvas_oauth::{CanvasOAuthError, CanvasOAuthService},
+    canvas_operation_http::{
+        CanvasOperationHttpClient, CanvasOperationHttpError, CanvasOperationResponse,
+    },
     canvas_provider_http::{
-        canvas_retry_after_seconds, client_for_canvas_origin, CanvasHttpClientPolicy,
+        canvas_retry_after_seconds, client_for_canvas_origin, validate_canvas_origin,
+        CanvasHttpClientPolicy, CanvasOriginPolicy,
     },
     canvas_sync_processor::{
         ags_assertion, normalized_rest_payload, rest_assertion, CanvasAuthoritativeObservation,
-        CanvasAuthoritativeProvider, CanvasProviderReadError, CanvasRosterSnapshot,
-        CanvasSyncResources,
+        CanvasAuthoritativeProvider, CanvasProviderReadError, CanvasProviderRunScope,
+        CanvasRosterSnapshot, CanvasSyncResources,
     },
     canvas_sync_worker::CanvasSyncTarget,
 };
@@ -42,6 +48,87 @@ const NRPS_MEMBERSHIP_ACCEPT: &str = "application/vnd.ims.lti-nrps.v2.membership
 const TOKEN_RESPONSE_BYTES: usize = 65_536;
 const COLLECTION_PAGE_BYTES: usize = 8_388_608;
 const COLLECTION_MAX_PAGES: usize = 200;
+
+// Application REST evidence uses the published HTTPX per-operation/inactivity
+// budget. This is deliberately not the shared roster/OAuth/LTI client policy.
+const APPLICATION_REST_TIMEOUT_SECONDS: f64 = 15.0;
+
+enum RestReadClient {
+    Operation(CanvasOperationHttpClient),
+    Total(reqwest::Client),
+}
+
+impl RestReadClient {
+    async fn get(
+        &self,
+        url: Url,
+        token: &str,
+    ) -> Result<ProviderResponse, CanvasProviderReadError> {
+        let mut headers = http::HeaderMap::new();
+        let mut authorization = http::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| CanvasProviderReadError::Unavailable)?;
+        authorization.set_sensitive(true);
+        headers.insert(http::header::AUTHORIZATION, authorization);
+        headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+        match self {
+            Self::Operation(client) => client
+                .send(http::Method::GET, url, headers, Vec::new())
+                .await
+                .map(ProviderResponse::Operation)
+                .map_err(|error| match error {
+                    CanvasOperationHttpError::Origin => {
+                        CanvasProviderReadError::InvalidConfiguration
+                    }
+                    _ => CanvasProviderReadError::Unavailable,
+                }),
+            Self::Total(client) => client
+                .get(url)
+                .headers(headers)
+                .send()
+                .await
+                .map(ProviderResponse::Total)
+                .map_err(|_| CanvasProviderReadError::Unavailable),
+        }
+    }
+}
+
+enum ProviderResponse {
+    Total(Response),
+    Operation(CanvasOperationResponse),
+}
+
+impl From<Response> for ProviderResponse {
+    fn from(response: Response) -> Self {
+        Self::Total(response)
+    }
+}
+
+impl ProviderResponse {
+    fn response(&self) -> &Response {
+        match self {
+            Self::Total(response) => response,
+            Self::Operation(response) => &response.response,
+        }
+    }
+
+    async fn chunk(&mut self) -> Result<Option<Bytes>, CanvasProviderReadError> {
+        match self {
+            Self::Total(response) => response
+                .chunk()
+                .await
+                .map_err(|_| CanvasProviderReadError::Unavailable),
+            // Keep decoding, operation-timeout classification and driver-drop
+            // cancellation attached. Never read its underlying response body.
+            Self::Operation(response) => response
+                .chunk()
+                .await
+                .map_err(|_| CanvasProviderReadError::Unavailable),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum CollectionProtocol {
@@ -168,6 +255,7 @@ pub struct HttpCanvasAuthoritativeProvider {
     policy: CanvasHttpClientPolicy,
     self_managed_origin_allowlist: Vec<String>,
     run_tokens: Option<Arc<RunLtiTokens>>,
+    run_scope: Option<CanvasProviderRunScope>,
 }
 
 impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
@@ -177,6 +265,7 @@ impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
             .field("policy", &self.policy)
             .field("oauth_api_key_configured", &!self.oauth_api_key.is_empty())
             .field("run_scoped", &self.run_tokens.is_some())
+            .field("run_scope", &self.run_scope)
             .finish_non_exhaustive()
     }
 }
@@ -197,13 +286,38 @@ impl HttpCanvasAuthoritativeProvider {
             policy,
             self_managed_origin_allowlist,
             run_tokens: None,
+            run_scope: None,
         }
     }
 
-    fn fresh_run(&self) -> Self {
+    fn fresh_run(&self, scope: CanvasProviderRunScope) -> Self {
         Self {
             run_tokens: Some(Arc::new(RunLtiTokens::default())),
+            run_scope: Some(scope),
             ..self.clone()
+        }
+    }
+
+    async fn rest_client(
+        &self,
+        canvas_base_url: &str,
+    ) -> Result<(RestReadClient, Url), CanvasProviderReadError> {
+        if self.run_scope == Some(CanvasProviderRunScope::Application) {
+            let policy = CanvasOriginPolicy::from(&self.policy);
+            let base = validate_canvas_origin(canvas_base_url, &policy)
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            Ok((
+                RestReadClient::Operation(CanvasOperationHttpClient::new(
+                    policy,
+                    CanvasNetworkTimeout::from_seconds(APPLICATION_REST_TIMEOUT_SECONDS),
+                )),
+                base,
+            ))
+        } else {
+            let (client, base) = client_for_canvas_origin(canvas_base_url, &self.policy)
+                .await
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            Ok((RestReadClient::Total(client), base))
         }
     }
 
@@ -230,10 +344,9 @@ impl HttpCanvasAuthoritativeProvider {
         canvas_user_id: &str,
     ) -> Result<Value, CanvasProviderReadError> {
         let token = self.oauth_token(resources).await?;
-        let (client, base) =
-            client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
-                .await
-                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        let (client, base) = self
+            .rest_client(&resources.platform.canvas_base_url)
+            .await?;
         let scope = requirement
             .get("scope")
             .and_then(Value::as_object)
@@ -267,14 +380,10 @@ impl HttpCanvasAuthoritativeProvider {
             url.query_pairs_mut()
                 .append_pair("student_id", canvas_user_id);
         }
-        let response = client
-            .get(url)
-            .bearer_auth(&token)
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(|_| CanvasProviderReadError::Unavailable)?;
-        if response.status().as_u16() == 401 && response.headers().contains_key(WWW_AUTHENTICATE) {
+        let response = client.get(url, &token).await?;
+        if response.response().status().as_u16() == 401
+            && response.response().headers().contains_key(WWW_AUTHENTICATE)
+        {
             self.oauth
                 .mark_rejected_access_token(
                     &resources.platform.id,
@@ -439,8 +548,11 @@ impl HttpCanvasAuthoritativeProvider {
 
 #[async_trait]
 impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
-    fn for_run(self: Arc<Self>) -> Arc<dyn CanvasAuthoritativeProvider> {
-        Arc::new(self.fresh_run())
+    fn for_run(
+        self: Arc<Self>,
+        scope: CanvasProviderRunScope,
+    ) -> Arc<dyn CanvasAuthoritativeProvider> {
+        Arc::new(self.fresh_run(scope))
     }
 
     async fn read_requirement(
@@ -754,9 +866,11 @@ async fn request_collection_page(
 }
 
 async fn read_json_response(
-    mut response: Response,
+    response: impl Into<ProviderResponse>,
     maximum_bytes: usize,
 ) -> Result<Value, CanvasProviderReadError> {
+    let mut body = response.into();
+    let response = body.response();
     if response.status().is_redirection() {
         return Err(CanvasProviderReadError::InvalidConfiguration);
     }
@@ -765,7 +879,7 @@ async fn read_json_response(
     }
     if response.status().as_u16() == 429 {
         return Err(CanvasProviderReadError::RateLimited {
-            retry_after_seconds: canvas_retry_after_seconds(&response).unwrap_or(0),
+            retry_after_seconds: canvas_retry_after_seconds(response).unwrap_or(0),
         });
     }
     if !response.status().is_success() {
@@ -778,11 +892,7 @@ async fn read_json_response(
         return Err(CanvasProviderReadError::Unavailable);
     }
     let mut bytes = Vec::with_capacity(length.unwrap_or(0).min(maximum_bytes));
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| CanvasProviderReadError::Unavailable)?
-    {
+    while let Some(chunk) = body.chunk().await? {
         if bytes.len().saturating_add(chunk.len()) > maximum_bytes {
             return Err(CanvasProviderReadError::Unavailable);
         }
@@ -1162,6 +1272,10 @@ fn map_oauth_error(error: CanvasOAuthError) -> CanvasProviderReadError {
 }
 
 #[cfg(test)]
+#[path = "canvas_sync_provider_http_tests.rs"]
+mod operation_scope_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1288,7 +1402,7 @@ mod tests {
         }
     }
 
-    fn run_token_resources() -> CanvasSyncResources {
+    pub(super) fn run_token_resources() -> CanvasSyncResources {
         use crate::canvas_sync_processor::CanvasSyncPlatformSnapshot;
 
         CanvasSyncResources {
@@ -1309,7 +1423,7 @@ mod tests {
         }
     }
 
-    fn run_token_key() -> LtiTokenKey {
+    pub(super) fn run_token_key() -> LtiTokenKey {
         let resources = run_token_resources();
         LtiTokenKey::new(
             &resources,
@@ -1318,7 +1432,8 @@ mod tests {
         )
     }
 
-    fn run_provider_without_database_io() -> (HttpCanvasAuthoritativeProvider, sqlx::PgPool) {
+    pub(super) fn run_provider_without_database_io(
+    ) -> (HttpCanvasAuthoritativeProvider, sqlx::PgPool) {
         use crate::{
             canvas_lti_tool_signing::CanvasLtiToolSigningError,
             canvas_oauth::CanvasOAuthServiceConfig,
@@ -1393,7 +1508,7 @@ mod tests {
     async fn run_provider_factory_resets_scoped_instances_and_keeps_templates_uncached() {
         let (template, pool) = run_provider_without_database_io();
         assert!(template.run_tokens.is_none());
-        let first = template.fresh_run();
+        let first = template.fresh_run(CanvasProviderRunScope::Application);
         let first_cache = first.run_tokens.as_ref().unwrap();
         first_cache
             .get_or_request(run_token_key(), || async {
@@ -1403,15 +1518,15 @@ mod tests {
             .unwrap();
         // A caller cannot extend a previous job's token lifetime by scoping an
         // already-scoped instance. Cloning the stateless template also stays uncached.
-        let second = first.fresh_run();
+        let second = first.fresh_run(CanvasProviderRunScope::Application);
         let second_cache = second.run_tokens.as_ref().unwrap();
         assert!(!Arc::ptr_eq(first_cache, second_cache));
         assert!(second_cache.tokens.lock().await.is_empty());
         assert!(template.clone().run_tokens.is_none());
         let object: Arc<dyn CanvasAuthoritativeProvider> = Arc::new(first.clone());
-        let left = object.clone().for_run();
-        let right = object.clone().for_run();
-        let nested = left.clone().for_run();
+        let left = object.clone().for_run(CanvasProviderRunScope::Application);
+        let right = object.clone().for_run(CanvasProviderRunScope::Application);
+        let nested = left.clone().for_run(CanvasProviderRunScope::Application);
         assert!(!Arc::ptr_eq(&object, &left));
         assert!(!Arc::ptr_eq(&left, &right));
         assert!(!Arc::ptr_eq(&left, &nested));
@@ -1429,7 +1544,7 @@ mod tests {
     #[tokio::test]
     async fn run_provider_rechecks_trust_before_considering_a_cached_grant() {
         let (template, pool) = run_provider_without_database_io();
-        let run = template.fresh_run();
+        let run = template.fresh_run(CanvasProviderRunScope::Application);
         let mut resources = run_token_resources();
         let key = run_token_key();
         run.run_tokens

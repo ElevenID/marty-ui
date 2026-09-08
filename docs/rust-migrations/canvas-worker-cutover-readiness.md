@@ -1,5 +1,23 @@
 # Canvas worker cutover readiness — 2026-09-08
 
+Newer unqualified candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` failed
+native timeout preflight in
+[CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937),
+runtime job `101967919625`. The prompt application case passed; the delayed case
+observed `TerminalSucceeded` instead of the required retry, with job, fact,
+snapshot and target differences. This supersedes the earlier byte-count-only
+failure at `7ca035d03`. Roster cases and the later full configured suite were
+not reached. PR #814 remains draft and blocked by Rust Service Tests and CI Gate.
+
+The narrow application REST repair is implemented in its separate worktree and
+compiled in 65s; after the additional malformed-header regression and test-spy
+type alias, final unit execution passed 354 tests in 15.73s (8.94s compilation).
+Strict all-target Clippy passed in 21.75s. Hosted qualification is still required. Application/issued-drift
+scope selects the shared 15s operation transport; roster, LTI and signing paths
+remain unchanged, and roster inactivity remains unqualified. The scoped `f0`
+checkpoint below is unchanged. The worker remains unrouted; no frozen outcome,
+Python deletion or deployment changed.
+
 Status: latest qualified composed checkpoint
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`.
 [CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
@@ -19,9 +37,15 @@ The scoped provider-I/O deadline, real-renewal and retained-prefix replay now ha
 hosted qualification. It does not close all lifecycle/provider/consumer gates,
 real-provider lease expiry, signing or beta acceptance. The later native timeout
 work (`395cab656` and its later follow-ups) and separate body-reference branch
-`c5e77f260` are not qualified by `f0`; actual native timeout execution is still
-pending. PR #814 remains draft and unrouted. No Python feature deletion,
-deployment or restore occurred.
+`c5e77f260` are not qualified by `f0`; the later native timeout failure and repair
+gates are recorded above. Body-reference A-v2 and independent B-v2 passed all six
+cases in 265.68s and 266.63s at `ffb515200c4611bbaa188d84c510074bb4a98c81`.
+Their 46,042 raw bytes agree exactly: SHA256
+`e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
+Exact-owned cleanup passed; permanent corpus registration and native body replay
+remain pending. This reference evidence does not establish native body parity.
+PR #814 remains draft and unrouted. No Python feature deletion, deployment or
+restore occurred.
 
 ## Historical 121-entry checkpoint
 

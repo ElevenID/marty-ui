@@ -36,6 +36,73 @@ POLL_SECONDS = 0.025
 assert_control = partial(process_control.assert_control, family="timeout")
 output_counts = partial(process_control.output_counts, family="timeout")
 write_marker = partial(process_control.write_marker, family="timeout")
+DIAGNOSTIC_PREFIX = b"MARTY_TIMEOUT_DIAG_V1:"
+DIAGNOSTIC_CATEGORIES = frozenset(
+    name.encode("ascii")
+    for name in (
+        "AwaitTerminal",
+        "TerminalSucceeded",
+        "TerminalRetry",
+        "TerminalDeadLetter",
+        "TerminalUnknown",
+        "TerminalMismatch",
+        "AwaitIdle",
+        "CompareOutcome",
+        "OutcomeJobs",
+        "OutcomeFacts",
+        "OutcomeOauth",
+        "OutcomeSnapshot",
+        "OutcomeHeartbeat",
+        "OutcomeTarget",
+        "OutcomeShape",
+        "PublishTransition",
+        "PostPublicationGeneration",
+        "PostPublicationLease",
+        "PostPublicationEffects",
+        "PostPublicationOutput",
+        "AwaitLateWindow",
+        "VerifyLateState",
+        "AwaitHandlerJoin",
+        "VerifyJoinedState",
+        "InterruptWorker",
+        "VerifyShutdown",
+        "Complete",
+    )
+)
+
+
+def coordinator_diagnostics(stderr):
+    """Exact closed coordinator records only, never raw panic/output fragments."""
+    try:
+        stderr.seek(0)
+        contents = stderr.read(65_537)
+    except (OSError, ValueError):
+        return "Native timeout coordinator diagnostics unavailable"
+    if type(contents) is not bytes:
+        return "Native timeout coordinator diagnostics unavailable"
+    if len(contents) > 65_536:
+        return "Native timeout coordinator diagnostics oversized"
+    records = []
+    for record in contents.splitlines(keepends=True):
+        line = record.removesuffix(b"\n").removesuffix(b"\r")
+        if DIAGNOSTIC_PREFIX not in line:
+            continue
+        if not record.endswith(b"\n") or not line.startswith(DIAGNOSTIC_PREFIX):
+            return "Native timeout coordinator diagnostics invalid"
+        category = line[len(DIAGNOSTIC_PREFIX) :]
+        if (
+            category not in DIAGNOSTIC_CATEGORIES
+            or category in records
+            or len(records) >= 32
+        ):
+            return "Native timeout coordinator diagnostics invalid"
+        records.append(category)
+    if not records:
+        return "Native timeout coordinator diagnostics unavailable"
+    # Every byte copied into the note has matched a fixed category exactly.
+    return "Native timeout coordinator diagnostics: " + ",".join(
+        category.decode("ascii") for category in records
+    )
 
 
 def require(condition, message):
@@ -543,6 +610,7 @@ def run_case(executable, matrix, case, reference, response):
                     except (OSError, ValueError):
                         note = "Owned native timeout child output counts unavailable"
                     failure.add_note(note)
+                    failure.add_note(coordinator_diagnostics(stderr))
         assert_requests(fixture, reference)
     assert_requests(fixture, reference)
     print(f"Native worker timeout {case['name']} passed (1 actual HTTPS request)")
