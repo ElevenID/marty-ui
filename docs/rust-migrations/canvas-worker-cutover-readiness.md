@@ -1,5 +1,14 @@
 # Canvas worker cutover readiness — 2026-09-08
 
+Latest local integration `9a292d9cd`: 2,924 root tests passed (three skips),
+118 service tests passed, and Rust inputs exactly match qualified gateway
+`afe9084b8` (31 native forwards, zero legacy; actual-process lifecycle passed).
+Unused Python bootstrap helpers and unused Python-job database provisioning
+are removed with retained coverage. Hosted qualification is still separate.
+Credentials v0.1.73 preparation passed, but release tests fail against the old
+Core dependency. Current Core's KMS-only DIDComm compatibility must be resolved
+before a new immutable dependency/release can be selected; see the roadmap.
+
 Current checkpoint: `afc8bd754` passed complete CI `34223397680`, including
 169 configured published-schema tests (two explicit captures ignored) and
 11 worker/PostgreSQL tests (two manual diagnostics ignored). Those ignored
@@ -9,8 +18,8 @@ Its stale service image assertion is repaired locally in `121b77737`; Rust 2021
 formatting is repaired in `cca487a73`. Nine focused tests, 118 service tests and
 229 target format checks passed. The separate root `tests/` run passed 2,891
 tests but did not collect the service suite. Hosted repair qualification is
-pending, and the independently reviewed next gateway lifecycle helper still
-awaits execution/integration. No gateway route cutover, reachable Canvas Python endpoint deletion or
+pending; the gateway lifecycle now has the local qualification above.
+No gateway route cutover, reachable Canvas Python endpoint deletion or
 deployment has been performed in this lane; those actions remain gated by the
 required evidence. Credentials release preparation has passed after explicit
 workflow activation approval; released-image qualification remains pending.

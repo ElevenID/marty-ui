@@ -7,7 +7,7 @@ route cutover, Python deletion or deployment is established by this document.
 
 ## Evidence boundary
 
-The tested `3de5e0211` candidate controls live in
+The tested `afe9084b8` candidate controls (integrated at `9a292d9cd`) live in
 [canvas_operations_gateway_replay.rs](../../rust/services/issuance/tests/support/canvas_operations_gateway_replay.rs).
 They compose the actual gateway router/proxy and bounded HTTP client with the
 actual issuance executable and owned PostgreSQL. Identity and membership ports
@@ -19,8 +19,8 @@ Both real runtime and proxy route tables are used. Candidate construction change
 only the eight operation service selections; methods, paths, authentication and
 other policy fields must remain identical. The published-table control makes
 eight requests to a separately served legacy trap, with zero native effects.
-The candidate gate counts 17 native requests and zero legacy requests. Neither
-count means 17 frozen cases. The seven-entry `NON_MANUAL_CASES` list supplies
+The candidate gate counts 31 native requests and zero legacy requests. Neither
+count means 31 frozen cases. The seven-entry `NON_MANUAL_CASES` list supplies
 one request for each nonmanual route, not an exhaustive replay inventory.
 
 The new registered
@@ -38,12 +38,13 @@ not a copied lifecycle service graph. It requires ten requests, nine native
 forwards and zero legacy forwards. Its legacy endpoint is a distinct owned,
 unserved reservation, not another executed legacy-trap test.
 
-## Base operations: 46 names, 14 represented, 32 remaining
+## Base operations: 46 names, 28 represented, 18 remaining
 
 The authority is [canvas-operations-oracle.json](../../contracts/canvas-operations-oracle.json)
 with [its scenarios](../../contracts/canvas-operations-scenarios.json).
-The following **14 distinct corpus names are represented by source-derived
-checks**, not 14 exact unadapted replays.
+The following **28 distinct corpus names are represented by source-derived
+checks**, not 28 exact unadapted replays. The fourteen-case read expansion passed
+configured PostgreSQL qualification, retaining all eight legacy-route controls.
 
 | Coverage form | Corpus names | Boundary |
 | --- | --- | --- |
@@ -51,16 +52,16 @@ checks**, not 14 exact unadapted replays.
 | Trusted dismissal and repeat conflict | `review_dismiss`, `review_dismiss_again` | Session/API identities deliberately change expected actor fields and the second review ID. Duplicate responses use an explicit public MIP projection. Raw unrelated rows and resolution audit are checked. |
 | Foreign/missing object hiding | `job_foreign`, `job_missing`, `review_foreign` | Authorized foreign tenant query reaches native 404 rather than an outer 403. A synthetic missing-review counterpart reuses `review_foreign`; it is not a fifteenth frozen name. |
 | Public validation errors | `jobs_invalid_status`, `review_invalid_action` | Explicit public 422 envelopes, not unchanged direct Python error bodies. |
+| Filtering and unmatched bindings | `jobs_filtered`, `jobs_unmatched_binding`, `candidates_filtered`, `candidates_unmatched_binding`, `reviews_filtered`, `reviews_unmatched_binding` | Exact frozen DTOs before mutations; full raw state unchanged and one native forward per request. |
+| Additional list validation | `jobs_zero_limit`, `jobs_excess_limit`, `candidates_invalid_status`, `candidates_zero_limit`, `candidates_excess_limit`, `reviews_invalid_status`, `reviews_zero_limit`, `reviews_excess_limit` | Frozen status strings/complete bound arrays checked before explicit public MIP projection; raw state unchanged. |
 
 Six additional auth/RBAC denials check zero upstream calls and unchanged raw
 state, but are not exact replays of the four base authentication/tenant cases.
-The remaining **32 base names** are:
+The remaining **18 base names** are:
 
 | Required family | Names still outside the represented base-name set |
 | --- | --- |
 | Authentication/tenant precedence (4) | `missing_management_key`, `wrong_management_key`, `missing_tenant`, `foreign_query` |
-| Filtering and unmatched bindings (6) | `jobs_filtered`, `jobs_unmatched_binding`, `candidates_filtered`, `candidates_unmatched_binding`, `reviews_filtered`, `reviews_unmatched_binding` |
-| List validation/bounds (8) | `jobs_zero_limit`, `jobs_excess_limit`, `candidates_invalid_status`, `candidates_zero_limit`, `candidates_excess_limit`, `reviews_invalid_status`, `reviews_zero_limit`, `reviews_excess_limit` |
 | Retry/resolve state and tenant gates (5) | `retry_rollout_closed`, `retry_foreign`, `retry_again`, `resolve_queued`, `resolve_again` |
 | Manual review, effects and recovery (7) | `review_note_limit`, `review_suspend`, `review_revoke`, `review_failed`, `review_recovered_failure`, `review_recovered_success`, `review_concurrent` |
 | Enqueue idempotence/tenant gates (2) | `enqueue_duplicate`, `enqueue_foreign` |

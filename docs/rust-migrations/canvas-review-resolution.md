@@ -7,7 +7,11 @@ recovery and atomic review/audit finalization. The candidate native executable n
 composes these handlers into its shared HTTP router; gateway ownership remains
 unchanged. Reachable Python and deployment consumers remain.
 
-Current qualification remains exact-head scoped: `afc8bd754` passed complete
+Latest local integration `9a292d9cd` passes 2,924 root tests (three skips) and
+118 service tests. Its exact Rust inputs match qualified gateway `afe9084b8`:
+the 31-request candidate and actual-process lifecycle passed in 7.62 and 5.28
+seconds respectively, with owned-resource cleanup and strict Clippy passing.
+Hosted qualification remains exact-head scoped: `afc8bd754` passed complete
 CI; the newer `d498` runtime job `102083828642` remains live. Its stale service
 image assertion is repaired locally in `121b77737`, and Rust 2021 formatting in
 `cca487a73`; these are not a passing hosted rerun. The separate local
@@ -17,8 +21,8 @@ Image, browser and UI jobs completed successfully. The
 [roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08)
 records the now-authorized credentials release and outstanding qualification gates.
 
-The next candidate gateway lifecycle helper is independently source-reviewed,
-but execution and integration remain pending. It reuses the actual-main owner
+The integrated candidate gateway lifecycle helper is independently reviewed and
+locally executed; hosted qualification remains pending. It reuses the actual-main owner
 for all four publication/mirror lifecycle cases and the held concurrent 409,
 with trusted actor persistence, tenant/auth denial and durable duplicate checks.
 Public MIP errors have explicit expected-only projections; direct frozen
@@ -26,8 +30,10 @@ responses are not weakened. Controlled identity ports and candidate route
 selection do not qualify production routing, recovery or cancellation behavior.
 No gateway route cutover, reachable Canvas Python endpoint deletion or deployment has been performed in
 this lane; those actions remain gated by the required evidence. Credentials
-release preparation has passed after explicit workflow activation approval;
-released-image qualification remains pending.
+release preparation passed after explicit workflow activation approval, but
+release testing exposed an old Core wheel versus newer CI-source mismatch and
+a downstream KMS-only DIDComm capability gap. Released-image qualification
+remains pending; preserve the failing security assertions and immutable tag.
 
 ## Native composition checkpoint — 2026-09-08
 

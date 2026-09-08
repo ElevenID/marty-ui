@@ -31,6 +31,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
+Latest local integration `9a292d9cd` passes 2,924 root tests (three platform
+skips) and all 118 separately collected service tests. Its Rust, frozen contracts,
+stack lock and mandatory published runner match qualified gateway `afe9084b8`
+exactly. The expanded candidate passed with 31 native forwards and zero legacy
+forwards; its shared actual-process lifecycle regression also passed. This is
+local qualification, not the still-running hosted `d498` result below.
+Two unused Python helpers (`common/di.py`, `common/metrics.py`) were deleted
+after caller/packaging review and passing tests; their migration-image copies
+were unused. Exact-path retirement guards preserve retained common adapters.
+The Python test job no longer provisions unused PostgreSQL/Redis containers;
+its complete test command and Rust integration fixtures remain unchanged.
+
 The newer PR #814 head `d498` is still under hosted qualification in
 [CI34233064711](https://github.com/ElevenID/marty-ui/actions/runs/34233064711).
 Runtime job `102083828642` remains live; image, browser and UI jobs completed
@@ -87,8 +99,16 @@ disabled. After explicit user approval, the three required workflows were
 re-enabled. [Preparation 34236062000](https://github.com/ElevenID/marty-credentials/actions/runs/34236062000)
 passed and created annotated `v0.1.73` at the exact green main commit.
 [Release 34236090229](https://github.com/ElevenID/marty-credentials/actions/runs/34236090229)
-is building; completed image publication, artifact qualification and lock
-advancement remain pending. The separate PyPI publication workflow stays disabled.
+has a failed pre-release Python test job: 1,689 passed, two skipped, and three
+security assertions failed against pinned Core 0.1.60. Main CI instead builds
+newer Core source `08a0d435`, which contains the already-merged fixes. No published
+Core release contains those fixes. Current Core main is 0.2.0 and intentionally
+omits DIDComm APIs still required by credentials, so changing the dependency pin
+alone is not a safe repair. Preserve all assertions and the immutable v0.1.73 tag;
+qualify the downstream KMS-only capability migration before selecting a new
+release. Other release build jobs may still finish, but image publication,
+artifact qualification and lock advancement remain pending.
+The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub
 had already removed its remote branch.
@@ -106,10 +126,11 @@ and lifecycle cases still precede route cutover and Python deletion. The new
 test is registered in the existing mandatory full database gate, but these
 local changes are not yet merged or qualified by hosted CI.
 
-The next gateway lifecycle helper has independent source-review clearance and
+The integrated gateway lifecycle helper has independent source-review clearance and
 reuses the actual issuance process/dependency owner for suspend, revoke, mirror
 refusal and publication refusal, including the held-claim conflict and durable
-duplicate guards. Its execution and integration are still pending. Its explicit
+duplicate guards. Configured local execution and integrated-source qualification
+passed; hosted qualification remains pending. Its explicit
 public error expectations do not replace the frozen direct-response contract;
 candidate routing and controlled identity ports are not production route
 cutover. No gateway route change, reachable Canvas Python endpoint deletion or deployment has been
