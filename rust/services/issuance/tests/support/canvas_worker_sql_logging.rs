@@ -46,6 +46,10 @@ async fn observe(database_url: &str, native: bool, level: &str) -> Vec<Value> {
         // Real database execution exceeds the unchanged one-second SQLx
         // classification threshold; no injected logger or edited clock.
         sqlx::query("SELECT pg_sleep(1.05)").execute(&mut connection).await.unwrap();
+        // A server NoticeResponse must remain WARN independently of statement
+        // logging policy; this is not a synthetic tracing event.
+        sqlx::query("DO $$ BEGIN RAISE WARNING 'synthetic PostgreSQL operational warning'; END $$")
+            .execute(&mut connection).await.unwrap();
         tracing::warn!(target: "marty_canvas_sync_worker", operation="synthetic", "synthetic operational warning");
         tracing::error!(target: "marty_canvas_sync_worker", operation="synthetic", "synthetic operational error");
         connection.close().await.unwrap();
@@ -75,6 +79,16 @@ pub async fn replay(database_url: &str) {
             .iter()
             .filter(|record| record["target"] == "marty_canvas_sync_worker")
             .collect();
+        let notices: Vec<_> = records
+            .iter()
+            .filter(|record| record["target"] == "sqlx::postgres::notice")
+            .collect();
+        assert_eq!(notices.len(), 1, "actual PostgreSQL warning retained");
+        assert_eq!(notices[0]["level"], "WARN");
+        assert_eq!(
+            notices[0]["fields"]["message"],
+            "synthetic PostgreSQL operational warning"
+        );
         assert_eq!(
             operations.len(),
             2,
@@ -111,8 +125,8 @@ pub async fn replay(database_url: &str) {
                 .is_some_and(|value| value.is_finite() && value >= 1.0));
             assert_eq!(
                 query.len(),
-                if native { 2 } else { 1 },
-                "ordinary DEBUG query diagnostics retained"
+                if native { 3 } else { 1 },
+                "ordinary SELECT and DO statement DEBUG diagnostics retained"
             );
             if native {
                 assert!(query.iter().all(|record| record["level"] == "DEBUG"));
