@@ -19,7 +19,12 @@ Current checkpoint: `afc8bd754` passed complete CI `34223397680`, including
 169 configured published-schema tests (two explicit captures ignored) and
 11 worker/PostgreSQL tests (two manual diagnostics ignored). Those ignored
 paths are not parity gates. The newer `d498` CI `34233064711` runtime job
-`102083828642` remains live; image, browser and UI jobs completed successfully.
+`102083828642` failed: all four preflights passed, but the full published suite
+had 170 passes and one lease-expiry failure (two explicit captures ignored).
+The late-response window observed leased/no terminal status and ended with
+`FailureUnknown`; the exact cause is not yet established. Closed diagnostic
+categories are being qualified without changing parity/timing gates. The
+parallel Rust/database group, image, browser and UI jobs completed successfully.
 Its stale service image assertion is repaired locally in `121b77737`; Rust 2021
 formatting is repaired in `cca487a73`. Nine focused tests, 118 service tests and
 229 target format checks passed. The separate root `tests/` run passed 2,891

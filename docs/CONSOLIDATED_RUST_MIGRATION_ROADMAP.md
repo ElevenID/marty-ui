@@ -47,25 +47,33 @@ separately collected service tests. Subsequent webhook-helper retirement
 100-line helper and 61-line test file. Six native auth tests, 13 ownership/
 composition tests, and all 116 retained service tests passed. The combined tree
 preserves the separately qualified gateway and webhook inputs. These are local
-results, not the still-running hosted `d498` result below.
+results, not the failed hosted `d498` result below.
 Two unused Python helpers (`common/di.py`, `common/metrics.py`) were deleted
 after caller/packaging review and passing tests; their migration-image copies
 were unused. Exact-path retirement guards preserve retained common adapters.
 The Python test job no longer provisions unused PostgreSQL/Redis containers;
 its complete test command and Rust integration fixtures remain unchanged.
 
-The newer PR #814 head `d498` is still under hosted qualification in
+The newer PR #814 head `d498` failed hosted qualification in
 [CI34233064711](https://github.com/ElevenID/marty-ui/actions/runs/34233064711).
-Runtime job `102083828642` remains live; image, browser and UI jobs completed
-successfully. Service Tests `102083828627` failed a stale assertion that mapped
+Runtime job `102083828642` ended on 2026-09-08 at 15:15 UTC: all four preflights
+passed, but the full published-schema suite reported 170 passed, one failed
+and two explicit captures ignored in 4544.64 seconds. The parallel Rust/database
+group exited successfully. `worker_lease_expiry_matches_frozen_published_process`
+failed during `late-response-window`: the observed transaction stayed leased
+with no terminal status despite renewal and original expiry; the coordinator
+reported `AwaitLateWindow` then `FailureUnknown`. This does not identify the
+underlying runtime cause. A narrow closed-category diagnostics repair is being
+qualified without changing timing, privacy or parity gates. Image, browser and
+UI jobs completed successfully. Service Tests `102083828627` failed a stale assertion that mapped
 the worker to an issuance image, and the Rust 2021 formatting gate also failed.
 The service-image assertion is repaired locally in `121b77737`; Rust 2021
 formatting is repaired in `cca487a73`. Nine focused image-strategy tests and all
 118 service tests passed, and 229 target format checks passed. The earlier
 2,891-test root `tests/` run did not collect
 `services/`; the 118-test service suite is separate evidence, not part of that
-count. Neither local repair is a passing hosted rerun or a completed runtime
-result. The verified `afc8bd754` baseline below remains attributed to its exact
+count. Neither local repair is a passing hosted rerun. The verified
+`afc8bd754` baseline below remains attributed to its exact
 head.
 
 Draft PR #814 at `afc8bd754` passed
@@ -149,6 +157,14 @@ The first positive test exposed an incomplete synthetic DID document; adding
 its required separate signing relationship fixed the fixture without changing
 production crypto. This roundtrip is not independent-wallet/full-service
 acceptance and does not close the deferred KMS correction.
+Resolver tests-only integration `a6100933b` adds canonical embedded `did:key`
+and `did:jwk` resolution (correct key binding, then missing-endpoint rejection)
+and `did:peer:2` with the existing full service representation, including a real
+anoncrypt/decrypt roundtrip without network resolver configuration. The selected
+author tree passed 23 native DIDComm unit tests and strict library Clippy;
+these new tests have not yet been rerun on the combined integration tree.
+Peer method 0 and abbreviated peer service representations remain unqualified;
+no unnecessary Cargo features or Core dependency changes were introduced.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub

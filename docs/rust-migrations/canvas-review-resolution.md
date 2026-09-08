@@ -12,7 +12,10 @@ Latest local integration `9a292d9cd` passes 2,924 root tests (three skips) and
 the 31-request candidate and actual-process lifecycle passed in 7.62 and 5.28
 seconds respectively, with owned-resource cleanup and strict Clippy passing.
 Hosted qualification remains exact-head scoped: `afc8bd754` passed complete
-CI; the newer `d498` runtime job `102083828642` remains live. Its stale service
+CI; the newer `d498` runtime job `102083828642` failed its full-suite lease-expiry
+case after all four preflights passed (170 passed, one failed, two captures
+ignored). Closed late-window diagnostics need qualification; the failure cause
+is not established. Its stale service
 image assertion is repaired locally in `121b77737`, and Rust 2021 formatting in
 `cca487a73`; these are not a passing hosted rerun. The separate local
 service suite passed 118 tests, including nine image-strategy tests; the root
