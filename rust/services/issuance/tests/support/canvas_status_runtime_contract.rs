@@ -36,6 +36,10 @@ struct RuntimeState {
     responses: Responses,
     response_override: Mutex<Option<Value>>,
     observe_review_claim: AtomicBool,
+    publication_refusal: AtomicBool,
+    publication_hold: AtomicBool,
+    publication_entered: tokio::sync::Notify,
+    publication_release: tokio::sync::Notify,
 }
 
 impl RuntimeState {
@@ -186,6 +190,41 @@ async fn mirror(
     response
 }
 
+async fn publication_http(
+    State(state): State<Arc<RuntimeState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> axum::response::Response {
+    let action = match body["status"].as_str() {
+        Some("suspended") => "suspend",
+        Some("revoked") => "revoke",
+        _ => panic!("unexpected owned publication action"),
+    };
+    state.check_review_claim(action).await;
+    let status: String = sqlx::query_scalar("SELECT status FROM issuance_service.issued_credentials WHERE id='credential-review' AND organization_id='org-review'")
+        .fetch_one(&state.pool).await.unwrap();
+    state.calls.lock().unwrap().push(json!({"port":"publication","action":action,
+        "status":status,"body":body,"service_token":headers.get("x-service-token").and_then(|value| value.to_str().ok())}));
+    if state.publication_hold.load(Ordering::SeqCst) {
+        state.publication_entered.notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            state.publication_release.notified(),
+        )
+        .await
+        .expect("owned publication hold deadline");
+    }
+    if state.publication_refusal.load(Ordering::SeqCst) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    // Existing credential_postgres_contract::revocation_server response contract.
+    Json(
+        json!({"success":true,"organization_id":body["organization_id"],
+        "index":body["index"],"status_list_url":"https://status.example/lists/active"}),
+    )
+    .into_response()
+}
+
 struct AbortServer(tokio::task::AbortHandle);
 impl Drop for AbortServer {
     fn drop(&mut self) {
@@ -200,10 +239,92 @@ pub async fn run(pool: &PgPool) {
 /// Compose two independently frozen boundaries: review resolution and configured
 /// provider HTTP. This is not a new captured whole-route Python observation.
 pub async fn run_review_operations(pool: &PgPool) {
-    use super::canvas_operations_read_replay::{
-        insert_review, request_case, runtime_router, timestamps,
-    };
+    use super::canvas_operations_read_replay::runtime_router;
     use marty_issuance_service::canvas_operations::CanvasOperationsService;
+    let RuntimeFixture {
+        state,
+        service,
+        stop,
+        server,
+        _cleanup,
+        ..
+    } = start_runtime(pool, Responses::Baseline).await;
+    let router = runtime_router(
+        CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
+            .with_review_operations(Some(Arc::new(service))),
+    );
+    review_cases(pool, &state, &ReviewRequests::Router(router)).await;
+    let _ = stop.send(());
+    server.await.unwrap().unwrap();
+}
+
+#[derive(Clone)]
+enum ReviewRequests {
+    Router(Router),
+    Process {
+        client: reqwest::Client,
+        base: String,
+    },
+}
+
+impl ReviewRequests {
+    fn actual_process(&self) -> bool {
+        matches!(self, Self::Process { .. })
+    }
+
+    async fn request(&self, case: &Value) -> (u16, String, Value) {
+        match self {
+            Self::Router(router) => {
+                super::canvas_operations_read_replay::request_case(router, case).await
+            }
+            Self::Process { client, base } => {
+                let mut response = client
+                    .post(format!("{base}{}", case["path"].as_str().unwrap()))
+                    .header(
+                        "x-api-key",
+                        case["headers"]["X-API-Key"]
+                            .as_str()
+                            .unwrap_or("synthetic-operations-key"),
+                    )
+                    .header(
+                        "x-organization-id",
+                        case["headers"]["X-Organization-ID"]
+                            .as_str()
+                            .unwrap_or("org-review"),
+                    )
+                    .header("origin", "https://wallet.example")
+                    .header("x-request-id", "synthetic-main-review")
+                    .json(&case["body"])
+                    .send()
+                    .await
+                    .unwrap();
+                let status = response.status().as_u16();
+                assert_eq!(response.headers()["x-request-id"], "synthetic-main-review");
+                assert_eq!(
+                    response.headers()["access-control-allow-origin"],
+                    "https://wallet.example"
+                );
+                let content_type = response.headers()["content-type"]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.unwrap() {
+                    assert!(bytes.len() + chunk.len() <= 64 * 1024);
+                    bytes.extend_from_slice(&chunk);
+                }
+                (
+                    status,
+                    content_type,
+                    serde_json::from_slice(&bytes).unwrap(),
+                )
+            }
+        }
+    }
+}
+
+async fn review_cases(pool: &PgPool, state: &Arc<RuntimeState>, requests: &ReviewRequests) {
+    use super::canvas_operations_read_replay::{insert_review, timestamps};
 
     // The SQL comes only from this compiled-in frozen corpus. Retain its static
     // lifetime, as in the existing lifecycle replay, for SQLx's safe-string API.
@@ -237,25 +358,17 @@ pub async fn run_review_operations(pool: &PgPool) {
         .find(|case| case["name"] == refusal_name)
         .unwrap();
     assert_eq!(refusal_expected["error_class"], "RuntimeError");
-    let RuntimeFixture {
-        state,
-        service,
-        stop,
-        server,
-        _cleanup,
-        ..
-    } = start_runtime(pool, Responses::Baseline).await;
     state.observe_review_claim.store(true, Ordering::SeqCst);
-    let router = runtime_router(
-        CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
-            .with_review_operations(Some(Arc::new(service))),
-    );
     let preserved_sql = "SELECT jsonb_build_object('transactions',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t),'applications',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM issuance_service.applications a),'other_credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c WHERE id<>'credential-review'),'other_deliveries',(SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM issuance_service.credential_delivery_records d WHERE id<>'delivery-provider'))";
     let preserved: Value = sqlx::query_scalar(preserved_sql)
         .fetch_one(pool)
         .await
         .unwrap();
-    for name in ["suspend_delivered", "revoke_delivered", "mirror_failure"] {
+    let mut names = vec!["suspend_delivered", "revoke_delivered", "mirror_failure"];
+    if requests.actual_process() {
+        names.push("publication_failure");
+    }
+    for name in names {
         let case = scenarios["cases"]
             .as_array()
             .unwrap()
@@ -279,10 +392,98 @@ pub async fn run_review_operations(pool: &PgPool) {
         let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'").fetch_one(pool).await.unwrap();
         *state.response_override.lock().unwrap() =
             (name == "mirror_failure").then(|| refusal.clone());
+        state
+            .publication_refusal
+            .store(name == "publication_failure", Ordering::SeqCst);
         state.calls.lock().unwrap().clear();
         state.events.lock().unwrap().clear();
 
-        let (status, content_type, mut body) = request_case(&router, case).await;
+        if requests.actual_process() && name == "suspend_delivered" {
+            let denied_sql = "SELECT jsonb_build_object('reviews',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM issuance_service.evidence_policy_reviews r),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c),'deliveries',(SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM issuance_service.credential_delivery_records d),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM issuance_service.issuance_events e),'secret_usage',(SELECT last_used_at FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'))";
+            let before: Value = sqlx::query_scalar(denied_sql)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            let mut denied = case.clone();
+            denied["headers"] = json!({"X-API-Key":"wrong-synthetic-key"});
+            assert_eq!(requests.request(&denied).await.0, 401);
+            denied["headers"] = json!({"X-Organization-ID":"foreign"});
+            let (status, content_type, body) = requests.request(&denied).await;
+            let input_frozen: Value = serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-review-input-oracle.json"
+            ))
+            .unwrap();
+            let expected = input_frozen["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == "valid_foreign_org")
+                .unwrap();
+            // Same tenant-isolation projection, adapted to the suspend request;
+            // not a replay of that corpus's dismiss request.
+            assert_eq!(json!(status), expected["status"]);
+            assert_eq!(content_type, expected["content_type"]);
+            assert_eq!(body, expected["body"]);
+            assert!(state.calls.lock().unwrap().is_empty());
+            assert_eq!(
+                sqlx::query_scalar::<_, Value>(denied_sql)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap(),
+                before
+            );
+        }
+
+        let (status, content_type, mut body) = if requests.actual_process()
+            && name == "suspend_delivered"
+        {
+            // Exercise the existing concurrent-at-publication contract through
+            // the actual main binary, not merely a post-resolution duplicate.
+            state.publication_hold.store(true, Ordering::SeqCst);
+            let first_requests = requests.clone();
+            let first_case = case.clone();
+            let first = tokio::spawn(async move { first_requests.request(&first_case).await });
+            let _request_cleanup = AbortServer(first.abort_handle());
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                state.publication_entered.notified(),
+            )
+            .await
+            .expect("actual publication must hold an active review claim");
+            let held_sql = "SELECT jsonb_build_object('reviews',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM issuance_service.evidence_policy_reviews r),'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM issuance_service.issued_credentials c),'deliveries',(SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM issuance_service.credential_delivery_records d),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM issuance_service.issuance_events e))";
+            let held: Value = sqlx::query_scalar(held_sql).fetch_one(pool).await.unwrap();
+            let held_calls = state.calls.lock().unwrap().clone();
+            assert_eq!(held_calls.len(), 1);
+            assert_eq!(credential_row(pool).await, credential_before);
+            assert_eq!(delivery_row(pool).await, delivery_before);
+            let (status, content_type, body) = requests.request(case).await;
+            let concurrent = frozen["observations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == "concurrent_at_publication")
+                .unwrap();
+            assert_eq!(
+                json!({"status":status,"content_type":content_type,"body":body}),
+                concurrent["competing_response"]
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, Value>(held_sql)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap(),
+                held
+            );
+            assert_eq!(*state.calls.lock().unwrap(), held_calls);
+            state.publication_hold.store(false, Ordering::SeqCst);
+            state.publication_release.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(5), first)
+                .await
+                .unwrap()
+                .unwrap()
+        } else {
+            requests.request(case).await
+        };
         timestamps(&mut body);
         assert_eq!(json!(status), expected["status"], "{name}");
         assert_eq!(content_type, expected["content_type"]);
@@ -294,7 +495,10 @@ pub async fn run_review_operations(pool: &PgPool) {
         timestamps(&mut snapshot);
         assert_eq!(snapshot["credential"], expected["snapshot"]["credential"]);
         assert_eq!(snapshot["review"], expected["snapshot"]["review"]);
-        assert_eq!(snapshot["resolved_events"], event_count + 1);
+        assert_eq!(
+            snapshot["resolved_events"],
+            event_count + i64::from(name != "publication_failure")
+        );
         let credential_after = credential_row(pool).await;
         for (key, value) in credential_before.as_object().unwrap() {
             if !expected["snapshot"]["credential"]
@@ -309,6 +513,44 @@ pub async fn run_review_operations(pool: &PgPool) {
             }
         }
         let delivery = delivery_row(pool).await;
+        let calls = state.calls.lock().unwrap().clone();
+        assert_eq!(calls[0]["port"], "publication");
+        assert_eq!(calls[0]["action"], action);
+        assert_eq!(calls[0]["status"], "active");
+        if requests.actual_process() {
+            assert_eq!(
+                calls[0]["service_token"],
+                "synthetic-main-service-token-at-least-32-bytes"
+            );
+            assert_eq!(
+                calls[0]["body"],
+                json!({"organization_id":"org-review",
+                "credential_id":"credential-review","index":7,"status":if action == "suspend" { "suspended" } else { "revoked" },
+                "credential_format":"sd_jwt_vc","reason":case["body"]["note"]})
+            );
+        } else {
+            assert_eq!(
+                calls[0],
+                json!({"port":"publication","action":action,"status":"active"})
+            );
+        }
+        if name == "publication_failure" {
+            assert_eq!(
+                calls.len(),
+                1,
+                "refused publication must prevent mirror I/O"
+            );
+            assert_eq!(credential_after, credential_before);
+            assert_eq!(delivery, delivery_before);
+            assert_eq!(
+                sqlx::query_scalar::<_, Value>(preserved_sql)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap(),
+                preserved
+            );
+            continue;
+        }
         for (key, value) in delivery_before.as_object().unwrap() {
             if !["metadata", "last_error", "updated_at", "canvas_account_id"]
                 .contains(&key.as_str())
@@ -357,12 +599,7 @@ pub async fn run_review_operations(pool: &PgPool) {
                 "synthetic-runtime-request"
             );
         }
-        let calls = state.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 2, "one publication and one actual HTTP mirror");
-        assert_eq!(
-            calls[0],
-            json!({"port":"publication","action":action,"status":"active"})
-        );
         assert_eq!(calls[1]["port"], "mirror");
         assert_eq!(
             calls[1]["persisted_status"],
@@ -381,10 +618,12 @@ pub async fn run_review_operations(pool: &PgPool) {
             calls[1]["authorization"],
             "Bearer synthetic-runtime-tenant-token"
         );
-        assert_eq!(
-            *state.events.lock().unwrap(),
-            [snapshot["credential"]["status"].as_str().unwrap()]
-        );
+        if !requests.actual_process() {
+            assert_eq!(
+                *state.events.lock().unwrap(),
+                [snapshot["credential"]["status"].as_str().unwrap()]
+            );
+        }
         let used: bool = sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
         assert!(used);
         // Retain raw review/event rows too: a duplicate must not refresh a
@@ -396,9 +635,11 @@ pub async fn run_review_operations(pool: &PgPool) {
             .unwrap();
         let lifecycle_events = state.events.lock().unwrap().clone();
         // Already-resolved requests must not repeat publication or provider I/O.
-        assert_eq!(request_case(&router, case).await.0, 409);
+        assert_eq!(requests.request(case).await.0, 409);
         assert_eq!(*state.calls.lock().unwrap(), calls);
-        assert_eq!(*state.events.lock().unwrap(), lifecycle_events);
+        if !requests.actual_process() {
+            assert_eq!(*state.events.lock().unwrap(), lifecycle_events);
+        }
         assert_eq!(
             sqlx::query_scalar::<_, Value>(duplicate_preserved_sql)
                 .fetch_one(pool)
@@ -416,8 +657,6 @@ pub async fn run_review_operations(pool: &PgPool) {
             preserved
         );
     }
-    let _ = stop.send(());
-    server.await.unwrap().unwrap();
 }
 
 pub async fn run_unicode(pool: &PgPool) {
@@ -784,6 +1023,42 @@ struct RuntimeFixture {
 }
 
 async fn start_runtime(pool: &PgPool, responses: Responses) -> RuntimeFixture {
+    let RuntimeDependencies {
+        state,
+        vault,
+        config,
+        url,
+        stop,
+        server,
+        _cleanup,
+    } = start_dependencies(pool, responses).await;
+    let provider = Arc::new(CanvasCredentialsStatusService::from_runtime(&config, vault));
+    let repository =
+        PostgresCredentialManagementRepository::new(pool.clone()).with_canvas_lifecycle(provider);
+    let service =
+        CredentialManagementService::new(Arc::new(repository), state.clone(), state.clone());
+    RuntimeFixture {
+        state,
+        service,
+        config,
+        url,
+        stop,
+        server,
+        _cleanup,
+    }
+}
+
+struct RuntimeDependencies {
+    state: Arc<RuntimeState>,
+    vault: Arc<PostgresIntegrationSecretVault>,
+    config: IssuanceServiceConfig,
+    url: String,
+    stop: tokio::sync::oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<std::io::Result<()>>,
+    _cleanup: AbortServer,
+}
+
+async fn start_dependencies(pool: &PgPool, responses: Responses) -> RuntimeDependencies {
     let vault = Arc::new(PostgresIntegrationSecretVault::new(
         pool.clone(),
         IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -813,9 +1088,17 @@ async fn start_runtime(pool: &PgPool, responses: Responses) -> RuntimeFixture {
         responses,
         response_override: Mutex::new(None),
         observe_review_claim: AtomicBool::new(false),
+        publication_refusal: AtomicBool::new(false),
+        publication_hold: AtomicBool::new(false),
+        publication_entered: tokio::sync::Notify::new(),
+        publication_release: tokio::sync::Notify::new(),
     });
     let application = Router::new()
         .route("/status", post(mirror))
+        .route(
+            "/revocation/internal/revocation-profiles/profile-review/process-revocation",
+            post(publication_http),
+        )
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/status", listener.local_addr().unwrap());
@@ -853,20 +1136,103 @@ async fn start_runtime(pool: &PgPool, responses: Responses) -> RuntimeFixture {
         .map(|(name, value)| (name.to_owned(), value.to_owned())),
     )
     .unwrap();
-    let provider = Arc::new(CanvasCredentialsStatusService::from_runtime(&config, vault));
-    let repository =
-        PostgresCredentialManagementRepository::new(pool.clone()).with_canvas_lifecycle(provider);
-    let service =
-        CredentialManagementService::new(Arc::new(repository), state.clone(), state.clone());
-    RuntimeFixture {
+    RuntimeDependencies {
         state,
-        service,
+        vault,
         config,
         url,
         stop,
         server,
         _cleanup,
     }
+}
+
+/// Start the packaged main binary: its existing composition owns the real
+/// lifecycle publisher, repository and Canvas service. Only external HTTP peers
+/// are controlled here; no signing or production policy is replaced.
+pub async fn run_review_operations_main(pool: &PgPool, database_url: &str) {
+    use super::issuance_process::{
+        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
+        ChildGuard,
+    };
+    use std::time::Duration;
+    let database = url::Url::parse(database_url).unwrap();
+    assert!(database.path().ends_with("_test"));
+    let RuntimeDependencies {
+        state,
+        url,
+        stop,
+        server,
+        _cleanup,
+        ..
+    } = start_dependencies(pool, Responses::Baseline).await;
+    sqlx::query("UPDATE issuance_service.issued_credentials SET revocation_profile_id='profile-review',status_list_entries=$1 WHERE id='credential-review' AND organization_id='org-review'")
+        .bind(json!([{"status_list_id":"profile-review","index":7,"status_purpose":"revocation"}]))
+        .execute(pool).await.unwrap();
+    let (http_listener, http_port) = reserve_port();
+    let (grpc_listener, grpc_port) = reserve_port();
+    let mut command = isolated_smoke_command(http_port, grpc_port);
+    command
+        .env("DATABASE_URL", database_url)
+        .env("ISSUANCE_API_KEY", "synthetic-operations-key")
+        .env(
+            "GRPC_SERVICE_TOKEN",
+            "synthetic-main-service-token-at-least-32-bytes",
+        )
+        .env(
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .env(
+            "REVOCATION_PROFILE_SERVICE_URL",
+            url.replace("/status", "/revocation"),
+        )
+        .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-review")
+        .env("CANVAS_CREDENTIALS_PROVIDER", "bridge")
+        .env(
+            "CANVAS_CREDENTIALS_API_TOKEN",
+            "synthetic-runtime-operator-token",
+        )
+        .env("CANVAS_CREDENTIALS_STATUS_SYNC_URL", &url)
+        .env("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "2.5")
+        .env("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "true");
+    drop((http_listener, grpc_listener));
+    let mut child = ChildGuard(
+        command
+            .spawn()
+            .expect("start owned issuance lifecycle process"),
+    );
+    let client = bounded_http_client(Duration::from_secs(5));
+    let health = tokio::time::timeout(
+        Duration::from_secs(10),
+        wait_for_health_with_client(http_port, &client),
+    )
+    .await
+    .expect("owned issuance readiness deadline");
+    assert_eq!(
+        health,
+        Some(json!({"status":"healthy","service":"issuance-service"}))
+    );
+    assert!(child.0.try_wait().unwrap().is_none());
+    review_cases(
+        pool,
+        &state,
+        &ReviewRequests::Process {
+            client,
+            base: format!("http://127.0.0.1:{http_port}"),
+        },
+    )
+    .await;
+    assert!(child.0.try_wait().unwrap().is_none());
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    let _ = stop.send(());
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 async fn run_scenario(pool: &PgPool, responses: Responses) {

@@ -1720,6 +1720,8 @@ mod canvas_status_provider_replay;
 
 #[path = "support/canvas_status_runtime_contract.rs"]
 mod canvas_status_runtime_contract;
+#[path = "support/issuance_process.rs"]
+mod issuance_process;
 
 #[tokio::test]
 async fn validation_boundary_matches_published_http() {
@@ -2037,6 +2039,24 @@ async fn status_runtime_composes_review_resolution_with_configured_http() {
         .await
         .unwrap();
     canvas_status_runtime_contract::run_review_operations(&pool).await;
+    pool.close().await;
+    owned.close().unwrap();
+}
+
+#[tokio::test]
+async fn status_main_process_resolves_reviews_with_real_http_publication_and_mirror() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+        .await
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&owned.url)
+        .await
+        .unwrap();
+    canvas_status_runtime_contract::run_review_operations_main(&pool, &owned.url).await;
     pool.close().await;
     owned.close().unwrap();
 }

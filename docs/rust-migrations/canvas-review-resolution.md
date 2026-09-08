@@ -34,9 +34,35 @@ test is mandatory in the full published CI inventory.
 The retained configured review-lifecycle differential test also passed in 12.73s,
 and the existing configured credential/delivery effect regression in 4.37s.
 
-Actual-main authenticated lifecycle/publication, gateway adoption and fresh-head
-full hosted qualification remain separate gates. No Python endpoint deletion,
-consumer switching or deployment is authorized by these local checks.
+Gateway adoption and fresh-head full hosted qualification remain separate gates.
+No Python endpoint deletion, consumer switching or deployment is authorized by
+these local checks.
+
+### Actual-main authenticated lifecycle follow-up
+
+The registered `status_main_process_resolves_reviews_with_real_http_publication_and_mirror`
+test passed locally in 8.72s. It starts the real issuance executable with an
+exact-owned disposable PostgreSQL database, the shared isolated process launcher,
+and controlled HTTP publication/mirror peers. Production `main` constructs the
+service graph. Suspend, revoke, mirror refusal and publication refusal preserve
+the independently frozen response and credential/review projections.
+
+The test additionally checks real publication service-token authentication and
+request shape, the separate tenant-vault bearer used for mirroring, active claim
+and pre-/post-persistence ordering, foreign-tenant/auth rejection without secret
+use, a frozen competing-claim 409 while publication is held, and exact duplicate
+review/event/data preservation. Only HTTP peers are controlled in this path;
+no replacement lifecycle service or publisher port is constructed. This is not
+a new frozen Python HTTP transcript, gRPC event-delivery test, or graceful-stop
+qualification. The shared dependency fixture and assertions also serve the
+previous service-level test.
+
+After a clean issuance-package rebuild (44.68s), the executable inventory was
+checked for the new test before execution. All four extracted-launcher smoke
+tests passed in 3.01s; all ten retained configured status-runtime regressions
+passed in 55.09s; strict all-target Clippy passed in 30.23s; 41 workflow contract
+tests passed in 2.09s. The new actual-main test is mandatory in the full published
+CI inventory. Owned databases and probe containers were removed after the tests.
 
 ## Shared owners and state boundaries
 
