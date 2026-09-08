@@ -79,6 +79,31 @@ const READ_VALIDATION_CASES: [&str; 8] = [
     "reviews_zero_limit",
     "reviews_excess_limit",
 ];
+const JOB_STATE_CASES: [&str; 6] = [
+    "retry_foreign",
+    "retry_again",
+    "resolve_queued",
+    "resolve_again",
+    "enqueue_duplicate",
+    "enqueue_foreign",
+];
+// Preserve the frozen transitions: queued conflicts precede the fixture's
+// explicit dead-letter reset, and duplicate enqueue follows the original job.
+const JOB_SEQUENCE_CASES: [&str; 13] = [
+    "jobs_list",
+    "candidates_list",
+    "reviews_list",
+    "job_get",
+    "retry_foreign",
+    "retry_dead_letter",
+    "retry_again",
+    "resolve_queued",
+    "resolve_dead_letter",
+    "resolve_again",
+    "enqueue",
+    "enqueue_duplicate",
+    "enqueue_foreign",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Routing {
@@ -567,7 +592,29 @@ fn public_error_expected(name: &str) -> (u16, Value) {
     // currently becomes the generic description with no details; this does not
     // claim the public gateway preserves the direct Pydantic validation array.
     let (status, description, code) = match name {
-        "job_foreign" | "job_missing" => (404, "Canvas synchronization job not found", None),
+        "job_foreign" | "job_missing" | "retry_foreign" => {
+            (404, "Canvas synchronization job not found", None)
+        }
+        "retry_rollout_closed" => (
+            409,
+            "Portable Canvas integration is disabled for this organization",
+            None,
+        ),
+        "retry_again" => (
+            409,
+            "Only dead-letter Canvas sync jobs can be retried",
+            None,
+        ),
+        "resolve_queued" | "resolve_again" => (
+            409,
+            "Only dead-letter Canvas sync jobs can be resolved",
+            None,
+        ),
+        "enqueue_foreign" => (
+            404,
+            "Canvas application not found",
+            Some("canvas_application_not_found"),
+        ),
         "review_foreign" => (
             404,
             "Canvas evidence correction review not found",
@@ -739,6 +786,45 @@ async fn public_error_cases(pool: &PgPool, router: &Router, http: &CountedHttp) 
     }
 }
 
+fn assert_duplicate_enqueue(before: &Value, after: &Value, body: &Value) {
+    let job = before["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| job["id"] == body["id"])
+        .expect("duplicate must return the existing job");
+    assert_eq!(job["status"], "queued");
+    assert_eq!(job["target_id"], body["target_id"]);
+    let mut expected = before.clone();
+    let target = expected["targets"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|target| target["id"] == body["target_id"])
+        .expect("duplicate must retain the original target");
+    let actual = after["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["id"] == body["target_id"])
+        .unwrap();
+    // The real enqueue_application_sync upsert refreshes exactly these two
+    // timestamps and records the request source. No whole-row normalization:
+    // unknown target fields, every job and every unrelated table stay exact.
+    for key in ["updated_at", "last_enqueued_at"] {
+        let old = chrono::DateTime::parse_from_rfc3339(target[key].as_str().unwrap()).unwrap();
+        let new = chrono::DateTime::parse_from_rfc3339(actual[key].as_str().unwrap()).unwrap();
+        assert!(new >= old, "duplicate enqueue timestamp went backwards");
+        target[key] = actual[key].clone();
+    }
+    assert!(target["metadata"].is_object());
+    target["metadata"]["last_requested_from"] = json!("application_sync_api");
+    assert!(
+        after == &expected,
+        "duplicate enqueue changed unexpected raw state"
+    );
+}
+
 async fn frozen_matrix(pool: &PgPool, router: &Router, http: &CountedHttp) {
     let [shared, scenarios, _] = fixtures();
     let preserved: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
@@ -752,7 +838,7 @@ async fn frozen_matrix(pool: &PgPool, router: &Router, http: &CountedHttp) {
     let mut aliases = BTreeMap::new();
     // The frozen filtered reads observe the seed before retry/resolve/enqueue
     // mutate it. Reuse the same DTO/snapshot comparator, not another fixture.
-    for name in READ_FILTER_CASES.into_iter().chain(NON_MANUAL_CASES) {
+    for name in READ_FILTER_CASES.into_iter().chain(JOB_SEQUENCE_CASES) {
         let (case, expected) = frozen_case(name);
         for sql in case["sql"].as_array().into_iter().flatten() {
             sqlx::query(sql.as_str().unwrap())
@@ -760,18 +846,22 @@ async fn frozen_matrix(pool: &PgPool, router: &Router, http: &CountedHttp) {
                 .await
                 .unwrap();
         }
-        let unchanged = if case["method"] == "GET" {
-            Some(raw_state(pool).await)
-        } else {
-            None
-        };
+        let before = raw_state(pool).await;
+        let foreign = matches!(name, "retry_foreign" | "enqueue_foreign");
+        if foreign {
+            assert_eq!(case["headers"], json!({"X-Organization-ID":"org-foreign"}));
+        }
         let calls = http.counts();
         assert_eq!(calls.1, 0);
         let (status, content_type, mut body) = request(
             router,
             case,
-            Some(("cookie", "sessionId=actor-primary")),
-            "org-review",
+            Some(if foreign {
+                ("x-api-key", "actor-key-wrong-org")
+            } else {
+                ("cookie", "sessionId=actor-primary")
+            }),
+            if foreign { "org-other" } else { "org-review" },
             RequestBoundary::Forwarded,
         )
         .await;
@@ -780,19 +870,26 @@ async fn frozen_matrix(pool: &PgPool, router: &Router, http: &CountedHttp) {
             (calls.0 + 1, 0),
             "{name}: native request count"
         );
-        if let Some(before) = unchanged {
+        if case["method"] == "GET" || expected["status"].as_u64().unwrap() >= 400 {
             assert!(
                 raw_state(pool).await == before,
-                "{name}: read changed raw state"
+                "{name}: read or rejected transition changed raw state"
             );
+        }
+        if name == "enqueue_duplicate" {
+            assert_duplicate_enqueue(&before, &raw_state(pool).await, &body);
         }
         timestamps(&mut body);
         generated_ids(&mut body, &mut aliases);
-        assert_eq!(
-            json!({"status":status,"content_type":content_type,"body":body}),
-            json!({"status":expected["status"],"content_type":expected["content_type"],"body":expected["body"]}),
-            "frozen gateway case {name}"
-        );
+        if expected["status"].as_u64().unwrap() >= 400 {
+            assert_public_error((status, content_type, body), name);
+        } else {
+            assert_eq!(
+                json!({"status":status,"content_type":content_type,"body":body}),
+                json!({"status":expected["status"],"content_type":expected["content_type"],"body":expected["body"]}),
+                "frozen gateway case {name}"
+            );
+        }
         let mut state: Value = sqlx::query_scalar(scenarios["snapshot_sql"].as_str().unwrap())
             .fetch_one(pool)
             .await
@@ -963,10 +1060,7 @@ async fn actor_cases(pool: &PgPool, router: &Router, http: &CountedHttp) {
     }
 }
 
-/// The registered caller owns the exact disposable DB, outer timeout and cleanup.
-pub async fn run(pool: &PgPool, database_url: &str) {
-    seed(pool).await;
-    let trap = LegacyTrap::start().await;
+async fn start_native(database_url: &str, enabled: bool) -> (ChildGuard, u16) {
     let (http_reservation, http_port) = reserve_port();
     let (_grpc_reservation, grpc_port) = reserve_port();
     let mut command = isolated_smoke_command(http_port, grpc_port);
@@ -977,10 +1071,13 @@ pub async fn run(pool: &PgPool, database_url: &str) {
             "GRPC_SERVICE_TOKEN",
             "synthetic-gateway-service-token-at-least-32-characters",
         )
-        .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        .env(
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+            if enabled { "true" } else { "false" },
+        )
         .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-review");
     drop(http_reservation);
-    let mut child = ChildGuard(command.spawn().unwrap());
+    let child = ChildGuard(command.spawn().unwrap());
     let client = bounded_http_client(Duration::from_secs(2));
     let health = tokio::time::timeout(
         Duration::from_secs(10),
@@ -992,6 +1089,49 @@ pub async fn run(pool: &PgPool, database_url: &str) {
         health,
         Some(json!({"status":"healthy","service":"issuance-service"}))
     );
+    (child, http_port)
+}
+
+fn finish_native(mut child: ChildGuard) {
+    assert!(
+        child.0.try_wait().unwrap().is_none(),
+        "issuance exited before fixture shutdown"
+    );
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+}
+
+/// The registered caller owns the exact disposable DB, outer timeout and cleanup.
+pub async fn run(pool: &PgPool, database_url: &str) {
+    seed(pool).await;
+    let trap = LegacyTrap::start().await;
+    // Rollout is an actual-main startup input, not an HTTP-layer stub. Run the
+    // closed control before any frozen job transition and reap it before the
+    // enabled process starts; both use the same untouched seed and process owner.
+    let (closed_child, closed_port) = start_native(database_url, false).await;
+    let (closed, closed_http) = candidate_router(closed_port, trap.port);
+    let (case, expected) = frozen_case("retry_rollout_closed");
+    assert_eq!(case["rollout"], false);
+    unchanged_public_error(
+        pool,
+        &closed,
+        &closed_http,
+        case,
+        "org-review",
+        "retry_rollout_closed",
+    )
+    .await;
+    let state: Value = sqlx::query_scalar(fixtures()[1]["snapshot_sql"].as_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(state, expected["snapshot"]);
+    assert_eq!(expected["lifecycle_calls"], json!([]));
+    assert_eq!(closed_http.counts(), (1, 0));
+    assert_eq!(trap.calls.load(Ordering::SeqCst), 0);
+    finish_native(closed_child);
+
+    let (child, http_port) = start_native(database_url, true).await;
 
     let (published, published_http) = router(http_port, trap.port, Routing::PublishedLegacy);
     let before = raw_state(pool).await;
@@ -1018,16 +1158,12 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     frozen_matrix(pool, &candidate, &candidate_http).await;
     public_error_cases(pool, &candidate, &candidate_http).await;
     actor_cases(pool, &candidate, &candidate_http).await;
-    // Seven positive routes, six filtered reads, fourteen public-error controls,
-    // and two dismisses with their duplicates. Legacy selection stays at zero.
-    assert_eq!(candidate_http.counts(), (31, 0));
+    // Retain all 31 existing requests and add the six ordered job-state cases.
+    // The separate closed-rollout child contributes the 38th native request.
+    assert_eq!(candidate_http.counts(), (37, 0));
+    assert_eq!(closed_http.counts().0 + candidate_http.counts().0, 38);
     assert_eq!(trap.calls.load(Ordering::SeqCst), 8);
-    assert!(
-        child.0.try_wait().unwrap().is_none(),
-        "issuance exited before fixture shutdown"
-    );
-    child.0.kill().unwrap();
-    child.0.wait().unwrap();
+    finish_native(child);
     trap.close().await;
 }
 
@@ -1068,7 +1204,14 @@ mod tests {
         ]
         .into_iter()
         .chain(READ_VALIDATION_CASES)
-        {
+        .chain([
+            "retry_rollout_closed",
+            "retry_foreign",
+            "retry_again",
+            "resolve_queued",
+            "resolve_again",
+            "enqueue_foreign",
+        ]) {
             let (status, expected) = public_error_expected(name);
             let mut actual = expected.clone();
             actual["message_id"] = json!("11111111-1111-4111-8111-111111111111");
@@ -1154,6 +1297,119 @@ mod tests {
                 assert_eq!(public_error_expected(name).0, 422);
             }
         }
+    }
+
+    #[test]
+    fn job_state_cases_preserve_exact_frozen_order_and_setup() {
+        let selected: BTreeSet<_> = NON_MANUAL_CASES
+            .into_iter()
+            .chain(JOB_STATE_CASES)
+            .collect();
+        assert_eq!(selected.len(), 13);
+        let from_frozen: Vec<_> = fixtures()[1]["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|case| {
+                let name = case["name"].as_str().unwrap();
+                selected.contains(name).then_some(name)
+            })
+            .collect();
+        assert_eq!(from_frozen, JOB_SEQUENCE_CASES);
+        let (closed, closed_expected) = frozen_case("retry_rollout_closed");
+        assert_eq!(closed["rollout"], false);
+        assert_eq!(
+            closed_expected["snapshot"],
+            frozen_case("jobs_list").1["snapshot"]
+        );
+        for name in JOB_STATE_CASES {
+            let (case, expected) = frozen_case(name);
+            assert_eq!(case["method"], "POST");
+            assert!(case.get("sql").is_none());
+            assert!(case.get("body").is_none());
+            assert!(case.get("rollout").is_none());
+            assert_eq!(expected["lifecycle_calls"], json!([]));
+            if matches!(name, "retry_foreign" | "enqueue_foreign") {
+                assert_eq!(case["headers"], json!({"X-Organization-ID":"org-foreign"}));
+            } else {
+                assert!(case.get("headers").is_none());
+            }
+            if name == "enqueue_duplicate" {
+                assert_eq!(expected["body"], frozen_case("enqueue").1["body"]);
+                assert_eq!(expected["snapshot"], frozen_case("enqueue").1["snapshot"]);
+            } else {
+                assert!(matches!(public_error_expected(name).0, 404 | 409));
+            }
+        }
+        assert_eq!(
+            frozen_case("retry_again").1["snapshot"],
+            frozen_case("retry_dead_letter").1["snapshot"]
+        );
+        assert_eq!(
+            frozen_case("resolve_queued").1["snapshot"],
+            frozen_case("retry_again").1["snapshot"]
+        );
+        assert_eq!(
+            frozen_case("resolve_again").1["snapshot"],
+            frozen_case("resolve_dead_letter").1["snapshot"]
+        );
+    }
+
+    #[test]
+    fn duplicate_enqueue_allows_only_owned_target_refresh() {
+        let before = json!({
+            "jobs":[{"id":"job-owned","target_id":"target-owned","status":"queued","result":{}}],
+            "targets":[{"id":"target-owned","updated_at":"2026-09-08T12:00:00Z",
+                "last_enqueued_at":"2026-09-08T12:00:00Z","enabled":true,
+                "metadata":{"created_from":"application_sync_api"}},
+                {"id":"target-unrelated","metadata":{}}],
+            "events":[],"credentials":[{"id":"credential-preserved"}]
+        });
+        let body = json!({"id":"job-owned","target_id":"target-owned"});
+        let mut after = before.clone();
+        after["targets"][0]["updated_at"] = json!("2026-09-08T12:00:01Z");
+        after["targets"][0]["last_enqueued_at"] = json!("2026-09-08T12:00:01Z");
+        after["targets"][0]["metadata"]["last_requested_from"] = json!("application_sync_api");
+        assert_duplicate_enqueue(&before, &after, &body);
+        for mutation in [
+            "job",
+            "new-job",
+            "unrelated-target",
+            "target-field",
+            "metadata",
+            "event",
+            "credential",
+            "old-time",
+            "invalid-time",
+        ] {
+            let mut changed = after.clone();
+            match mutation {
+                "job" => changed["jobs"][0]["result"] = json!({"unexpected":true}),
+                "new-job" => changed["jobs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":"extra"})),
+                "unrelated-target" => {
+                    changed["targets"][1]["metadata"] = json!({"unexpected":true})
+                }
+                "target-field" => changed["targets"][0]["enabled"] = json!(false),
+                "metadata" => changed["targets"][0]["metadata"]["unexpected"] = json!(true),
+                "event" => changed["events"] = json!([{"id":"extra"}]),
+                "credential" => changed["credentials"] = json!([]),
+                "old-time" => changed["targets"][0]["updated_at"] = json!("2026-09-08T11:59:59Z"),
+                "invalid-time" => changed["targets"][0]["last_enqueued_at"] = json!("invalid"),
+                _ => unreachable!(),
+            }
+            assert!(std::panic::catch_unwind(|| assert_duplicate_enqueue(
+                &before, &changed, &body
+            ))
+            .is_err());
+        }
+        let wrong_job = json!({"id":"different-job","target_id":"target-owned"});
+        assert!(
+            std::panic::catch_unwind(|| assert_duplicate_enqueue(&before, &after, &wrong_job))
+                .is_err()
+        );
     }
 
     #[test]
