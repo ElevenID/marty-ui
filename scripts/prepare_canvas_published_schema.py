@@ -135,6 +135,15 @@ def prepare():
         dispatch_case = os.environ.get("MARTY_CANVAS_WORKER_DISPATCH_CASE")
         timeout_case = os.environ.get("MARTY_CANVAS_WORKER_TIMEOUT_CASE")
         body_timeout_case = os.environ.get("MARTY_CANVAS_WORKER_BODY_TIMEOUT_CASE")
+        lease_expiry_case = os.environ.get("MARTY_CANVAS_WORKER_LEASE_EXPIRY_CASE")
+        if lease_expiry_case is not None:
+            from run_canvas_worker_lease_expiry_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_lease_expiry"] = run(lease_expiry_case)
         if body_timeout_case is not None:
             from run_canvas_worker_body_timeout_oracle import run
 

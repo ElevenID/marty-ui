@@ -306,6 +306,48 @@ async fn capture_worker_body_timeout_published_process() {
 }
 
 #[tokio::test]
+#[ignore = "explicit reviewed lease-expiry reference capture only; not native qualification"]
+async fn capture_worker_lease_expiry_published_process() {
+    use std::io::Write;
+
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let destination = std::path::PathBuf::from(
+        std::env::var_os("MARTY_CANVAS_LEASE_EXPIRY_CAPTURE_FILE")
+            .expect("explicit new lease-expiry capture file required"),
+    );
+    assert!(destination.is_absolute(), "capture file must be absolute");
+    assert!(!destination.exists(), "capture file must not already exist");
+    let mut reports = Vec::new();
+    for name in ["renewal_lock_early_release", "renewal_lock_crosses_expiry"] {
+        let owned =
+            canvas_published_database::PublishedDatabase::start_with_worker_lease_expiry(name)
+                .await
+                .unwrap();
+        let raw = owned.raw_probe_report().unwrap();
+        assert!(raw.len() <= 1_048_576, "lease-expiry report exceeds limit");
+        let report: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["worker_lease_expiry"]["case"], name);
+        assert_eq!(
+            report["worker_lease_expiry"]["schema"],
+            "marty.canvas-worker-lease-expiry-observation/v1"
+        );
+        owned.close_verified().unwrap();
+        reports.push(raw);
+        eprintln!("Published lease-expiry observation and owned cleanup passed: {name}");
+    }
+    // Preserve raw numeric lexemes; publish only after both owned cleanups.
+    // create_new never replaces evidence; a write/sync error may leave a new
+    // partial failed capture, which is not a frozen or qualifying artifact.
+    let raw = format!("[{}]\n", reports.join(",\n"));
+    let mut output = std::fs::File::create_new(destination).unwrap();
+    output.write_all(raw.as_bytes()).unwrap();
+    output.sync_all().unwrap();
+}
+
+#[tokio::test]
 async fn worker_timeout_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

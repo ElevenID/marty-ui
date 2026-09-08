@@ -491,6 +491,23 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_lease_expiry(case: &str) -> Result<Self, String> {
+        if !matches!(
+            case,
+            "renewal_lock_early_release" | "renewal_lock_crosses_expiry"
+        ) {
+            return Err("unsupported owned lease-expiry case".into());
+        }
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-lease-expiry-scenarios.json"),
+            "worker_lease_expiry",
+            "worker-lease-expiry",
+            "MARTY_CANVAS_WORKER_LEASE_EXPIRY_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_dispatch(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -973,6 +990,7 @@ impl PublishedDatabase {
                 | "worker_deadline"
                 | "worker_timeout"
                 | "worker_body_timeout"
+                | "worker_lease_expiry"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -1068,6 +1086,7 @@ impl PublishedDatabase {
                 | "worker_deadline"
                 | "worker_timeout"
                 | "worker_body_timeout"
+                | "worker_lease_expiry"
                 | "worker_provider_signals"
                 | "worker_provider_recovery"
                 | "worker_provider_final"
@@ -1137,6 +1156,19 @@ impl PublishedDatabase {
             "worker_timeout" => &[
                 "scripts/canvas_worker_timeout_https_fixture.py",
                 "scripts/canvas_worker_output_capture.py",
+                "contracts/canvas-worker-deadline-scenarios.json",
+                "contracts/canvas-worker-retry-scenarios.json",
+                "contracts/canvas-worker-validation-scenarios.json",
+                "contracts/canvas-worker-roster-failure-scenarios.json",
+                "scripts/run_canvas_worker_provider_signals_oracle.py",
+                "scripts/run_canvas_worker_provider_recovery_oracle.py",
+            ],
+            "worker_lease_expiry" => &[
+                "scripts/run_canvas_worker_body_timeout_oracle.py",
+                "scripts/canvas_worker_body_timeout_https_fixture.py",
+                "scripts/canvas_worker_output_capture.py",
+                "scripts/canvas_worker_shutdown_output.py",
+                "contracts/canvas-worker-body-timeout-scenarios.json",
                 "contracts/canvas-worker-deadline-scenarios.json",
                 "contracts/canvas-worker-retry-scenarios.json",
                 "contracts/canvas-worker-validation-scenarios.json",
