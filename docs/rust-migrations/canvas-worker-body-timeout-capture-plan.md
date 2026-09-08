@@ -27,6 +27,23 @@ fixtures, oracles, tolerances, and cutover gates remain unchanged.
 
 ## Verified authority and existing coverage
 
+### First attempted capture: diagnostic failure, not a reference
+
+At committed input head `44e3dc2fad7e7e1a58f7303536bafc32ba8be566`, the first
+capture attempt stopped in `application_body_prompt` after 24.38 seconds. The
+strict post-SIGINT output profile rejected 33 stderr lines: two reviewed startup
+warnings, 31 other lines, and two traceback headings. No raw output was exposed
+and no capture artifact was emitted. Remaining cases were not executed.
+
+The parent verified both exact-owned containers were removed: PostgreSQL
+`ad053c9126caeadbd1f01d47ad323ac91510eb69323a61b5ea5ceb7f4541a89c` and probe
+`8a05162fb1b6fb1c03a7b29d2ca4466023c8b3d1762a6c9ecbb3e27b816ad717`.
+The next action is a pinned-source review of shutdown output and, if warranted,
+a distinct strictly bounded shutdown profile with privacy/unknown-output
+negative tests. Do not weaken the pre-interrupt profile, accept arbitrary
+tracebacks, or freeze this failed attempt. Any runner repair requires a new A/B
+sequence with the reviewed inputs fixed before A.
+
 The reference image remains:
 
 ```text
