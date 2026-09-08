@@ -186,8 +186,10 @@ image job passed as well. This qualifies these retained privacy boundaries;
 the current candidate must retain them in fresh exact-head CI. Later revocation
 qualification is tracked separately in the cutover readiness table.
 
-All 51 signing helper/operation observations still need native diagnostic
-adoption (gate 13); coordination with the overlapping crypto owner is pending.
+The isolated signing helper/test implementation below now passes the 45 detail
+and six operation-message projections locally. Production signing-adapter
+adoption (gate 13) and coordination with the overlapping crypto owner remain
+pending; the pure test target does not close that gate.
 The new gate 6 missing-target test composes an orphan in the dedicated worker
 test schema, not a published-schema FK/deletion race; the complete configured
 PostgreSQL suite passed all four entries locally on Windows in 94.81s. Fresh-head
@@ -198,3 +200,71 @@ all-service/collector logging or whole-worker cutover. Consumer selector removal
 the separate live-provider lease-expiry composition and aggregate beta acceptance
 remain explicit work in the [readiness table](canvas-worker-cutover-readiness.md).
 No live Python deletion or production deployment is authorized by these passes.
+
+## Isolated signing diagnostic helper (2026-09-08)
+
+The new [signing_error_detail.rs](../../rust/services/issuance/src/signing_error_detail.rs)
+implements the pinned Python helper's selection and status/message behavior,
+reusing [python_value.rs](../../rust/services/issuance/src/python_value.rs) for
+Python truthiness, dictionary representation and frozen Unicode whitespace
+semantics. It is not wired into the production library or signing adapters.
+No protected signing implementation, cryptographic policy or frozen reference
+was changed for this slice.
+
+The isolated [signing_error_detail_contract.rs](../../rust/services/issuance/tests/signing_error_detail_contract.rs)
+imports those two modules directly through `#[path]`. Its explicit Cargo test
+registration is necessary because the package disables automatic integration
+test discovery. It checks the unchanged canonical-LF corpus digest, source
+revision and signing helper/test blob identities, then replays all 45 detail
+strings and all six operation-message projections. The six frozen HTTP request
+counts, methods and paths remain reference metadata: this test performs no
+HTTP request and does not manufacture corresponding native observations.
+
+The helper accepts an already parsed `serde_json::Value` and a supplier of
+already decoded response text. The operation wrapper calls its JSON supplier
+before the text supplier for error statuses. Text is evaluated eagerly even
+when a usable JSON detail is available, and text-supplier failures propagate.
+Both suppliers are bypassed for the exact existing status short-circuits:
+401 rejection, context/resolve 404 absence, and non-error status continuation
+(status below 400).
+Signing 404 still produces its operation-specific error. Actual JSON parsing,
+HTTP byte/charset decoding, response-body ownership and successful-response
+parsing remain the future adapters' responsibility; this pure projection does
+not establish their HTTPX parity.
+
+Independent controls also retain the non-obvious selection boundaries:
+
+- A truthy whitespace-only first detail does not fall through to a later JSON
+  key; it uses the stripped response text or reason fallback.
+- The final `error` operand is not truthiness-filtered. An empty dictionary
+  there renders as `{}`, while a falsey earlier dictionary can fall through.
+- Python dictionary insertion order, quoting, booleans, `None`, large integers
+  and Unicode representation survive selection. Unsupported selected scalar
+  or list values retain the text fallback rather than being stringified.
+- The limit is 500 selected Unicode characters, not bytes or grapheme clusters.
+  Operation prefixes and HTTP status text sit outside that detail limit. It is
+  neither a response allocation/memory bound nor secret redaction: content
+  within those characters can still contain remote diagnostic material.
+
+Parent-executed local verification completed with compilation in 33.64s and
+13 tests passing in 0.01s: eleven new helper/corpus controls plus the two
+existing `python_value` controls imported by the test target. The separate
+registration regression passed one test in 0.11s. Independent source and test
+review found no blockers. Strict all-target Clippy passed in 23.02s; fresh
+hosted evidence for this slice remained pending at this checkpoint. The runnable target is
+`cargo test -p marty-issuance-service --test signing_error_detail_contract`.
+
+Gate 13 remains open until the crypto owner agrees the production integration
+scope and the context, DID-resolution and signing adapters actually adopt the
+shared behavior. That integration must preserve operation-specific status and
+error propagation, exercise the existing reference request method/path/count
+observations through real owned adapter calls, and retain their current
+successful-response and cryptographic behavior. The local pure passes prove
+neither adapter adoption nor signing, whole-worker cutover, deployed logging
+privacy or beta acceptance.
+
+Choose `SigningOperation` from the caller's operation, not the URL alone:
+the pinned `resolve_remote_issuer_context` uses the context error prefix even
+when an `issuer_did` makes it call `/resolve-issuer-did`. A future adapter test
+must preserve that caller/route distinction rather than infer `Resolve` from
+the endpoint path.
