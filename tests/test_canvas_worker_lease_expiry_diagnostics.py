@@ -23,7 +23,7 @@ def test_every_rust_category_matches_closed_parser_inventory(native):
     ).read_text(encoding="utf-8")
     block = re.search(r"enum Diagnostic \{([^}]+)\}", source).group(1)
     categories = re.findall(r"^\s*([A-Za-z]+),\s*$", block, re.MULTILINE)
-    assert len(categories) == len(set(categories)) == 44
+    assert len(categories) == len(set(categories)) == 52
     assert {name.encode() for name in categories} == native.DIAGNOSTIC_CATEGORIES
     mapping = re.search(
         r"fn failure_diagnostic\(reason: &str\) -> Diagnostic \{(.*?)\n\}\n",
@@ -32,7 +32,7 @@ def test_every_rust_category_matches_closed_parser_inventory(native):
     )
     mapped_reasons = re.findall(r'"(native expiry [^"\n]+)"', mapping.group(1))
     actual_checks = source[mapping.end() :].split("#[cfg(test)]")[0]
-    assert len(mapped_reasons) == 24
+    assert len(mapped_reasons) == 32
     assert all(f'"{reason}"' in actual_checks for reason in mapped_reasons)
     for name in categories:
         contents = (
@@ -201,3 +201,62 @@ def test_final_checks_remain_strict_and_cleanup_precedes_failure_diagnostic():
     assert replay.index("let cleanup_ok") < replay.index(
         "emit_diagnostic(failure_diagnostic(reason))"
     )
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "FailureWorkerLiveness",
+        "FailureWorkerEarlyExit",
+        "FailureStateQueryTimeout",
+        "FailureStateQuery",
+        "FailureSnapshotTimeout",
+        "FailureSnapshotPanic",
+        "FailureLateState",
+        "FailureLateTimeout",
+    ],
+)
+def test_late_failure_categories_are_exact_and_private_payloads_stay_hidden(
+    native, category
+):
+    record = native.DIAGNOSTIC_PREFIX + category.encode() + b"\n"
+    prefix = b"MARTY_EXPIRY_DIAG_V1:AwaitLateWindow\n"
+    contents = prefix + record + b"panic: private-row-and-token\n"
+    assert native.coordinator_diagnostics(io.BytesIO(contents)) == (
+        "Native expiry coordinator diagnostics: AwaitLateWindow," + category
+    )
+    for malformed in (
+        record[:-1],
+        record[:-1] + b":private-row-and-token\n",
+        b"private-row-and-token " + record,
+        record + record,
+        record + b"MARTY_EXPIRY_DIAG_V1:private-row-and-token\n",
+    ):
+        assert native.coordinator_diagnostics(io.BytesIO(prefix + malformed)) == (
+            "Native expiry coordinator diagnostics invalid"
+        )
+    assert native.coordinator_diagnostics(
+        io.BytesIO(contents + b"x" * 65536)
+    ) == "Native expiry coordinator diagnostics oversized"
+
+
+def test_snapshot_panic_guard_preserves_budget_and_late_checks():
+    source = (
+        ROOT
+        / "rust/services/issuance/tests/support/canvas_worker_lease_expiry_replay.rs"
+    ).read_text(encoding="utf-8")
+    snapshot = source.split("async fn bounded_snapshot(", 1)[1].split(
+        "async fn observe(", 1
+    )[0]
+    assert "tokio::time::timeout(Duration::from_secs(2), future)" in snapshot
+    assert ".catch_unwind()" in snapshot
+    assert '.map_err(|_| "native expiry snapshot panicked")?' in snapshot
+    assert '.map_err(|_| "native expiry snapshot timed out")' in snapshot
+    assert "emit_diagnostic" not in snapshot  # No per-poll records or new limit.
+    assert "bounded_snapshot(snapshot(pool, fixture)).await?" in source
+    late = source.split("emit_diagnostic(Diagnostic::AwaitLateWindow);", 1)[1]
+    late = late.split('mark(control, "late-window-verified")?', 1)[0]
+    assert "tokio::time::timeout(Duration::from_secs(40), async" in late
+    assert "alive(worker)?" in late
+    assert late.count("stable(pool, fixture, &outcome, &rows).await") == 2
+    assert '"native expiry late window timed out"' in late

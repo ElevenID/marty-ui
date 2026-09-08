@@ -62,6 +62,14 @@ enum Diagnostic {
     FailureJobGeneration,
     FailureTerminalLease,
     FailureJobQuery,
+    FailureWorkerLiveness,
+    FailureWorkerEarlyExit,
+    FailureStateQueryTimeout,
+    FailureStateQuery,
+    FailureSnapshotTimeout,
+    FailureSnapshotPanic,
+    FailureLateState,
+    FailureLateTimeout,
     FailureShutdownWait,
     FailureShutdownStatus,
     FailurePostShutdownState,
@@ -108,6 +116,14 @@ fn failure_diagnostic(reason: &str) -> Diagnostic {
         "native expiry narrow job query timed out"
         | "native expiry narrow job query failed"
         | "native expiry narrow query too wide" => Diagnostic::FailureJobQuery,
+        "native expiry worker liveness failed" => Diagnostic::FailureWorkerLiveness,
+        "native expiry worker exited early" => Diagnostic::FailureWorkerEarlyExit,
+        "native expiry state query timed out" => Diagnostic::FailureStateQueryTimeout,
+        "native expiry state query failed" => Diagnostic::FailureStateQuery,
+        "native expiry snapshot timed out" => Diagnostic::FailureSnapshotTimeout,
+        "native expiry snapshot panicked" => Diagnostic::FailureSnapshotPanic,
+        "native expiry late response changed durable state" => Diagnostic::FailureLateState,
+        "native expiry late window timed out" => Diagnostic::FailureLateTimeout,
         "native expiry worker shutdown wait failed" => Diagnostic::FailureShutdownWait,
         "native expiry worker shutdown status differs" => Diagnostic::FailureShutdownStatus,
         "native expiry post-shutdown state verification failed" => {
@@ -432,10 +448,18 @@ async fn scalar(pool: &PgPool, key: &str) -> Checked<Value> {
     .map_err(|_| "native expiry state query failed")
 }
 
-async fn observe(pool: &PgPool, fixture: &WorkerFixture) -> Checked<Value> {
-    let mut state = tokio::time::timeout(Duration::from_secs(2), snapshot(pool, fixture))
+async fn bounded_snapshot(future: impl std::future::Future<Output = Value>) -> Checked<Value> {
+    // Preserve the existing snapshot budget and failure semantics. Identify this
+    // stage without inspecting a SQL/fixture assertion's potentially private panic.
+    AssertUnwindSafe(tokio::time::timeout(Duration::from_secs(2), future))
+        .catch_unwind()
         .await
-        .map_err(|_| "native expiry snapshot timed out")?;
+        .map_err(|_| "native expiry snapshot panicked")?
+        .map_err(|_| "native expiry snapshot timed out")
+}
+
+async fn observe(pool: &PgPool, fixture: &WorkerFixture) -> Checked<Value> {
+    let mut state = bounded_snapshot(snapshot(pool, fixture)).await?;
     state["target"] = scalar(pool, "target_sql").await?;
     Ok(state)
 }
@@ -902,6 +926,22 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn snapshot_guard_preserves_values_and_classifies_panics_without_payloads() {
+        let value = json!({"synthetic": [1, true, null]});
+        assert_eq!(bounded_snapshot(async { value.clone() }).await, Ok(value));
+        for payload in ["private-row", "native expiry state query failed", ""] {
+            let result = bounded_snapshot(async { panic!("{payload}") }).await;
+            assert_eq!(result, Err("native expiry snapshot panicked"));
+            assert_eq!(
+                failure_diagnostic(result.unwrap_err()),
+                Diagnostic::FailureSnapshotPanic
+            );
+        }
+        let result = bounded_snapshot(async { std::panic::panic_any(17_u32) }).await;
+        assert_eq!(result, Err("native expiry snapshot panicked"));
+    }
+
     #[test]
     fn expiry_observer_identity_matches_launcher_and_both_frozen_targets() {
         use super::super::canvas_worker_process_signals::worker_database_url;
@@ -927,6 +967,38 @@ mod tests {
     #[test]
     fn diagnostic_failure_mapping_is_exact_and_payload_free() {
         for (reason, expected) in [
+            (
+                "native expiry worker liveness failed",
+                Diagnostic::FailureWorkerLiveness,
+            ),
+            (
+                "native expiry worker exited early",
+                Diagnostic::FailureWorkerEarlyExit,
+            ),
+            (
+                "native expiry state query timed out",
+                Diagnostic::FailureStateQueryTimeout,
+            ),
+            (
+                "native expiry state query failed",
+                Diagnostic::FailureStateQuery,
+            ),
+            (
+                "native expiry snapshot timed out",
+                Diagnostic::FailureSnapshotTimeout,
+            ),
+            (
+                "native expiry snapshot panicked",
+                Diagnostic::FailureSnapshotPanic,
+            ),
+            (
+                "native expiry late response changed durable state",
+                Diagnostic::FailureLateState,
+            ),
+            (
+                "native expiry late window timed out",
+                Diagnostic::FailureLateTimeout,
+            ),
             (
                 "native expiry worker shutdown wait failed",
                 Diagnostic::FailureShutdownWait,
