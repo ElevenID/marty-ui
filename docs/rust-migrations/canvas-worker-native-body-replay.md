@@ -13,6 +13,25 @@ in 33.46s; Rust formatting and Python lint/format. Independent review found no
 remaining blockers after the post-join lease and writer-completion fixes.
 These results are not an actual configured Linux body replay.
 
+Integrated head `ca1dcf00b` reached the BODY preflight in
+[CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818),
+runtime job `102001699788`, but failed after 3.80s on the controller's import:
+`ModuleNotFoundError: No module named 'sqlalchemy'`. The header preflight had
+passed in 107.46s. No BODY provider request ran and no runtime mismatch was
+observed; later mixed/full groups were skipped. The repair provisions a separate
+Python 3.12 harness environment with a closed, pinned import-dependency set,
+checks actual controller import and frozen inputs, and only then exposes its
+interpreter to the Rust preflights/full groups. It does not change the immutable
+published worker environment or captured source. New hosted parity remains due.
+
+Repair validation: all 2,545 repository Python tests passed with three explicit
+skips in 165.37s. Seven new setup controls exercise the actual shell, failure
+ordering and isolated controller import; the combined focused run passed 26
+tests. A fresh environment containing only SQLAlchemy 2.0.52, greenlet 3.4.0
+and typing_extensions 4.15.0 passed the exact import/input smoke and `pip check`.
+Independent source review and Ruff passed. These are dependency/setup checks,
+not native body-parity results.
+
 ## Independent authority
 
 [The body capture record](canvas-worker-body-timeout-capture-plan.md) records

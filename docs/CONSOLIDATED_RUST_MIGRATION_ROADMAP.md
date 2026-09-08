@@ -57,8 +57,14 @@ input was pending; both cases then succeeded. Actual native expiry/lock-wait
 behavior remains unqualified and must not be inferred from this reference or
 used to weaken fences. Final local validation passed 2,538 Python tests with
 three explicit skips in 170.56s, Rust compilation in 17.83s and strict all-target
-Clippy in 8.55s. Fresh-head hosted CI remains pending; these local passes do not
-qualify actual native BODY or live-provider lease-expiry behavior.
+Clippy in 8.55s. Integrated head `ca1dcf00b` then failed
+[CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818):
+header parity passed in 107.46s, but BODY preflight stopped in 3.80s because
+the Rust job's Python environment lacked SQLAlchemy. No native BODY request
+ran; mixed/full configured suites were skipped. An isolated, pinned harness
+environment and import/input smoke check repair this setup boundary without
+changing runtime or frozen reference inputs. Fresh-head qualification is still
+required; local passes do not qualify actual BODY or live-provider expiry.
 
 Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
 preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).

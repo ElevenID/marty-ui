@@ -391,6 +391,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Prepare isolated Canvas worker harness dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/canvas-worker-harness"
+          # These import-only harness dependencies are separate from production
+          # services and the immutable published worker's own environment.
+          "$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install \
+            --disable-pip-version-check --only-binary=:all: --no-deps \
+            SQLAlchemy==2.0.52 greenlet==3.4.0 typing_extensions==4.15.0
+          "$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE" <<'PY'
+          from pathlib import Path
+          import sys
+          assert sys.version_info[:2] == (3, 12)
+          root = Path(sys.argv[1])
+          sys.path.insert(0, str(root / "scripts"))
+          import test_canvas_worker_body_timeout_https as controller
+          matrix, reports, responses = controller.load_inputs(root)
+          assert len(matrix["cases"]) == len(reports) == len(responses) == 6
+          print("Native Canvas BODY harness imports and frozen inputs verified")
+          PY
+          # Rust invokes python3 by name in preflights AND the full suite.
+          # Publish this interpreter only after both installation and smoke pass.
+          printf '%s\n' "$RUNNER_TEMP/canvas-worker-harness/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: 1.95.0

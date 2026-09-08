@@ -15,8 +15,12 @@ its first ordinary regeneration passed locally in **113.12s**, comparing the
 exact frozen bytes. All four fixture IDs were verified absent afterward.
 Final local validation passed **2,538 Python tests with three explicit skips in
 170.56s**, Rust compilation in **17.83s**, and strict all-target Clippy in
-**8.55s**. Current-head hosted CI remains pending; native BODY and live-provider
-expiry behavior remain unqualified.
+**8.55s**. Integrated head `ca1dcf00b` subsequently failed hosted
+[CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818)
+at BODY controller import because its Python environment lacked SQLAlchemy;
+later full suites were skipped. The isolated harness dependency repair still
+requires fresh-head CI. Native BODY and live-provider expiry behavior remain
+unqualified.
 
 | Case | Identical actual observations in A and B |
 | --- | --- |

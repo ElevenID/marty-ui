@@ -25,7 +25,13 @@ The corpus is frozen and its registered ordinary regeneration passed locally in
 113.12s with exact-byte equality; all four fixture IDs were verified absent.
 Final local validation passed 2,538 Python tests with three explicit skips in
 170.56s, Rust compilation in 17.83s and strict all-target Clippy in 8.55s.
-Current-head hosted CI and actual native BODY/expiry qualification remain pending.
+Integrated head `ca1dcf00b` failed
+[CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818)
+before native BODY replay: SQLAlchemy was missing in the Rust job's Python
+environment. Header parity passed in 107.46s; BODY setup failed in 3.80s and
+mixed/full suites were skipped. The isolated harness dependency setup repair
+does not change runtime or frozen inputs. Fresh-head CI and actual native
+BODY/expiry qualification remain required.
 Published queued renewal revived the lease
 after observed original expiry. This is not evidence of native lock-wait
 behavior or authorization to weaken native fences. PR #814 remains draft and
