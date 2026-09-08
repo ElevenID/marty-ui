@@ -275,6 +275,16 @@ impl UpstreamClient for CountedHttp {
             request.header("x-api-key"),
             Some("synthetic-operations-key")
         );
+        let tenants = request.query.get("organization_id").unwrap();
+        assert_eq!(tenants.len(), 1);
+        assert_eq!(
+            request.header("x-organization-id"),
+            Some(tenants[0].as_str())
+        );
+        if tenants[0] == "org-other" {
+            assert_eq!(request.header("x-api-key-id"), Some("trusted-key-id"));
+            assert_eq!(request.header("x-user-id"), Some("api_key:trusted-key-id"));
+        }
         self.http.send(instance, request).await
     }
 }
@@ -437,13 +447,10 @@ async fn request(
     router: &Router,
     case: &Value,
     auth: Option<(&str, &str)>,
+    tenant: &str,
     boundary: RequestBoundary,
 ) -> (u16, String, Value) {
-    let path = case["path"].as_str().unwrap();
-    let path = format!(
-        "{path}{}organization_id=org-review",
-        if path.contains('?') { "&" } else { "?" }
-    );
+    let path = tenant_path(case["path"].as_str().unwrap(), tenant);
     let mut builder = Request::builder()
         .method(case["method"].as_str().unwrap_or("GET"))
         .uri(path)
@@ -482,6 +489,20 @@ async fn request(
     (status, content_type, body)
 }
 
+fn tenant_path(path: &str, tenant: &str) -> String {
+    assert!(matches!(tenant, "org-review" | "org-other"));
+    assert!(!path.contains('#'));
+    let query = path.split_once('?').map_or("", |(_, query)| query);
+    assert!(
+        url::form_urlencoded::parse(query.as_bytes()).all(|(key, _)| key != "organization_id"),
+        "request must have exactly one explicit tenant query parameter"
+    );
+    format!(
+        "{path}{}organization_id={tenant}",
+        if path.contains('?') { "&" } else { "?" }
+    )
+}
+
 async fn raw_state(pool: &PgPool) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object(\
         'jobs',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM issuance_service.canvas_evidence_sync_jobs r),\
@@ -513,6 +534,151 @@ fn frozen_case(name: &str) -> (&'static Value, &'static Value) {
     (case, expected)
 }
 
+const MESSAGE_ID_SENTINEL: &str = "$gateway-message-id";
+
+fn public_error_expected(name: &str) -> (u16, Value) {
+    // Closed source-derived PUBLIC expectations, not a second generic normalizer.
+    // MMF b4376cda59b3921598e1749f550595d7293e4624 proxy.rs normalizes
+    // detail strings/objects, retaining detail.code under details. Array detail
+    // currently becomes the generic description with no details; this does not
+    // claim the public gateway preserves the direct Pydantic validation array.
+    let (status, description, code) = match name {
+        "job_foreign" | "job_missing" => (404, "Canvas synchronization job not found", None),
+        "review_foreign" => (
+            404,
+            "Canvas evidence correction review not found",
+            Some("canvas_review_not_found"),
+        ),
+        "review_dismiss_again" => (
+            409,
+            "Canvas evidence correction review is already resolved",
+            Some("canvas_review_already_resolved"),
+        ),
+        "jobs_invalid_status" => (422, "Invalid Canvas sync job status", None),
+        "review_invalid_action" => (422, "Downstream service request failed", None),
+        _ => panic!("unreviewed public error case"),
+    };
+    let (_, frozen) = frozen_case(name);
+    assert_eq!(frozen["status"], status);
+    assert_eq!(frozen["content_type"], "application/json");
+    if name == "review_invalid_action" {
+        assert!(frozen["body"]["detail"].is_array());
+    } else if let Some(code) = code {
+        assert_eq!(
+            frozen["body"],
+            json!({"detail":{"code":code,"message":description}})
+        );
+    } else {
+        assert_eq!(frozen["body"], json!({"detail":description}));
+    }
+    let mut expected = json!({"error":"service_error", "error_description":description,
+        "message_id":MESSAGE_ID_SENTINEL});
+    if let Some(code) = code {
+        expected["details"] = json!({"code":code});
+    }
+    (status, expected)
+}
+
+fn assert_public_error(actual: (u16, String, Value), name: &str) -> Value {
+    let (status, content_type, mut body) = actual;
+    let (expected_status, expected) = public_error_expected(name);
+    assert_eq!(status, expected_status);
+    assert_eq!(content_type, "application/json");
+    let message_id = body["message_id"].as_str().expect("public MIP message_id");
+    assert!(
+        uuid::Uuid::parse_str(message_id).is_ok(),
+        "public MIP message_id must be a UUID"
+    );
+    // The MIP UUID and the separately validated gateway request-header UUID
+    // have independent owners. Never require them to match or strip other data.
+    body["message_id"] = json!(MESSAGE_ID_SENTINEL);
+    assert!(
+        body == expected,
+        "public error differs from reviewed MIP envelope"
+    );
+    body
+}
+
+async fn unchanged_public_error(
+    pool: &PgPool,
+    router: &Router,
+    http: &CountedHttp,
+    case: &Value,
+    tenant: &str,
+    expected_name: &str,
+) -> Value {
+    let before = raw_state(pool).await;
+    let calls = http.counts();
+    assert_eq!(calls.1, 0);
+    let key = if tenant == "org-other" {
+        "actor-key-wrong-org"
+    } else {
+        "actor-key"
+    };
+    let actual = request(
+        router,
+        case,
+        Some(("x-api-key", key)),
+        tenant,
+        RequestBoundary::Forwarded,
+    )
+    .await;
+    let body = assert_public_error(actual, expected_name);
+    assert_eq!(
+        http.counts(),
+        (calls.0 + 1, 0),
+        "public error must reach native exactly once"
+    );
+    assert!(
+        raw_state(pool).await == before,
+        "public error changed durable state"
+    );
+    body
+}
+
+async fn public_error_cases(pool: &PgPool, router: &Router, http: &CountedHttp) {
+    // The query matches the authenticated foreign tenant; a gateway 403 cannot
+    // satisfy these controls. Seeded foreign and missing IDs must be publicly
+    // indistinguishable after validating their independent generated UUIDs.
+    let (foreign_job, _) = frozen_case("job_foreign");
+    let (missing_job, _) = frozen_case("job_missing");
+    let foreign =
+        unchanged_public_error(pool, router, http, foreign_job, "org-other", "job_foreign").await;
+    let missing =
+        unchanged_public_error(pool, router, http, missing_job, "org-other", "job_missing").await;
+    assert_eq!(foreign, missing);
+
+    let (foreign_review, _) = frozen_case("review_foreign");
+    let mut missing_review = foreign_review.clone();
+    // Only the object ID is changed; this is a missing-object counterpart, not
+    // an invented additional frozen observation or a different tenant contract.
+    missing_review["path"] =
+        json!("/v1/integrations/canvas/evidence-policy-reviews/missing/resolve");
+    let foreign = unchanged_public_error(
+        pool,
+        router,
+        http,
+        foreign_review,
+        "org-other",
+        "review_foreign",
+    )
+    .await;
+    let missing = unchanged_public_error(
+        pool,
+        router,
+        http,
+        &missing_review,
+        "org-other",
+        "review_foreign",
+    )
+    .await;
+    assert_eq!(foreign, missing);
+
+    for name in ["jobs_invalid_status", "review_invalid_action"] {
+        unchanged_public_error(pool, router, http, frozen_case(name).0, "org-review", name).await;
+    }
+}
+
 async fn frozen_matrix(pool: &PgPool, router: &Router) {
     let [shared, scenarios, _] = fixtures();
     let preserved: Value = sqlx::query_scalar(shared["preserved_rows_sql"].as_str().unwrap())
@@ -536,6 +702,7 @@ async fn frozen_matrix(pool: &PgPool, router: &Router) {
             router,
             case,
             Some(("cookie", "sessionId=actor-primary")),
+            "org-review",
             RequestBoundary::Forwarded,
         )
         .await;
@@ -582,9 +749,15 @@ async fn actor_cases(pool: &PgPool, router: &Router, http: &CountedHttp) {
         let before = raw_state(pool).await;
         let calls = http.counts();
         assert_eq!(
-            request(router, dismiss, auth, RequestBoundary::DeniedBeforeProxy)
-                .await
-                .0,
+            request(
+                router,
+                dismiss,
+                auth,
+                "org-review",
+                RequestBoundary::DeniedBeforeProxy
+            )
+            .await
+            .0,
             status
         );
         assert_eq!(http.counts(), calls, "denied request reached upstream");
@@ -610,8 +783,14 @@ async fn actor_cases(pool: &PgPool, router: &Router, http: &CountedHttp) {
         }
         let before = raw_state(pool).await;
         let case = json!({"method":"POST", "path":format!("/v1/integrations/canvas/evidence-policy-reviews/{id}/resolve"), "body":dismiss["body"]});
-        let (status, content_type, mut body) =
-            request(router, &case, Some(auth), RequestBoundary::Forwarded).await;
+        let (status, content_type, mut body) = request(
+            router,
+            &case,
+            Some(auth),
+            "org-review",
+            RequestBoundary::Forwarded,
+        )
+        .await;
         timestamps(&mut body);
         let mut expected_body = expected["body"].clone();
         // API identity and the second fixture ID are intentional gateway-input
@@ -686,8 +865,17 @@ async fn actor_cases(pool: &PgPool, router: &Router, http: &CountedHttp) {
             json!({"organization_id":"org-review", "review_id":id,
             "credential_id":"credential-review", "resolution_action":"dismiss", "resolved_by":actor})
         );
-        let duplicate = request(router, &case, Some(auth), RequestBoundary::Forwarded).await;
-        assert_eq!(duplicate.0, 409);
+        let calls = http.counts();
+        let duplicate = request(
+            router,
+            &case,
+            Some(auth),
+            "org-review",
+            RequestBoundary::Forwarded,
+        )
+        .await;
+        assert_public_error(duplicate, "review_dismiss_again");
+        assert_eq!(http.counts(), (calls.0 + 1, calls.1));
         assert!(
             raw_state(pool).await == after,
             "duplicate resolution changed raw state"
@@ -733,6 +921,7 @@ pub async fn run(pool: &PgPool, database_url: &str) {
             &published,
             case,
             Some(("cookie", "sessionId=actor-primary")),
+            "org-review",
             RequestBoundary::Forwarded,
         )
         .await;
@@ -747,8 +936,10 @@ pub async fn run(pool: &PgPool, database_url: &str) {
 
     let (candidate, candidate_http) = router(http_port, trap.port, Routing::CandidateNative);
     frozen_matrix(pool, &candidate).await;
+    public_error_cases(pool, &candidate, &candidate_http).await;
     actor_cases(pool, &candidate, &candidate_http).await;
-    assert_eq!(candidate_http.counts(), (11, 0)); // 7 routes + 2 dismiss + 2 duplicates.
+    // Seven positive routes, six public-error controls, two dismisses and duplicates.
+    assert_eq!(candidate_http.counts(), (17, 0));
     assert_eq!(trap.calls.load(Ordering::SeqCst), 8);
     assert!(
         child.0.try_wait().unwrap().is_none(),
@@ -762,6 +953,99 @@ pub async fn run(pool: &PgPool, database_url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tenant_query_is_explicit_unique_and_preserves_other_parameters() {
+        assert_eq!(
+            tenant_path("/jobs", "org-other"),
+            "/jobs?organization_id=org-other"
+        );
+        assert_eq!(
+            tenant_path("/jobs?status=invalid", "org-review"),
+            "/jobs?status=invalid&organization_id=org-review"
+        );
+        for path in [
+            "/jobs?organization_id=org-review",
+            "/jobs?organization_id=org-other&organization_id=org-review",
+            "/jobs?organization%5Fid=org-other",
+            "/jobs#fragment",
+        ] {
+            assert!(std::panic::catch_unwind(|| tenant_path(path, "org-other")).is_err());
+        }
+        assert!(std::panic::catch_unwind(|| tenant_path("/jobs", "unreviewed")).is_err());
+    }
+
+    #[test]
+    fn public_error_comparison_validates_uuid_and_preserves_exact_envelope() {
+        for name in [
+            "job_foreign",
+            "job_missing",
+            "review_foreign",
+            "review_dismiss_again",
+            "jobs_invalid_status",
+            "review_invalid_action",
+        ] {
+            let (status, expected) = public_error_expected(name);
+            let mut actual = expected.clone();
+            actual["message_id"] = json!("11111111-1111-4111-8111-111111111111");
+            assert_eq!(
+                assert_public_error((status, "application/json".into(), actual.clone()), name),
+                expected
+            );
+            let mut mutations = Vec::new();
+            for id in [
+                Value::Null,
+                json!(1),
+                json!("invalid"),
+                json!(MESSAGE_ID_SENTINEL),
+            ] {
+                let mut changed = actual.clone();
+                changed["message_id"] = id;
+                mutations.push(changed);
+            }
+            let mut missing_id = actual.clone();
+            missing_id.as_object_mut().unwrap().remove("message_id");
+            mutations.push(missing_id);
+            let mut extra = actual.clone();
+            extra["unexpected"] = json!(true);
+            mutations.push(extra);
+            let mut description = actual.clone();
+            description["error_description"] = json!("different");
+            mutations.push(description);
+            let mut details = actual.clone();
+            if details.get("details").is_some() {
+                details.as_object_mut().unwrap().remove("details");
+            } else {
+                details["details"] = json!({"unexpected":true});
+            }
+            mutations.push(details);
+            for changed in mutations {
+                assert!(std::panic::catch_unwind(|| assert_public_error(
+                    (status, "application/json".into(), changed),
+                    name
+                ))
+                .is_err());
+            }
+            assert!(std::panic::catch_unwind(|| assert_public_error(
+                (200, "application/json".into(), actual.clone()),
+                name
+            ))
+            .is_err());
+            assert!(std::panic::catch_unwind(|| assert_public_error(
+                (status, "text/plain".into(), actual),
+                name
+            ))
+            .is_err());
+        }
+        assert_eq!(
+            public_error_expected("job_foreign"),
+            public_error_expected("job_missing")
+        );
+        assert!(public_error_expected("review_invalid_action")
+            .1
+            .get("details")
+            .is_none());
+    }
 
     #[test]
     fn candidate_selection_changes_only_eight_real_route_destinations() {
