@@ -728,6 +728,13 @@
     ],
     "text_rules": [
       {
+        "id": "no-retired-python-webhook-signatures",
+        "glob": "services/common/webhook_signatures.py",
+        "pattern": "\\A",
+        "expected_matches": {},
+        "reason": "Unused helper retired after its two Python test contracts were frozen and passed in the native auth target using pinned mmf-push. All other event/HMAC tests remain. This does not claim universal Unicode/numeric canonicalization parity."
+      },
+      {
         "id": "no-retired-python-org-client-setup",
         "glob": "services/common/di.py",
         "pattern": "\\A",

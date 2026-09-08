@@ -26,6 +26,7 @@ def test_retired_helpers_cannot_return_even_as_empty_files(tmp_path: Path) -> No
     for filename, rule in (
         ("di.py", "no-retired-python-org-client-setup"),
         ("metrics.py", "no-retired-python-metrics-bootstrap"),
+        ("webhook_signatures.py", "no-retired-python-webhook-signatures"),
     ):
         source = source_root / filename
         for contents in ("", "def legacy_helper(): return True\n"):
