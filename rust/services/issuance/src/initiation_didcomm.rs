@@ -1559,6 +1559,12 @@ fn preflight_plaintext(
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod shared_fixtures {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/didcomm_test_fixtures.rs"
+        ));
+    }
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
@@ -1569,43 +1575,12 @@ mod tests {
         CredentialLifecycle, IssuerContext,
     };
     use chrono::{TimeZone, Utc};
-    use marty_didcomm::types::{Jwk, VerificationMethod};
     use serde_json::{Map, Value};
+    use shared_fixtures::{authcrypt_parties, recipient_document, SYNTHETIC_RECIPIENT_MULTIBASE};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         sync::Notify,
     };
-
-    fn recipient_document() -> DidDocument {
-        let did = "did:example:holder";
-        let key_id = format!("{did}#key-1");
-        DidDocument {
-            id: did.to_owned(),
-            context: serde_json::Value::Null,
-            authentication: Vec::new(),
-            assertion_method: Vec::new(),
-            key_agreement: vec![json!(key_id)],
-            verification_method: vec![VerificationMethod {
-                id: key_id,
-                r#type: "JsonWebKey2020".to_owned(),
-                controller: did.to_owned(),
-                public_key_jwk: Some(Jwk {
-                    kty: "OKP".to_owned(),
-                    crv: Some("X25519".to_owned()),
-                    x: Some(URL_SAFE_NO_PAD.encode([7_u8; 32])),
-                    y: None,
-                    d: None,
-                    kid: None,
-                    additional_properties: serde_json::Map::new(),
-                }),
-                public_key_multibase: None,
-                public_key_base58: None,
-                additional_properties: serde_json::Map::new(),
-            }],
-            service: Vec::new(),
-            additional_properties: serde_json::Map::new(),
-        }
-    }
 
     fn policy_file(contents: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -1615,57 +1590,6 @@ mod tests {
         std::fs::write(&path, contents).unwrap();
         path
     }
-
-    fn authcrypt_parties() -> (DidDocument, [u8; 32], DidDocument, [u8; 32]) {
-        // Public values independently derived from the synthetic repeated-byte
-        // secrets. Production envelope/key binding remains entirely in Core.
-        let document = |did: &str, public_hex: &str| {
-            let mut document = recipient_document();
-            document.id = did.to_owned();
-            let key_id = format!("{did}#key-1");
-            document.key_agreement = vec![json!(key_id)];
-            document.verification_method[0].id = key_id;
-            document.verification_method[0].controller = did.to_owned();
-            document.verification_method[0]
-                .public_key_jwk
-                .as_mut()
-                .unwrap()
-                .x = Some(URL_SAFE_NO_PAD.encode(hex::decode(public_hex).unwrap()));
-            // The managed resolver also requires an authentication/assertion
-            // relationship; use a separate synthetic signing key, not X25519.
-            let mut signing_method = document.verification_method[0].clone();
-            signing_method.id = format!("{did}#signing-1");
-            let signing_jwk = signing_method.public_key_jwk.as_mut().unwrap();
-            signing_jwk.crv = Some("Ed25519".to_owned());
-            signing_jwk.x = Some(
-                URL_SAFE_NO_PAD.encode(
-                    ed25519_dalek::SigningKey::from_bytes(&[11_u8; 32])
-                        .verifying_key()
-                        .to_bytes(),
-                ),
-            );
-            document.assertion_method = vec![json!(signing_method.id)];
-            document.verification_method.push(signing_method);
-            document
-        };
-        (
-            document(
-                "did:web:issuer.example",
-                "57db4b359f23ae5e146e4e2512056704722506348c150c14753d0c933d04d421",
-            ),
-            [9_u8; 32],
-            document(
-                "did:example:holder",
-                "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d",
-            ),
-            [7_u8; 32],
-        )
-    }
-
-    // Base58btc of the X25519 multicodec prefix EC01 and authcrypt_parties'
-    // synthetic recipient public key. Both tests verify its decoded key through
-    // canonical Core; no local multibase/resolver implementation is introduced.
-    const SYNTHETIC_RECIPIENT_MULTIBASE: &str = "z6LSd1FDxqS6PDoWwxco3fnM3DGEuXyse6pr7uRRYamJDqit";
 
     fn assert_embedded_key_binding(document: &DidDocument, did: &str, expected_key: [u8; 32]) {
         assert_eq!(document.id, did);
