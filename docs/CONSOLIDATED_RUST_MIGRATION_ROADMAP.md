@@ -141,6 +141,14 @@ delivery/atomicity tests and 21 DIDComm unit tests. These are not actual-wallet
 or PostgreSQL cutover acceptance. Public error/state/retry reconciliation,
 resolver capability qualification, full two-mode delivery and consumer routing
 remain before Python retirement. No KMS implementation or dependency pin changed.
+The subsequent tests-only `4fa4c3b5c` adds real canonical-Core authcrypt
+encryption/authenticated-decryption after a policy flip and resolver shutdown,
+plus wrong-sender rejection without anoncrypt fallback. All 23 combined DIDComm
+unit tests passed at that head; the author also passed strict scoped Clippy.
+The first positive test exposed an incomplete synthetic DID document; adding
+its required separate signing relationship fixed the fixture without changing
+production crypto. This roundtrip is not independent-wallet/full-service
+acceptance and does not close the deferred KMS correction.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub
