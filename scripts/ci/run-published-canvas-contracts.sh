@@ -113,6 +113,7 @@ fi
 "${executables[0]}" --list | grep -Fx 'status_provider_matches_frozen_protocol: test'
 "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'
 "${executables[0]}" --list | grep -Fx 'status_runtime_composes_review_resolution_with_configured_http: test'
+"${executables[0]}" --list | grep -Fx 'status_main_process_resolves_reviews_with_real_http_publication_and_mirror: test'
 "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_unicode_failures_and_recovery: test'
 "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_charset_failures_and_recovery: test'
 "${executables[0]}" --list | grep -Fx 'status_runtime_preserves_iso2022_failures_and_recovery: test'
