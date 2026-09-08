@@ -16,6 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE = "docker-compose.selfhost.prod.yml"
 BUNDLE = "docker-compose.selfhost.bundle.override.yml"
 WORKER = "canvas-sync-worker"
+NATIVE_WORKER = "/usr/local/bin/marty-canvas-sync-worker"
+NATIVE_LOADER = ". /app/load-secrets-env.sh\nexec " + NATIVE_WORKER + "\n"
+GHCR_WORKER_IMAGE = (
+    "${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}"
+)
 DEVELOPMENT_BASE = "docker-compose.base.yml"
 CONFORMANCE_PROJECT = "marty-conformance-worker-config"
 BETA_WORKER_ENVIRONMENT = {
@@ -42,6 +47,10 @@ def assert_shared_rust_services(base, bundle):
     assert "/services:${SELFHOST_IMAGE_TAG:?" in anchor["image"]
     checked = []
     for name, original in base["services"].items():
+        if name == WORKER:
+            # Its explicit headless/secret-loader launch has its own complete
+            # model comparison in assert_worker_preserved, called by run().
+            continue
         build = original.get("build", {})
         dockerfile = build.get("dockerfile")
         if dockerfile == "services/Dockerfile":
@@ -138,15 +147,11 @@ def assert_published_issuance_preserved(base, bundle):
 
 def assert_worker_preserved(base, bundle):
     original = base["services"][WORKER]
-    assert original["image"].startswith("${MARTY_ISSUANCE_IMAGE:?"), (
-        "Unqualified worker must retain the immutable published issuance image"
-    )
+    assert original["build"]["dockerfile"] == "services/Dockerfile"
+    assert original["build"]["args"]["SERVICE_NAME"] == WORKER
     assert original["entrypoint"] == ["/bin/sh", "-c"]
-    assert len(original["command"]) == 1
-    assert original["command"][0].splitlines() == [
-        ". /app/load-secrets-env.sh",
-        "exec python -m issuance.canvas_worker",
-    ]
+    assert original["command"] == [NATIVE_LOADER]
+    assert "CANVAS_SYNC_PROCESSOR" not in environment_mapping(original["environment"])
     assert original["healthcheck"] == {"disable": True}
     assert not original.get("ports")
     assert original["restart"] == "unless-stopped"
@@ -159,13 +164,34 @@ def assert_worker_preserved(base, bundle):
     # Compare the entire rendered worker, not selected fields: this also guards
     # file-secret bindings, source paths, URL-template escaping, configuration,
     # networks, and future additions against unintended bundle overrides.
-    assert_inherited_service(base, bundle, WORKER)
+    expected = shared_worker_model(
+        original, bundle["x-selfhost-service-image"]["image"]
+    )
+    observed = deepcopy(bundle["services"][WORKER])
+    observed["environment"] = environment_mapping(observed.get("environment", {}))
+    assert observed == expected, (
+        "Bundle must preserve complete native worker definition"
+    )
 
 
-def assert_consumer_worker(base, actual, name, *, isolated=False, beta=False):
-    """Only the reviewed container-name reset and beta gRPC token may differ."""
+def shared_worker_model(original, image):
+    """Explicit selection delta; preserve every remaining runtime field."""
+    expected = deepcopy(original)
+    expected.pop("build", None)
+    expected.update(image=image, pull_policy="always")
+    expected["environment"] = environment_mapping(expected.get("environment", {}))
+    expected["environment"]["SERVICE_NAME"] = "canvas_sync_worker"
+    return expected
+
+
+def assert_consumer_worker(
+    base, actual, name, *, isolated=False, beta=False, shared_image=None
+):
+    """Only declared native artifact, isolation and beta-token deltas may differ."""
     expected = deepcopy(base["services"][WORKER])
     expected["environment"] = environment_mapping(expected.get("environment", {}))
+    if shared_image is not None:
+        expected = shared_worker_model(expected, shared_image)
     if isolated:
         expected.pop("container_name", None)
     if beta:
@@ -180,20 +206,19 @@ def assert_consumer_worker(base, actual, name, *, isolated=False, beta=False):
         or observed[field] != expected[field]
     )
     assert observed == expected, (
-        f"Consumer must preserve complete Python worker: {name}; "
+        f"Consumer must preserve complete native worker: {name}; "
         f"differing fields: {', '.join(differences)}"
     )
 
 
 def assert_base_worker_selection(base):
     worker = base["services"][WORKER]
-    assert worker["image"].startswith("${MARTY_ISSUANCE_IMAGE:?")
-    assert worker["image"] == base["services"]["issuance-migrations"]["image"]
-    assert worker["command"] == ["python", "-m", "issuance.canvas_worker"]
+    assert "image" not in worker
+    assert worker["build"]["dockerfile"] == "services/Dockerfile"
+    assert environment_mapping(worker["build"]["args"])["SERVICE_NAME"] == WORKER
+    assert worker["command"] == [NATIVE_WORKER]
     assert not worker.get("entrypoint")
-    assert worker["environment"]["CANVAS_SYNC_PROCESSOR"] == (
-        "${CANVAS_SYNC_PROCESSOR:-issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target}"
-    )
+    assert "CANVAS_SYNC_PROCESSOR" not in environment_mapping(worker["environment"])
     assert worker["healthcheck"] == {"disable": True}
     assert not worker.get("ports")
     assert worker["restart"] == "unless-stopped"
@@ -332,13 +357,17 @@ def assert_consumer_matrix(renderer=None):
         model = renderer(
             *case["files"], profiles=case["profiles"], project=CONFORMANCE_PROJECT
         )
-        assert_consumer_worker(base, model, case["name"], isolated=True)
+        shared_image = consumer_shared_image(case["files"], model)
+        assert_consumer_worker(
+            base, model, case["name"], isolated=True, shared_image=shared_image
+        )
         assert_conformance_isolation(model)
         checked.append(case["name"])
     for case in catalog_cases():
         original = renderer(case["files"][0])
         model = renderer(*case["files"], profiles=case["profiles"])
-        assert_consumer_worker(original, model, case["name"])
+        shared_image = consumer_shared_image(case["files"], model)
+        assert_consumer_worker(original, model, case["name"], shared_image=shared_image)
         checked.append(
             case["name"]
             + (
@@ -358,6 +387,20 @@ def assert_consumer_matrix(renderer=None):
     return checked
 
 
+def consumer_shared_image(files, model):
+    if "docker-compose.profile.ghcr.yml" in files:
+        image = model["x-service-image"]["image"]
+        assert image == GHCR_WORKER_IMAGE, (
+            "GHCR worker must select the services artifact"
+        )
+        return image
+    if BUNDLE in files:
+        image = model["x-selfhost-service-image"]["image"]
+        assert "/services:${SELFHOST_IMAGE_TAG:?" in image
+        return image
+    return None
+
+
 def run(suite="bundle", compose_command=None):
     if suite not in {"bundle", "consumers"}:
         raise ValueError("Unknown Compose gate suite")
@@ -369,7 +412,7 @@ def run(suite="bundle", compose_command=None):
     if suite == "consumers":
         consumers = assert_consumer_matrix(renderer)
         print(
-            f"Canvas consumer matrix preserves complete Python worker definitions in {len(consumers)} conformance/catalog/beta compositions (configuration only)"
+            f"Canvas consumer matrix preserves complete native worker definitions in {len(consumers)} conformance/catalog/beta compositions (configuration only)"
         )
         return
     # Keep the installed/older Compose bundle qualification independent from
@@ -379,7 +422,7 @@ def run(suite="bundle", compose_command=None):
     assert_published_issuance_preserved(base, bundle)
     converted = assert_shared_rust_services(base, bundle)
     print(
-        "Self-host bundle preserves immutable issuance API, migrations and Canvas worker"
+        "Self-host bundle preserves immutable issuance API/migrations and complete native Canvas worker"
     )
     print(
         f"Self-host bundle preserves all {len(converted)} converted Rust service definitions"

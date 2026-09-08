@@ -26,7 +26,7 @@ VERIFICATION_DIGEST = "sha256:" + "c" * 64
 RETAGGED_VERIFICATION_DIGEST = "sha256:" + "d" * 64
 ISSUANCE_IMAGE = "synthetic.invalid/issuance@" + ISSUANCE_DIGEST
 SERVICES_IMAGE = "synthetic.invalid/services@" + SERVICES_DIGEST
-EXTERNAL = frozenset({"issuance", "canvas-sync-worker"})
+EXTERNAL = frozenset({"issuance"})
 
 HARNESS = r"""
 param([string]$Source, [string]$Runner, [string]$InputPath)
@@ -359,7 +359,7 @@ def run(compose_command=None, powershell=None):
             if (
                 len(names) != 19
                 or len(set(names)) != 19
-                or len(set(names) - EXTERNAL) != 17
+                or len(set(names) - EXTERNAL) != 18
             ):
                 raise AssertionError("Review changed application image inventory")
             overlay = directory / f"{mode}-images.yml"

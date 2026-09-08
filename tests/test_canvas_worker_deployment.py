@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PROCESSOR = (
     "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target"
 )
+NATIVE_WORKER = "/usr/local/bin/marty-canvas-sync-worker"
+NATIVE_LOADER = ". /app/load-secrets-env.sh\nexec " + NATIVE_WORKER + "\n"
 
 
 def _yaml(path: str):
@@ -32,7 +34,17 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         worker = services["canvas-sync-worker"]
 
         assert "canvas_worker" not in str(api.get("command", ""))
-        assert "issuance.canvas_worker" in str(worker["command"])
+        assert worker["command"] == (
+            [NATIVE_LOADER]
+            if path == "docker-compose.selfhost.prod.yml"
+            else [NATIVE_WORKER]
+        )
+        assert worker.get("entrypoint") == (
+            ["/bin/sh", "-c"] if path == "docker-compose.selfhost.prod.yml" else None
+        )
+        assert worker["build"]["dockerfile"] == "services/Dockerfile"
+        assert worker["build"]["args"]["SERVICE_NAME"] == "canvas-sync-worker"
+        assert "image" not in worker
         assert worker["healthcheck"] == {"disable": True}
         assert "ports" not in worker
         assert (
@@ -92,11 +104,14 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         ):
             assert private_key_setting not in environment
             assert private_key_setting not in api_environment
-        assert PROCESSOR in environment["CANVAS_SYNC_PROCESSOR"]
+        assert "CANVAS_SYNC_PROCESSOR" not in environment
+        assert environment["SERVICE_NAME"] == "canvas_sync_worker"
         assert "CANVAS_SYNC_WORKER_POLL_SECONDS" in environment
 
 
-def test_unrouted_rust_candidate_is_packaged_without_changing_consumers() -> None:
+def test_native_worker_consumers_select_the_packaged_binary_without_changing_api() -> (
+    None
+):
     cargo = (ROOT / "rust/services/issuance/Cargo.toml").read_text(encoding="utf-8")
     worker = (ROOT / "rust/services/issuance/src/bin/canvas_sync_worker.rs").read_text(
         encoding="utf-8"
@@ -119,12 +134,12 @@ def test_unrouted_rust_candidate_is_packaged_without_changing_consumers() -> Non
         assert "--bin marty-canvas-sync-worker" in dockerfile
         assert "target/release/marty-canvas-sync-worker" in dockerfile
 
-    # Candidate packaging is not a cutover: every production consumer remains
-    # on the Python oracle until the frozen differential/deletion gates pass.
+    # Explicit staged consumer selection; immutable Python evidence and the
+    # independently released issuance API/migrations remain untouched.
     for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
         worker = _yaml(path)["services"]["canvas-sync-worker"]
-        assert "issuance.canvas_worker" in str(worker["command"])
-        assert PROCESSOR in worker["environment"]["CANVAS_SYNC_PROCESSOR"]
+        assert NATIVE_WORKER in str(worker["command"])
+        assert "CANVAS_SYNC_PROCESSOR" not in worker["environment"]
 
 
 def test_deployments_migrate_issuance_from_the_released_credentials_image() -> None:
@@ -179,8 +194,17 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     )
     container = worker["spec"]["template"]["spec"]["containers"][0]
 
-    assert container["command"] == ["python"]
-    assert container["args"] == ["-m", "issuance.canvas_worker"]
+    assert container["command"] == [NATIVE_WORKER]
+    assert not container.get("args")
+    assert (
+        container["image"]
+        == "${OCIR_REGISTRY}/marty-ui/canvas-sync-worker:${IMAGE_TAG}"
+    )
+    literals = {
+        item["name"]: item["value"] for item in container["env"] if "value" in item
+    }
+    assert literals["CANVAS_SYNC_PROCESSOR"] == ""
+    assert literals["SERVICE_NAME"] == "canvas_sync_worker"
     assert "ports" not in container
     assert container["envFrom"] == [{"configMapRef": {"name": "marty-config"}}]
     secret_names = {
@@ -216,9 +240,7 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     )["value"] == ("http://gateway:8000/internal/signing-keys")
 
 
-@pytest.mark.parametrize(
-    "service", ["canvas-sync-worker", "issuance", "issuance-migrations"]
-)
+@pytest.mark.parametrize("service", ["issuance", "issuance-migrations"])
 def test_selfhost_bundle_does_not_override_unqualified_services(service) -> None:
     # Parse nodes rather than pretending Compose's !reset is ordinary YAML.
     # The executable rendering gate separately tests actual Compose merging.
@@ -269,9 +291,16 @@ def test_ci_executes_real_compose_worker_merge_gate() -> None:
 def test_bundle_worker_comparison_preserves_every_field(compose_worker_gate, field):
     base = _yaml("docker-compose.selfhost.prod.yml")
     bundle = deepcopy(base)
+    bundle["x-selfhost-service-image"] = {
+        "image": "synthetic-rust-services-image",
+        "pull_policy": "always",
+    }
+    bundle["services"]["canvas-sync-worker"] = compose_worker_gate[
+        "shared_worker_model"
+    ](base["services"]["canvas-sync-worker"], "synthetic-rust-services-image")
     worker = bundle["services"]["canvas-sync-worker"]
     if field == "image":
-        worker[field] = "synthetic-rust-services-image"
+        worker[field] = "synthetic-wrong-services-image"
     elif field == "environment":
         worker[field]["SERVICE_NAME"] = "issuance_native"
     elif field == "secrets":
@@ -284,7 +313,7 @@ def test_bundle_worker_comparison_preserves_every_field(compose_worker_gate, fie
     if field is None:
         compare(base, bundle)
     else:
-        with pytest.raises(AssertionError, match="complete unqualified Python"):
+        with pytest.raises(AssertionError, match="complete native worker"):
             compare(base, bundle)
 
 
@@ -416,7 +445,7 @@ def test_consumer_comparison_preserves_complete_worker_with_only_reviewed_differ
         changed["environment"].update(compose_worker_gate["BETA_WORKER_ENVIRONMENT"])
     if field is not None:
         if field == "environment":
-            changed[field].pop("CANVAS_SYNC_PROCESSOR")
+            changed[field].pop("SERVICE_NAME")
         elif field == "secrets":
             changed[field] = []
         else:
@@ -432,7 +461,7 @@ def test_consumer_comparison_preserves_complete_worker_with_only_reviewed_differ
         )
     else:
         with pytest.raises(
-            AssertionError, match="preserve complete Python worker"
+            AssertionError, match="preserve complete native worker"
         ) as caught:
             compare(
                 base,
@@ -455,7 +484,7 @@ def test_beta_environment_list_is_semantically_compared_without_dropping_fields(
     environment.update(compose_worker_gate["BETA_WORKER_ENVIRONMENT"])
     values = [f"{name}={value}" for name, value in environment.items()]
     if invalid:
-        values.append("CANVAS_SYNC_PROCESSOR=unexpected-duplicate")
+        values.append("SERVICE_NAME=unexpected-duplicate")
     model["services"]["canvas-sync-worker"]["environment"] = values
     if invalid:
         with pytest.raises(AssertionError):
@@ -708,7 +737,13 @@ def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_own
 
     def renderer(*files, **options):
         renders.append((files, options))
-        return {"networks": {"marty-network": {"name": "elevenid-beta-network"}}}
+        return {
+            "networks": {"marty-network": {"name": "elevenid-beta-network"}},
+            "x-service-image": {"image": compose_worker_gate["GHCR_WORKER_IMAGE"]},
+            "x-selfhost-service-image": {
+                "image": "synthetic/services:${SELFHOST_IMAGE_TAG:?required}"
+            },
+        }
 
     def unexpected(*args):
         pytest.fail("Consumer suite must not silently replace the older bundle owner")
@@ -740,6 +775,25 @@ def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_own
         for _, options in renders
     )
     assert "15 conformance/catalog/beta compositions" in capsys.readouterr().out
+
+
+def test_ghcr_worker_and_anchor_cannot_be_swapped_to_python_together(
+    compose_worker_gate,
+):
+    image = compose_worker_gate["GHCR_WORKER_IMAGE"]
+    model = {
+        "x-service-image": {"image": image},
+        "services": {"canvas-sync-worker": {"image": image}},
+    }
+    owner = compose_worker_gate["consumer_shared_image"]
+    files = ["docker-compose.base.yml", "docker-compose.profile.ghcr.yml"]
+    assert owner(files, model) == image
+    wrong = "${MARTY_ISSUANCE_IMAGE:?private-wrong-artifact}"
+    model["x-service-image"]["image"] = wrong
+    model["services"]["canvas-sync-worker"]["image"] = wrong
+    with pytest.raises(AssertionError, match="services artifact") as error:
+        owner(files, model)
+    assert wrong not in str(error.value)
 
 
 @pytest.mark.parametrize("prefix", ["docker compose", [], [""], [1]])
@@ -835,7 +889,10 @@ def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:
     service = catalog.services["canvas-sync-worker"]
     assert service["compose_service"] == "canvas-sync-worker"
     assert service["k8s_deployment"] == "canvas-sync-worker"
-    assert service["image_name"] == "issuance"
+    assert service["image_name"] == "canvas-sync-worker"
+    assert service["dockerfile"] == "services/Dockerfile"
+    assert service["context"] == "."
+    assert service["service_name_env"] == "canvas_sync_worker"
     assert service["group"] == "app"
     assert "canvas-sync-worker" in catalog.service_groups["app"]
 
@@ -878,11 +935,8 @@ def test_kubernetes_canvas_worker_configuration_includes_safe_defaults() -> None
     assert config["CANVAS_SYNC_WORKER_POLL_SECONDS"] == "5"
 
 
-def test_production_preflight_requires_a_configured_canvas_worker_processor() -> None:
-    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
-    validate = namespace["validate_selfhost_canvas_public_config"]
-    check_error = namespace["CheckError"]
-    enabled = {
+def selfhost_canvas_environment():
+    return {
         "CANVAS_PORTABLE_INTEGRATION_ENABLED": "true",
         "CANVAS_LTI_EXPERIENCE_BASE_URL": "https://marty.example.com",
         "CANVAS_PILOT_ORGANIZATION_IDS": "org-pilot",
@@ -899,6 +953,12 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
         "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "600",
     }
 
+
+def test_production_preflight_requires_a_configured_canvas_worker_processor() -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    validate = namespace["validate_selfhost_canvas_public_config"]
+    check_error = namespace["CheckError"]
+    enabled = selfhost_canvas_environment()
     with pytest.raises(check_error, match="CANVAS_SYNC_PROCESSOR"):
         validate(enabled)
 
@@ -958,3 +1018,91 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
         }
     )
     assert "CANVAS_LTI_TOOL_ISSUER_DID" in configured
+
+
+@pytest.mark.parametrize("with_model", [False, True])
+def test_legacy_selfhost_null_processor_fails_closed(with_model):
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    env = {**selfhost_canvas_environment(), "CANVAS_SYNC_PROCESSOR": None}
+    worker = {
+        "command": ["python", "-m", "issuance.canvas_worker"],
+        "environment": {"CANVAS_SYNC_PROCESSOR": None},
+    }
+    with pytest.raises(namespace["CheckError"]):
+        namespace["validate_selfhost_canvas_public_config"](
+            env, worker if with_model else None
+        )
+
+
+def test_native_selfhost_model_skips_only_python_callback_requirement():
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    validate = namespace["validate_selfhost_canvas_public_config"]
+    env = selfhost_canvas_environment()
+    worker = {
+        "entrypoint": ["/bin/sh", "-c"],
+        "command": [NATIVE_LOADER],
+        "environment": {
+            "SERVICE_NAME": "canvas_sync_worker",
+            "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
+            "DATABASE_URL_TEMPLATE": "postgresql://worker:{{DB_PASSWORD}}@postgres/worker",
+        },
+    }
+    validate(env, worker)
+    changed = deepcopy(worker)
+    changed["environment"]["CANVAS_SYNC_PROCESSOR"] = PROCESSOR
+    with pytest.raises(namespace["CheckError"]):
+        validate(env, changed)
+    changed = deepcopy(worker)
+    changed["entrypoint"] = None
+    changed["command"] = [NATIVE_WORKER]
+    with pytest.raises(namespace["CheckError"]):
+        validate(env, changed)
+    without_inventory = dict(env)
+    del without_inventory["CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS"]
+    with pytest.raises(namespace["CheckError"], match="must inventory"):
+        validate(without_inventory, worker)
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "command", "json", "missing", "duplicate-env"]
+)
+def test_selfhost_wrapper_reads_actual_config_model_and_never_echoes_expanded_secrets(
+    monkeypatch, failure
+):
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    wrapper = namespace["validate_selfhost_canvas_configuration"]
+    calls = []
+    worker = {
+        "entrypoint": ["/bin/sh", "-c"],
+        "command": [NATIVE_LOADER],
+        "environment": {"SERVICE_NAME": "canvas_sync_worker"},
+    }
+    if failure == "duplicate-env":
+        worker["environment"] = [
+            "SERVICE_NAME=canvas_sync_worker",
+            "SERVICE_NAME=private-value",
+        ]
+    model = {"services": {"canvas-sync-worker": worker}} if failure != "missing" else {}
+
+    def compose(*args):
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            [],
+            1 if failure == "command" else 0,
+            "private-expanded-secret" if failure == "json" else json.dumps(model),
+            "private-expanded-secret",
+        )
+
+    monkeypatch.setitem(wrapper.__globals__, "run_compose_command", compose)
+    arguments = (
+        selfhost_canvas_environment(),
+        Path("synthetic.env"),
+        Path("synthetic.yml"),
+    )
+    if failure is None:
+        wrapper(*arguments)
+    else:
+        with pytest.raises(namespace["CheckError"]) as error:
+            wrapper(*arguments)
+        assert "private-" not in str(error.value)
+    assert calls == [(arguments[1], arguments[2], "config", "--format", "json")]

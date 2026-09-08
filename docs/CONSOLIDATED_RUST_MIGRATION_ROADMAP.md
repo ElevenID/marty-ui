@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: latest qualified head `2d864723f` passed complete CI, including 146 configured published-schema tests and four worker/PostgreSQL tests, all four native header-timeout HTTPS cases and seven mixed-roster stages with 55 HTTPS requests. New native BODY/live-provider-expiry qualification and whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: latest fully qualified composed head `2d864723f` passed complete CI, including 146 configured published-schema tests and four worker/PostgreSQL tests. Current `afc8bd754` has passed native header, live-provider-expiry and BODY preflights; full current-head qualification remains running. Coordinated native consumer selection is prepared on a separate unmerged branch, not deployed. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -30,6 +30,36 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
 ## Current execution snapshot — 2026-09-08
+
+Draft PR #814 at `afc8bd754` is running
+[CI34223397680](https://github.com/ElevenID/marty-ui/actions/runs/34223397680).
+Runtime job `102051657514` passed the header, lease-expiry and BODY preflight
+steps; mixed-roster and broader qualification are not inferred from those passes.
+The combined local Python suite passed **2,723 tests with three skips** in
+211.04s. A subsequent reviewed real-PostgreSQL warning regression passed in
+7.06s with Clippy passing, and is retained in unpushed `ccedce2f2`.
+
+The separate `feat/canvas-worker-native-consumer-cutover-v1` branch prepares
+all worker image/launch mappings, native-aware operational validators and full
+configuration preservation tests. The final local suite passed 2,821 tests with
+three skips; the 15-consumer, five-generated and 24-rollback model gates passed.
+Independent source/test review passed, but revealed a remaining Kubernetes
+issuance image-binding gap: image-only updates must preserve the external API,
+and full manifests must bind API and migrations to one validated immutable
+artifact. This repair and merge remain pending. Local beta builds now include the worker's own artifact
+(18 builds, 19 services); Kubernetes uses the per-service tag its publisher
+actually builds. Python issuance/migrations, both rollback runtimes and every
+non-selection setting remain required. See the
+[staged consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md#staged-native-consumer-selection-2026-09-08).
+No consumer preparation authorizes source deletion, main merge or deployment.
+
+Cleanup also found unique unmerged UI key-custody work in `827ab777b` on local
+main and the security branch. Both references are preserved. Backend
+`key_reference` contract proof and ownership handoff must precede its port; mock
+UI tests alone do not establish compatibility. See the
+[preservation hold](rust-migrations/marty-ui-worktree-cleanup-inventory-2026-09-07.md#ui-preservation-and-compatibility-hold-2026-09-08).
+
+### Earlier preparation checkpoints (historical)
 
 The eight operations handlers are now composed into the native executable with
 one shared credential lifecycle service; gateway routing remains unchanged.
@@ -61,7 +91,7 @@ mandatory generated-overlay CI gate was added. See the
 Worker BODY/expiry qualification, composed operations lifecycle gates, actual
 consumer switching and beta acceptance remain separate unfinished work.
 
-### Current transport integration and merge gates
+### Historical transport integration and merge gates
 
 The application REST repair at `2d864723f74831d4338e1686c242b1bad534a4b9`
 is on draft PR #814. [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184)

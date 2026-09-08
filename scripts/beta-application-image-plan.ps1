@@ -12,7 +12,7 @@ function New-BetaApplicationImagePlan {
     )
 
     foreach ($service in $Services) {
-        $externalIssuance = $service -in @("issuance", "canvas-sync-worker")
+        $externalIssuance = $service -eq "issuance"
         $selectorPresent = $OfficialStackRelease -and -not $externalIssuance
         $imageExpression = if ($externalIssuance) { '${MARTY_ISSUANCE_IMAGE}' }
             elseif ($OfficialStackRelease) { '${MARTY_SERVICES_IMAGE}' }

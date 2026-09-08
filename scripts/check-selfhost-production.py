@@ -19,10 +19,12 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "packages"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from marty_common.migration_profile import normalize_migration_profile  # pylint: disable=import-error
-from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID  # pylint: disable=import-error
-from marty_devops import DeploymentCatalog  # pylint: disable=import-error
+from canvas_worker_runtime import classify_worker_launch  # noqa: E402
+from marty_common.migration_profile import normalize_migration_profile  # noqa: E402
+from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID  # noqa: E402
+from marty_devops import DeploymentCatalog  # noqa: E402
 
 
 class CheckError(RuntimeError):
@@ -529,7 +531,9 @@ def _validate_public_https_url(value: str, *, label: str) -> str:
     return _public_dns_host(parsed.hostname, label=label)
 
 
-def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
+def validate_selfhost_canvas_public_config(
+    env_values: dict[str, str], worker_service: dict[str, Any] | None = None,
+) -> str:
     checked: list[str] = []
     for key in (
         "PUBLIC_API_URL",
@@ -636,12 +640,23 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
             seen_kids.add(kid)
         if active_kid not in seen_kids:
             raise CheckError("CANVAS_LTI_TOOL_ACTIVE_KID must identify a key in CANVAS_LTI_TOOL_PUBLIC_JWKS.")
-        processor = env_values.get("CANVAS_SYNC_PROCESSOR", "").strip()
-        module_name, separator, function_name = processor.partition(":")
-        if not separator or not module_name or not function_name:
-            raise CheckError(
-                "CANVAS_SYNC_PROCESSOR must use module:function syntax when portable Canvas is enabled."
+        runtime = "python"
+        processor_environment = env_values
+        if worker_service is not None:
+            processor_environment = worker_service.get("environment", {})
+            runtime = classify_worker_launch(
+                worker_service.get("entrypoint"), worker_service.get("command"),
+                processor_environment,
             )
+            if runtime is None:
+                raise CheckError("Canvas worker launch must select a reviewed native or Python runtime.")
+        if runtime == "python":
+            processor = (processor_environment.get("CANVAS_SYNC_PROCESSOR") or "").strip()
+            module_name, separator, function_name = processor.partition(":")
+            if not separator or not module_name or not function_name:
+                raise CheckError(
+                    "CANVAS_SYNC_PROCESSOR must use module:function syntax when portable Canvas is enabled."
+                )
         if env_values.get("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS", "").strip() != "600":
             raise CheckError(
                 "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS must be 600 when portable Canvas is enabled."
@@ -651,7 +666,7 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
                 "CANVAS_PORTABLE_INTEGRATION_ENABLED",
                 "CANVAS_PILOT_ORGANIZATION_IDS",
                 *signer_keys,
-                "CANVAS_SYNC_PROCESSOR",
+                "Canvas native worker launch" if runtime == "native" else "CANVAS_SYNC_PROCESSOR",
                 "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
             ]
         )
@@ -696,6 +711,25 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
         checked.append("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST")
 
     return f"checked={','.join(checked) if checked else 'none-configured'}"
+
+
+def validate_selfhost_canvas_configuration(
+    env_values: dict[str, str], env_file: Path, compose_file: Path,
+) -> str:
+    if env_values.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "").strip().lower() != "true":
+        return validate_selfhost_canvas_public_config(env_values)
+    result = run_compose_command(env_file, compose_file, "config", "--format", "json")
+    if result.returncode:
+        # Compose output can contain expanded secrets; never echo it here.
+        raise CheckError("Could not inspect the configured Canvas worker launch.")
+    try:
+        model = json.loads(result.stdout)
+        worker = model["services"]["canvas-sync-worker"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise CheckError("Configured Canvas worker model is missing or invalid.") from exc
+    if not isinstance(worker, dict):
+        raise CheckError("Configured Canvas worker model is invalid.")
+    return validate_selfhost_canvas_public_config(env_values, worker)
 
 
 def validate_auth_login_redirect_hosts(env_values: dict[str, str]) -> str:
@@ -1175,7 +1209,7 @@ def main() -> int:
         run_check("ui-origin-config", lambda: validate_ui_origin_config(env_values)),
         run_check("selfhost-ui-bundle-origins", lambda: validate_selfhost_ui_bundle_origins(env_values)),
         run_check("selfhost-canvas-frame-ancestors", validate_selfhost_canvas_frame_ancestors),
-        run_check("selfhost-canvas-public-config", lambda: validate_selfhost_canvas_public_config(env_values)),
+        run_check("selfhost-canvas-public-config", lambda: validate_selfhost_canvas_configuration(env_values, env_file, prod_compose_file)),
         run_check("auth-login-redirects", lambda: validate_auth_login_redirect_hosts(env_values)),
         run_check("keycloak-open-badge-option", lambda: validate_keycloak_open_badge_option(env_values)),
         run_check("credential-login-page", lambda: validate_credential_login_page(env_values)),

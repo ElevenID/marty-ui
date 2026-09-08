@@ -49,9 +49,7 @@ def synthetic_base():
         )
     }
     services["canvas-sync-worker"]["command"] = [
-        "python",
-        "-m",
-        "issuance.canvas_worker",
+        "/usr/local/bin/marty-canvas-sync-worker",
     ]
     return {
         "services": services,
@@ -176,7 +174,9 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
     assert len(names) == len(set(names)) == 19
     assert {item["service"] for item in report["plan"]} == set(names)
     native = set(names) - gate["EXTERNAL"]
-    assert len(native) == 17
+    assert len(native) == 18
+    assert gate["EXTERNAL"] == {"issuance"}
+    assert "canvas-sync-worker" in native
     assert set(report["build_services"]) == (native if mode == "local" else set())
     for item in report["plan"]:
         external = item["service"] in gate["EXTERNAL"]

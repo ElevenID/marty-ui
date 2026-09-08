@@ -1,5 +1,99 @@
 # Canvas worker consumer audit — 2026-09-07
 
+## Staged native consumer selection — 2026-09-08
+
+The separate local branch `feat/canvas-worker-native-consumer-cutover-v1`, based
+on `14de48dce`, now contains the coordinated worker selection changes below.
+They are staged implementation work: **unpushed, unmerged and not deployed**.
+Independent review approved the eight source files; PowerShell parser and Bash
+syntax checks passed. Configuration-test and validator qualification belong to
+their separate lanes and are not inferred from source approval.
+
+Final local validation passed **2,821 Python tests with three skips** in
+197.91s, plus 218 focused launch/validator controls. Actual Compose 5.4
+configuration-only checks passed for all 15 consumer compositions, five
+generated 19-service models and 24 rollback merges; the existing 17-service
+bundle checks and dedicated worker comparison remain intact. The Kubernetes
+image-only transition guard passed 45 controls, including zero image writes
+after a rejected legacy launch. Independent source/test review passed.
+These results do not qualify a deployment or the current hosted runtime suite.
+
+The shared launch classifier rejects direct native execution with unresolved
+`DATABASE_URL_TEMPLATE`; exact loader and dispatcher forms perform expansion.
+It does not prohibit native-owned secret files or library-specific file settings.
+Tests bind the three native secret-file readers to their actual Rust owners;
+accepting other file settings does not claim they are consumed or valid.
+
+**Remaining image-binding gate discovered during review:** the existing
+Kubernetes updater includes issuance in its application loop, while the registry
+publisher explicitly skips that external component. Moreover, the issuance API
+and migration manifests still name registry issuance tags, not a validated
+`MARTY_ISSUANCE_IMAGE` pin. No registry lookup or deployed failure is claimed.
+Before landing, make image-only updates preserve the running issuance artifact
+and bind full-manifest API/migration deployment to the same reviewed immutable
+external image, validated before any deployment mutation. Do not infer an image
+from the native services tag or invent a digest. This snapshot is not ready for
+cutover while that source gap remains.
+
+At this checkpoint, remote `afc8bd754` CI `34223397680`, runtime job
+`102051657514`, reported successful header (12:02:35–12:04:30 UTC), expiry
+(12:04:30–12:06:20 UTC) and body (12:06:20–12:10:33 UTC) preflight steps.
+Mixed-roster verification was running from 12:10:33 UTC; full groups remained
+pending. These are step-success facts, not inferred test counts or a final CI
+result. That run does not include this separate branch's consumer selection.
+This section neither qualifies the staged worker runtime nor authorizes
+deployment or Python deletion.
+All older selection descriptions and counts below are dated historical evidence,
+not assertions that the newly edited sources still select Python.
+
+| Consumer | Artifact and exact launch selection |
+| --- | --- |
+| Base Compose | Local `services/Dockerfile` build with build argument `SERVICE_NAME=canvas-sync-worker`; command `["/usr/local/bin/marty-canvas-sync-worker"]` and runtime `SERVICE_NAME=canvas_sync_worker`. |
+| Self-host Compose | The same local build; entrypoint `["/bin/sh", "-c"]` and the exact two-line command `. /app/load-secrets-env.sh` then `exec /usr/local/bin/marty-canvas-sync-worker`, with the final newline retained. Runtime selector is `canvas_sync_worker`. |
+| GHCR overlay | Existing immutable `MARTY_SERVICES_IMAGE` shared Rust artifact, explicit `build: !reset null`, and `SERVICE_NAME=canvas_sync_worker`; native launch remains inherited. |
+| Self-host bundle | Existing `${SELFHOST_IMAGE_PREFIX}/services:${SELFHOST_IMAGE_TAG}` shared artifact, preserving the existing prefix default and required release tag, explicit build reset and native selector; secret-loader launch remains inherited. |
+| Generated beta overlay | Official releases use the shared services reference/digest and native selector. Local releases build `elevenid-local/canvas-sync-worker:${ReleaseVersion}`. Only issuance remains external: **19 application services and 18 local builds**. |
+| Kubernetes | `${OCIR_REGISTRY}/marty-ui/canvas-sync-worker:${IMAGE_TAG}`, command `["/usr/local/bin/marty-canvas-sync-worker"]`, no Python arguments, and runtime selector `canvas_sync_worker`. |
+
+The Kubernetes tag is deliberately the **per-service** native artifact, not a
+new unresolved `/services` tag. The existing `build-push-registry.sh` app loop
+already builds and pushes `canvas-sync-worker` from `services/Dockerfile` with
+the corresponding build argument. The service catalog now records that same
+image name, Dockerfile, context and selector. The image updater's existing app
+loop selects it once; its obsolete second assignment to the issuance image is
+removed. GHCR, bundles and official beta releases instead use their existing
+shared services artifact. No build or push was executed for this audit.
+
+Worker-only Compose `CANVAS_SYNC_PROCESSOR` entries are removed. Kubernetes
+explicitly sets that variable to an empty value on the native worker, overriding
+the shared ConfigMap only for this container. The ConfigMap's Python selector
+remains available to issuance and rollback. No dynamic native import selector
+or new secret is introduced.
+
+The change retains the issuance API and issuance migrations on their Python
+artifact, the supported Python/native rollback launch contracts, exact database
+URL and loader expansion, all provider/pilot/signer settings, shared issuance
+`TOKEN_HMAC_KEY`, secret mounts/references, both completed migration dependencies,
+headless database-heartbeat health, network isolation, resources and restart
+behavior. Kubernetes retains its 30-second termination grace. Generated image
+evidence uses the actual worker artifact, while the verification image remains
+pinned before rehearsal. Worker selection does not switch the eight operations
+routes or authorize deleting their Python fallback.
+
+The parallel validator changes are now present in
+`check_canvas_beta_capabilities.py`, `check_canvas_oss_portability.py` and
+`check-selfhost-production.py`. They replace blanket issuance/worker image
+equality and Python-only launch assumptions with a closed supported launch and
+worker-specific image/provenance checks, rather than removing validation. The
+beta capability path checks the running image ID against its configured image
+and release/source labels; coordinated local evidence binds the worker's own
+image ID to its release marker. Pilot, origin, signer, key and deadline guards
+remain required. Their final tests/review, the complete 15-consumer, five-generated
+model and 24-rollback configuration gates, and exact-head hosted qualification
+remain separate acceptance evidence; no new pass is claimed here.
+
+## Historical audit scope and follow-ups
+
 This is a tracked-source audit of the owned `marty-ui` worktree, observed at
 `5aa086a1ed20d1990453c434b17cd6b9bb9e3ded`. It supplements the
 [readiness inventory](canvas-worker-cutover-readiness.md#deployment-consumer-inventory),

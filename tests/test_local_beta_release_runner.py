@@ -664,7 +664,7 @@ def test_beta_runner_preserves_the_pinned_external_issuance_image_role() -> None
     script = text("scripts/deploy-local-beta-release.ps1")
 
     helper = text("scripts/beta-application-image-plan.ps1")
-    assert '$service -in @("issuance", "canvas-sync-worker")' in helper
+    assert '$externalIssuance = $service -eq "issuance"' in helper
     assert "'${MARTY_ISSUANCE_IMAGE}'" in helper
     assert (
         'Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)'

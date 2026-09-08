@@ -159,11 +159,15 @@ def test_deployment_wiring_matches_the_frozen_process_and_defaults() -> None:
         services = yaml_document(path)["services"]
         worker = services["canvas-sync-worker"]
         issuance = services["issuance"]
-        assert "issuance.canvas_worker" in str(worker["command"])
+        # Intentional consumer selection delta; historical Python contract
+        # remains unchanged and continues to govern the behavior comparisons.
+        assert "/usr/local/bin/marty-canvas-sync-worker" in str(worker["command"])
         assert "canvas_worker" not in str(issuance.get("command", ""))
         assert worker["healthcheck"] == {"disable": True}
         assert "ports" not in worker
-        assert worker["image"] == issuance["image"]
+        assert "image" not in worker
+        assert worker["build"]["dockerfile"] == "services/Dockerfile"
+        assert worker["build"]["args"]["SERVICE_NAME"] == "canvas-sync-worker"
         assert set(compose_contract["startup_dependencies"]) == set(
             worker["depends_on"]
         )
@@ -172,7 +176,8 @@ def test_deployment_wiring_matches_the_frozen_process_and_defaults() -> None:
             for dependency in worker["depends_on"].values()
         )
         environment = worker["environment"]
-        assert expected_processor in environment["CANVAS_SYNC_PROCESSOR"]
+        assert "CANVAS_SYNC_PROCESSOR" not in environment
+        assert environment["SERVICE_NAME"] == "canvas_sync_worker"
         for name, spec in worker_defaults.items():
             if name == "CANVAS_SYNC_WORKER_ID":
                 continue
@@ -212,8 +217,11 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         and item.get("metadata", {}).get("name") == kubernetes_contract["deployment"]
     )
     container = deployment["spec"]["template"]["spec"]["containers"][0]
-    assert container["command"] == kubernetes_contract["legacy_command"]
-    assert container["args"] == kubernetes_contract["legacy_args"]
+    # Explicit native launch delta, not a rewrite of the historical argv.
+    assert kubernetes_contract["legacy_command"] == ["python"]
+    assert kubernetes_contract["legacy_args"] == ["-m", "issuance.canvas_worker"]
+    assert container["command"] == ["/usr/local/bin/marty-canvas-sync-worker"]
+    assert not container.get("args")
     assert "ports" not in container
     assert container["envFrom"] == [
         {"configMapRef": {"name": kubernetes_contract["config_source"]}}
@@ -232,7 +240,11 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
     literal_environment = {
         item["name"]: item["value"] for item in container["env"] if "value" in item
     }
-    assert literal_environment == kubernetes_contract["literal_environment"]
+    assert literal_environment == {
+        **kubernetes_contract["literal_environment"],
+        "SERVICE_NAME": "canvas_sync_worker",
+        "CANVAS_SYNC_PROCESSOR": "",
+    }
 
     migration = yaml_document("k8s/oracle/06a-issuance-migrations.yaml")
     assert migration["kind"] == "Job"

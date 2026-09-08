@@ -397,15 +397,19 @@ cmd_status() {
 }
 
 cmd_update_images() {
+  # Image-only updates cannot replace a legacy command or inherited selector.
+  # This read-only snapshot is not a lock against concurrent operator changes.
+  if ! kubectl get deployment canvas-sync-worker -n "$NAMESPACE" -o json --request-timeout=10s 2>/dev/null \
+    | "$PYTHON_BIN" "$REPO_ROOT/scripts/check_canvas_worker_kubernetes_update.py" --namespace "$NAMESPACE"; then
+    error "Canvas worker image update refused; apply the reviewed full-manifest cutover first."
+    return 1
+  fi
   step "Rolling image update — tag: ${IMAGE_TAG}"
   while IFS= read -r svc; do
     [[ -z "$svc" ]] && continue
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
   done < <(catalog_services app)
-  kubectl set image deployment/canvas-sync-worker \
-    "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}" \
-    -n "$NAMESPACE" 2>/dev/null && success "Updated canvas-sync-worker" || warn "Deployment 'canvas-sync-worker' not found (skipped)"
   kubectl set image deployment/ui "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" \
     -n "$NAMESPACE" 2>/dev/null && success "Updated ui" || warn "Deployment 'ui' not found (skipped)"
   kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \

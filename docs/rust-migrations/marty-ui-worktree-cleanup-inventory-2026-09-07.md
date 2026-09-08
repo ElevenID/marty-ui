@@ -2,6 +2,15 @@
 
 ## UI preservation and compatibility hold — 2026-09-08
 
+The later native consumer work reuses the existing lease-expiry worktree on
+`feat/canvas-worker-native-consumer-cutover-v1`, based on `14de48dce`.
+The superseded `feat/canvas-worker-native-lease-expiry-v1` branch name was
+deleted normally only after its exact tip
+`662edbc15d008f7fcd1868c52958aa0416644816` was verified as an ancestor of both
+the local and pushed PR branch. No worktree files or commits were removed;
+the implementation remains recoverable through those retained histories.
+This narrow cleanup does not release the unique UI/security references below.
+
 The independent read-only follow-up found local `main` clean: no staged,
 unstaged or ordinary untracked changes at
 `97bf86a3824ac7e79fb4ff662f4c86c002fa716d`. It retains **two local commits and is

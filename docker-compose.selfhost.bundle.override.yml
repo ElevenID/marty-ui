@@ -76,10 +76,13 @@ services:
     environment:
       SERVICE_NAME: trust_profile
 
-  # The issuance API and standalone Canvas worker are not cutover-qualified yet.
-  # Inherit their immutable MARTY_ISSUANCE_IMAGE, migration image, and complete
-  # Python/secret-loader definitions
-  # from the self-host base; the shared services image contains Rust, not Python.
+  # The issuance API and migrations retain their immutable Python artifact.
+  # The worker inherits its native secret-loader launch from the self-host base.
+  canvas-sync-worker:
+    <<: *selfhost-service-image
+    build: *selfhost-build-reset
+    environment:
+      SERVICE_NAME: canvas_sync_worker
 
   applicant:
     <<: *selfhost-service-image

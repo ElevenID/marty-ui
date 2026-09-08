@@ -907,14 +907,19 @@ spec:
         - name: ocir-secret
       containers:
         - name: canvas-sync-worker
-          image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
+          image: ${OCIR_REGISTRY}/marty-ui/canvas-sync-worker:${IMAGE_TAG}
           imagePullPolicy: Always
-          command: ["python"]
-          args: ["-m", "issuance.canvas_worker"]
+          command: ["/usr/local/bin/marty-canvas-sync-worker"]
           envFrom:
             - configMapRef:
                 name: marty-config
           env:
+            - name: SERVICE_NAME
+              value: "canvas_sync_worker"
+            # Override the Python selector inherited from the shared ConfigMap
+            # only for this native worker; issuance and rollback retain it.
+            - name: CANVAS_SYNC_PROCESSOR
+              value: ""
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
