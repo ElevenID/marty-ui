@@ -6,6 +6,7 @@ finish bounded observation/cleanup before failing; they are never parity passes.
 """
 
 from contextlib import ExitStack
+from functools import partial
 import hashlib
 import json
 import os
@@ -44,6 +45,51 @@ require = header.require
 wait_for = header.wait_for
 assert_control = header.assert_control
 write_marker = header.write_marker
+DIAGNOSTIC_PREFIX = b"MARTY_EXPIRY_DIAG_V1:"
+DIAGNOSTIC_CATEGORIES = frozenset(
+    name.encode("ascii")
+    for name in (
+        "AwaitRequest",
+        "VerifyInitial",
+        "LockHeld",
+        "ReleaseDue",
+        "VerifyHeldState",
+        "VerifyEffects",
+        "SampleBeforeRollback",
+        "Rollback",
+        "SampleAfterRollback",
+        "CheckReleaseBand",
+        "ObserveOutcome",
+        "PublishOutcome",
+        "AwaitLateWindow",
+        "VerifyJoinedState",
+        "VerifyShutdown",
+        "Complete",
+        "FailureClockAgreement",
+        "FailureClockOrder",
+        "FailureRenewalBlocker",
+        "FailureRenewalNotObserved",
+        "FailureRenewalLeftLock",
+        "FailureHeldState",
+        "FailureLockedJob",
+        "FailurePreReleaseJob",
+        "FailureEffects",
+        "FailureReleaseBracket",
+        "FailureEarlyBand",
+        "FailureExpiryBand",
+        "FailureLeasedIdentity",
+        "FailureJobGeneration",
+        "FailureTerminalLease",
+        "FailureJobQuery",
+        "FailureUnknown",
+    )
+)
+coordinator_diagnostics = partial(
+    header.coordinator_diagnostics,
+    prefix=DIAGNOSTIC_PREFIX,
+    categories=DIAGNOSTIC_CATEGORIES,
+    family="expiry",
+)
 
 
 def validate_outcome(value):
@@ -413,6 +459,7 @@ def run_case(executable, case, observed, response):
                     ) from None
                 failure.add_note("Owned native expiry process cleanup failed")
             if failure is not None:
+                failure.add_note(coordinator_diagnostics(stderr))
                 try:
                     failure.add_note(header.output_counts(stdout, stderr))
                 except (OSError, ValueError):

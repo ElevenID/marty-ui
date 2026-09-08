@@ -28,6 +28,25 @@ chunk. The later mixed/full groups were skipped. This is a separate runtime
 read-inactivity mismatch, not another dependency-import failure.
 Native BODY and full-worker live-provider expiry behavior remain unqualified.
 
+The first actual Linux native expiry preflight ran at
+`3967412b7fbe4627a12f313e9d4a4b8156f14f93` in
+[CI34212739731](https://github.com/ElevenID/marty-ui/actions/runs/34212739731),
+runtime job `102017341528`. Setup, compilation, actual AGS/NRPS and header parity
+(108.69s) passed. Expiry failed in 15.00s because the coordinator exited during
+`outcome-observed`, before result publication. Captured output counts alone do
+not establish the failing invariant or a runtime cause. Closed diagnostics and
+another actual replay are needed. Subsequent BODY/mixed/full groups were skipped;
+the reference observations below remain unchanged.
+
+The closed-diagnostic repair preserves all existing runtime, timing and state
+checks. It emits only fixed coordinator phases and exact error categories, then
+reads bounded complete records after owned cleanup; arbitrary panic/output text
+is never copied into the report. Independent review passed. Local verification
+passed all 2,648 Python tests with three explicit skips in 170.57s, four Rust
+coordinator controls in 0.00s after 9.97s compilation, and strict all-target
+Clippy in 5.17s. Both frozen BODY/expiry raw hashes remain unchanged. These
+diagnostic tests do not identify the failure cause; a new native replay must.
+
 | Case | Identical actual observations in A and B |
 | --- | --- |
 | `renewal_lock_early_release` | One HTTPS request; all five body chunks flushed; queued renewal advanced the lease; job succeeded with one fact. |
@@ -152,7 +171,8 @@ registered as `worker_lease_expiry_matches_frozen_published_process` and
 conservative release brackets, raw state comparison, late-handler stability and
 owned cleanup instead of synthesizing success. An early expiry preflight is
 integrated ahead of BODY; the full configured suite remains required.
-**Actual Linux native expiry parity has not run.**
+**Actual Linux native expiry replay failed at `3967412b7` before outcome
+publication; parity remains unqualified.** See the current evidence above.
 
 Local implementation checks passed compilation in **11.23s**, three new Rust
 pure controls in **0.00s**, and strict all-target Clippy in **33.18s**. The complete

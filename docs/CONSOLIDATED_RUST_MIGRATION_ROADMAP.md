@@ -79,7 +79,8 @@ chunk. BODY preflight failed in 117.33s; later mixed/full groups were skipped.
 This supplies actual evidence for a scoped roster read-inactivity repair. In the separate LEASE
 worktree, the reviewed native expiry coordinator/controller are registered,
 with an early expiry preflight integrated before BODY and the full suite
-retained. Actual Linux native expiry parity has not run. Local compilation
+retained. Its first actual Linux native expiry replay failed at `3967412b7`
+before outcome publication, as recorded below. Local compilation
 passed in 11.23s, three new Rust pure controls in 0.00s and strict all-target
 Clippy in 33.18s. The complete LEASE Python suite passed 2,627 tests with three
 explicit skips in 195.22s. The exact isolated workflow import smoke loaded all
@@ -95,6 +96,27 @@ tests in 15.89s, strict all-target Clippy in 24.50s and all 104 frozen actual TL
 transport cases; the full worker contract executable compiled in 38.55s.
 This repair still needs fresh-head hosted BODY and expiry parity; neither local
 checks nor the three previously passing BODY cases authorize cutover.
+
+Pushed head `3967412b7fbe4627a12f313e9d4a4b8156f14f93` reached
+[CI34212739731](https://github.com/ElevenID/marty-ui/actions/runs/34212739731).
+Runtime job `102017341528` passed setup, compilation, actual AGS/NRPS and header
+parity (108.69s), then failed native expiry preflight in 15.00s: its coordinator
+exited during `outcome-observed` before publishing a result. The byte-count-only
+diagnostic does not identify which invariant failed. BODY/mixed/full groups were
+skipped. A closed diagnostic repair is underway without changing frozen inputs,
+runtime behavior or timing gates. PR #814 stays draft and unrouted.
+
+The reviewed diagnostic repair passed the complete local Python suite (2,648
+tests, three explicit skips, 170.57s), four Rust coordinator controls (0.00s
+after 9.97s compilation), and strict all-target Clippy (5.17s). The raw frozen
+BODY/expiry hashes are unchanged. Fresh hosted native replay is still required.
+
+Parallel work at `ceb5729a5` added an isolated DRY Rust signing diagnostic helper
+and explicit contract test target. All 45 frozen detail and six operation-message
+projections passed within 13 pure tests (0.01s after 33.64s compilation), with
+independent review and strict all-target Clippy (23.02s). The helper is not yet
+production-wired: overlapping crypto ownership, actual HTTP/decoding parity and
+adapter adoption remain gate 13 work. No signing feature or caller was removed.
 
 Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
 preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).

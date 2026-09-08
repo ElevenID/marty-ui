@@ -162,6 +162,7 @@ def rig(native, monkeypatch, tmp_path):
         control=None,
         exit_code=0,
         control_mutation=None,
+        diagnostic_bytes=b"",
     )
     events = []
     monkeypatch.setattr(native.time, "monotonic", lambda: clock.now)
@@ -218,6 +219,7 @@ def rig(native, monkeypatch, tmp_path):
 
         def __init__(self, command, **kwargs):
             state.child = self
+            self.stderr = kwargs["stderr"]
             state.control = Path(
                 kwargs["env"]["MARTY_CANVAS_WORKER_LEASE_EXPIRY_CONTROL"]
             )
@@ -243,6 +245,8 @@ def rig(native, monkeypatch, tmp_path):
         def cleanup(self, timeout):
             events.append("cleanup")
             assert timeout == 10
+            self.stderr.write(state.diagnostic_bytes)
+            self.stderr.flush()
             if state.cleanup_fail:
                 raise RuntimeError("private-cleanup-sentinel")
 
@@ -401,6 +405,33 @@ def test_each_phase_failure_cleans_owned_children_and_fixture(rig, phase):
     with pytest.raises(AssertionError, match="Synthetic phase failure"):
         run()
     assert "cleanup" in events and state.fixture.closed and not state.control.exists()
+
+
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+def test_closed_diagnostic_note_is_read_after_cleanup_without_replacing_failure(
+    native, rig, monkeypatch, cleanup_failure
+):
+    state, events, run = rig
+    state.fail = "outcome-observed"
+    state.cleanup_fail = cleanup_failure
+    state.diagnostic_bytes = (
+        b"private-panic-secret\nMARTY_EXPIRY_DIAG_V1:ReleaseDue\n"
+        b"MARTY_EXPIRY_DIAG_V1:FailureHeldState\nprivate-token-secret\n"
+    )
+    diagnostic = native.coordinator_diagnostics
+
+    def after_cleanup(stderr):
+        assert "cleanup" in events
+        return diagnostic(stderr)
+
+    monkeypatch.setattr(native, "coordinator_diagnostics", after_cleanup)
+    with pytest.raises(AssertionError, match="Synthetic phase failure") as caught:
+        run()
+    assert "Native expiry coordinator diagnostics: ReleaseDue,FailureHeldState" in (
+        caught.value.__notes__
+    )
+    assert all("private-" not in note for note in caught.value.__notes__)
+    assert state.fixture.closed and not state.control.exists()
 
 
 def test_cleanup_failure_cannot_disclose_or_replace_original(rig):

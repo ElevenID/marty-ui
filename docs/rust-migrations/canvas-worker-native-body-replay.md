@@ -6,6 +6,13 @@ below. Its scoped Rust repair is locally validated but still needs fresh-head
 worker parity. Frozen reference inputs, consumer routing and deployment remain
 unchanged.
 
+At pushed repair head `3967412b7`,
+[CI34212739731](https://github.com/ElevenID/marty-ui/actions/runs/34212739731)
+passed header parity in 108.69s but failed the preceding native expiry preflight
+in 15.00s, before outcome publication. BODY was skipped, so this run neither
+qualifies nor disproves the roster repair. The expiry diagnostic is being
+repaired without changing any frozen expectation or BODY schedule.
+
 Local verification passed: complete Python suite 2,365 tests / three explicit
 skips in 161.34s; ten shared header/body Rust controls in 0.01s after 51.22s
 compilation; all 354 issuance library tests in 16.99s; strict all-target Clippy

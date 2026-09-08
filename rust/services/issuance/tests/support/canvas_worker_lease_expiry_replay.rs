@@ -24,6 +24,81 @@ const APPLICATION: &str = "canvas-native-expiry-worker";
 const CASES: [&str; 2] = ["renewal_lock_early_release", "renewal_lock_crosses_expiry"];
 type Checked<T> = Result<T, &'static str>;
 
+// Only closed, payload-free categories are emitted. The parent never forwards
+// Rust panic text, arbitrary error messages, database rows or timing values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Diagnostic {
+    AwaitRequest,
+    VerifyInitial,
+    LockHeld,
+    ReleaseDue,
+    VerifyHeldState,
+    VerifyEffects,
+    SampleBeforeRollback,
+    Rollback,
+    SampleAfterRollback,
+    CheckReleaseBand,
+    ObserveOutcome,
+    PublishOutcome,
+    AwaitLateWindow,
+    VerifyJoinedState,
+    VerifyShutdown,
+    Complete,
+    FailureClockAgreement,
+    FailureClockOrder,
+    FailureRenewalBlocker,
+    FailureRenewalNotObserved,
+    FailureRenewalLeftLock,
+    FailureHeldState,
+    FailureLockedJob,
+    FailurePreReleaseJob,
+    FailureEffects,
+    FailureReleaseBracket,
+    FailureEarlyBand,
+    FailureExpiryBand,
+    FailureLeasedIdentity,
+    FailureJobGeneration,
+    FailureTerminalLease,
+    FailureJobQuery,
+    FailureUnknown,
+}
+
+fn emit_diagnostic(category: Diagnostic) {
+    eprintln!("MARTY_EXPIRY_DIAG_V1:{category:?}");
+}
+
+fn failure_diagnostic(reason: &str) -> Diagnostic {
+    match reason {
+        "native expiry database and monotonic clocks disagree" => Diagnostic::FailureClockAgreement,
+        "native expiry clock ordering invalid" | "native expiry clock range invalid" => {
+            Diagnostic::FailureClockOrder
+        }
+        "native expiry exact renewal blocker differs" => Diagnostic::FailureRenewalBlocker,
+        "native expiry renewal never reached the owned blocker" => {
+            Diagnostic::FailureRenewalNotObserved
+        }
+        "native expiry renewal left owned lock" => Diagnostic::FailureRenewalLeftLock,
+        "native expiry held state differs from reference" => Diagnostic::FailureHeldState,
+        "native expiry locked job changed" => Diagnostic::FailureLockedJob,
+        "native expiry pre-release generation changed" => Diagnostic::FailurePreReleaseJob,
+        "native expiry incomplete body changed business effects" => Diagnostic::FailureEffects,
+        "native expiry release clock bracket too wide" => Diagnostic::FailureReleaseBracket,
+        "native expiry early release missed current-lease band" => Diagnostic::FailureEarlyBand,
+        "native expiry release missed original database expiry band" => {
+            Diagnostic::FailureExpiryBand
+        }
+        "native expiry leased identity or original fence changed" => {
+            Diagnostic::FailureLeasedIdentity
+        }
+        "native expiry original job generation changed" => Diagnostic::FailureJobGeneration,
+        "native expiry terminal lease was not cleared" => Diagnostic::FailureTerminalLease,
+        "native expiry narrow job query timed out"
+        | "native expiry narrow job query failed"
+        | "native expiry narrow query too wide" => Diagnostic::FailureJobQuery,
+        _ => Diagnostic::FailureUnknown,
+    }
+}
+
 fn require(condition: bool, message: &'static str) -> Checked<()> {
     if condition {
         Ok(())
@@ -421,8 +496,10 @@ async fn run<'a>(
         expected,
         crosses_expiry,
     } = *context;
+    emit_diagnostic(Diagnostic::AwaitRequest);
     await_marker(control, "request-received", worker, 30).await?;
     let r0 = Instant::now(); // Parent S/R0/A bracket: before every database read.
+    emit_diagnostic(Diagnostic::VerifyInitial);
     let initial = read_job(pool).await?;
     initial_age(&initial)?;
     let expires = initial
@@ -472,6 +549,7 @@ async fn run<'a>(
         "native expiry held setup exceeded request budget",
     )?;
     mark(control, "before-release-verified")?;
+    emit_diagnostic(Diagnostic::LockHeld);
 
     let mut waiting_pid = None;
     let (release_start, release_end, locked_sample) = loop {
@@ -502,15 +580,19 @@ async fn run<'a>(
             r0.elapsed() >= Duration::from_secs(12)
         };
         if due {
+            emit_diagnostic(Diagnostic::ReleaseDue);
             require(
                 waiting_pid.is_some(),
                 "native expiry renewal never reached the owned blocker",
             )?;
+            emit_diagnostic(Diagnostic::VerifyHeldState);
             held_state(&observe(pool, fixture).await?, &expected["before_release"])?;
+            emit_diagnostic(Diagnostic::VerifyEffects);
             require(
                 scalar(pool, "effect_rows_sql").await? == initial_effects,
                 "native expiry incomplete body changed business effects",
             )?;
+            emit_diagnostic(Diagnostic::SampleBeforeRollback);
             let before = read_job(pool).await?;
             validate_clock(&before, &initial)?;
             require(
@@ -520,16 +602,19 @@ async fn run<'a>(
             let transaction = blocker
                 .take()
                 .ok_or("native expiry release owner missing")?;
+            emit_diagnostic(Diagnostic::Rollback);
             tokio::time::timeout(Duration::from_secs(2), transaction.rollback())
                 .await
                 .map_err(|_| "native expiry rollback timed out")?
                 .map_err(|_| "native expiry rollback failed")?;
+            emit_diagnostic(Diagnostic::SampleAfterRollback);
             let after = read_job(pool).await?;
             validate_clock(&after, &initial)?;
             require(
                 after.after.duration_since(before.before) <= Duration::from_millis(500),
                 "native expiry release clock bracket too wide",
             )?;
+            emit_diagnostic(Diagnostic::CheckReleaseBand);
             if crosses_expiry {
                 require(
                     before.now >= expires + chrono::Duration::seconds(1)
@@ -555,6 +640,7 @@ async fn run<'a>(
         tokio::time::sleep(Duration::from_millis(25)).await;
     };
 
+    emit_diagnostic(Diagnostic::ObserveOutcome);
     let mut renewed = false;
     let mut first_terminal: Option<&'static str> = None;
     let mut first_terminal_bracket = None;
@@ -622,6 +708,7 @@ async fn run<'a>(
             == expected["first_terminal_status"]
         && (crosses_expiry || (renewed && outcome_status == "succeeded"))
         && (outcome_status != "leased" || rows.0 == initial_effects);
+    emit_diagnostic(Diagnostic::PublishOutcome);
     publish(
         control,
         &json!({
@@ -632,6 +719,7 @@ async fn run<'a>(
         }),
     )?;
     // Keep diagnostic outcomes alive through the same actual late-write window.
+    emit_diagnostic(Diagnostic::AwaitLateWindow);
     let late = marker(control, "late-window-complete")?;
     tokio::time::timeout(Duration::from_secs(40), async {
         while !late.is_file() {
@@ -645,8 +733,10 @@ async fn run<'a>(
     .map_err(|_| "native expiry late window timed out")??;
     mark(control, "late-window-verified")?;
     await_marker(control, "handlers-joined", worker, 10).await?;
+    emit_diagnostic(Diagnostic::VerifyJoinedState);
     stable(pool, fixture, &outcome, &rows).await?;
     worker.signal("SIGINT");
+    emit_diagnostic(Diagnostic::VerifyShutdown);
     require(
         worker.wait().await.code() == Some(130),
         "native expiry worker shutdown status differs",
@@ -666,7 +756,9 @@ async fn run<'a>(
     require(
         parity,
         "native expiry full outcome differs from frozen published behavior",
-    )
+    )?;
+    emit_diagnostic(Diagnostic::Complete);
+    Ok(())
 }
 
 pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: &str) {
@@ -761,6 +853,9 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
         .map_err(|_| "native expiry coordinator failed in a fixed phase")
         .and_then(|value| value.map_err(|_| "native expiry coordinator exceeded its total bound"))
         .and_then(|value| value);
+    if let Err(reason) = result {
+        emit_diagnostic(failure_diagnostic(reason));
+    }
     result.expect("native expiry replay failed");
     assert!(
         rollback_ok && cleanup_ok,
@@ -771,6 +866,103 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_failure_mapping_is_exact_and_payload_free() {
+        for (reason, expected) in [
+            (
+                "native expiry clock ordering invalid",
+                Diagnostic::FailureClockOrder,
+            ),
+            (
+                "native expiry clock range invalid",
+                Diagnostic::FailureClockOrder,
+            ),
+            (
+                "native expiry renewal left owned lock",
+                Diagnostic::FailureRenewalLeftLock,
+            ),
+            (
+                "native expiry locked job changed",
+                Diagnostic::FailureLockedJob,
+            ),
+            (
+                "native expiry pre-release generation changed",
+                Diagnostic::FailurePreReleaseJob,
+            ),
+            (
+                "native expiry incomplete body changed business effects",
+                Diagnostic::FailureEffects,
+            ),
+            (
+                "native expiry original job generation changed",
+                Diagnostic::FailureJobGeneration,
+            ),
+            (
+                "native expiry terminal lease was not cleared",
+                Diagnostic::FailureTerminalLease,
+            ),
+            (
+                "native expiry narrow job query timed out",
+                Diagnostic::FailureJobQuery,
+            ),
+            (
+                "native expiry narrow job query failed",
+                Diagnostic::FailureJobQuery,
+            ),
+            (
+                "native expiry narrow query too wide",
+                Diagnostic::FailureJobQuery,
+            ),
+            (
+                "native expiry database and monotonic clocks disagree",
+                Diagnostic::FailureClockAgreement,
+            ),
+            (
+                "native expiry exact renewal blocker differs",
+                Diagnostic::FailureRenewalBlocker,
+            ),
+            (
+                "native expiry renewal never reached the owned blocker",
+                Diagnostic::FailureRenewalNotObserved,
+            ),
+            (
+                "native expiry held state differs from reference",
+                Diagnostic::FailureHeldState,
+            ),
+            (
+                "native expiry release clock bracket too wide",
+                Diagnostic::FailureReleaseBracket,
+            ),
+            (
+                "native expiry early release missed current-lease band",
+                Diagnostic::FailureEarlyBand,
+            ),
+            (
+                "native expiry release missed original database expiry band",
+                Diagnostic::FailureExpiryBand,
+            ),
+            (
+                "native expiry leased identity or original fence changed",
+                Diagnostic::FailureLeasedIdentity,
+            ),
+        ] {
+            assert_eq!(failure_diagnostic(reason), expected);
+            for altered in [
+                format!("private-payload {reason}"),
+                format!("{reason}: private-payload"),
+            ] {
+                assert_eq!(failure_diagnostic(&altered), Diagnostic::FailureUnknown);
+            }
+        }
+        for unknown in ["", "private-payload", "\nMARTY_EXPIRY_DIAG_V1:Complete\n"] {
+            assert_eq!(failure_diagnostic(unknown), Diagnostic::FailureUnknown);
+            assert_eq!(
+                format!("{:?}", failure_diagnostic(unknown)),
+                "FailureUnknown"
+            );
+        }
+    }
 
     fn leased() -> JobSample {
         let now = DateTime::parse_from_rfc3339("2026-09-08T00:00:00Z")

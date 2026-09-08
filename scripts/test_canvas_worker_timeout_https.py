@@ -71,38 +71,41 @@ DIAGNOSTIC_CATEGORIES = frozenset(
 )
 
 
-def coordinator_diagnostics(stderr):
+def coordinator_diagnostics(
+    stderr,
+    *,
+    prefix=DIAGNOSTIC_PREFIX,
+    categories=DIAGNOSTIC_CATEGORIES,
+    family="timeout",
+):
     """Exact closed coordinator records only, never raw panic/output fragments."""
+    if family not in ("timeout", "expiry"):
+        return "Native coordinator diagnostics invalid"
+    label = f"Native {family} coordinator diagnostics"
     try:
         stderr.seek(0)
         contents = stderr.read(65_537)
     except (OSError, ValueError):
-        return "Native timeout coordinator diagnostics unavailable"
+        return f"{label} unavailable"
     if type(contents) is not bytes:
-        return "Native timeout coordinator diagnostics unavailable"
+        return f"{label} unavailable"
     if len(contents) > 65_536:
-        return "Native timeout coordinator diagnostics oversized"
+        return f"{label} oversized"
     records = []
     for record in contents.splitlines(keepends=True):
         line = record.removesuffix(b"\n").removesuffix(b"\r")
-        if DIAGNOSTIC_PREFIX not in line:
+        if prefix not in line:
             continue
-        if not record.endswith(b"\n") or not line.startswith(DIAGNOSTIC_PREFIX):
-            return "Native timeout coordinator diagnostics invalid"
-        category = line[len(DIAGNOSTIC_PREFIX) :]
-        if (
-            category not in DIAGNOSTIC_CATEGORIES
-            or category in records
-            or len(records) >= 32
-        ):
-            return "Native timeout coordinator diagnostics invalid"
+        if not record.endswith(b"\n") or not line.startswith(prefix):
+            return f"{label} invalid"
+        category = line[len(prefix) :]
+        if category not in categories or category in records or len(records) >= 32:
+            return f"{label} invalid"
         records.append(category)
     if not records:
-        return "Native timeout coordinator diagnostics unavailable"
+        return f"{label} unavailable"
     # Every byte copied into the note has matched a fixed category exactly.
-    return "Native timeout coordinator diagnostics: " + ",".join(
-        category.decode("ascii") for category in records
-    )
+    return f"{label}: " + ",".join(category.decode("ascii") for category in records)
 
 
 def require(condition, message):
