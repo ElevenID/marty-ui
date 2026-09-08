@@ -3,8 +3,40 @@
 All eight Canvas operations now have candidate handlers in the existing Rust
 issuance crate. The eighth implements manual dismiss/suspend/revoke, note/action
 validation, actor-header priority, durable claims, failure release, pending
-recovery and atomic review/audit finalization. None is newly registered in the
-live issuance router or gateway. Reachable Python and deployment consumers remain.
+recovery and atomic review/audit finalization. The candidate native executable now
+composes these handlers into its shared HTTP router; gateway ownership remains
+unchanged. Reachable Python and deployment consumers remain.
+
+## Native composition checkpoint — 2026-09-08
+
+`CanvasServices.with_operations` feeds the existing full-service router before
+the shared request-ID/CORS middleware. `main` constructs one credential lifecycle
+service and shares its repository, publisher and event sink with HTTP, gRPC and
+operations; its repository uses the existing configured Canvas status provider
+and tenant vault. No second lifecycle state machine or provider adapter is added.
+
+Independent review passed. The actual executable's isolated smoke checks all
+eight frozen routes with missing/wrong keys, exact 401 responses, request IDs,
+CORS and a 404 negative route; it passed in 2.90s and confirmed no database
+connections. All 362 issuance unit tests passed in 15.79s. The existing frozen
+operations input/read/job/resolution tests now traverse the same router owner
+with unchanged expected data: seven configured tests passed in 32.46s.
+
+The new configured status integration passed in 6.90s: suspend, revoke and an
+independently frozen provider refusal traverse real PostgreSQL, tenant vault and
+HTTP status transport. It checks claims across effects, preserved unrelated data,
+durable delivery results and duplicate-request preservation of reviews/events.
+Canonical publication and event ports remain controlled in this test; it is not
+a new whole-route Python capture or actual-main authenticated lifecycle proof.
+Published/smoke executables compiled in 49.05s, strict all-target Clippy passed in
+30.14s, and all 41 workflow contract tests passed in 2.96s. The new configured
+test is mandatory in the full published CI inventory.
+The retained configured review-lifecycle differential test also passed in 12.73s,
+and the existing configured credential/delivery effect regression in 4.37s.
+
+Actual-main authenticated lifecycle/publication, gateway adoption and fresh-head
+full hosted qualification remain separate gates. No Python endpoint deletion,
+consumer switching or deployment is authorized by these local checks.
 
 ## Shared owners and state boundaries
 

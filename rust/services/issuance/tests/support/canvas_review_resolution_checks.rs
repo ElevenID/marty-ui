@@ -3,7 +3,7 @@
 use super::canvas_operations_read_replay::{request_case, seed};
 use async_trait::async_trait;
 use marty_issuance_service::{
-    canvas_operations::{candidate_router, CanvasOperationsService, OperationsError},
+    canvas_operations::{CanvasOperationsService, OperationsError},
     canvas_review_resolution::CanvasReviewLifecycle,
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleEvent, CredentialLifecycleEventSink,
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 fn router(pool: &PgPool, lifecycle: Option<Arc<dyn CanvasReviewLifecycle>>) -> axum::Router {
-    candidate_router(
+    super::canvas_operations_read_replay::runtime_router(
         CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
             .with_review_operations(lifecycle),
     )

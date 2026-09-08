@@ -13,6 +13,7 @@ use marty_issuance_service::{
         UuidCanvasEvidenceFactIdGenerator,
     },
     canvas_catalog::HttpCanvasCatalogProvider,
+    canvas_credentials_status::CanvasCredentialsStatusService,
     canvas_credentials_validation::{
         CanvasCredentialsValidationService, HttpCanvasCredentialsValidationTransport,
     },
@@ -59,6 +60,7 @@ use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
     canvas_oauth_http::HttpCanvasOAuthProvider,
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
+    canvas_operations::CanvasOperationsService,
     canvas_provider_http::CanvasOriginPolicy as CanvasProviderOriginPolicy,
     canvas_readiness_runtime::{
         CanvasReadinessRuntime, HttpCanvasReadinessDocumentProvider,
@@ -239,7 +241,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_pilot_organizations.clone(),
         config.canvas_readiness_max_age,
     )
-    .with_integration_secret_repository(integration_secret_vault)
+    .with_integration_secret_repository(integration_secret_vault.clone())
     .with_canvas_credentials_validator(canvas_credentials_validator);
     let canvas_lti_login = CanvasLtiLoginService::new(
         canvas_lti_repository.clone(),
@@ -514,11 +516,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.issuer_base_url,
     );
     let lifecycle_events = CredentialLifecycleEventBus::default();
+    let canvas_status = Arc::new(CanvasCredentialsStatusService::from_runtime(
+        &config,
+        integration_secret_vault.clone(),
+    ));
     let credential_management = CredentialManagementService::new(
-        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
+        Arc::new(
+            PostgresCredentialManagementRepository::new(pool.clone())
+                .with_canvas_lifecycle(canvas_status),
+        ),
         Arc::new(credential_lifecycle.status_publisher()),
         Arc::new(lifecycle_events.clone()),
     );
+    // All three consumers share the same lifecycle policy, repository, status
+    // publisher and event bus. Gateway adoption of operations remains separate.
+    let canvas_operations =
+        CanvasOperationsService::new(pool.clone(), config.issuance_api_key.as_deref())
+            .with_job_operations(
+                config.canvas_portable_enabled,
+                config.canvas_pilot_organizations.clone(),
+            )
+            .with_review_operations(Some(Arc::new(credential_management.clone())));
     let credential_management_http = CredentialManagementHttpService::new(
         credential_management.clone(),
         config.issuance_api_key.as_deref(),
@@ -581,7 +599,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     ),
                     canvas_lti_tool_signer,
                 ),
-            ),
+            )
+            .with_operations(canvas_operations),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );

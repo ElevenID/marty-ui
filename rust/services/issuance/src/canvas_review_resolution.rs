@@ -1,4 +1,4 @@
-//! Manual correction resolution candidate. The public runtime does not route it.
+//! Manual correction resolution, composed into native HTTP; gateway cutover is separate.
 //! Claims share the evidence processor's application lock; audit writes share
 //! its transaction helper, while credential changes use the lifecycle owner.
 use async_trait::async_trait;

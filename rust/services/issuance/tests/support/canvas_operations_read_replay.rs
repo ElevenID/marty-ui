@@ -2,10 +2,28 @@ use axum::{
     body::{to_bytes, Body},
     http::Request,
 };
-use marty_issuance_service::canvas_operations::{candidate_router, CanvasOperationsService};
+use marty_issuance_service::{
+    canvas_operations::CanvasOperationsService, http::router_with_canvas_operations,
+    transport::TransportPolicy, IssuanceRuntime, IssuanceServiceConfig,
+};
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
+
+/// Exercise the unchanged handlers through the same state/transport composition
+/// used by the native process. Gateway ownership is deliberately unchanged.
+pub(super) fn runtime_router(service: CanvasOperationsService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("synthetic operations configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("synthetic operations runtime");
+    router_with_canvas_operations(
+        runtime.state(),
+        StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+        TransportPolicy::new(["https://console.example.invalid".to_owned()]),
+        service,
+    )
+}
 
 pub(super) fn timestamps(value: &mut Value) {
     match value {
@@ -138,7 +156,7 @@ pub async fn replay_inputs(pool: &PgPool) {
         frozen["observations"].as_array().unwrap().len(),
         cases.len()
     );
-    let router = candidate_router(CanvasOperationsService::new(
+    let router = runtime_router(CanvasOperationsService::new(
         pool.clone(),
         Some("synthetic-operations-key"),
     ));
@@ -203,7 +221,7 @@ pub async fn replay(pool: &PgPool) {
         .fetch_one(pool)
         .await
         .unwrap();
-    let router = candidate_router(CanvasOperationsService::new(
+    let router = runtime_router(CanvasOperationsService::new(
         pool.clone(),
         Some("synthetic-operations-key"),
     ));
@@ -289,7 +307,7 @@ pub(super) fn generated_ids(
 }
 
 pub(super) fn job_router(pool: &PgPool, enabled: bool) -> axum::Router {
-    candidate_router(
+    runtime_router(
         CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
             .with_job_operations(enabled, ["org-review".to_owned()].into()),
     )
