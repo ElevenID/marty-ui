@@ -31,14 +31,24 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-08
 
-Latest local integration `1cce2d3c4` includes the qualified gateway authentication
-expansion `42ae6825f`: 41 native forwards, zero legacy forwards, eleven pure
-controls and strict scoped Clippy passed. The configured candidate took
-7.84 seconds and its shared actual-process lifecycle regression took 5.29 seconds.
-The base corpus now has 39 represented names and seven remaining; these are not
-39 exact unadapted replays. Thirteen full lifecycle cases remain. See the
+Latest local integration `4d8b5728b` includes qualified oversized-note gateway
+parity from `574cb4895`: 42 native forwards, zero candidate legacy forwards,
+thirteen pure controls and strict scoped Clippy passed. The configured candidate
+took 7.84 seconds and its shared actual-process lifecycle regression took 5.67
+seconds. The base corpus now has 40 represented names and six remaining; these
+are not 40 exact unadapted replays. Thirteen full lifecycle cases remain. See the
 [coverage inventory](rust-migrations/canvas-gateway-coverage.md).
-The subsequent combined policy/tenant integration `3aba9e122` passed all 2,924
+The combined DIDComm/diagnostics tree `d27f12147` passed all 2,933 root Python
+tests (three platform skips) in 207.84 seconds and all 116 retained service tests
+in 0.83 seconds. Only documentation changed while those suites ran; the later
+two-helper Rust note expansion has separate qualification above.
+Combined native qualification at `4d8b5728b` then passed 28 DIDComm unit tests,
+five DIDComm HTTP tests, six lease-expiry diagnostic controls and strict scoped
+Clippy. The configured gateway helper inputs exactly match the separately
+qualified note commit. The diagnostic controls are not an actual rerun of the
+failed long-running expiry scenario; new exact-head hosted qualification remains
+required before merge.
+The earlier combined policy/tenant integration `3aba9e122` passed all 2,924
 root tests (three platform skips) in 219.29 seconds and all 116 retained service
 tests in 1.17 seconds. Only documentation changed while these suites ran.
 Earlier `9a292d9cd` passed 2,924 root tests (three platform skips) and all 118
@@ -65,7 +75,9 @@ with no terminal status despite renewal and original expiry; the coordinator
 reported `AwaitLateWindow` then `FailureUnknown`. This does not identify the
 underlying runtime cause. A narrow closed-category diagnostics repair is being
 qualified without changing timing, privacy or parity gates. Image, browser and
-UI jobs completed successfully. Service Tests `102083828627` failed a stale assertion that mapped
+UI jobs completed successfully. The closed diagnostic repair is now locally
+qualified by the combined controls above, but the original runtime mismatch
+is not declared fixed. Service Tests `102083828627` failed a stale assertion that mapped
 the worker to an issuance image, and the Rust 2021 formatting gate also failed.
 The service-image assertion is repaired locally in `121b77737`; Rust 2021
 formatting is repaired in `cca487a73`. Nine focused image-strategy tests and all
@@ -162,7 +174,7 @@ and `did:jwk` resolution (correct key binding, then missing-endpoint rejection)
 and `did:peer:2` with the existing full service representation, including a real
 anoncrypt/decrypt roundtrip without network resolver configuration. The selected
 author tree passed 23 native DIDComm unit tests and strict library Clippy;
-these new tests have not yet been rerun on the combined integration tree.
+the new cases also passed in the combined 28-unit run above.
 Peer method 0 and abbreviated peer service representations remain unqualified;
 no unnecessary Cargo features or Core dependency changes were introduced.
 Public prerequisite parity integration `103e6c918` preserves eight captured
@@ -174,8 +186,8 @@ author tree, after the HTTP regression first failed with 503 instead of 422.
 New controls cover typed preflight failure ordering, exact transport-claim
 release and failed-release fencing, and generic post-preflight packing/encryption
 failure with release before retry. Existing successful replay, unknown-outcome
-and concurrent-claim behavior is retained. Combined-tree qualification is
-underway; this is not full wallet/PostgreSQL consumer cutover evidence.
+and concurrent-claim behavior is retained. Combined-tree qualification passed
+as recorded above; this is not full wallet/PostgreSQL consumer cutover evidence.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub

@@ -7,7 +7,7 @@ route cutover, Python deletion or deployment is established by this document.
 
 ## Evidence boundary
 
-The tested `42ae6825f` candidate controls (integrated at `1cce2d3c4`) live in
+The tested `574cb4895` candidate controls (integrated at `4d8b5728b`) live in
 [canvas_operations_gateway_replay.rs](../../rust/services/issuance/tests/support/canvas_operations_gateway_replay.rs).
 They compose the actual gateway router/proxy and bounded HTTP client with the
 actual issuance executable and owned PostgreSQL. Identity and membership ports
@@ -19,10 +19,10 @@ Both real runtime and proxy route tables are used. Candidate construction change
 only the eight operation service selections; methods, paths, authentication and
 other policy fields must remain identical. The published-table control makes
 eight requests to a separately served legacy trap, with zero native effects.
-The candidate gate counts 41 native requests and zero legacy requests: one
-against an actual rollout-disabled process, 37 existing enabled requests, and
+The candidate gate counts 42 native requests and zero legacy requests: one
+against an actual rollout-disabled process, 38 enabled requests, and
 three additional tenant controls. Four additional public auth/tenant denials
-make no upstream call. This does not mean 41 frozen cases. The seven-entry
+make no upstream call. This does not mean 42 frozen cases. The seven-entry
 `NON_MANUAL_CASES` list supplies
 one request for each nonmanual route, not an exhaustive replay inventory.
 
@@ -41,16 +41,16 @@ not a copied lifecycle service graph. It requires ten requests, nine native
 forwards and zero legacy forwards. Its legacy endpoint is a distinct owned,
 unserved reservation, not another executed legacy-trap test.
 
-## Base operations: 46 names, 39 represented, seven remaining
+## Base operations: 46 names, 40 represented, six remaining
 
 The authority is [canvas-operations-oracle.json](../../contracts/canvas-operations-oracle.json)
 with [its scenarios](../../contracts/canvas-operations-scenarios.json).
-The following **39 distinct corpus names are represented by source-derived
-checks**, not 39 exact unadapted replays. The public authentication expansion
-passed configured PostgreSQL qualification in 7.84 seconds, retaining all prior
-38 native requests and eight legacy-route controls. Eleven pure controls and
+The following **40 distinct corpus names are represented by source-derived
+checks**, not 40 exact unadapted replays. The oversized-note expansion passed
+configured PostgreSQL qualification in 7.84 seconds, retaining the previous
+41 native requests and eight legacy-route controls. Thirteen pure controls and
 strict scoped Clippy passed; the shared gateway lifecycle regression passed in
-5.29 seconds. All four owned containers were verified absent after cleanup.
+5.67 seconds. All four owned containers were verified absent after cleanup.
 
 | Coverage form | Corpus names | Boundary |
 | --- | --- | --- |
@@ -58,6 +58,7 @@ strict scoped Clippy passed; the shared gateway lifecycle regression passed in
 | Trusted dismissal and repeat conflict | `review_dismiss`, `review_dismiss_again` | Session/API identities deliberately change expected actor fields and the second review ID. Duplicate responses use an explicit public MIP projection. Raw unrelated rows and resolution audit are checked. |
 | Foreign/missing object hiding | `job_foreign`, `job_missing`, `review_foreign` | Authorized foreign tenant query reaches native 404 rather than an outer 403. A synthetic missing-review counterpart reuses `review_foreign`; it is not a fifteenth frozen name. |
 | Public validation errors | `jobs_invalid_status`, `review_invalid_action` | Explicit public 422 envelopes, not unchanged direct Python error bodies. |
+| Oversized manual-review note | `review_note_limit` | Shared unchanged body recipe sends all 2001 note characters. Complete frozen Pydantic detail checked before explicit public MIP projection; raw state unchanged, one native forward. Unsupported media recipes fail explicitly before dispatch. |
 | Filtering and unmatched bindings | `jobs_filtered`, `jobs_unmatched_binding`, `candidates_filtered`, `candidates_unmatched_binding`, `reviews_filtered`, `reviews_unmatched_binding` | Exact frozen DTOs before mutations; full raw state unchanged and one native forward per request. |
 | Additional list validation | `jobs_zero_limit`, `jobs_excess_limit`, `candidates_invalid_status`, `candidates_zero_limit`, `candidates_excess_limit`, `reviews_invalid_status`, `reviews_zero_limit`, `reviews_excess_limit` | Frozen status strings/complete bound arrays checked before explicit public MIP projection; raw state unchanged. |
 | Rollout, foreign tenant and repeated job transitions | `retry_rollout_closed`, `retry_foreign`, `retry_again`, `resolve_queued`, `resolve_again`, `enqueue_foreign` | Real disabled startup and frozen transition ordering; explicit public MIP errors and exact unchanged raw state. Foreign cases use an authenticated foreign principal, not untrusted tenant headers. |
@@ -66,13 +67,13 @@ strict scoped Clippy passed; the shared gateway lifecycle regression passed in
 
 Six earlier auth/RBAC denials also check zero upstream calls and unchanged raw
 state. Neither they nor the seven new controls are unchanged direct-service
-replays. The remaining **seven base names** are:
+replays. The remaining **six base names** are:
 
 | Required family | Names still outside the represented base-name set |
 | --- | --- |
-| Manual review, effects and recovery (7) | `review_note_limit`, `review_suspend`, `review_revoke`, `review_failed`, `review_recovered_failure`, `review_recovered_success`, `review_concurrent` |
+| Manual review, effects and recovery (6) | `review_suspend`, `review_revoke`, `review_failed`, `review_recovered_failure`, `review_recovered_success`, `review_concurrent` |
 
-New lifecycle outcomes do not silently mark the seven base manual-review names
+New lifecycle outcomes do not silently mark the six base manual-review names
 as complete: those scenarios have their own setup, ordering, effects and recovery
 observations. The corrected recovery corpus
 [canvas-operations-recovery-oracle.json](../../contracts/canvas-operations-recovery-oracle.json)

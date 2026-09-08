@@ -1,9 +1,11 @@
 # Canvas worker cutover readiness — 2026-09-08
 
-Latest local integration `1cce2d3c4` includes qualified gateway authentication
-parity from `42ae6825f`: 41 native forwards, zero legacy, eleven pure controls
-and the actual-process lifecycle regression passed. Base coverage is 39
-represented names with seven remaining; lifecycle still has 13 full cases remaining.
+Latest local integration `4d8b5728b` includes qualified oversized-note gateway
+parity from `574cb4895`: 42 native forwards, zero candidate legacy, thirteen pure
+controls and the actual-process lifecycle regression passed. Base coverage is
+40 represented names with six remaining; lifecycle still has 13 full cases remaining.
+The preceding combined DIDComm/diagnostics tree passed 2,933 root Python tests
+(three platform skips) and all 116 retained service tests.
 Earlier `9a292d9cd` passed 2,924 root tests (three skips) and 118 service tests.
 Subsequent unused webhook-helper retirement transferred both Python tests to
 Rust: six native auth tests, 13 ownership/composition tests and all 116 retained
@@ -12,8 +14,9 @@ retirement commit; the gateway helper matches its separately qualified commit.
 Unused Python bootstrap helpers and unused Python-job database provisioning
 are also removed with retained coverage. Hosted qualification is separate.
 Credentials v0.1.73 preparation passed, but release tests fail against the old
-Core dependency. Current Core's KMS-only DIDComm compatibility must be resolved
-before a new immutable dependency/release can be selected; see the roadmap.
+Core dependency. Complete the Rust DIDComm consumer port first; KMS corrections
+are deferred as `DIDCOMM-KMS-001` and do not block that port. Qualify compatible
+consumer artifacts before selecting a new immutable dependency/release; see the roadmap.
 
 Current checkpoint: `afc8bd754` passed complete CI `34223397680`, including
 169 configured published-schema tests (two explicit captures ignored) and
