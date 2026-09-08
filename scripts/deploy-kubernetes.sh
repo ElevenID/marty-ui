@@ -224,7 +224,7 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
+  local issuance_api_key token_hmac_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
   local integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
@@ -251,6 +251,8 @@ cmd_setup_secrets() {
   smtp_username="$(resolve_secret_input SMTP_USERNAME)"
   smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
+  token_hmac_key="$(resolve_secret_input TOKEN_HMAC_KEY)"
+  require_resolved_secret TOKEN_HMAC_KEY "$token_hmac_key"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
   notification_webhook_secret="$(resolve_secret_input NOTIFICATION_WEBHOOK_SECRET)"
   notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
@@ -307,6 +309,7 @@ cmd_setup_secrets() {
     --from-literal=SMTP_USERNAME="$smtp_username" \
     --from-literal=SMTP_PASSWORD="$smtp_password" \
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
+    --from-literal=TOKEN_HMAC_KEY="$token_hmac_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
     --from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret" \

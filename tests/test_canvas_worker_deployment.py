@@ -192,7 +192,25 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
         "DATABASE_URL": "DATABASE_URL",
         "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",
+        "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
+    issuance = next(
+        document
+        for document in documents
+        if document
+        and document.get("kind") == "Deployment"
+        and document.get("metadata", {}).get("name") == "issuance"
+    )["spec"]["template"]["spec"]["containers"][0]
+    for selected in (container, issuance):
+        tokens = [item for item in selected["env"] if item["name"] == "TOKEN_HMAC_KEY"]
+        assert tokens == [
+            {
+                "name": "TOKEN_HMAC_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {"name": "marty-secrets", "key": "TOKEN_HMAC_KEY"}
+                },
+            }
+        ]
     assert next(
         item for item in container["env"] if item["name"] == "SIGNING_KEYS_INTERNAL_URL"
     )["value"] == ("http://gateway:8000/internal/signing-keys")
@@ -520,13 +538,13 @@ def test_beta_tracked_matrix_reads_all_seven_release_source_layers(compose_worke
 @pytest.mark.parametrize(
     "extra",
     [
-        '    $AdditionalComposeFile',
+        "    $AdditionalComposeFile",
         '    "docker-compose.extra.yml"',
-        '    (Join-Path $script:RepoRoot $AdditionalComposeFile)',
+        "    (Join-Path $script:RepoRoot $AdditionalComposeFile)",
         '    (Join-Path $script:RepoRoot "docker-compose.$Profile.yml")',
         '    (Join-Path $script:RepoRoot "../docker-compose.extra.yml")',
         '    (Join-Path $script:RepoRoot "docker-compose.extra.yml"); Invoke-Extra',
-        '    ,',
+        "    ,",
         '    (Join-Path $script:RepoRoot "docker-compose.extra.yml"),,',
     ],
 )
@@ -535,11 +553,11 @@ def test_beta_source_reader_rejects_any_unparsed_array_entry(
 ):
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/deploy-local-beta-release.ps1").write_text(
-        '$script:ComposeFiles = @(\n'
+        "$script:ComposeFiles = @(\n"
         '    (Join-Path $script:RepoRoot "docker-compose.base.yml"),\n'
         '    (Join-Path $script:RepoRoot "docker-compose.beta.yml"),\n'
         + extra
-        + '\n)\n',
+        + "\n)\n",
         encoding="utf-8",
     )
     namespace = compose_worker_gate["beta_release_source_files"].__globals__
@@ -554,13 +572,13 @@ def test_beta_source_reader_preserves_order_blank_lines_and_optional_trailing_co
 ):
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/deploy-local-beta-release.ps1").write_text(
-        '$script:ComposeFiles = @(\n\n'
+        "$script:ComposeFiles = @(\n\n"
         '    (Join-Path $script:RepoRoot "docker-compose.base.yml"),\n'
-        '   \n'
+        "   \n"
         '    (Join-Path $script:RepoRoot "docker-compose.beta.yml"),\n'
         '    (Join-Path $script:RepoRoot "docker-compose.extra.yml")'
         + trailing_comma
-        + '\n\n)\n',
+        + "\n\n)\n",
         encoding="utf-8",
     )
     namespace = compose_worker_gate["beta_release_source_files"].__globals__

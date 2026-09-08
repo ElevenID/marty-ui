@@ -223,7 +223,12 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         for item in container["env"]
         if "valueFrom" in item
     }
-    assert secret_environment == kubernetes_contract["secret_environment"]
+    # Retain the historical three-key artifact. The confirmed shared-key wiring
+    # repair is additive deployment coverage, not a rewritten behavior oracle.
+    assert secret_environment == {
+        **kubernetes_contract["secret_environment"],
+        "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
+    }
     literal_environment = {
         item["name"]: item["value"] for item in container["env"] if "value" in item
     }
