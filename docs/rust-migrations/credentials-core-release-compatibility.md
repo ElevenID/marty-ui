@@ -3,6 +3,13 @@
 Status: release blocked on concrete dependency behavior, not release-workflow
 permission. The user authorized workflow activation. Production is unchanged.
 
+User sequencing decision on 2026-09-08: finish the feature-preserving DIDComm
+Rust consumer migration first. KMS-layer corrections are explicitly deferred in
+Credentials `docs/rust-migrations/didcomm-kms-outstanding.md` (`DIDCOMM-KMS-001`,
+[PR #273](https://github.com/ElevenID/marty-credentials/pull/273)). This release
+compatibility gap must not be used to block the Rust port itself. It still
+prevents claiming compatibility with a new artifact that lacks required APIs.
+
 ## Verified release failure
 
 Credentials preparation [34236062000](https://github.com/ElevenID/marty-credentials/actions/runs/34236062000)
@@ -38,21 +45,29 @@ as a shortcut.
 At credentials `9bd`, `services/issuance/application/rust_integration.py` lists
 all three as required startup capabilities. Preflight and final delivery use
 the same frozen sender/recipient inputs and prohibit authcrypt-to-anoncrypt
-fallback. `services/issuance/api/routes.py` calls the delivery path from issuance
+fallback. `services/issuance/infrastructure/api/routes.py` calls the delivery path from issuance
 and `/v1/issuance/didcomm/deliver`; `docs/CONFIGURATION.md` documents issuer policy.
 All six inspected local credentials branches retained the same integration-file
-blob; no committed downstream migration was found. Uncommitted other-worker
-work has not been assumed absent or overwritten.
+blob; their Python consumer has not been replaced. The user confirmed that the
+crypto worker is not editing Credentials. A substantial native consumer already
+exists in marty-ui's `rust/services/issuance/src/initiation_didcomm.rs`; reuse and
+qualify that owner rather than adding another implementation. Its existing
+Core `ec307b6edd0450c558869fd587215e72cd46e9d1` pin supports Rust anoncrypt and
+authcrypt without restoring deleted Python APIs. This existing local-key path
+is not KMS-only and does not authorize an unqualified dependency update.
 
 ## Required repair and release evidence
 
-1. Confirm crypto-worker ownership and any unlanded DIDComm migration before
-   overlapping edits. The user has been asked for that handoff.
+1. Preserve the confirmed ownership boundary: this lane owns the Credentials
+   consumer migration; other-worker Core changes remain separate and untouched.
 2. Preserve both delivery modes, recipient resolution, issuer policy, sender
    binding, preflight/final-context consistency and no-fallback behavior through
-   the intended KMS boundary. Do not merely delete startup capability checks.
+   the existing canonical Rust owner. Do not merely delete startup capability
+   checks. The future KMS boundary belongs to the deferred follow-up.
 3. Freeze language-neutral behavior and test the actual replacement Rust ports,
-   including failure ordering and absence of secret-key material in consumers.
+   including failure ordering, durable effects, public behavior and actual
+   consumers. Secret-key exclusion and opaque KMS operations remain explicit
+   outstanding security work, not a claimed property of the current Rust port.
 4. Qualify the **actual release-profile wheels** with credentials, not only
    source-built compatibility wheels. Keep the three failed security regressions
    and add main-CI evidence that exercises the production dependency profile.

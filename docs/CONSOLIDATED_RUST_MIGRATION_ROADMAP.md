@@ -38,6 +38,9 @@ controls and strict scoped Clippy passed. The configured candidate took
 The base corpus now has 39 represented names and seven remaining; these are not
 39 exact unadapted replays. Thirteen full lifecycle cases remain. See the
 [coverage inventory](rust-migrations/canvas-gateway-coverage.md).
+The subsequent combined policy/tenant integration `3aba9e122` passed all 2,924
+root tests (three platform skips) in 219.29 seconds and all 116 retained service
+tests in 1.17 seconds. Only documentation changed while these suites ran.
 Earlier `9a292d9cd` passed 2,924 root tests (three platform skips) and all 118
 separately collected service tests. Subsequent webhook-helper retirement
 `d5f16228e` transferred its two Python tests into Rust before deleting the unused
@@ -119,12 +122,25 @@ draft creation was skipped. Image publication, artifact qualification and lock
 advancement remain pending. Credentials ownership is now explicitly clear of
 the crypto worker. The contract-only inventory passed independent review and
 45 tests (37 retained behavioral cases and eight inventory/parser checks).
+[Credentials PR #273](https://github.com/ElevenID/marty-credentials/pull/273)
+merged through the protected queue at `501977d0759ccad42b3e55488e65151c3934ef39`
+on 2026-09-08 after exact-head and queue qualification.
 User decision on 2026-09-08: migrate the remaining DIDComm consumer behavior to
 Rust first, reusing the existing native issuance owner; defer DIDComm KMS-layer
 corrections as outstanding work `DIDCOMM-KMS-001` in Credentials
 `docs/rust-migrations/didcomm-kms-outstanding.md`. Preserve anoncrypt and true
 authcrypt with no downgrade. No new backend is being provisioned, no removed
 Core Python API is restored, and the Rust port alone is not KMS-only acceptance.
+The native DIDComm reconciliation now includes two reviewed repairs in local
+`3aba9e122`: policy issuer length uses Unicode characters like the captured
+Python parser, and direct delivery carries the trusted tenant header into the
+existing shared authorization guard before downstream lookup. Ten policy
+vectors and six tenant observations were frozen from unchanged Python; both
+regressions failed before repair. The combined native tree passed 16 HTTP/
+delivery/atomicity tests and 21 DIDComm unit tests. These are not actual-wallet
+or PostgreSQL cutover acceptance. Public error/state/retry reconciliation,
+resolver capability qualification, full two-mode delivery and consumer routing
+remain before Python retirement. No KMS implementation or dependency pin changed.
 The separate PyPI publication workflow stays disabled.
 No deployment has occurred. The redundant local release branch was removed
 only after its entire source tree was verified identical to merged main; GitHub
