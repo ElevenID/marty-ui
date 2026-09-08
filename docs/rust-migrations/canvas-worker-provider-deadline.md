@@ -1,5 +1,22 @@
 # Provider I/O and the whole-worker job deadline
 
+## Qualified checkpoint — 2026-09-08
+
+Exact head `f0b60073093a89567e43a6fd6452100b2ddc67ec` passed
+[CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
+and all required checks, including Rust CodeQL. Runtime job `101944349432`
+passed **137 configured tests in 3639.20s** at `2026-09-08T06:21:43Z`, plus
+four configured worker/PostgreSQL tests in 96.32s. Both actual native cases
+below passed with three HTTPS requests each, alongside fresh published deadline
+regeneration, the four-case published timeout reference and the retained
+seven-stage/55-request mixed-roster replay. Unconfigured counts are not proof.
+
+The deadline slice's actual Linux replay/full-suite landing gate is satisfied
+at this exact head. Later native timeout work (`395cab656` and its subsequent
+follow-ups) and the separate body-reference branch `c5e77f260` do not inherit
+this qualification. Actual native timeout execution remains pending. There was
+no worker routing, Python deletion, runtime timeout change or deployment.
+
 This reference slice targets active-I/O cancellation (cutover gate 3) and real
 renewal composition (gate 4). It does not close real-provider lease expiry
 (gate 5), consumer cutover, signing qualification or beta acceptance.
@@ -111,8 +128,9 @@ review subsequently identified an additional forced-coordinator-exit cleanup
 gap: direct-child reaping does not establish cleanup of its worker and database.
 The repair is now implemented with the ownership boundary below; both actual
 Linux process-group cases passed hosted Release checks at `f0b600730`. Native
-whole-worker deadline replay is implemented locally but remains
-**unqualified** pending actual Linux replay and the full updated suite.
+whole-worker deadline replay and the full updated configured suite subsequently
+passed at that exact head, as recorded above. The failed local clock samples
+remain historical diagnostic evidence, not substituted passing observations.
 Failed preliminary and diagnostic runs supply neither frozen
 behavior nor a parity waiver.
 
@@ -144,9 +162,9 @@ no packages were installed to change that reference image. Hosted Release
 checks at `f0b60073093a89567e43a6fd6452100b2ddc67ec` subsequently passed **1,694
 tests with one existing skip**, including both real Linux cases. This proves
 the stated surviving-controller containment boundary, not whole-worker parity.
-Rust Images and Rust CodeQL succeeded at that head. The larger runtime job
-in [CI run 34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
-was still running its isolated phase at 2026-09-08 05:33 UTC; its result remains pending.
+Rust Images and Rust CodeQL succeeded at that head. The larger runtime job,
+still running at the historical 05:33 UTC checkpoint, subsequently completed
+successfully with the exact configured results and native markers above.
 
 The full local Python suite passed 1,691 tests with three explicit skips in
 131.91s before the final CI dependency regression was added. All issuance Rust
@@ -159,13 +177,13 @@ owners for the [four-case native timeout replay](canvas-worker-native-timeout-re
 Its local Python suite passed 1,760 tests with three explicit skips in 116.55s,
 with compiled Rust controls and strict Clippy also passing. No actual native
 timeout replay has run, and no runtime timeout policy or frozen expectation was
-changed. Those local checks do not close this deadline qualification gate.
+changed. Those local checks are separate from the hosted `f0` deadline result.
 
 A separate [local clock audit](canvas-worker-local-clock-audit-2026-09-07.md)
 reproduced a roughly -0.945s wall-clock step without importing worker code.
 Local deadline failures therefore remain invalid timing observations; neither
-the fixture tolerance nor frozen results were changed. Hosted Linux is the next
-qualification route, not a waiver of the comparison.
+the fixture tolerance nor frozen results were changed. The subsequent hosted
+Linux pass supplies qualification without waiving that comparison.
 
 The declared timing bounds are fixture tolerances, not a claim of exact timer
 precision: initial persisted job age 0–2s, each timing query at most 1s, and the

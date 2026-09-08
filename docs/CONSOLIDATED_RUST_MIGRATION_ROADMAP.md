@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: exact head `9cbba6b7b` passed 121 configured Linux runtime tests, including the complete seven-stage mixed-roster replay, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: exact head `f0b600730` passed 137 configured Linux runtime tests, including both actual-worker deadline cases and the retained seven-stage mixed-roster replay. New native timeout/body work and whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-08
 
 ## Objective
 
@@ -29,11 +29,35 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-07
+## Current execution snapshot — 2026-09-08
 
 ### Current transport integration and merge gates
 
 Latest qualified composed worker checkpoint:
+`f0b60073093a89567e43a6fd6452100b2ddc67ec`:
+[CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
+completed successfully, with all required checks passing, including Rust CodeQL.
+Runtime job `101944349432` passed **137 configured published-schema tests in
+3639.20s**, logged at `2026-09-08T06:21:43Z`, and **four configured
+worker/PostgreSQL tests in 96.32s**. Both native deadline cases,
+`early_release` and `deadline_cancel`, passed with three actual HTTPS requests
+each. Fresh deadline and four-case timeout published-reference regeneration
+passed; the seven-stage mixed-roster replay retained its 55-request trace.
+Unconfigured test counts are not database or actual-worker qualification.
+
+Hosted Release checks passed 1,694 tests with one existing skip, including both
+real Linux containment cases; Rust Images and Rust CodeQL succeeded. This
+qualifies the scoped deadline/renewal/prefix-preservation replay, not the whole
+worker, all consumer configurations, signing, UI/demo acceptance or deployment.
+PR #814 remains draft and unrouted. The later native timeout branch at
+`395cab656` and its later follow-ups, and the separate body-reference branch at
+`c5e77f260`, are **not qualified by this earlier head**. Actual native timeout
+execution remains pending; no runtime timeout policy or frozen outcome was
+changed to obtain the `f0` result.
+
+#### Historical 121-entry checkpoint and development evidence
+
+Previously qualified composed worker checkpoint:
 `9cbba6b7bc687614e8c2d74ef78fab532e5888fb`,
 [CI34109922914](https://github.com/ElevenID/marty-ui/actions/runs/34109922914).
 Runtime job `101703569433` passed **121 configured tests in 3319.49s** and
@@ -55,7 +79,7 @@ occurred. PR #814 remains draft: real-provider deadline/timeout comparisons,
 remaining consumer/loader and remote-signing boundaries, and beta acceptance
 are not closed by these scoped passes.
 
-Current local extensions use the shared disposable-schema, TLS and safe output
+The subsequent deadline/timeout extensions used shared disposable-schema, TLS and safe output
 owners. Their focused fixture suite passed 190 tests in 14.89s, including real
 child-output and loopback tests. Revised deadline A/B passed in 102.79s/98.95s;
 four-case target-specific timeout A/B passed in 110.30s/109.39s. Both corpora
@@ -74,10 +98,9 @@ verified, non-reaping Linux process-group owner. The actual forced-borrower
 database regression passed in 5.55s. At pushed head
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`, hosted Release checks passed **1,694
 tests with one existing skip**, including both actual Linux child/grandchild
-containment cases. Rust Images and Rust CodeQL succeeded. The larger runtime
-job in [CI run 34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
-was still running its isolated phase at 2026-09-08 05:33 UTC; these scoped successes
-do not qualify native deadline replay or the full updated worker suite.
+containment cases. Rust Images and Rust CodeQL succeeded. The runtime job was
+still running at the historical 05:33 UTC checkpoint; it subsequently completed
+with the qualified 137-test result above, including both actual deadline cases.
 
 The separate local commit `c17f1e1fa66af86cbd4392c0921540e1d260ef57` adds the
 [four-case native timeout replay](rust-migrations/canvas-worker-native-timeout-replay.md)
@@ -87,9 +110,10 @@ controls and strict Clippy passed. Actual native timeout execution remains
 pending, and the predicted application 15s-versus-20s mismatch has not been
 observed by that replay. No runtime timeout policy was changed. A separate
 [clock audit](rust-migrations/canvas-worker-local-clock-audit-2026-09-07.md)
-reproduced an environment-level wall-clock step without worker code. Actual
-Linux deadline qualification and native timeout replay remain open. These
-extensions are not qualified by the hosted 121-entry checkpoint.
+reproduced an environment-level wall-clock step without worker code. Hosted
+Linux deadline qualification subsequently passed at `f0` without widening the
+bounds. Native timeout replay remains unqualified; neither it nor the separate
+body-reference work inherits the earlier checkpoint's qualification.
 
 #### Earlier checkpoint record (superseded by the evidence above)
 
