@@ -1492,7 +1492,7 @@ fn load_active_policy(
         .issuers
         .0
         .keys()
-        .any(|did| !did.starts_with("did:") || did.len() > MAX_ENDPOINT_LENGTH)
+        .any(|did| !did.starts_with("did:") || did.chars().count() > MAX_ENDPOINT_LENGTH)
     {
         return Err(NativeDidcommError::EncryptionPolicyUnavailable);
     }
@@ -2949,30 +2949,66 @@ mod tests {
 
     #[test]
     fn policy_requires_exact_canonical_entries_without_key_reuse() {
-        let key = URL_SAFE_NO_PAD.encode([9_u8; 32]);
-        let valid = policy_file(&format!(
-            r#"{{"version":1,"issuers":{{"did:example:issuer":{{"mode":"authcrypt","sender_x25519_private_key":"{key}"}}}}}}"#
-        ));
-        assert!(matches!(
-            load_active_policy(Some(&valid), "did:example:issuer").unwrap(),
-            ActiveEncryptionPolicy::Authcrypt(_)
-        ));
-        std::fs::remove_file(valid).unwrap();
-
-        for invalid in [
-            r#"{"version":1,"issuers":{"did:example:issuer":{"mode":"anoncrypt","mode":"authcrypt"}}}"#.to_owned(),
-            r#"{"version":true,"issuers":{"did:example:issuer":{"mode":"anoncrypt"}}}"#.to_owned(),
-            r#"{"version":1,"issuers":{"did:example:issuer":{"mode":"authcrypt","sender_x25519_private_key":"AA=="}}}"#.to_owned(),
-            r#"{"version":1,"issuers":{"did:example:issuer":{"mode":"anoncrypt","unexpected":true}}}"#.to_owned(),
-            format!(r#"{{"version":1,"issuers":{{"did:example:a":{{"mode":"authcrypt","sender_x25519_private_key":"{key}"}},"did:example:b":{{"mode":"authcrypt","sender_x25519_private_key":"{key}"}}}}}}"#),
-        ] {
-            let path = policy_file(&invalid);
-            assert_eq!(
-                load_active_policy(Some(&path), "did:example:issuer").err(),
-                Some(NativeDidcommError::EncryptionPolicyUnavailable)
-            );
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/didcomm-policy-python-reference.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture["schema"],
+            "marty.didcomm-policy-python-reference/v1"
+        );
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 10);
+        let mut names = BTreeSet::new();
+        let mut failures = Vec::new();
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            assert!(names.insert(name), "duplicate reference case: {name}");
+            let input = &case["input"];
+            let (issuer, encoded) = match input["kind"].as_str().unwrap() {
+                "literal" => (
+                    input["active_issuer"].as_str().unwrap().to_owned(),
+                    input["json"].as_str().unwrap().to_owned(),
+                ),
+                "repeated-issuer" => {
+                    let scalar = input["scalar"].as_str().unwrap();
+                    assert_eq!(scalar.chars().count(), 1);
+                    let repeat = usize::try_from(input["repeat"].as_u64().unwrap()).unwrap();
+                    let issuer = format!(
+                        "{}{}",
+                        input["prefix"].as_str().unwrap(),
+                        scalar.repeat(repeat)
+                    );
+                    let encoded = json!({
+                        "version": 1,
+                        "issuers": {(issuer.clone()): {"mode": "anoncrypt"}},
+                    })
+                    .to_string();
+                    (issuer, encoded)
+                }
+                other => panic!("unsupported reference input: {other}"),
+            };
+            let path = policy_file(&encoded);
+            let actual = load_active_policy(Some(&path), &issuer);
             std::fs::remove_file(path).unwrap();
+            let actual = match actual {
+                Ok(ActiveEncryptionPolicy::Anoncrypt) => {
+                    json!({"accepted": true, "mode": "anoncrypt"})
+                }
+                Ok(ActiveEncryptionPolicy::Authcrypt(_)) => {
+                    json!({"accepted": true, "mode": "authcrypt"})
+                }
+                Err(error) => json!({"accepted": false, "native_error": format!("{error:?}")}),
+            };
+            let mut expected = case["expected"].clone();
+            // Python diagnostics remain in the independent fixture; native errors
+            // use the existing sanitized adapter classification, not those strings.
+            expected.as_object_mut().unwrap().remove("python_error");
+            if actual != expected {
+                failures.push(format!("{name}: expected {expected}, got {actual}"));
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
