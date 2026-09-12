@@ -50,20 +50,28 @@ three smoke tests, issuance 386 library tests, all twelve configured database
 gates, pure guards, 99 Python checks, strict Clippy and 19-package formatting
 passed. All 34 owned test containers were independently absent. No Python was
 deleted and no deployment occurred; standalone aliases and sibling routes remain
-unchanged. Hosted `84665d26d` is still a separate older batch. Earlier ownership
-statements below describe that hosted or historical state, not this local tree.
+unchanged. Hosted PR #814 now tests `cb1a01656`; earlier ownership statements
+below describe historical checkpoints, not the current local tree.
 
 The integrated `e7e048e65` tree subsequently passed the full repository `tests/`
 suite: **3,044 passed, three skipped in 203.89s**, using Python 3.12 and an isolated
 temporary directory. This does not relabel the separate service or hosted suites.
 Retirement audit also found a remaining beta DIDComm caller: the legacy credential
-renewal route invokes initiation internally. Native post-issuance renewal
-finalization exists, but renewal admission still needs migration. Its frozen
+renewal route invokes initiation internally. Native renewal admission and shared
+delivery are now implemented and qualified as a candidate, but packaged-service
+and gateway activation remain pending. Its frozen
 reference is now integrated at `63ab016e0`: 31 cases and 22 complete interned
 states, with an independently reproduced exact live replay and 53 combined
 reference guards passing. The documented late-linkage and refused-delivery
-findings require explicit treatment in the native target; the oracle is unchanged.
+findings are explicitly corrected in the native target; the oracle is unchanged.
 See [renewal evidence and remaining work](rust-migrations/credential-renewal-retirement.md).
+Candidate `1239dda5c`, integrated locally as `68635c519`, passed all eight
+real PostgreSQL/Core/HTTPS renewal scenarios in both encryption modes, the
+repository binding/recovery and publisher-attempt guards, all 17 configured
+DIDComm tests, 400 library tests, three renewal and three initiation HTTP tests,
+155 Python guards, strict Clippy and 19-package formatting. These are candidate
+router and repository results, not packaged-main/gateway or beta acceptance.
+No active Python renewal or encryption feature has been deleted.
 Supported standalone URL aliases and shared Canvas
 service callers remain separate deletion gates; the native worker itself is
 already wired in source.
@@ -86,13 +94,23 @@ the reference script's Python crypto imports; replacing fixture-only derivation
 with exact constants passed the unchanged ownership guard and exact live replay.
 No frozen observation or ownership exception was changed to obtain this result.
 
-Latest local initiation selection is `845de6a62`: exact native POST initiation,
+The pushed `cb1a01656` tree subsequently passed **3,104 repository Python tests,
+three skipped in 212.09s**. Its hosted CI `34713842275` remains in progress;
+CodeQL Rust, CodeQL Actions, organization quality and open-source policy passed.
+The preceding hosted run `34708271140` failed the cross-expiry worker observer:
+its separate reads could combine a leased job with a later idle heartbeat.
+The reviewed observer-only correction rechecks job state after idle and preserves
+terminal-observation accounting and the frozen oracle. Actual Linux process
+qualification remains required; Windows guard-only results are not that proof.
+The newer local renewal candidate has not been pushed over that running CI.
+
+Earlier initiation selection `845de6a62` established exact native POST initiation,
 unchanged public rewrite/authentication, 65 native plus 66 remaining operations
 from the frozen 131. Full gateway/issuance and sixteen composed DIDComm tests,
 strict Clippy, 117 Python guards and package formatting passed. Beta Flow's
 native RPC target and related-resource configuration are also locally integrated;
 physical-document HTTP and standalone consumer profiles remain preserved.
-These follow-ups are not yet in the running hosted `84665d26d` batch.
+These follow-ups are included in the current hosted `cb1a01656` batch.
 
 All 46 base Canvas gateway case names are locally qualified, including six
 manual/recovery cases integrated as `2789ad0da`. The latter reuse the original
@@ -107,8 +125,8 @@ no network-disconnect cancellation guarantee is claimed. Runtime source and
 frozen expectations are unchanged; the real-HTTP bridge projection is explicit.
 
 Current remaining Canvas work is exact-head qualification and landing of the
-operations activation, production adoption/transport qualification of the 51-observation signing
-diagnostic helper, compatible artifacts and effective consumer acceptance. Native
+operations activation and integrated signing-response adoption, compatible
+artifacts and effective consumer/transport acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
 in source; source selection is not deployment acceptance. All eight Canvas
 operations are now selected locally, but not yet deployed. The audited missing
@@ -116,8 +134,8 @@ beta status-sync URL forwarding repair is integrated; signing
 diagnostics are a separate consumer boundary, not an operations prerequisite.
 Reviewed reference capture `cad8684ab` adds 35 inputs, 105 remote-operation and
 102 caller observations, independently reproduced with eight guards. Decoder,
-surrogate-rendering and redirect behavior constrain the remaining Rust adapter;
-these controlled Python observations are not native or deployed acceptance. The
+surrogate-rendering and redirect behavior constrain the now-integrated Rust adapter;
+those controlled Python observations alone are not deployed acceptance. The
 [current Canvas audit](rust-migrations/canvas-worker-cutover-readiness.md#current-remaining-work-audit)
 supersedes historical pending-failure and unimplemented-launch statements.
 
