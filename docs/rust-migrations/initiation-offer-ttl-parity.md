@@ -36,7 +36,9 @@ configuration, and one shared `InitiationService`. The structured setting is
 maps into that layer. Overflow becomes a sanitized typed internal error; this
 corpus does not claim frozen whole-HTTP error formatting for misconfiguration.
 
-Deployment follow-up: the legacy base issuance service already forwards
-`ISSUANCE_OFFER_TTL_MINUTES`. The beta `issuance-native` service must forward it
-when automatic initiation is selected. This branch intentionally does not edit
-Compose, route allow-lists, release pins, Core crypto, or KMS configuration.
+Deployment integration now forwards `ISSUANCE_OFFER_TTL_MINUTES` into beta
+`issuance-native` using the exact legacy base expression and default. The
+read-only Compose gate checks default, custom Python integer spelling, zero
+and negative bindings without clamping. Automatic initiation routing is still
+unchanged; this setting does not itself qualify that consumer cutover. No
+release pins, Core crypto, KMS configuration or deployed services were changed.

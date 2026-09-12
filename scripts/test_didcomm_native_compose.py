@@ -127,6 +127,7 @@ def assert_bindings(model, compose_command):
 
         default = render()["services"]["issuance-native"]
         environment = default["environment"]
+        assert environment["ISSUANCE_OFFER_TTL_MINUTES"] == "10080"
         assert environment["UNIVERSAL_RESOLVER_URL"] == ""
         assert environment["DIDCOMM_DID_WEB_INTERNAL_BASE_URL"] == "http://gateway:8000"
         assert environment["DIDCOMM_ALLOW_PRIVATE_IPS"] == (
@@ -151,6 +152,7 @@ def assert_bindings(model, compose_command):
                 "UNIVERSAL_RESOLVER_URL": "https://resolver.example/identifiers/",
                 "DIDCOMM_DID_WEB_INTERNAL_BASE_URL": "http://managed-gateway:8000",
                 "DIDCOMM_ALLOW_PRIVATE_IPS": "yes",
+                "ISSUANCE_OFFER_TTL_MINUTES": "1_440",
             }
         )["services"]["issuance-native"]["environment"]
         assert (
@@ -162,6 +164,15 @@ def assert_bindings(model, compose_command):
             == "http://managed-gateway:8000"
         )
         assert explicit["DIDCOMM_ALLOW_PRIVATE_IPS"] == ("true" if has_ca else "yes")
+        assert explicit["ISSUANCE_OFFER_TTL_MINUTES"] == "1_440"
+        for minutes in ("0", "-5"):
+            configured = render({"ISSUANCE_OFFER_TTL_MINUTES": minutes})
+            assert (
+                configured["services"]["issuance-native"]["environment"][
+                    "ISSUANCE_OFFER_TTL_MINUTES"
+                ]
+                == minutes
+            )
         for name in sorted(
             required & {"DIDCOMM_ENCRYPTION_POLICY_DIR", "OIDF_TLS_CERT_DIR"}
         ):
@@ -194,6 +205,7 @@ def run(compose_command=None):
     native = base["services"]["issuance-native"]
     legacy = base["services"]["issuance"]
     for name in (
+        "ISSUANCE_OFFER_TTL_MINUTES",
         "UNIVERSAL_RESOLVER_URL",
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         "DIDCOMM_ALLOW_PRIVATE_IPS",
