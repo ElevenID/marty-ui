@@ -80,8 +80,9 @@ controlled; this is not packaged-process or fresh automatic-admission proof.
 
 Configuration source `671cd18ba` adds reviewed native resolver forwarding and
 explicit policy/CA mount ownership, with actual Compose and 257 combined local
-configuration/CI guards passing. Deployment-time policy-pairing enforcement is
-being implemented before selection. TLS source `d9740b515` now reloads trust per
+configuration/CI guards passing. Reviewed `417fbd974` now enforces paired beta
+policy selection and validates actual Compose before mutations; 307 integrated
+selector/configuration tests passed. TLS source `d9740b515` now reloads trust per
 delivery and preserves unrelated startup; fifteen native/thirteen gateway cases,
 real trust rotation/bundle controls, six HTTP tests, executable bad-CA startup,
 all 378 issuance library tests and strict Clippy pass.
@@ -93,9 +94,21 @@ explicit; projection snapshots are not full admission qualification. Existing
 canonical peer0/abbreviated-peer2 defects are documented separately from the
 working full-peer2 representation transferred without loss.
 
-Production selection is unchanged; a separate single-direct-route branch is
-undergoing qualification. Direct route cutover, fresh automatic/Flow admission, consumer/image
-selection and safe Python retirement remain open. See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
+Reviewed source `ff7d3462f` (integration `d4a8cae53`) now selects only direct
+`POST /v1/issuance/didcomm/deliver` in source. The embedded selection passed 108
+gateway tests, 379 issuance tests, eight HTTP tests, nine configured target tests
+including fifteen native/thirteen gateway cases and real trust rotation, actual
+bad-CA executable startup, strict Clippy and nineteen-package formatting. The
+missing typed coverage registration found by the initial full run was repaired
+and the final full issuance/composed gates passed. Eighty-two coverage/CI guards
+passed. Native HTTP coverage is now 64 of the frozen 131 operations.
+
+Production and beta deployments are unchanged; this is locally reviewed source,
+not a merge or deployed acceptance claim. Fresh automatic HTTP/Flow admission,
+compatible consumer/image selection and safe Python retirement remain open.
+Automatic initiation also needs configured offer-TTL parity: the native default
+was hardcoded rather than using the existing operator setting. That independent
+Rust repair is underway, with no KMS changes. See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
 The final combined native tree passed 377 issuance unit tests, eight HTTP tests,
 the configured nine-case composition plus five support controls, strict package

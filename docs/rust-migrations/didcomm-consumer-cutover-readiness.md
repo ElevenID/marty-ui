@@ -1,7 +1,8 @@
 # DIDComm Rust consumer cutover readiness
 
-Status, 2026-09-12: reconciliation and qualification in progress. No DIDComm
-consumer cutover or reachable Python deletion is established by this document.
+Status, 2026-09-12: direct-route native source selection is locally qualified;
+automatic initiation and Flow consumer migration remain in progress. No deployed
+DIDComm cutover or reachable Python deletion is established by this document.
 Production is unchanged. This is a migration of observable behavior into the
 existing native owner, not a second cryptographic implementation.
 
@@ -14,6 +15,33 @@ merged the outstanding `DIDCOMM-KMS-001` note at
 and opaque key-agreement corrections are outside this slice. Both anoncrypt and
 sender-authenticated authcrypt remain; failure must not select a weaker mode.
 Retained native local-key compatibility is not KMS-only custody.
+
+## Latest direct-route checkpoint
+
+Reviewed source `ff7d3462f`, integrated as `d4a8cae53`, selects only
+`POST /v1/issuance/didcomm/deliver` through the existing native allow-list.
+Both gateway route tables now use that embedded selection without test rewrites;
+the negative legacy control changes exactly one owner. Initiation, Flow/gRPC,
+sibling paths and other methods remain on their existing routes. Native coverage
+is 64 HTTP operations with 67 remaining; the frozen total of 131 is unchanged.
+
+The selected-route tree passed 108 gateway tests, all 379 issuance library tests,
+six direct HTTP and two initiation HTTP tests, nine configured target tests
+(fifteen native/thirteen gateway cases plus transport/support controls), actual
+bad-CA executable startup, strict gateway/issuance Clippy and nineteen-package
+formatting. The final configured run took 43.40 seconds; all eight exact-owned
+containers from the two root runs were independently verified absent. An initial
+full-suite failure caught a missing typed coverage selector; it was corrected
+and the complete issuance and composed gates rerun successfully. Eighty-two
+coverage/CI guards also passed. These are local results, not hosted CI or release
+acceptance.
+
+Reviewed source `417fbd974`, integrated as `fca0d17db`, pairs explicit beta
+authcrypt selection and validates the actual final Compose model before image
+mutations and again before maintenance. The integrated selector/configuration
+suite passed 307 tests. No policy contents were read by that gate, and no
+deployment occurred. Current PR #814 remains draft and its older exact-head
+runtime run is allowed to finish before pushing this batch.
 
 ## One native delivery owner, multiple consumers
 
@@ -178,16 +206,16 @@ Reviewed configuration source `671cd18ba` (integration `db9fcf058`) now forwards
 the legacy resolver/default-private-IP settings to beta native issuance and adds
 explicit native-only policy/CA overlays. Full Compose rendering and synthetic
 binding checks pass, including rejection of legacy authcrypt without native
-policy pairing. The deployment runner still needs to enforce that guard before
-cutover; an optional overlay alone does not prevent a downgrade. See the
+policy pairing. The reviewed deployment runner now enforces that guard as noted
+above; an optional overlay alone would not prevent a downgrade. See the
 [configuration boundary](didcomm-native-configuration.md).
 
 Reviewed TLS source `d9740b515` (integration `af6e54d44`) closes CA startup/reload
 parity as described above: fifteen native and thirteen gateway composition cases,
 actual trust rotation/bundle controls, six HTTP tests, real executable health
 with invalid trust, all 378 library tests and strict Clippy passed. No KMS change
-is included. Single-route selection is being qualified separately; this document
-does not establish a merged or deployed cutover.
+is included. The subsequently qualified single-route selection is recorded above;
+this document does not establish a merged or deployed cutover.
 
 The [retirement audit](didcomm-retirement-audit.md) and source `25f14fb3a`
 (integration `627d977d3`) preserve eight full HTTP/gRPC response pairs and four
@@ -198,13 +226,13 @@ Neither snapshot projection nor isolated rejection is full admission evidence.
 Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
 not demonstrated migration regressions; working full peer2 has old/new evidence.
 
-1. Qualify direct and automatic delivery through the shared actual native owner,
-   including whole response fields, true crypto, durable finalization, failure,
-   concurrent ownership, projection-only recovery and stable no-resend replay.
-2. Exercise actual gateway-to-native direct and initiation routes with a legacy
-   trap. Preserve management-key injection, trusted tenant and error projection.
-   `ISSUANCE_NATIVE_SERVICE_URL` alone does not switch the direct DIDComm route:
-   its gateway ownership is still the `issuance` service.
+1. Qualify fresh automatic HTTP initiation, including admission, real reservation,
+   configured offer expiry, mixed wallets, holder fallback and existing-reservation
+   recovery through the shared actual delivery owner. Direct delivery/recovery is
+   qualified above; controlled projector inputs are not fresh admission evidence.
+2. Retain the direct gateway gate and qualify the initiation route with a legacy
+   trap before selecting it. Preserve management-key injection, trusted tenant and
+   error projection. Qualify Flow/gRPC separately against its governed push target.
 3. Review issuance-wide routing and image/migration ownership. Compose profiles,
    the beta image plan and Kubernetes still select external Python issuance;
    do not switch the entire service based solely on DIDComm evidence.

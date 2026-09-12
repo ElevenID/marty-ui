@@ -68,8 +68,9 @@ invalid authcrypt keys fail closed, and direct manual Compose invocations do not
 receive runner enforcement automatically. This change does not switch routes or
 perform a deployment.
 
-Native CA startup/error/rotation parity is a separate outstanding qualification;
-the configuration gate does not execute the Rust service. DIDComm KMS corrections
+Native CA startup/error/rotation parity is separately qualified in
+[`didcomm-consumer-cutover-readiness.md`](didcomm-consumer-cutover-readiness.md);
+the configuration gate itself does not execute the Rust service. DIDComm KMS corrections
 remain deferred under `DIDCOMM-KMS-001`. Compatibility policy files can contain
 local sender private keys and are not a KMS-only solution.
 
