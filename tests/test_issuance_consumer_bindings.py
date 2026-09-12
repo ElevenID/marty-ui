@@ -120,7 +120,10 @@ def assert_kubernetes_bindings(documents, config):
         }
     }
     expected = {
-        "gateway": {"ISSUANCE_SERVICE_URL": http_alias},
+        "gateway": {
+            "ISSUANCE_SERVICE_URL": http_alias,
+            "AUTH_GRPC_TARGET": {"value": "auth:9001"},
+        },
         "organization": {"ES_GRPC_TARGET": {"value": "event-stream:9015"}},
         "issuance": {
             "ORG_GRPC_TARGET": {"value": "organization:9002"},

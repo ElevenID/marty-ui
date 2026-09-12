@@ -427,7 +427,7 @@ cmd_update_images() {
   prepare_kubernetes_native_issuance || return 1
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
     # Read-only API snapshot, not a lock against concurrent operator changes.
-    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance service/issuance-native configmap/issuance-native-config -n "$NAMESPACE" -o json --request-timeout=10s \
+    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys service/issuance-native service/signing-keys configmap/issuance-native-config -n "$NAMESPACE" -o json --request-timeout=10s \
       | "$K8S_NATIVE_ISSUANCE_BIN" check-update --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR" --namespace "$NAMESPACE"; then
       error "Native issuance image update refused; apply the reviewed full-manifest selection first."
       return 1
@@ -442,6 +442,8 @@ cmd_update_images() {
   fi
   step "Rolling image update — tag: ${IMAGE_TAG}"
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+    kubectl set image deployment/signing-keys "signing-keys=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
+    kubectl rollout status deployment/signing-keys -n "$NAMESPACE" --timeout=180s || return 1
     kubectl set image deployment/issuance-native "issuance-native=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
     kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
   fi
@@ -546,6 +548,7 @@ cmd_deploy() {
   step "Deploying microservices…"
   apply_manifest "${K8S_DIR}/07-microservices.yaml"
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+    kubectl rollout status deployment/signing-keys -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/gateway -n "$NAMESPACE" --timeout=180s || return 1
   fi

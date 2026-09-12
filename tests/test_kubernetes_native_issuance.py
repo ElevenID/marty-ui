@@ -42,6 +42,129 @@ def constants(name):
     return set(names)
 
 
+def test_duplicate_common_organization_binding_cleanup_preserves_complete_mapping():
+    source = (ROOT / "k8s/oracle/01-configmap.yaml").read_text(encoding="utf-8")
+    binding = '  MARTY_ORG_ID: "${MARTY_ORG_ID}"\n'
+    anchor = '  MARTY_MIGRATION_PROFILE: "${MARTY_MIGRATION_PROFILE}"\n'
+    assert source.count(binding) == source.count(anchor) == 1
+    original = source.replace(anchor, anchor + binding)
+    assert hashlib.sha256(original.encode()).hexdigest() == (
+        "0e770f9579987ed58a7ae1896bfa01b9437c56815d616adf63b6995e693c8e4b"
+    )
+    # This historical parser overwrites the identical duplicate; the actual
+    # Rust renderer's separate test still refuses duplicate mappings strictly.
+    assert yaml.safe_load(source) == yaml.safe_load(original)
+    assert yaml.safe_load(source)["data"]["MARTY_ORG_ID"] == "${MARTY_ORG_ID}"
+
+
+def signing_inventory(values):
+    assert len(values) == 2
+    value = deployment(values, "signing-keys")
+    selected = owner(value)
+    entries = selected["env"]
+    assert len(entries) == len({v["name"] for v in entries}) == 7
+    actual = {v["name"]: v for v in entries}
+    expected = {
+        "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
+        "SIGNING_KEYS_SERVICE_PORT": {
+            "name": "SIGNING_KEYS_SERVICE_PORT",
+            "value": "8017",
+        },
+        "SIGNING_KEYS_REDIS_URL": {
+            "name": "SIGNING_KEYS_REDIS_URL",
+            "value": "redis://redis:6379/2",
+        },
+    }
+    for name in ("SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"):
+        expected[name] = {
+            "name": name,
+            "valueFrom": {"secretKeyRef": {"name": "marty-secrets", "key": name}},
+        }
+    for name in ("BAO_ADDR", "PUBLIC_DOMAIN"):
+        expected[name] = {
+            "name": name,
+            "valueFrom": {"configMapKeyRef": {"name": "marty-config", "key": name}},
+        }
+    assert actual == expected
+    assert selected["image"] == "${MARTY_SERVICES_IMAGE}"
+    assert selected["envFrom"] == []
+    assert len(value["spec"]["template"]["spec"]["containers"]) == 1
+    assert value["spec"]["selector"]["matchLabels"] == {"app": "signing-keys"}
+    service = next(v for v in values if v["kind"] == "Service")
+    assert service["spec"] == {
+        "type": "ClusterIP",
+        "selector": {"app": "signing-keys"},
+        "ports": [{"name": "http", "port": 8017, "targetPort": 8017}],
+    }
+    for name in ("livenessProbe", "readinessProbe"):
+        assert selected[name]["httpGet"] == {"path": "/health", "port": 8017}
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "missing-token", "wrong-redis", "broad-env", "sidecar"]
+)
+def test_signing_dependency_has_only_existing_declared_bindings(fault):
+    values = resources("k8s/oracle/07b-signing-keys.yaml")
+    signing_inventory(values)
+    selected = owner(deployment(values, "signing-keys"))
+    if fault == "missing-token":
+        selected["env"] = [
+            v for v in selected["env"] if v["name"] != "OPENBAO_SERVICE_TOKEN"
+        ]
+    elif fault == "wrong-redis":
+        next(v for v in selected["env"] if v["name"] == "SIGNING_KEYS_REDIS_URL")[
+            "value"
+        ] = "redis://localhost:6379/2"
+    elif fault == "broad-env":
+        selected["envFrom"] = [{"configMapRef": {"name": "marty-config"}}]
+    elif fault == "sidecar":
+        deployment(values, "signing-keys")["spec"]["template"]["spec"][
+            "containers"
+        ].append({"name": "other"})
+    if fault:
+        with pytest.raises(AssertionError):
+            signing_inventory(values)
+
+
+def test_signing_existing_service_and_kubernetes_dependency_sources_are_connected():
+    for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
+        service = yaml.safe_load((ROOT / path).read_text())["services"]["signing-keys"]
+        assert service["build"]["args"]["SERVICE_NAME"] == "signing-keys"
+        assert service["environment"]["SIGNING_KEYS_SERVICE_PORT"] == "8017"
+        assert (
+            service["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
+        )
+        assert (
+            service["depends_on"]["db-migrate"]["condition"]
+            == "service_completed_successfully"
+        )
+    config = (ROOT / "rust/services/signing-keys/src/config.rs").read_text()
+    assert (
+        'secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?)'
+        in config
+    )
+    main = (ROOT / "rust/services/signing-keys/src/main.rs").read_text()
+    assert "OpenBaoEnvelopeProvider" in main
+    common = resources("k8s/oracle/01-configmap.yaml")[0]["data"]
+    assert common["BAO_ADDR"] == "${BAO_ADDR}"
+    assert (
+        "BAO_ADDR=https://vault.example.com"
+        in (ROOT / ".env.production.example").read_text()
+    )
+    original = resources("k8s/oracle/07-microservices.yaml")
+    assert not any(v["metadata"]["name"] == "signing-keys" for v in original)
+    gateway = owner(deployment(original, "gateway"))
+    assert [v for v in gateway["env"] if v["name"] == "AUTH_GRPC_TARGET"] == [
+        {"name": "AUTH_GRPC_TARGET", "value": "auth:9001"}
+    ]
+    cli = (
+        ROOT / "rust/crates/release-evidence/src/kubernetes_native_cli.rs"
+    ).read_text()
+    assert '"07b-signing-keys.yaml"' in cli
+    script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    assert "OPENBAO_SERVICE_TOKEN=" in script
+
+
 def test_reference_replays_actual_unchanged_formatter_and_preserves_new_policy_distinction():
     source = (ROOT / "scripts/prepare_official_beta_release.py").read_text(
         encoding="utf-8"

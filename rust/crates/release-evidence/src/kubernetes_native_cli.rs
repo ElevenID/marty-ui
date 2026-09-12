@@ -58,7 +58,10 @@ fn run() -> Result<()> {
     }
     let repo = repo.ok_or(REFUSAL)?;
     let manifests = manifests.ok_or(REFUSAL)?;
-    let template = native::documents(&read(&manifests.join("07a-issuance-native.yaml"))?)?;
+    let mut template = native::documents(&read(&manifests.join("07a-issuance-native.yaml"))?)?;
+    template.extend(native::documents(&read(
+        &manifests.join("07b-signing-keys.yaml"),
+    )?)?);
     let source = String::from_utf8(read(&repo.join("rust/services/gateway/src/config.rs"))?)
         .map_err(|_| REFUSAL)?;
     let ready = native::readiness_from_source(&source)?;

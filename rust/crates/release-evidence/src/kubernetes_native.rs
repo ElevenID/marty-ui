@@ -8,6 +8,7 @@ pub const MAX_BYTES: usize = 1024 * 1024;
 pub const MAX_SETTINGS_BYTES: usize = 256 * 1024;
 pub const REFUSAL: &str = "Kubernetes native issuance configuration refused.";
 pub const NATIVE_URL: &str = "http://issuance-native:8005";
+pub const SIGNING_URL: &str = "http://signing-keys:8017";
 pub type Result<T> = std::result::Result<T, &'static str>;
 pub type Environment = BTreeMap<String, String>;
 pub const OPTIONAL_SETTINGS: &[&str] = &[
@@ -335,6 +336,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
     let deployment = &resources[index(resources, "Deployment", "issuance-native")?];
     let service = &resources[index(resources, "Service", "issuance-native")?];
     let config = &resources[index(resources, "ConfigMap", "issuance-native-config")?];
+    require(service["apiVersion"] == "v1" && config["apiVersion"] == "v1")?;
     require(config["data"] == json!({}))?;
     require(
         deployment["spec"]["selector"]["matchLabels"] == json!({"app":"issuance-native"})
@@ -342,33 +344,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"issuance-native"})),
     )?;
     let owner = container(deployment, "issuance-native")?;
-    require(
-        deployment["apiVersion"] == "apps/v1"
-            && service["apiVersion"] == "v1"
-            && config["apiVersion"] == "v1",
-    )?;
-    require_keys(
-        owner,
-        &[
-            "name",
-            "image",
-            "imagePullPolicy",
-            "command",
-            "args",
-            "envFrom",
-            "env",
-            "ports",
-            "resources",
-            "livenessProbe",
-            "readinessProbe",
-        ],
-    )?;
-    require(
-        owner["command"] == json!(["/app/services/entrypoint.sh"])
-            && owner["args"] == json!([])
-            && owner["image"] == "${MARTY_SERVICES_IMAGE}"
-            && owner["imagePullPolicy"] == "Always",
-    )?;
+    closed_runtime_pod(deployment, owner)?;
     require(owner["envFrom"] == json!([{"configMapRef":{"name":"issuance-native-config"}}]))?;
     let env = environment(owner)?;
     let mut expected = BTreeMap::new();
@@ -405,15 +381,44 @@ fn native_template(resources: &[Value]) -> Result<()> {
     )?;
     for probe in ["livenessProbe", "readinessProbe"] {
         require(owner[probe]["httpGet"] == json!({"path":"/health","port":8005}))?;
-        require_keys(
-            &owner[probe],
-            &["httpGet", "initialDelaySeconds", "periodSeconds"],
-        )?;
     }
     require(
         service["spec"]
             == json!({"type":"ClusterIP","selector":{"app":"issuance-native"},"ports":[{"name":"http","port":8005,"targetPort":8005},{"name":"grpc","port":9005,"targetPort":9005}]}),
     )?;
+    Ok(())
+}
+
+fn closed_runtime_pod(deployment: &Value, owner: &Value) -> Result<()> {
+    require(deployment["apiVersion"] == "apps/v1")?;
+    require_keys(
+        owner,
+        &[
+            "name",
+            "image",
+            "imagePullPolicy",
+            "command",
+            "args",
+            "envFrom",
+            "env",
+            "ports",
+            "resources",
+            "livenessProbe",
+            "readinessProbe",
+        ],
+    )?;
+    require(
+        owner["command"] == json!(["/app/services/entrypoint.sh"])
+            && owner["args"] == json!([])
+            && owner["image"] == "${MARTY_SERVICES_IMAGE}"
+            && owner["imagePullPolicy"] == "Always",
+    )?;
+    for probe in ["livenessProbe", "readinessProbe"] {
+        require_keys(
+            &owner[probe],
+            &["httpGet", "initialDelaySeconds", "periodSeconds"],
+        )?;
+    }
     let pod = deployment.pointer("/spec/template/spec").ok_or(REFUSAL)?;
     require(
         pod["serviceAccountName"] == "marty-app"
@@ -436,6 +441,46 @@ fn native_template(resources: &[Value]) -> Result<()> {
         pod.get("volumes").is_none()
             && owner.get("volumeMounts").is_none()
             && pod.get("hostNetwork").is_none(),
+    )?;
+    Ok(())
+}
+
+fn signing_template(resources: &[Value]) -> Result<()> {
+    require(resources.len() == 2)?;
+    let deployment = &resources[index(resources, "Deployment", "signing-keys")?];
+    let service = &resources[index(resources, "Service", "signing-keys")?];
+    require(deployment["apiVersion"] == "apps/v1" && service["apiVersion"] == "v1")?;
+    require(
+        deployment["spec"]["selector"]["matchLabels"] == json!({"app":"signing-keys"})
+            && deployment.pointer("/spec/template/metadata/labels")
+                == Some(&json!({"app":"signing-keys"})),
+    )?;
+    let owner = container(deployment, "signing-keys")?;
+    closed_runtime_pod(deployment, owner)?;
+    require(owner["envFrom"] == json!([]))?;
+    let mut expected = BTreeMap::new();
+    for (name, value) in [
+        ("SERVICE_NAME", "signing-keys"),
+        ("SIGNING_KEYS_SERVICE_PORT", "8017"),
+        ("SIGNING_KEYS_REDIS_URL", "redis://redis:6379/2"),
+    ] {
+        expected.insert(name, json!({"name":name,"value":value}));
+    }
+    for name in ["SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"] {
+        expected.insert(name, secret_ref(name));
+    }
+    for name in ["BAO_ADDR", "PUBLIC_DOMAIN"] {
+        expected.insert(name, config_ref(name, name));
+    }
+    let env = environment(owner)?;
+    require(env.len() == expected.len() && expected.iter().all(|(k, v)| env.get(k) == Some(&v)))?;
+    require(owner["ports"] == json!([{"name":"http","containerPort":8017}]))?;
+    for probe in ["livenessProbe", "readinessProbe"] {
+        require(owner[probe]["httpGet"] == json!({"path":"/health","port":8017}))?;
+    }
+    require(
+        service["spec"]
+            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017}]}),
     )?;
     Ok(())
 }
@@ -552,7 +597,19 @@ pub fn compose(
     require(selected(values)?)?;
     let image = services_image(values.get("MARTY_SERVICES_IMAGE").ok_or(REFUSAL)?)?;
     let configuration = configuration(values)?;
-    native_template(template)?;
+    require(template.len() == 5)?;
+    let signing: Vec<_> = template
+        .iter()
+        .filter(|v| v["metadata"]["name"] == "signing-keys")
+        .cloned()
+        .collect();
+    let issuance: Vec<_> = template
+        .iter()
+        .filter(|v| v["metadata"]["name"] != "signing-keys")
+        .cloned()
+        .collect();
+    native_template(&issuance)?;
+    signing_template(&signing)?;
     require(
         !ready.is_empty()
             && ready.iter().any(|v| v == "issuance")
@@ -581,20 +638,50 @@ pub fn compose(
         item["metadata"]["namespace"] = json!(namespace);
     }
     let native_index = index(&additions, "Deployment", "issuance-native")?;
+    let signing_index = index(&additions, "Deployment", "signing-keys")?;
     let config_index = index(&additions, "ConfigMap", "issuance-native-config")?;
     container_mut(&mut additions[native_index], "issuance-native")?["image"] = json!(image);
+    container_mut(&mut additions[signing_index], "signing-keys")?["image"] = json!(image);
+    for setting in ["MARTY_RELEASE_VERSION", "MARTY_UI_SHA"] {
+        if let Some(value) = values.get(setting) {
+            append_env(
+                container_mut(&mut additions[signing_index], "signing-keys")?,
+                setting,
+                value,
+            )?;
+        }
+    }
     additions[config_index]["data"] = configuration;
     pair_settings(
         container_mut(&mut result[legacy_index], "issuance")?,
         container_mut(&mut additions[native_index], "issuance-native")?,
         values,
     )?;
+    let shared_signing_key = (**environment(container(&result[gateway_index], "gateway")?)?
+        .get("SIGNING_KEYS_INTERNAL_API_KEY")
+        .ok_or(REFUSAL)?)
+    .clone();
+    require(
+        environment(container(&result[legacy_index], "issuance")?)?
+            .get("SIGNING_KEYS_INTERNAL_API_KEY")
+            == Some(&&shared_signing_key),
+    )?;
+    let signing_owner = container_mut(&mut additions[signing_index], "signing-keys")?;
+    let signing_key = signing_owner["env"]
+        .as_array_mut()
+        .ok_or(REFUSAL)?
+        .iter_mut()
+        .find(|v| v["name"] == "SIGNING_KEYS_INTERNAL_API_KEY")
+        .ok_or(REFUSAL)?;
+    *signing_key = shared_signing_key;
     let edge = container_mut(&mut result[gateway_index], "gateway")?;
+    require(environment(edge)?.contains_key("AUTH_GRPC_TARGET"))?;
     require(
         environment(edge)?.get("ISSUANCE_SERVICE_URL")
             == Some(&&config_ref("ISSUANCE_SERVICE_URL", "ISSUANCE_SERVICE_URL")),
     )?;
     append_env(edge, "ISSUANCE_NATIVE_SERVICE_URL", NATIVE_URL)?;
+    append_env(edge, "SIGNING_KEYS_SERVICE_URL", SIGNING_URL)?;
     let mut ready = ready.to_vec();
     ready.push("issuance-native".into());
     append_env(edge, "GATEWAY_REQUIRED_READY_SERVICES", &ready.join(","))?;
@@ -636,7 +723,9 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
         ("Deployment", "issuance-native"),
         ("Deployment", "gateway"),
         ("Deployment", "issuance"),
+        ("Deployment", "signing-keys"),
         ("Service", "issuance-native"),
+        ("Service", "signing-keys"),
         ("ConfigMap", "issuance-native-config"),
     ] {
         let observed = &actual[index(actual, kind, name)?];
@@ -672,6 +761,9 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                     "ISSUANCE_NATIVE_SERVICE_URL",
                     "GATEWAY_REQUIRED_READY_SERVICES",
                     "ISSUANCE_API_KEY",
+                    "AUTH_GRPC_TARGET",
+                    "SIGNING_KEYS_SERVICE_URL",
+                    "SIGNING_KEYS_INTERNAL_API_KEY",
                 ] {
                     require(observed.get(setting) == target.get(setting))?;
                 }
@@ -772,7 +864,11 @@ fn normalized_pod(deployment: &Value) -> Result<Value> {
     let owners = pod["containers"].as_array_mut().ok_or(REFUSAL)?;
     require(owners.len() == 1)?;
     let owner = &mut owners[0];
-    require(owner["name"] == "issuance-native")?;
+    require(
+        (deployment["metadata"]["name"] == "issuance-native"
+            || deployment["metadata"]["name"] == "signing-keys")
+            && owner["name"] == deployment["metadata"]["name"],
+    )?;
     services_image(owner["image"].as_str().ok_or(REFUSAL)?)?;
     owner.as_object_mut().ok_or(REFUSAL)?.remove("image");
     remove_default(

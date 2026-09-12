@@ -20,9 +20,13 @@ fn fixtures() -> (Vec<Value>, Vec<Value>, Vec<String>, Environment) {
     let baseline =
         native::documents(&fs::read(root.join("k8s/oracle/07-microservices.yaml")).unwrap())
             .unwrap();
-    let template =
+    let mut template =
         native::documents(&fs::read(root.join("k8s/oracle/07a-issuance-native.yaml")).unwrap())
             .unwrap();
+    template.extend(
+        native::documents(&fs::read(root.join("k8s/oracle/07b-signing-keys.yaml")).unwrap())
+            .unwrap(),
+    );
     let ready = native::readiness_from_source(
         &fs::read_to_string(root.join("rust/services/gateway/src/config.rs")).unwrap(),
     )
@@ -71,7 +75,7 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
         }
         let model = native::compose(&before, &template, &ready, &values).unwrap();
         let mut after = model["items"].as_array().unwrap().clone();
-        assert_eq!(after.len(), before.len() + 3);
+        assert_eq!(after.len(), before.len() + 5);
         let new = after.split_off(before.len());
         let native_owner = &new[index(&new, "Deployment", "issuance-native")];
         let config = &new[index(&new, "ConfigMap", "issuance-native-config")];
@@ -97,6 +101,10 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                 assert_eq!(
                     entries.pop().unwrap(),
                     json!({"name":"GATEWAY_REQUIRED_READY_SERVICES","value":format!("{},issuance-native",ready.join(","))})
+                );
+                assert_eq!(
+                    entries.pop().unwrap(),
+                    json!({"name":"SIGNING_KEYS_SERVICE_URL","value":"http://signing-keys:8017"})
                 );
                 assert_eq!(
                     entries.pop().unwrap(),
@@ -352,45 +360,52 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
 fn api_defaults(model: &Value) -> Value {
     let mut actual = model.clone();
     let rows = actual["items"].as_array_mut().unwrap();
-    let native = index(rows, "Deployment", "issuance-native");
-    rows[native]["metadata"]["resourceVersion"] = json!("1234");
-    rows[native]["status"] = json!({"availableReplicas":1});
-    let pod = rows[native].pointer_mut("/spec/template/spec").unwrap();
-    for (name, value) in [
-        ("dnsPolicy", json!("ClusterFirst")),
-        ("restartPolicy", json!("Always")),
-        ("schedulerName", json!("default-scheduler")),
-        ("terminationGracePeriodSeconds", json!(30)),
-        ("securityContext", json!({})),
-        ("enableServiceLinks", json!(true)),
-        ("serviceAccount", json!("marty-app")),
-    ] {
-        pod[name] = value;
-    }
-    let owner = &mut pod["containers"][0];
-    owner["terminationMessagePath"] = json!("/dev/termination-log");
-    owner["terminationMessagePolicy"] = json!("File");
-    for port in owner["ports"].as_array_mut().unwrap() {
-        port["protocol"] = json!("TCP");
-    }
-    for name in ["livenessProbe", "readinessProbe"] {
-        for (key, value) in [
-            ("successThreshold", 1),
-            ("failureThreshold", 3),
-            ("timeoutSeconds", 1),
+    for selected in ["issuance-native", "signing-keys"] {
+        let native = index(rows, "Deployment", selected);
+        rows[native]["metadata"]["resourceVersion"] = json!("1234");
+        rows[native]["status"] = json!({"availableReplicas":1});
+        let pod = rows[native].pointer_mut("/spec/template/spec").unwrap();
+        for (name, value) in [
+            ("dnsPolicy", json!("ClusterFirst")),
+            ("restartPolicy", json!("Always")),
+            ("schedulerName", json!("default-scheduler")),
+            ("terminationGracePeriodSeconds", json!(30)),
+            ("securityContext", json!({})),
+            ("enableServiceLinks", json!(true)),
+            ("serviceAccount", json!("marty-app")),
         ] {
-            owner[name][key] = json!(value);
+            pod[name] = value;
         }
-        owner[name]["httpGet"]["scheme"] = json!("HTTP");
-    }
-    let service = index(rows, "Service", "issuance-native");
-    rows[service]["spec"]["clusterIP"] = json!("10.96.0.123");
-    rows[service]["spec"]["clusterIPs"] = json!(["10.96.0.123"]);
-    rows[service]["spec"]["ipFamilies"] = json!(["IPv4"]);
-    rows[service]["spec"]["ipFamilyPolicy"] = json!("SingleStack");
-    rows[service]["spec"]["sessionAffinity"] = json!("None");
-    for port in rows[service]["spec"]["ports"].as_array_mut().unwrap() {
-        port["protocol"] = json!("TCP");
+        let owner = &mut pod["containers"][0];
+        owner["terminationMessagePath"] = json!("/dev/termination-log");
+        owner["terminationMessagePolicy"] = json!("File");
+        for port in owner["ports"].as_array_mut().unwrap() {
+            port["protocol"] = json!("TCP");
+        }
+        for name in ["livenessProbe", "readinessProbe"] {
+            for (key, value) in [
+                ("successThreshold", 1),
+                ("failureThreshold", 3),
+                ("timeoutSeconds", 1),
+            ] {
+                owner[name][key] = json!(value);
+            }
+            owner[name]["httpGet"]["scheme"] = json!("HTTP");
+        }
+        let service = index(rows, "Service", selected);
+        let allocated = if selected == "issuance-native" {
+            "10.96.0.123"
+        } else {
+            "10.96.0.124"
+        };
+        rows[service]["spec"]["clusterIP"] = json!(allocated);
+        rows[service]["spec"]["clusterIPs"] = json!([allocated]);
+        rows[service]["spec"]["ipFamilies"] = json!(["IPv4"]);
+        rows[service]["spec"]["ipFamilyPolicy"] = json!("SingleStack");
+        rows[service]["spec"]["sessionAffinity"] = json!("None");
+        for port in rows[service]["spec"]["ports"].as_array_mut().unwrap() {
+            port["protocol"] = json!("TCP");
+        }
     }
     actual
 }
@@ -681,6 +696,185 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
 }
 
 #[test]
+fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_owner() {
+    let (baseline, template, ready, mut values) = fixtures();
+    values.insert("MARTY_RELEASE_VERSION".into(), "2026.09.1".into());
+    values.insert("MARTY_UI_SHA".into(), "b".repeat(40));
+    for custom in [false, true] {
+        let mut baseline = baseline.clone();
+        let key = json!({"name":"SIGNING_KEYS_INTERNAL_API_KEY","valueFrom":{"secretKeyRef":{"name":if custom {"existing-custom-signing"} else {"marty-secrets"},"key":"SIGNING_KEYS_INTERNAL_API_KEY"}}});
+        for name in ["gateway", "issuance"] {
+            let i = index(&baseline, "Deployment", name);
+            *owner_mut(&mut baseline[i])["env"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|v| v["name"] == "SIGNING_KEYS_INTERNAL_API_KEY")
+                .unwrap() = key.clone();
+        }
+        let model = native::compose(&baseline, &template, &ready, &values).unwrap();
+        let rows = model["items"].as_array().unwrap();
+        for name in ["gateway", "issuance", "issuance-native", "signing-keys"] {
+            assert_eq!(
+                env(&rows[index(rows, "Deployment", name)])["SIGNING_KEYS_INTERNAL_API_KEY"],
+                key
+            );
+        }
+        for name in ["issuance-native", "signing-keys"] {
+            let selected = &rows[index(rows, "Deployment", name)];
+            assert_eq!(owner(selected)["image"], values["MARTY_SERVICES_IMAGE"]);
+            for name in ["MARTY_RELEASE_VERSION", "MARTY_UI_SHA"] {
+                assert_eq!(env(selected)[name]["value"], values[name]);
+            }
+        }
+        let native_env = env(&rows[index(rows, "Deployment", "issuance-native")]);
+        assert!(!native_env
+            .keys()
+            .any(|name| name.starts_with("BAO") || name.starts_with("OPENBAO")));
+        let signing = env(&rows[index(rows, "Deployment", "signing-keys")]);
+        assert_eq!(
+            signing["SIGNING_KEYS_REDIS_URL"]["value"],
+            "redis://redis:6379/2"
+        );
+        assert_eq!(
+            signing["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
+        assert_eq!(
+            signing["OPENBAO_SERVICE_TOKEN"],
+            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"OPENBAO_SERVICE_TOKEN"}}})
+        );
+        native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
+        for fault in [
+            "signing-key",
+            "gateway-signing-key",
+            "signing-source-missing",
+            "signing-service-missing",
+            "auth-target",
+        ] {
+            assert_eq!(
+                native::check_update(&snapshot_fault(&model, fault), &model, "marty-prod"),
+                Err(REFUSAL),
+                "{fault}"
+            );
+        }
+        let i = index(&baseline, "Deployment", "issuance");
+        owner_mut(&mut baseline[i])["env"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|v| v["name"] == "SIGNING_KEYS_INTERNAL_API_KEY")
+            .unwrap()["valueFrom"]["secretKeyRef"]["name"] = json!("mismatched-existing-key");
+        assert_eq!(
+            native::compose(&baseline, &template, &ready, &values),
+            Err(REFUSAL)
+        );
+    }
+    for setting in ["SIGNING_KEYS_INTERNAL_API_KEY", "AUTH_GRPC_TARGET"] {
+        let mut baseline = baseline.clone();
+        let i = index(&baseline, "Deployment", "gateway");
+        owner_mut(&mut baseline[i])["env"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|v| v["name"] != setting);
+        assert_eq!(
+            native::compose(&baseline, &template, &ready, &values),
+            Err(REFUSAL),
+            "{setting}"
+        );
+    }
+    let i = index(&template, "Deployment", "signing-keys");
+    for fault in ["secret-ref", "redis", "custody-leak", "sidecar"] {
+        let mut template = template.clone();
+        match fault {
+            "secret-ref" => owner_mut(&mut template[i])["env"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|v| v["name"] != "OPENBAO_SERVICE_TOKEN"),
+            "redis" => {
+                owner_mut(&mut template[i])["env"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|v| v["name"] == "SIGNING_KEYS_REDIS_URL")
+                    .unwrap()["value"] = json!("redis://localhost:6379/2");
+            }
+            "custody-leak" => owner_mut(&mut template[i])["envFrom"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"configMapRef":{"name":"marty-config"}})),
+            "sidecar" => template[i]["spec"]["template"]["spec"]["containers"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name":"unapproved"})),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            native::compose(&baseline, &template, &ready, &values),
+            Err(REFUSAL),
+            "{fault}"
+        );
+    }
+}
+
+#[test]
+fn common_config_has_one_organization_binding_and_still_refuses_duplicate_mappings() {
+    let source = fs::read_to_string(root().join("k8s/oracle/01-configmap.yaml"))
+        .unwrap()
+        .replace("\r\n", "\n"); // frozen source proof uses UTF-8/LF on both platforms
+    let binding = "  MARTY_ORG_ID: \"${MARTY_ORG_ID}\"\n";
+    assert_eq!(source.matches(binding).count(), 1);
+    let parsed = native::documents(source.as_bytes()).unwrap();
+    assert_eq!(parsed[0]["data"]["MARTY_ORG_ID"], "${MARTY_ORG_ID}");
+    let anchor = "  MARTY_MIGRATION_PROFILE: \"${MARTY_MIGRATION_PROFILE}\"\n";
+    assert_eq!(source.matches(anchor).count(), 1);
+    let original = source.replace(anchor, &format!("{anchor}{binding}"));
+    assert_eq!(native::documents(original.as_bytes()), Err(REFUSAL));
+}
+
+fn snapshot_fault(model: &Value, fault: &str) -> Value {
+    if ![
+        "signing-key",
+        "gateway-signing-key",
+        "signing-source-missing",
+        "signing-service-missing",
+        "auth-target",
+    ]
+    .contains(&fault)
+    {
+        return legacy_fault(model, fault);
+    }
+    let mut model = model.clone();
+    let rows = model["items"].as_array_mut().unwrap();
+    if fault == "signing-source-missing" || fault == "signing-service-missing" {
+        let kind = if fault == "signing-source-missing" {
+            "Deployment"
+        } else {
+            "Service"
+        };
+        let i = index(rows, kind, "signing-keys");
+        rows.remove(i);
+    } else {
+        let owner = if fault == "signing-key" {
+            "signing-keys"
+        } else {
+            "gateway"
+        };
+        let i = index(rows, "Deployment", owner);
+        let key = if fault == "auth-target" {
+            "AUTH_GRPC_TARGET"
+        } else {
+            "SIGNING_KEYS_INTERNAL_API_KEY"
+        };
+        owner_mut(&mut rows[i])["env"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|v| v["name"] != key);
+    }
+    model
+}
+
+#[test]
 fn full_deploy_preflights_before_first_write_and_apply_uses_captured_model() {
     let (_, _, _, values) = fixtures();
     let source = fs::read_to_string(root().join("scripts/deploy-kubernetes.sh")).unwrap();
@@ -704,7 +898,7 @@ kubectl() {
   [[ "$*" == 'apply -f -' ]] || return 95
   command cat > "$FIXTURE_APPLIED"
 }
-if [[ "$FIXTURE_FAULT" == captured ]]; then
+if [[ "$FIXTURE_FAULT" == captured || "$FIXTURE_FAULT" == valid-custom-source ]]; then
   prepare_kubernetes_native_issuance
   printf '%s' "$K8S_NATIVE_RENDERED_MODEL" > "$FIXTURE_CAPTURED"
   # A changed shell input after capture cannot silently regenerate a different
@@ -718,6 +912,7 @@ fi
     );
     for fault in [
         "captured",
+        "valid-custom-source",
         "invalid-template",
         "missing-secret-ref",
         "empty-selector",
@@ -729,10 +924,20 @@ fi
         let applied = dir.path().join("applied");
         fs::write(&ledger, []).unwrap();
         let mut manifests = root().join("k8s/oracle");
-        if fault == "invalid-template" || fault == "missing-secret-ref" {
+        if [
+            "valid-custom-source",
+            "invalid-template",
+            "missing-secret-ref",
+        ]
+        .contains(&fault)
+        {
             manifests = dir.path().join("manifests");
             fs::create_dir(&manifests).unwrap();
-            for file in ["07-microservices.yaml", "07a-issuance-native.yaml"] {
+            for file in [
+                "07-microservices.yaml",
+                "07a-issuance-native.yaml",
+                "07b-signing-keys.yaml",
+            ] {
                 fs::copy(root().join("k8s/oracle").join(file), manifests.join(file)).unwrap();
             }
             if fault == "invalid-template" {
@@ -741,13 +946,24 @@ fi
                 let file = manifests.join("07-microservices.yaml");
                 let mut documents = native::documents(&fs::read(&file).unwrap()).unwrap();
                 let i = index(&documents, "Deployment", "issuance");
-                owner_mut(&mut documents[i])["env"]
-                    .as_array_mut()
-                    .unwrap()
-                    .retain(|v| v["name"] != "TOKEN_HMAC_KEY");
+                if fault == "missing-secret-ref" {
+                    owner_mut(&mut documents[i])["env"]
+                        .as_array_mut()
+                        .unwrap()
+                        .retain(|v| v["name"] != "TOKEN_HMAC_KEY");
+                } else {
+                    let entry = owner_mut(&mut documents[i])["env"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|v| v["name"] == "DATABASE_URL")
+                        .unwrap();
+                    entry["valueFrom"]["secretKeyRef"]["name"] =
+                        json!("synthetic-existing-database");
+                }
                 let yaml = documents
                     .iter()
-                    .map(|v| serde_yaml::to_string(v).unwrap())
+                    .map(|v| serde_json::to_string(v).unwrap())
                     .collect::<Vec<_>>()
                     .join("\n---\n");
                 fs::write(file, yaml).unwrap();
@@ -784,13 +1000,13 @@ fi
         let (passed, output, errors) = execute(cmd, b"");
         assert_eq!(
             passed,
-            fault == "captured",
+            fault == "captured" || fault == "valid-custom-source",
             "{fault}: {}",
             String::from_utf8_lossy(&errors)
         );
         assert!(output.is_empty());
         let calls = fs::read_to_string(ledger).unwrap();
-        if fault == "captured" {
+        if fault == "captured" || fault == "valid-custom-source" {
             assert_eq!(calls, "apply -f -\n");
             let expected: Value = serde_json::from_slice(&fs::read(captured).unwrap()).unwrap();
             let observed: Value = serde_json::from_slice(&fs::read(applied).unwrap()).unwrap();
@@ -800,6 +1016,17 @@ fi
                 owner(&rows[index(rows, "Deployment", "issuance-native")])["image"],
                 values["MARTY_SERVICES_IMAGE"]
             );
+            if fault == "valid-custom-source" {
+                let selected = &rows[index(rows, "Deployment", "issuance-native")];
+                assert_eq!(
+                    env(selected)["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"],
+                    "synthetic-existing-database"
+                );
+                assert_eq!(
+                    owner(selected)["ports"][0]["containerPort"].as_u64(),
+                    Some(8005)
+                );
+            }
         } else {
             assert!(
                 calls.is_empty(),
@@ -839,7 +1066,8 @@ kubectl() {
     'get deployment') printf '{}\n' ;;
     'set image') : ;;
     'rollout status')
-      if [[ "$3" == deployment/issuance-native && "$FIXTURE_FAULT" == rollout ]]; then return 19; fi ;;
+      if [[ "$3" == deployment/issuance-native && "$FIXTURE_FAULT" == rollout ]]; then return 19; fi
+      if [[ "$3" == deployment/signing-keys && "$FIXTURE_FAULT" == signing-rollout ]]; then return 18; fi ;;
     *) return 93 ;;
   esac
 }
@@ -853,6 +1081,12 @@ cmd_update_images
         "policy-mount",
         "policy-path",
         "rollout",
+        "signing-rollout",
+        "signing-key",
+        "gateway-signing-key",
+        "signing-source-missing",
+        "signing-service-missing",
+        "auth-target",
         "missing-binary",
         "invalid-image",
         "disabled",
@@ -869,10 +1103,15 @@ cmd_update_images
             "policy-volume",
             "policy-mount",
             "policy-path",
+            "signing-key",
+            "gateway-signing-key",
+            "signing-source-missing",
+            "signing-service-missing",
+            "auth-target",
         ]
         .contains(&fault)
         {
-            legacy_fault(&expected, fault)
+            snapshot_fault(&expected, fault)
         } else {
             expected.clone()
         };
@@ -937,15 +1176,21 @@ cmd_update_images
             .filter(|v| v.starts_with("set image "))
             .collect();
         if fault == "none" || fault == "disabled" || fault == "absent" {
-            assert_eq!(writes.len(), if fault == "none" { 4 } else { 3 });
+            assert_eq!(writes.len(), if fault == "none" { 5 } else { 3 });
             assert!(!writes
                 .iter()
                 .any(|v| v.starts_with("set image deployment/issuance ")));
         } else if fault == "rollout" {
             assert_eq!(
                 writes.len(),
-                1,
+                2,
                 "No sibling writes after native rollout failure"
+            );
+        } else if fault == "signing-rollout" {
+            assert_eq!(
+                writes.len(),
+                1,
+                "No native or sibling writes after signing rollout failure"
             );
         } else {
             assert!(writes.is_empty(), "{fault}");
@@ -962,13 +1207,18 @@ cmd_update_images
         }
         if fault == "none" || fault == "rollout" {
             assert_eq!(
-                writes[0],
+                writes[1],
                 format!(
                     "set image deployment/issuance-native issuance-native={} -n marty-prod",
                     values["MARTY_SERVICES_IMAGE"]
                 )
             );
-            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance service/issuance-native configmap/issuance-native-config -n marty-prod -o json --request-timeout=10s\n"));
+            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys service/issuance-native service/signing-keys configmap/issuance-native-config -n marty-prod -o json --request-timeout=10s\n"));
+            let signing = "rollout status deployment/signing-keys -n marty-prod --timeout=180s\n";
+            assert!(
+                calls.find(signing).unwrap()
+                    < calls.find("set image deployment/issuance-native").unwrap()
+            );
             assert!(calls.contains(
                 "rollout status deployment/issuance-native -n marty-prod --timeout=180s\n"
             ));
@@ -1019,7 +1269,7 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
         )
         .unwrap()
     );
-    assert_eq!(baseline.len() + 3, model["items"].as_array().unwrap().len());
+    assert_eq!(baseline.len() + 5, model["items"].as_array().unwrap().len());
     for args in [
         vec!["validate", "--unknown", "private-canary"],
         vec!["validate", "--repo-root", "private-canary"],

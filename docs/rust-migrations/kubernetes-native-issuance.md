@@ -23,8 +23,10 @@ The default tool path is `rust/target/release/kubernetes-native-issuance`;
 This document deliberately provides no deployment invocation: final acceptance
 and release provenance remain outstanding.
 
-The source-only `07a-issuance-native.yaml` template must never be applied directly.
-The Rust tool composes it with the actual envsubst-rendered complete
+The source-only `07a-issuance-native.yaml` and `07b-signing-keys.yaml` templates
+must never be applied directly. Both must be present in the selected manifest
+directory, including custom `--k8s-dir` distributions. The Rust tool composes
+them with the actual envsubst-rendered complete
 `07-microservices.yaml`, returning a Kubernetes List. The shell captures and
 validates that complete model before its first deployment write. The tool has
 no network client and reads only declared non-secret selector/settings variables;
@@ -34,7 +36,8 @@ and their aggregate at 256 KiB. Duplicate mappings, resource identities, owner
 containers and environment entries are refused.
 
 New resources are the distinct `issuance-native` Deployment and ClusterIP Service
-(HTTP 8005, gRPC 9005), plus `issuance-native-config`. They do not share the
+(HTTP 8005, gRPC 9005), `issuance-native-config`, and the existing Rust
+`signing-keys` owner's Deployment and ClusterIP Service (HTTP 8017). They do not share the
 legacy `app: issuance` selector. The packaged services entrypoint receives
 `SERVICE_NAME=issuance_native`. Native has no host ports, host namespace flags,
 init containers, extra containers, or automatic service-account token mount.
@@ -48,8 +51,11 @@ health only, not database/schema, control-plane, wallet or signing readiness.
 No existing NetworkPolicy is supplied by this manifest set; ClusterIP/selector
 separation is not claimed as network-policy enforcement.
 
-The gateway gains only `ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005`
-and its existing source-derived readiness roster plus the native member. Its
+The opt-in gateway gains `ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005`,
+`SIGNING_KEYS_SERVICE_URL=http://signing-keys:8017`, and its existing source-derived
+readiness roster plus the native member. The common gateway manifest explicitly
+sets `AUTH_GRPC_TARGET=auth:9001`, repairing its prior localhost default across
+pods. Its
 `ISSUANCE_SERVICE_URL` remains legacy. The gateway's existing reviewed operation
 selector decides ownership; this is not an all-route switch. Flow still addresses
 `issuance:9005`, Envoy is unchanged, and all sibling services remain intact.
@@ -89,7 +95,7 @@ new inputs fail the guard. These are explicit categories, not a generic
 | Paired optional business settings | Offer TTL, token limit/window, issuer display/CORS; VCDM resources/size/timeout; DIDComm resolver/internal-web/private-IP policy; Canvas experience/state/JWKS TTLs, deep-linking issuer, private/localhost policy; provider signature tolerance, publish/status URLs, API origin list, base/validate/revoke aliases and publish/status timeouts. All 27 exact names are enumerated in `OPTIONAL_SETTINGS`. |
 | Existing Secret key references | `DATABASE_URL`, `ISSUANCE_API_KEY`, `TOKEN_HMAC_KEY`, `INTEGRATION_SECRET_MASTER_KEY`, `SIGNING_KEYS_INTERNAL_API_KEY`, `GRPC_SERVICE_TOKEN`, `CANVAS_CREDENTIALS_SHARED_SECRET`, all in `marty-secrets`. |
 | Optional provider token | `marty-secrets/CANVAS_CREDENTIALS_API_TOKEN`, optional reference. Setup does not fabricate this provider token; an integration needing it must already provision it through the authorized secret workflow. |
-| Native-only metadata/logging | Explicit `MARTY_RELEASE_VERSION`, `MARTY_UI_SHA`, `ISSUANCE_NATIVE_RUST_LOG` (mapped to `RUST_LOG`). Never copied to legacy. |
+| Native-only metadata/logging | Explicit `MARTY_RELEASE_VERSION`, `MARTY_UI_SHA`, `ISSUANCE_NATIVE_RUST_LOG` (mapped to `RUST_LOG`). Never copied to legacy. The two release identity fields also reach the selected signing owner; native-specific logging does not. |
 | Explicit file mounts | The two existing-policy/CA selectors below; no raw file value, host path or custody variable is copied. |
 
 Precedence is preserved at Kubernetes's actual environment boundary. Legacy
@@ -155,20 +161,23 @@ legacy issuance and native issuance. This is the same
 ## Image updates and qualification
 
 Before any image write, selected update-images captures native and legacy
-issuance Deployments, gateway, native Service and shared ConfigMap. The Rust
-guard checks the complete closed native pod model while allowing only enumerated
+issuance Deployments, gateway, signing Deployment, both selected Services and
+shared ConfigMap. The Rust
+guard checks both complete closed selected pod models while allowing only enumerated
 Kubernetes admission defaults; allocated Service addresses are not mistaken for
 source drift. The legacy check fences only supported paired environment/secret
 references and policy/CA mounts, leaving its independent image and unrelated
 topology alone. Missing map/key/policy refuses before writes. This is a snapshot,
 not a concurrency lock or a substitute for release authorization.
 
-The native image update waits for native rollout and propagates its failure
-before sibling image writes. Full deploy also requires native and gateway
+Selected image updates set and await signing first, then native, propagating
+failure before later image writes. Both use the same reviewed immutable services
+image. Full deploy also requires signing, native and gateway
 rollouts. Existing unrelated legacy update behavior is preserved. No automatic
 rollback or production action is introduced.
 
-Final Windows source checkpoint: all 30 release-evidence tests passed, including
+The preceding opt-in source checkpoint (before the dependency closure below):
+all 30 release-evidence tests passed, including
 nine K8s tests (1.83 seconds); strict all-target Clippy (0.84 seconds) and package
 format checks passed. Review identified and repaired empty-selector inconsistency
 and custom-source binding divergence before this final run. The update-shell test invokes
@@ -187,9 +196,72 @@ the prerequisite step runs before the normal complete workspace Rust suite. Bash
 mandatory rather than silently skipped. The Unix-only non-Unicode environment
 case is not claimed executed by the Windows checkpoint.
 
+## Resolved-runtime dependency closure: source-qualified checkpoint
+
+Inspection for the executable acceptance adapter found two real missing
+dependencies; the fixture must not hide either with listener rewrites. The
+gateway lacked its cross-pod auth target, and Kubernetes had no signing owner or
+gateway signing URL despite native issuance using the existing internal signing
+client. The opt-in `07b` template reuses the already-supported Rust service from
+base/self-host Compose, not a replacement signer or new custody design.
+
+The signing environment is a closed seven-entry source inventory: service name,
+port 8017, Redis database 2, internal signing key, `BAO_ADDR`,
+`OPENBAO_SERVICE_TOKEN`, and `PUBLIC_DOMAIN`. The token is the existing supported
+alias of `BAO_TOKEN`; the existing deployment secret setup already owns it.
+The internal key entry is derived verbatim from the matching gateway and legacy
+issuance entries and is shared with native issuance. Matching custom Secret
+references remain valid; disagreement refuses before writes. No Secret contents
+are read. Explicit release version/revision are appended to both native owners.
+The native issuance pod itself remains custody-free.
+
+`BAO_ADDR` is an existing external dependency supplied by `marty-config`; the
+production example uses `https://vault.example.com`. This is a placeholder, not
+evidence of a reachable or authorized provider. There is no assumed local OpenBao
+Deployment. Real provider access, configured key capability, Redis readiness and
+registry pull authorization remain operator/release acceptance prerequisites.
+Signing `/health` proves the listener after initial Redis setup, not an actual
+OpenBao encryption/signature operation. Existing migration ordering is retained;
+the signing service uses its existing Redis stores and adds no SQL migration.
+
+The second, identical `MARTY_ORG_ID` mapping in the common ConfigMap was removed.
+A frozen original-source hash and whole-map comparison prove this is a
+duplicate-key cleanup only; the Rust parser still rejects the historical
+duplicate. No organization value was changed. The operational renderer emits
+bounded JSON, avoiding serde_yaml's feature-unified JSON-number representation;
+modified-manifest fixtures now use JSON documents too and require a successful
+custom-source render, not merely a refusal that could hide an encoder failure.
+
+Kubernetes assets are distributed with the repository/manifest directory and
+the existing Rust CLI. This does not add Kubernetes assets to the separate
+self-host bundle. New source/model tests cover exact signing configuration,
+custom/mismatched identity, missing signing owner/service/auth/key, closed pod
+topology, release metadata and signing-before-native rollout failures. The
+executable shell controls remain closed doubles, with no cluster reads/writes.
+The refreshed Windows checkpoint passed all 32 release-evidence tests, including
+11 K8s tests (2.86 seconds). The complete 32-test suite also passed with
+`serde_json/arbitrary_precision` enabled (11 K8s tests, 2.70 seconds), followed by
+strict all-target feature-unified Clippy (1.44 seconds), package formatting and
+Bash syntax checks. The six full-deploy/apply cases and 19 update cases use the
+actual operational functions and renderer with closed command doubles. Both
+selected owners are checked against enumerated realistic API defaults.
+All 365 broader Python deployment/consumer/Canvas/source guards passed in 20.01
+seconds. These counts supersede the preceding checkpoint for this changed source.
+
+Initial runner failures were resolved before the final evidence: explicit Rust
+1.95.0 replaced the unsupported default 1.93 invocation; the frozen-source test
+normalizes only CRLF to its declared UTF-8/LF representation; the established
+`marty_common` test dependency path was restored; and the exact consumer inventory
+now includes the approved gateway auth target. No runtime/frozen behavior was
+relaxed. The resolved executable Kubernetes adapter remains pending.
+
 Still required: final integrated hosted tests, authenticated image provenance,
 resolved Kubernetes configuration/runtime acceptance (both DIDComm modes,
 ordinary/token/discovery/Canvas, initiation/renewal, real dependencies and no
 legacy fallback), and remaining direct HTTP/RPC consumers. No Python deletion,
 cluster acceptance, release-image boot or completed K8s migration is claimed by
 these model and command-boundary tests.
+
+Any later real Kubernetes gate must use an explicitly owned ephemeral cluster
+and namespace. Merely finding `kubectl` does not authorize using the current
+kubeconfig/context; no context or cluster API was inspected for this slice.

@@ -1,0 +1,94 @@
+# Opt-in dependency of the composed native issuance owner; never apply alone.
+# Uses the existing Rust signing service and existing external OpenBao contract.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signing-keys
+  namespace: marty-prod
+  labels:
+    app: signing-keys
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: signing-keys
+  template:
+    metadata:
+      labels:
+        app: signing-keys
+    spec:
+      serviceAccountName: marty-app
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: signing-keys
+          image: ${MARTY_SERVICES_IMAGE}
+          imagePullPolicy: Always
+          command: ["/app/services/entrypoint.sh"]
+          args: []
+          envFrom: []
+          env:
+            - name: SERVICE_NAME
+              value: signing-keys
+            - name: SIGNING_KEYS_SERVICE_PORT
+              value: "8017"
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_REDIS_URL
+              value: redis://redis:6379/2
+            - name: BAO_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: BAO_ADDR
+            - name: OPENBAO_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: OPENBAO_SERVICE_TOKEN
+            - name: PUBLIC_DOMAIN
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_DOMAIN
+          ports:
+            - name: http
+              containerPort: 8017
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 400m
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8017
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8017
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: signing-keys
+  namespace: marty-prod
+spec:
+  type: ClusterIP
+  selector:
+    app: signing-keys
+  ports:
+    - name: http
+      port: 8017
+      targetPort: 8017

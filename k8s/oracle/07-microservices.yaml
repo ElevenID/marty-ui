@@ -50,6 +50,8 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: GATEWAY_PORT
               value: "8000"
+            - name: AUTH_GRPC_TARGET
+              value: "auth:9001"
             - name: ISSUANCE_API_KEY
               valueFrom:
                 secretKeyRef:
