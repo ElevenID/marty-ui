@@ -48,6 +48,9 @@ status allocation/publication, DID resolution/endpoint policy, and wallet
 HTTP/TLS are controlled ports. Original prepared policy and Core packing and
 encryption execute with fixed, synthetic X25519 fixtures in both modes. No real
 signing key, operator environment, network wallet, TLS trust, or KMS is tested.
+Public fixture vectors are recorded constants, not Python key derivation. The
+Rust-ownership guard remains unchanged, and exact live replay still matches all
+31 cases after this fixture-only replacement.
 Actual socket connections/name resolution are denied after the event loop is
 created; caught attempts also fail the capture. Import-time environment is
 cleared. Five actual clock owners are frozen; timestamps are retained, not

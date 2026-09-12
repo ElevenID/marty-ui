@@ -118,8 +118,6 @@ def _capture(reference: Path):
 
     import httpx
     import marty_rs
-    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     from fastapi import FastAPI
     from issuance.application import canvas_sync_service, issuance_idempotency, rust_integration
     from issuance.domain import entities, ports
@@ -143,9 +141,12 @@ def _capture(reference: Path):
             raise ValueError("Reference import escaped the pinned checkout")
 
     def document(did, byte):
-        # Public fixtures only. This is not an operator key or a new crypto owner.
-        key = X25519PrivateKey.from_private_bytes(bytes([byte]) * 32)
-        public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        # Fixed public vectors for the existing synthetic repeated-byte keys.
+        # Capture does not implement key derivation; original Core owns crypto.
+        public = bytes.fromhex({
+            17: "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13",
+            29: "51ddf3cb36a42fdf3d6a81dfcaada9fe17818aa145548a08e51f2d73e9452478",
+        }[byte])
         return {
             "id": did,
             "verificationMethod": [{"id": f"{did}#key-1", "controller": did,
