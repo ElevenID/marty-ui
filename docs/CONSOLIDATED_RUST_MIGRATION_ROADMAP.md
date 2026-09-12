@@ -119,8 +119,13 @@ now proves actual reservation and delivery for anoncrypt, authcrypt and mixed
 ordinary-wallet offers, plus keyed-push rejection before side effects. The author
 tree passed all ten configured target tests in 47.84 seconds and strict Clippy.
 Controlled clock, seed, signer and control-plane dependencies remain explicit;
-this is not packaged gateway or Flow acceptance. Holder fallback, genuine
-existing-reservation recovery and initiation gateway selection remain open.
+this is not packaged gateway or Flow acceptance. Follow-on reviewed source
+`cc8e0406e` (integration `7e349c652`) qualifies subject fallback, no-holder pending
+responses, refused-wallet/no-resend behavior and mixed keyed rejection through
+the same fresh HTTP graph. Its nine unkeyed cases and two keyed controls passed
+with all existing native/gateway regressions (ten configured target tests,
+47.61 seconds), strict Clippy and verified container cleanup. Genuine
+existing-reservation admission recovery and initiation gateway selection remain open.
 See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
 The latest combined native tree `0d50538d2` passed 383 issuance library tests,

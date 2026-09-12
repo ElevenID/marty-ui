@@ -85,6 +85,21 @@ registration/configuration/reference regression suite passed 120 tests. These
 results include the integrated TTL repair, unlike the earlier 3,135-test Python
 checkpoint, and still do not claim hosted CI or deployment acceptance.
 
+Reviewed source `cc8e0406e`, integrated as `7e349c652`, expands the same fresh
+HTTP gate to nine unkeyed cases: explicit holder, subject fallback, missing holder
+and wallet refusal in both modes, plus mixed ordinary-wallet success. Explicit
+and mixed-wallet keyed requests are rejected before reservation/delivery. Missing
+holder leaves no credential, delivery or event rows. A refused HTTPS POST leaves
+durable unknown delivery state; direct retry and reloaded projector replay do not
+send, allocate or sign again. The first HTTP response remains pending, while a
+reloaded issued transaction projects issued status with a pending delivery URI.
+That observed distinction is asserted, not hidden by rewriting the reservation;
+it is not a claim that Python's transport-failure URI behavior is identical.
+The focused fresh gate passed in 5.82 seconds and the combined ten configured
+target tests in 47.61 seconds, with strict Clippy in 6.44 seconds. All eight
+exact-owned containers across those runs were verified absent. Genuine keyed
+admission recovery and the initiation gateway/Flow consumers remain separate.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
@@ -268,11 +283,12 @@ Neither snapshot projection nor isolated rejection is full admission evidence.
 Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
 not demonstrated migration regressions; working full peer2 has old/new evidence.
 
-1. Complete automatic HTTP qualification beyond the fresh admission/reservation,
-   mixed-wallet successes and offer-expiry evidence recorded above: holder fallback,
-   missing holder, fresh transport failure, mixed keyed rejection and genuine
-   existing-reservation admission recovery remain. Direct/projector replay is not
-   a substitute for executing the actual admission recovery lookup.
+1. Complete genuine existing-reservation admission recovery beyond the fresh HTTP
+   success/fallback/failure, mixed keyed rejection and offer-expiry evidence above.
+   Direct/projector replay is not a substitute for executing the actual admission
+   recovery lookup. Preserve ordinary-wallet keyed success/recovery/conflict and
+   qualify explicitly historical keyed DIDComm snapshots without weakening fresh
+   DIDComm rejection.
 2. Retain the direct gateway gate and qualify the initiation route with a legacy
    trap before selecting it. Preserve management-key injection, trusted tenant and
    error projection. Qualify Flow/gRPC separately against its governed push target.
