@@ -73,6 +73,13 @@ coverage and Linux execution remain outstanding. Base packaged-runtime, self-hos
 consumer gates remain open; active Python features, production and KMS scope are
 unchanged.
 
+Flow scope clarification: beta already selects `issuance-native:9005` for its
+initiation RPC and retains the legacy physical-document HTTP owner. Self-host
+still selects `issuance:9005` with `http://issuance:8005`; remaining deployment
+bindings and effective consumer acceptance must be completed without repeating
+the beta source cutover or moving unrelated HTTP operations. The native and
+legacy RPC owners use distinct service names, not distinct port numbers.
+
 Credentials [PR #275](https://github.com/ElevenID/marty-credentials/pull/275)
 merged through the protected queue at `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
 Protected main and the merged tree were independently verified; the tree is
