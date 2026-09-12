@@ -11,6 +11,19 @@ mod didcomm_test_fixtures;
 #[path = "support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;
 
+#[tokio::test]
+async fn didcomm_fresh_http_admission_composes_reservation_and_delivery() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Fresh DIDComm HTTP admission requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_fresh_http(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
 #[path = "support/didcomm_gateway_replay.rs"]
 mod didcomm_gateway_replay;
 

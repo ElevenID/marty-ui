@@ -26,7 +26,8 @@ use marty_issuance_service::{
     config::IssuanceServiceConfig,
     credential::{
         BuiltCredential, CredentialBuildRequest, CredentialBuilder, CredentialIssuanceError,
-        CredentialTransaction, CredentialTransactionStatus, IssuerContext, IssuerContextResolver,
+        CredentialRepository, CredentialTransaction, CredentialTransactionStatus, IssuerContext,
+        IssuerContextResolver,
     },
     credential_lifecycle::PostgresCredentialLifecycle,
     credential_postgres::PostgresCredentialRepository,
@@ -61,6 +62,9 @@ const SIGNED_CREDENTIAL: &str = "synthetic-controlled-signed-credential";
 const API_KEY: &str = "synthetic-didcomm-management-key";
 const SERVICE_TOKEN: &str = "synthetic-didcomm-status-token";
 const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
+
+#[path = "didcomm_fresh_initiation.rs"]
+mod fresh_initiation;
 
 struct ControlledIssuer;
 
@@ -419,14 +423,26 @@ fn assert_offer_result(
         offer,
         json!({"credential_issuer":format!("https://issuer.example/org/{ORGANIZATION}"),"credential_configuration_ids":["EmployeeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":reservation.transaction.pre_authorized_code}}})
     );
-    assert_eq!(
-        response,
-        &json!({
-            "id":reservation.transaction.id,"organization_id":ORGANIZATION,"credential_template_id":"didcomm-template","status":status,
-            "credential_offer_uri":offer_uri,"credential_offer_uris":{"didcomm":delivery_uri},"credential_offer_labels":{"didcomm":"Synthetic Wallet"},
-            "pre_auth_code":reservation.transaction.pre_authorized_code,"expires_at":"2023-11-14T23:13:20+00:00"
-        })
-    );
+    let mut expected = json!({
+        "id":reservation.transaction.id,"organization_id":ORGANIZATION,"credential_template_id":"didcomm-template","status":status,
+        "credential_offer_uri":offer_uri,"credential_offer_uris":{"didcomm":delivery_uri},"credential_offer_labels":{"didcomm":"Synthetic Wallet"},
+        "pre_auth_code":reservation.transaction.pre_authorized_code,"expires_at":reservation.transaction.expires_at.to_rfc3339()
+    });
+    if reservation
+        .transaction
+        .wallet_configs
+        .iter()
+        .any(|wallet| wallet["wallet_id"] == "ordinary")
+    {
+        let encoded = offer_uri
+            .strip_prefix("openid-credential-offer://?credential_offer=")
+            .unwrap();
+        expected["credential_offer_uris"]["ordinary"] = json!(format!(
+            "synthetic-wallet://open?source=fixture&credential_offer={encoded}"
+        ));
+        expected["credential_offer_labels"]["ordinary"] = json!("Ordinary Wallet");
+    }
+    assert_eq!(response, &expected);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -541,9 +557,11 @@ async fn run_case(
     fault: Option<Fault>,
     recovery: Option<Recovery>,
     gateway: bool,
+    fresh: Option<bool>,
 ) {
     assert!(fault.is_none() || recovery.is_none());
-    let id = format!(
+    assert!(fresh.is_none() || (automatic && !gateway && fault.is_none() && recovery.is_none()));
+    let mut id = format!(
         "didcomm-composed-{}-{}-{fault:?}-{}-gateway{gateway}",
         if authenticated { "auth" } else { "anon" },
         if automatic { "automatic" } else { "direct" },
@@ -554,6 +572,9 @@ async fn run_case(
             Some(Recovery::TlsTrust) => "tls-trust",
         },
     );
+    if let Some(mixed) = fresh {
+        id.push_str(if mixed { "-fresh-mixed" } else { "-fresh-http" });
+    }
     let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
         503
     } else {
@@ -600,11 +621,16 @@ async fn run_case(
         pool.clone(),
         b"synthetic-composed-hmac-key",
     ));
-    let reservation = repository
-        .reserve_idempotently(&transaction(&id))
-        .await
-        .unwrap();
-    assert!(reservation.created);
+    let seeded_reservation = if fresh.is_none() {
+        let reservation = repository
+            .reserve_idempotently(&transaction(&id))
+            .await
+            .unwrap();
+        assert!(reservation.created);
+        Some(reservation)
+    } else {
+        None
+    };
     let before = snapshot(pool, &id).await;
     let gate = (recovery == Some(Recovery::ConcurrentClaim)).then(|| Arc::new(BuildGate::new()));
     let builder = Arc::new(ControlledBuilder {
@@ -625,11 +651,12 @@ async fn run_case(
         },
     )
     .unwrap();
+    let issuer = Arc::new(ControlledIssuer);
     let delivery = Arc::new(
         NativeInitiationDidcommDelivery::new(
             NativeInitiationDidcommPorts {
-                repository,
-                issuer_resolver: Arc::new(ControlledIssuer),
+                repository: repository.clone(),
+                issuer_resolver: issuer.clone(),
                 builder: builder.clone(),
                 lifecycle: Arc::new(lifecycle),
                 envelope: Arc::new(NativeDidcommEnvelope::new(
@@ -686,12 +713,102 @@ async fn run_case(
         assert_eq!(resolutions.load(Ordering::SeqCst), 0);
         assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
     }
-    let projector = InitiationOfferProjector::new("https://issuer.example", delivery).unwrap();
-    let request = InitiationRequest {
-        organization_id: ORGANIZATION.into(),
-        issuer_did: ISSUER.into(),
-        holder_did: Some(HOLDER.into()),
-        ..Default::default()
+    let projector =
+        InitiationOfferProjector::new("https://issuer.example", delivery.clone()).unwrap();
+    let request = if fresh.is_some() {
+        serde_json::from_value(fresh_initiation::request_body()).unwrap()
+    } else {
+        InitiationRequest {
+            organization_id: ORGANIZATION.into(),
+            issuer_did: ISSUER.into(),
+            holder_did: Some(HOLDER.into()),
+            ..Default::default()
+        }
+    };
+    let (reservation, fresh_response) = if let Some(mixed) = fresh {
+        assert_eq!(
+            before,
+            json!({"transaction":null,"credentials":[],"deliveries":[],"events":[]})
+        );
+        let (fresh_router, admission) =
+            fresh_initiation::router(repository.clone(), delivery.clone(), issuer, &id, mixed);
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/issuance-initiation.json"
+        ))
+        .unwrap();
+        if !authenticated && !mixed {
+            let count: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_transactions")
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            let rejected = fresh_initiation::request(&fresh_router, true).await;
+            assert_eq!(
+                u64::from(rejected.0.as_u16()),
+                contract["idempotency"]["didcomm_push_with_idempotency"]["http_status"]
+                    .as_u64()
+                    .unwrap()
+            );
+            assert_eq!(
+                rejected.1,
+                json!({"detail":"idempotent initiation does not support DIDComm push delivery"})
+            );
+            assert_eq!(snapshot(pool, &id).await, before);
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM issuance_service.issuance_transactions"
+                )
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+                count
+            );
+            assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+            assert_eq!(allocations.load(Ordering::SeqCst), 0);
+            assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(resolutions.load(Ordering::SeqCst), 0);
+            assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
+        }
+        let (status, response) = fresh_initiation::request(&fresh_router, false).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(admission.seeds.load(Ordering::SeqCst), 1);
+        let committed = repository
+            .transaction_by_id(&id)
+            .await
+            .unwrap()
+            .expect("HTTP admission committed its own reservation");
+        assert_eq!(committed.created_at.timestamp(), 1_700_000_000);
+        assert_eq!(contract["transaction"]["offer_ttl_minutes"], 10_080);
+        assert_eq!(
+            committed.expires_at.timestamp(),
+            1_700_000_000 + 10_080 * 60
+        );
+        assert_eq!(committed.pre_authorized_code, format!("pre-auth-{id}"));
+        assert!(
+            committed.idempotency_key_hash.is_none()
+                && committed.idempotency_request_hash.is_none()
+        );
+        assert_eq!(committed.wallet_configs.len(), if mixed { 2 } else { 1 });
+        let python: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/didcomm-automatic-response-python-reference.json"
+        ))
+        .unwrap();
+        let holder = python["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["case"] == "success_holder")
+            .unwrap();
+        assert_eq!(response["status"], holder["response"]["status"]);
+        (
+            InitiationReservation {
+                transaction: committed,
+                created: false,
+            },
+            Some(response),
+        )
+    } else {
+        (seeded_reservation.unwrap(), None)
     };
     if let Some(fault) = fault {
         assert!(
@@ -805,7 +922,9 @@ async fn run_case(
         wallet.close_verified();
         return;
     }
-    let first = if recovery == Some(Recovery::TlsTrust) {
+    let first = if let Some(response) = fresh_response {
+        response
+    } else if recovery == Some(Recovery::TlsTrust) {
         assert!(!automatic);
         let frozen: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/didcomm-tls-python-reference.json"
@@ -1100,14 +1219,18 @@ async fn run_case(
 }
 
 pub(super) async fn run(database_url: &str) {
-    run_mode(database_url, false).await;
+    run_mode(database_url, false, false).await;
 }
 
 pub(super) async fn run_gateway(database_url: &str) {
-    run_mode(database_url, true).await;
+    run_mode(database_url, true, false).await;
 }
 
-async fn run_mode(database_url: &str, gateway: bool) {
+pub(super) async fn run_fresh_http(database_url: &str) {
+    run_mode(database_url, false, true).await;
+}
+
+async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(5))
@@ -1123,15 +1246,31 @@ async fn run_mode(database_url: &str, gateway: bool) {
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(120), async {
+        if fresh {
+            for authenticated in [false, true] {
+                run_case(&pool, authenticated, true, None, None, false, Some(false)).await;
+            }
+            run_case(&pool, false, true, None, None, false, Some(true)).await;
+            return;
+        }
         for authenticated in [false, true] {
             for automatic in [false, true] {
                 if gateway && automatic {
                     continue;
                 }
-                run_case(&pool, authenticated, automatic, None, None, gateway).await;
+                run_case(&pool, authenticated, automatic, None, None, gateway, None).await;
             }
             for fault in [Fault::HttpRefused, Fault::UntrustedTls] {
-                run_case(&pool, authenticated, false, Some(fault), None, gateway).await;
+                run_case(
+                    &pool,
+                    authenticated,
+                    false,
+                    Some(fault),
+                    None,
+                    gateway,
+                    None,
+                )
+                .await;
             }
             run_case(
                 &pool,
@@ -1140,6 +1279,7 @@ async fn run_mode(database_url: &str, gateway: bool) {
                 None,
                 Some(Recovery::ConcurrentClaim),
                 gateway,
+                None,
             )
             .await;
             run_case(
@@ -1149,6 +1289,7 @@ async fn run_mode(database_url: &str, gateway: bool) {
                 None,
                 Some(Recovery::TlsTrust),
                 gateway,
+                None,
             )
             .await;
             run_case(
@@ -1158,6 +1299,7 @@ async fn run_mode(database_url: &str, gateway: bool) {
                 None,
                 Some(Recovery::EventProjection),
                 gateway,
+                None,
             )
             .await;
         }
@@ -1168,6 +1310,7 @@ async fn run_mode(database_url: &str, gateway: bool) {
             Some(Fault::WrongSenderKey),
             None,
             gateway,
+            None,
         )
         .await;
     })
