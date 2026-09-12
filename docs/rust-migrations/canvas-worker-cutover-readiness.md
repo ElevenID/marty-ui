@@ -28,6 +28,21 @@ qualify the newer local integration's exact head or establish deployment.
   actual HTTP/status/decoding qualification, coordinated with crypto ownership.
   This is not authorization for a KMS redesign.
 
+The signing reachability follow-up resolves the apparent Context endpoint gap:
+`HttpProofPolicyResolver` in `signing_policy.rs` already selects `issuer-context`
+for DID-less requests and `resolve-issuer-did` otherwise. `main.rs` wires it into
+tenant discovery. Frozen Python organization proof-policy lookup and native
+metadata HTTP both intentionally mask failures with the same fixed public 503;
+do not expose internal signing details or count that masking as feature loss.
+Production adoption must cover this third owner as well as `HttpDidSigner` and
+`HttpIssuerContextResolver`, using one internal response adapter and the existing
+JSON/text decoding owners. Qualify the six frozen Context/Resolve/Sign 401/503
+operations through real HTTP, separately checking inner diagnostics and each
+caller's outward projection. Preserve Context 404 defaults, Canvas readiness
+masking, status-only logs and success validation. The 45 detail vectors remain
+required; add decoding/transport and no-leak controls. This is an audited plan,
+not completed production adoption or permission to overlap active crypto edits.
+
 Native worker launch wiring is already implemented in source: base Compose,
 self-host loader, GHCR/bundle and generated beta mappings, Kubernetes image and
 command, Kubernetes `TOKEN_HMAC_KEY`, shared validators and immutable
