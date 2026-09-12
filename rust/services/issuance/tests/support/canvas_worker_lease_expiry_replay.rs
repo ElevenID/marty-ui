@@ -506,6 +506,17 @@ async fn blocked(pool: &PgPool, blocker: i32) -> Checked<Option<i32>> {
     Ok(pid)
 }
 
+fn confirmed_idle_status(current: &str, confirmed: &str) -> Checked<bool> {
+    if current == confirmed {
+        return Ok(true);
+    }
+    require(
+        current == "leased" && matches!(confirmed, "succeeded" | "retry" | "dead_letter"),
+        "native expiry full snapshot crossed an invalid transition",
+    )?;
+    Ok(false)
+}
+
 async fn stable(
     pool: &PgPool,
     fixture: &WorkerFixture,
@@ -732,6 +743,19 @@ async fn run<'a>(
             continue;
         }
         if state["heartbeat"]["metadata"]["phase"] == "idle" {
+            // Snapshot queries read jobs before heartbeat. Completion between
+            // them can mix an old leased job with the new idle heartbeat.
+            // Confirm after idle; retain the actual sample for first-terminal
+            // accounting instead of discarding it or waiting for success only.
+            let confirmed = read_job(pool).await?;
+            let confirmed_status = status(&confirmed, &initial)?;
+            if !confirmed_idle_status(current_status, confirmed_status)? {
+                next_sample = Some(confirmed);
+                continue;
+            }
+            // A genuinely leased/idle observation remains observable and must
+            // still pass the unchanged frozen parity and late-state checks.
+            renewed |= confirmed.expires.is_some_and(|value| value > expires);
             break (state, current_status);
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -925,6 +949,26 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, case_name: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_idle_confirmation_retries_mixed_snapshot_without_hiding_real_outcomes() {
+        for current in ["leased", "succeeded", "retry", "dead_letter"] {
+            for confirmed in ["leased", "succeeded", "retry", "dead_letter"] {
+                let result = confirmed_idle_status(current, confirmed);
+                if current == confirmed {
+                    // Includes a real leased/idle divergence, not success only.
+                    assert_eq!(result, Ok(true));
+                } else if current == "leased" {
+                    assert_eq!(result, Ok(false));
+                } else {
+                    assert_eq!(
+                        result,
+                        Err("native expiry full snapshot crossed an invalid transition")
+                    );
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn snapshot_guard_preserves_values_and_classifies_panics_without_payloads() {

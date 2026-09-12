@@ -240,6 +240,31 @@ def test_late_failure_categories_are_exact_and_private_payloads_stay_hidden(
     ) == "Native expiry coordinator diagnostics oversized"
 
 
+def test_idle_confirmation_retains_the_actual_terminal_sample_and_strict_late_checks():
+    source = (
+        ROOT / "rust/services/issuance/tests/support/canvas_worker_lease_expiry_replay.rs"
+    ).read_text(encoding="utf-8")
+    outcome = source.split('emit_diagnostic(Diagnostic::ObserveOutcome);', 1)[1]
+    outcome = outcome.split('emit_diagnostic(Diagnostic::PublishOutcome);', 1)[0]
+    ordered = [
+        "let state = observe(pool, fixture).await?;",
+        'if state["heartbeat"]["metadata"]["phase"] == "idle"',
+        "let confirmed = read_job(pool).await?;",
+        "let confirmed_status = status(&confirmed, &initial)?;",
+        "if !confirmed_idle_status(current_status, confirmed_status)?",
+        "next_sample = Some(confirmed);",
+        "continue;",
+        "break (state, current_status);",
+    ]
+    position = 0
+    for fragment in ordered:
+        position = outcome.index(fragment, position) + len(fragment)
+    assert "Some(sample) => sample" in outcome
+    assert "first_terminal_bracket = Some((last_leased_start, sample.after))" in outcome
+    assert 'r0.elapsed() < Duration::from_secs(40)' in outcome
+    assert 'outcome == expected["outcome"]' in outcome
+
+
 def test_snapshot_panic_guard_preserves_budget_and_late_checks():
     source = (
         ROOT
