@@ -50,8 +50,12 @@ qualification. See [packager evidence](rust-migrations/selfhost-bundle-packager.
 Rendered-runtime acceptance source is integrated at `ee4587f56`; its full combined
 Python regression passed **3,478 tests, three skipped** in 212.63 seconds.
 Isolated full Linux gateway executable acceptance remains in progress.
-Hosted CI `34718953669` is still testing pushed `98e78b8d0`; the self-host commit
-and packager commits have not been pushed over that live run. Production remains unchanged.
+Hosted CI `34718953669` completed successfully at pushed `98e78b8d0`. Its two
+separate CodeQL password-hashing alerts were independently reviewed and dismissed
+as false positives; [source evidence](rust-migrations/codeql-canvas-hash-triage.md)
+records the exact random-state and public-contract inputs. Newer self-host,
+packager and consumer commits still require exact-head hosted qualification.
+Production remains unchanged.
 
 The preceding local checkpoint was `20e2a9d14`: reviewed token rate/window parity
 (`3552a9f84`) and the isolated base native issuance opt-in profile are integrated.
@@ -77,7 +81,8 @@ unchanged.
 
 Flow scope clarification: beta already selects `issuance-native:9005` for its
 initiation RPC and retains the legacy physical-document HTTP owner. Self-host
-still selects `issuance:9005` with `http://issuance:8005`; remaining deployment
+and the general-base native opt-in now also select `issuance-native:9005`, while
+keeping `http://issuance:8005`; remaining deployment
 bindings and effective consumer acceptance must be completed without repeating
 the beta source cutover or moving unrelated HTTP operations. The native and
 legacy RPC owners use distinct service names, not distinct port numbers.
@@ -96,6 +101,16 @@ in 5.72 seconds, with both owned fixture containers verified absent, and all
 three skipped** in 206.39 seconds. Rendered Flow secret-loader/provider selection,
 Rust-owned Kubernetes configuration and Envoy initiation routing are the active
 parallel consumer work; these results do not qualify those unfinished bindings.
+
+Flow rendered selection is now integrated at `264900a1c` (reviewed author
+`6b46611b8`). The combined configured gate passed in 9.79 seconds: actual Compose
+settings and the canonical secret loader feed the real Flow configuration/provider
+factory, with per-profile fresh admission, replay/conflict, missing/wrong-token
+controls, retained legacy HTTP and native-outage refusal. Both owned containers
+were independently verified absent. Author qualification also passed strict Clippy,
+235 Python guards, 20 packager tests and the prior Flow regressions. This is not
+Linux or packaged/public Flow startup acceptance; see the
+[scope and remaining gates](rust-migrations/flow-native-consumer-selection.md).
 
 Credentials [PR #275](https://github.com/ElevenID/marty-credentials/pull/275)
 merged through the protected queue at `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
