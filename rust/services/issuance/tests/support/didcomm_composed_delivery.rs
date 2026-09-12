@@ -281,29 +281,86 @@ fn direct_router(delivery: Arc<NativeInitiationDidcommDelivery>) -> Router {
     )
 }
 
-async fn direct_response(app: &Router, id: &str) -> (StatusCode, Value) {
+struct DirectEndpoint {
+    router: Router,
+    gateway: bool,
+}
+
+async fn direct_response(app: &DirectEndpoint, id: &str) -> (StatusCode, Value) {
     let request = Request::post("/v1/issuance/didcomm/deliver")
         .header("content-type", "application/json")
-        .header("x-api-key", API_KEY)
+        .header(
+            "x-api-key",
+            if app.gateway {
+                super::didcomm_gateway_replay::CLIENT_KEY
+            } else {
+                API_KEY
+            },
+        )
         .header("x-organization-id", ORGANIZATION)
         .body(Body::from(
             json!({"organization_id":ORGANIZATION,"transaction_id":id,"holder_did":HOLDER})
                 .to_string(),
         ))
         .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
+    let response = app.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     assert_eq!(response.headers()["content-type"], "application/json");
-    (
-        status,
-        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap(),
-    )
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    let body = if app.gateway && !status.is_success() {
+        super::didcomm_gateway_replay::assert_service_error_projection(body)
+    } else {
+        body
+    };
+    (status, body)
 }
 
-async fn direct(app: &Router, id: &str) -> Value {
+async fn direct(app: &DirectEndpoint, id: &str) -> Value {
     let (status, body) = direct_response(app, id).await;
     assert_eq!(status, StatusCode::OK);
     body
+}
+
+async fn gateway_state_errors(pool: &PgPool, app: &DirectEndpoint, id: &str) {
+    assert!(app.gateway);
+    let original = snapshot(pool, id).await;
+    assert_eq!(original["transaction"]["status"], "pending");
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/didcomm-direct-state-python-reference.json"
+    ))
+    .unwrap();
+    let cases = frozen["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 5);
+    for case in cases {
+        let changed =
+            sqlx::query("UPDATE issuance_service.issuance_transactions SET status=$2 WHERE id=$1")
+                .bind(id)
+                .bind(case["state"].as_str().unwrap())
+                .execute(pool)
+                .await
+                .unwrap();
+        assert_eq!(changed.rows_affected(), 1);
+        let before = snapshot(pool, id).await;
+        let (status, body) = direct_response(app, id).await;
+        assert_eq!(u64::from(status.as_u16()), case["status"].as_u64().unwrap());
+        assert_eq!(body, case["body"]);
+        assert_eq!(
+            snapshot(pool, id).await,
+            before,
+            "gateway state error has no durable effects"
+        );
+    }
+    sqlx::query("UPDATE issuance_service.issuance_transactions SET status='pending' WHERE id=$1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot(pool, id).await,
+        original,
+        "restore only the controlled eligibility input"
+    );
 }
 
 async fn snapshot(pool: &PgPool, id: &str) -> Value {
@@ -482,10 +539,11 @@ async fn run_case(
     automatic: bool,
     fault: Option<Fault>,
     recovery: Option<Recovery>,
+    gateway: bool,
 ) {
     assert!(fault.is_none() || recovery.is_none());
     let id = format!(
-        "didcomm-composed-{}-{}-{fault:?}-{}",
+        "didcomm-composed-{}-{}-{fault:?}-{}-gateway{gateway}",
         if authenticated { "auth" } else { "anon" },
         if automatic { "automatic" } else { "direct" },
         match recovery {
@@ -589,7 +647,36 @@ async fn run_case(
         )
         .unwrap(),
     );
-    let app = direct_router(delivery.clone());
+    let native_router = direct_router(delivery.clone());
+    let gateway_body =
+        json!({"organization_id":ORGANIZATION,"transaction_id":id,"holder_did":HOLDER});
+    let mut gateway_fixture = if gateway {
+        let fixture = super::didcomm_gateway_replay::GatewayFixture::start(
+            native_router.clone(),
+            ORGANIZATION,
+            API_KEY,
+        )
+        .await;
+        fixture.assert_selection_and_denials(&gateway_body).await;
+        Some(fixture)
+    } else {
+        None
+    };
+    let app = DirectEndpoint {
+        router: gateway_fixture
+            .as_ref()
+            .map_or(native_router, |fixture| fixture.router.clone()),
+        gateway,
+    };
+    if let Some(fixture) = &gateway_fixture {
+        let counts = fixture.counts();
+        gateway_state_errors(pool, &app, &id).await;
+        assert_eq!(fixture.counts(), (counts.0 + 5, counts.1));
+        assert_eq!(allocations.load(Ordering::SeqCst), 0);
+        assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(resolutions.load(Ordering::SeqCst), 0);
+        assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
+    }
     let projector = InitiationOfferProjector::new("https://issuer.example", delivery).unwrap();
     let request = InitiationRequest {
         organization_id: ORGANIZATION.into(),
@@ -694,6 +781,17 @@ async fn run_case(
             builder.calls.load(Ordering::SeqCst),
             expected_materializations
         );
+        if let Some(mut fixture) = gateway_fixture.take() {
+            assert_eq!(
+                fixture.counts().1,
+                1,
+                "candidate never selects legacy after baseline control"
+            );
+            fixture
+                .assert_unreachable_without_legacy_fallback(&gateway_body)
+                .await;
+            fixture.close().await;
+        }
         peers.close().await;
         wallet.close_verified();
         return;
@@ -915,11 +1013,30 @@ async fn run_case(
     assert_eq!(resolutions.load(Ordering::SeqCst), resolution_count);
     assert_eq!(allocations.load(Ordering::SeqCst), 1);
     assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+    if let Some(mut fixture) = gateway_fixture.take() {
+        assert_eq!(
+            fixture.counts().1,
+            1,
+            "candidate never selects legacy after baseline control"
+        );
+        fixture
+            .assert_unreachable_without_legacy_fallback(&gateway_body)
+            .await;
+        fixture.close().await;
+    }
     peers.close().await;
     wallet.close_verified();
 }
 
 pub(super) async fn run(database_url: &str) {
+    run_mode(database_url, false).await;
+}
+
+pub(super) async fn run_gateway(database_url: &str) {
+    run_mode(database_url, true).await;
+}
+
+async fn run_mode(database_url: &str, gateway: bool) {
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(5))
@@ -937,10 +1054,13 @@ pub(super) async fn run(database_url: &str) {
     tokio::time::timeout(Duration::from_secs(120), async {
         for authenticated in [false, true] {
             for automatic in [false, true] {
-                run_case(&pool, authenticated, automatic, None, None).await;
+                if gateway && automatic {
+                    continue;
+                }
+                run_case(&pool, authenticated, automatic, None, None, gateway).await;
             }
             for fault in [Fault::HttpRefused, Fault::UntrustedTls] {
-                run_case(&pool, authenticated, false, Some(fault), None).await;
+                run_case(&pool, authenticated, false, Some(fault), None, gateway).await;
             }
             run_case(
                 &pool,
@@ -948,6 +1068,7 @@ pub(super) async fn run(database_url: &str) {
                 false,
                 None,
                 Some(Recovery::ConcurrentClaim),
+                gateway,
             )
             .await;
             run_case(
@@ -956,10 +1077,19 @@ pub(super) async fn run(database_url: &str) {
                 true,
                 None,
                 Some(Recovery::EventProjection),
+                gateway,
             )
             .await;
         }
-        run_case(&pool, true, false, Some(Fault::WrongSenderKey), None).await;
+        run_case(
+            &pool,
+            true,
+            false,
+            Some(Fault::WrongSenderKey),
+            None,
+            gateway,
+        )
+        .await;
     })
     .await
     .expect("bounded composed DIDComm acceptance");

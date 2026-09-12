@@ -11,6 +11,22 @@ mod didcomm_test_fixtures;
 #[path = "support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;
 
+#[path = "support/didcomm_gateway_replay.rs"]
+mod didcomm_gateway_replay;
+
+#[tokio::test]
+async fn didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("DIDComm gateway test requires the explicit owned Docker gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_gateway(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
 #[tokio::test]
 async fn didcomm_native_composes_crypto_https_and_published_durability() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

@@ -586,6 +586,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'status_main_process_resolves_reviews_with_real_http_publication_and_mirror: test'"
         in published
     )
