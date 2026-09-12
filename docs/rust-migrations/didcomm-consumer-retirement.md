@@ -139,3 +139,123 @@ both implementations. Raw empty environment values fail numeric parsing in both,
 but Compose's `:-30` maps empty input to the normal default before startup.
 Capture and qualify a separate Rust parser/runtime correction; this configuration
 repair does not claim to close that existing gap or change KMS behavior.
+
+## Remaining consumer implementation batches (source audit only)
+
+Audit: base/self-host/Envoy and gateway configuration sources at UI `f78aceff4`
+were byte-identical to conformance branch `4f435d4c6`. These are proposed batches
+and required acceptance gates, not executed migrations or deployments. Production,
+Core, KMS and legacy features remain unchanged.
+
+### Routing inventory and correction boundary
+
+Base `docker-compose.base.yml:859` defines only the immutable Python issuance
+service. Gateway `:360` supplies only `ISSUANCE_SERVICE_URL`; gateway
+`config.rs:145-147` consequently aliases `issuance-native` to that legacy URL.
+A distinct native service plus explicit `ISSUANCE_NATIVE_SERVICE_URL` corrects
+this without changing `ISSUANCE_SERVICE_URL` or deleting unselected HTTP routes.
+Gateway `issuance_native.rs:27-81` selects exact methods/paths from the embedded
+coverage contract and leaves absent operations on legacy.
+
+The URL correction affects **all 73 selected HTTP entries at this audited
+revision**, not just DIDComm/initiation: 53 integration/Canvas, nine issuance,
+eight discovery, health, credential-schema and internal entries. Renewal adds
+its own entry after separately reviewed activation. Test the complete selected
+configuration surface when adding a general deployment owner.
+
+Base Flow `:811` still uses `issuance:9005`. Legacy loopback ports at `:935-936`
+expose 8005 and 9005 directly, bypassing gateway owner selection. Self-host
+`docker-compose.selfhost.prod.yml:485` likewise defines only Python issuance;
+gateway `:263` lacks a native URL and Flow `:870` selects legacy gRPC. Auth,
+applicant, presentation-policy and Flow retain direct legacy issuance HTTP URLs
+in both models. Self-host contains no Envoy service. These are independent
+consumers; changing the gateway alone does not retire them.
+
+### Batch 1: general base native profile
+
+- Add a distinct native owner and explicit gateway URL in a general opt-in
+  profile. Do not reuse conformance's private-IP allowance or synthetic CA.
+- Bind the actual executable, complete build/image selection, HTTP 8005/gRPC
+  9005, readiness and issuance-migration dependency. Pair DB, issuer URL,
+  API/HMAC/integration/signing secrets, organization 9002, template 9003,
+  revocation 9013 and their existing HTTP endpoints.
+- Preserve deployed Canvas, token-rate, TTL, resolver and discovery settings;
+  the beta-specific shared definition is not a substitute for that inventory.
+  If token authentication is enabled, pair all thirteen existing clients/peers
+  identified by the conformance validator, not only the three native targets.
+- Keep legacy loopback ports, Flow/Envoy targets and all unselected HTTP routes.
+  Authcrypt remains explicitly opt-in with paired owner-only read-only mounts;
+  no conformance trust configuration becomes a production default.
+
+Required gates: complete before/after model comparison with closed intentional
+deltas and negative binding tests; actual packaged native main and gateway using
+the rendered configuration; token/discovery/Canvas regressions plus ordinary,
+anoncrypt/authcrypt initiation and renewal. Missing/unavailable native must not
+retry against legacy. Use actual PostgreSQL, signing and wallet decryption for
+durability claims, with controlled peers clearly identified.
+
+### Batch 2: self-host native owner and package
+
+- Add a separate owner using existing `*_FILE` aliases and the same
+  `grpc_service_token` secret as current clients/peers. Gateway and native signing
+  already have the intended shared issuance-key file identity; preserve it.
+- Exercise `services/entrypoint.sh` and `scripts/load-secrets-env.sh`, which load
+  secret aliases, unset consumed file selectors and expand `DATABASE_URL_TEMPLATE`
+  from the database password. Preserve the issuance migration prerequisite.
+- Do not blindly extend the current beta service definition: it interpolates
+  required raw beta secret variables and references `marty-network`, while
+  self-host uses file-only secrets and its default network. Extract a neutral
+  executable/readiness/dependency definition with exact beta regression guards,
+  then give self-host an explicit native environment/secret allowlist.
+- Do not copy the legacy BAO token into native merely because it appears beside
+  other issuance secrets. Native signing uses its existing signing service owner;
+  this is not a KMS migration.
+- Add native image/`SERVICE_NAME`/build-reset handling to the self-host bundle
+  override using the qualified services artifact. Any newly referenced Compose
+  files must be included in `deploy-config/bundles/selfhost.json` assets. Preserve
+  all existing API/migration artifacts and unselected consumers.
+
+Required gates: actual packaged secret-loader/main with synthetic secret files;
+missing, unreadable and conflicting direct/file inputs fail closed; correctly
+expanded SQL URL, paired keys, default network and migration readiness. Render
+and exercise the packaged bundle without access to the source checkout. Reuse the
+real PG/signing/wallet graph for the actual selected native operations and prove
+legacy HTTP siblings remain available.
+
+### Batch 3: Flow initiation gRPC only
+
+After the native owner graph passes, change only `ISSUANCE_GRPC_TARGET` to
+`issuance-native:9005` in each qualified model. Keep `ISSUANCE_SERVICE_URL` on
+legacy for physical-document and other unselected HTTP behavior. Flow's actual
+`grpc_providers.rs:522` calls `InitiateIssuance` with its service authentication.
+
+Required gates: reuse `didcomm_flow_grpc_admission.rs` and the native gRPC fixture
+with actual candidate process configuration and token files. Cover ordinary
+idempotent recovery/conflict, fresh keyed DIDComm rejection, anoncrypt/authcrypt,
+refused wallet delivery and missing holder. Prove full responses, HTTP/2/protobuf
+transport, durable state and no extra sends; retain physical-document HTTP tests.
+
+### Batch 4: Envoy exact initiation routes
+
+`config/envoy/envoy.yaml:69-73` and `:136-140` currently send both the entire
+issuance RPC prefix and `/v1/issuance/` to `issuance_grpc`, whose endpoint at
+`:331-355` is legacy port 9005. Add a separate native HTTP/2 cluster and health
+check. Insert exact **POST** routes for the canonical `InitiateIssuance` RPC and
+`/v1/issuance/initiate` before those prefixes. Pass existing `x-service-token`;
+never inject it into unauthenticated traffic.
+
+Keep the eleven sibling RPCs on legacy: ExchangeToken, IssueCredential, GetOffer,
+ListTransactions, GetTransaction, RevokeCredential, SuspendCredential,
+ReinstateCredential, GetCredentialStatus, StreamCredentialEvents and HealthCheck.
+Native service-level health alone does not establish that those methods migrated.
+
+Required gates: actual intended Envoy image and descriptor, exact methods and
+lookalike paths, all siblings, missing/invalid/valid service authentication,
+protobuf and transcoded HTTP bodies including `pre_auth_code`, ordinary recovery
+and conflicts plus DIDComm delivery behavior. Gateway privacy projection must not
+be substituted for the actual protobuf surface. Mount both configuration and
+descriptor through `MARTY_RUNTIME_CONFIG_ROOT` in the intended deployment model.
+Current source uses `marty-envoy:latest` and `envoyproxy/envoy:v1.29-latest`; record
+and qualify the actual image digest instead of claiming an immutable released
+artifact already exists. No image-pin or deployment change is authorized by this
+audit alone.
