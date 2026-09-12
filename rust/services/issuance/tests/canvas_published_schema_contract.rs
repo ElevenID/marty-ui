@@ -2,6 +2,22 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/didcomm_native_grpc_fixture.rs"]
+mod didcomm_native_grpc_fixture;
+
+#[tokio::test]
+async fn didcomm_unkeyed_grpc_initiation_composes_real_delivery() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Unkeyed native RPC delivery requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_fresh_grpc(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
 #[path = "support/didcomm_admission_recovery.rs"]
 mod didcomm_admission_recovery;
 

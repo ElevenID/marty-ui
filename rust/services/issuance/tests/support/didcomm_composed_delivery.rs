@@ -67,6 +67,8 @@ const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 
 #[path = "didcomm_fresh_initiation.rs"]
 mod fresh_initiation;
+#[path = "didcomm_unkeyed_grpc_initiation.rs"]
+mod unkeyed_grpc;
 use fresh_initiation::Scenario as FreshScenario;
 
 struct ControlledIssuer;
@@ -559,9 +561,12 @@ async fn run_case(
     automatic: bool,
     fault: Option<Fault>,
     recovery: Option<Recovery>,
-    gateway: bool,
+    gate: Gate,
     fresh: Option<FreshScenario>,
 ) {
+    let gateway = matches!(gate, Gate::Gateway | Gate::FreshGateway);
+    let grpc = gate == Gate::FreshGrpc;
+    assert!(!grpc || fresh.is_some_and(|scenario| scenario.historical_status().is_none()));
     assert!(fault.is_none() || recovery.is_none());
     assert!(fresh.is_none() || (automatic && fault.is_none() && recovery.is_none()));
     let mut id = format!(
@@ -575,6 +580,9 @@ async fn run_case(
             Some(Recovery::TlsTrust) => "tls-trust",
         },
     );
+    if grpc {
+        id.push_str("-grpc");
+    }
     if let Some(scenario) = fresh {
         id.push_str(&format!("-fresh-{scenario:?}"));
     }
@@ -755,107 +763,126 @@ async fn run_case(
             before,
             json!({"transaction":null,"credentials":[],"deliveries":[],"events":[]})
         );
-        let (fresh_router, admission) =
-            fresh_initiation::router(repository.clone(), delivery.clone(), issuer, &id, scenario);
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/issuance-initiation.json"
         ))
         .unwrap();
-        if !authenticated
-            && matches!(
+        let (response, admission) = if grpc {
+            unkeyed_grpc::initiate(
+                pool,
+                repository.clone(),
+                delivery.clone(),
+                issuer,
+                &id,
                 scenario,
-                FreshScenario::ExplicitHolder | FreshScenario::MixedWallet
             )
-        {
-            let count: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_transactions")
-                    .fetch_one(pool)
-                    .await
-                    .unwrap();
-            let rejected = fresh_initiation::request(
-                &fresh_router,
+            .await
+        } else {
+            let (fresh_router, admission) = fresh_initiation::router(
+                repository.clone(),
+                delivery.clone(),
+                issuer,
+                &id,
                 scenario,
-                Some("synthetic-fresh-didcomm-key"),
-            )
-            .await;
-            assert_eq!(
-                u64::from(rejected.0.as_u16()),
-                contract["idempotency"]["didcomm_push_with_idempotency"]["http_status"]
-                    .as_u64()
-                    .unwrap()
             );
-            assert_eq!(
-                rejected.1,
-                json!({"detail":"idempotent initiation does not support DIDComm push delivery"})
-            );
-            assert_eq!(snapshot(pool, &id).await, before);
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM issuance_service.issuance_transactions"
+            if !authenticated
+                && matches!(
+                    scenario,
+                    FreshScenario::ExplicitHolder | FreshScenario::MixedWallet
+                )
+            {
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM issuance_service.issuance_transactions",
                 )
                 .fetch_one(pool)
                 .await
-                .unwrap(),
-                count
-            );
-            assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
-            assert_eq!(allocations.load(Ordering::SeqCst), 0);
-            assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
-            assert_eq!(resolutions.load(Ordering::SeqCst), 0);
-            assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
-        }
-        let (status, response) = if gateway {
-            if !authenticated && scenario == FreshScenario::ExplicitHolder {
-                let rejected = super::didcomm_gateway_replay::GatewayFixture::start_initiation(
-                    fresh_router.clone(),
-                    ORGANIZATION,
-                    "synthetic-invalid-management-key",
-                    ISSUER,
+                .unwrap();
+                let rejected = fresh_initiation::request(
+                    &fresh_router,
+                    scenario,
+                    Some("synthetic-fresh-didcomm-key"),
                 )
                 .await;
-                let (status, response) = rejected
-                    .initiate(&fresh_initiation::request_body(scenario))
-                    .await;
-                assert_eq!(status, StatusCode::UNAUTHORIZED);
                 assert_eq!(
-                    super::didcomm_gateway_replay::assert_service_error_projection(response),
-                    json!({"detail":"Invalid API Key"})
+                    u64::from(rejected.0.as_u16()),
+                    contract["idempotency"]["didcomm_push_with_idempotency"]["http_status"]
+                        .as_u64()
+                        .unwrap()
                 );
-                assert_eq!(rejected.counts(), (1, 0));
+                assert_eq!(
+                    rejected.1,
+                    json!({"detail":"idempotent initiation does not support DIDComm push delivery"})
+                );
                 assert_eq!(snapshot(pool, &id).await, before);
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM issuance_service.issuance_transactions"
+                    )
+                    .fetch_one(pool)
+                    .await
+                    .unwrap(),
+                    count
+                );
                 assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
                 assert_eq!(allocations.load(Ordering::SeqCst), 0);
                 assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+                assert_eq!(resolutions.load(Ordering::SeqCst), 0);
                 assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
-                rejected.close().await;
             }
-            let fixture = super::didcomm_gateway_replay::GatewayFixture::start_initiation(
-                fresh_router.clone(),
-                ORGANIZATION,
-                API_KEY,
-                ISSUER,
-            )
-            .await;
-            let body = fresh_initiation::request_body(scenario);
-            fixture.assert_initiation_selection_and_denials(&body).await;
-            assert_eq!(snapshot(pool, &id).await, before);
-            assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
-            let (status, public) = fixture.initiate(&body).await;
-            assert_eq!(status, StatusCode::OK, "{public}");
-            let response = fixture.assert_public_offer_projection(&public);
-            assert_eq!(fixture.counts(), (1, 1));
-            fresh_gateway = Some(fixture);
-            (status, response)
-        } else {
-            fresh_initiation::request(&fresh_router, scenario, None).await
+            let (status, response) = if gateway {
+                if !authenticated && scenario == FreshScenario::ExplicitHolder {
+                    let rejected = super::didcomm_gateway_replay::GatewayFixture::start_initiation(
+                        fresh_router.clone(),
+                        ORGANIZATION,
+                        "synthetic-invalid-management-key",
+                        ISSUER,
+                    )
+                    .await;
+                    let (status, response) = rejected
+                        .initiate(&fresh_initiation::request_body(scenario))
+                        .await;
+                    assert_eq!(status, StatusCode::UNAUTHORIZED);
+                    assert_eq!(
+                        super::didcomm_gateway_replay::assert_service_error_projection(response),
+                        json!({"detail":"Invalid API Key"})
+                    );
+                    assert_eq!(rejected.counts(), (1, 0));
+                    assert_eq!(snapshot(pool, &id).await, before);
+                    assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+                    assert_eq!(allocations.load(Ordering::SeqCst), 0);
+                    assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+                    assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
+                    rejected.close().await;
+                }
+                let fixture = super::didcomm_gateway_replay::GatewayFixture::start_initiation(
+                    fresh_router.clone(),
+                    ORGANIZATION,
+                    API_KEY,
+                    ISSUER,
+                )
+                .await;
+                let body = fresh_initiation::request_body(scenario);
+                fixture.assert_initiation_selection_and_denials(&body).await;
+                assert_eq!(snapshot(pool, &id).await, before);
+                assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+                let (status, public) = fixture.initiate(&body).await;
+                assert_eq!(status, StatusCode::OK, "{public}");
+                let response = fixture.assert_public_offer_projection(&public);
+                assert_eq!(fixture.counts(), (1, 1));
+                fresh_gateway = Some(fixture);
+                (status, response)
+            } else {
+                fresh_initiation::request(&fresh_router, scenario, None).await
+            };
+            assert_eq!(status, StatusCode::OK);
+            (response, admission)
         };
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(admission.seeds.load(Ordering::SeqCst), 1);
         let committed = repository
             .transaction_by_id(&id)
             .await
             .unwrap()
-            .expect("HTTP admission committed its own reservation");
+            .expect("native admission committed its own reservation");
         assert_eq!(committed.created_at.timestamp(), 1_700_000_000);
         assert_eq!(contract["transaction"]["offer_ttl_minutes"], 10_080);
         assert_eq!(
@@ -1046,10 +1073,10 @@ async fn run_case(
             assert_eq!(state["deliveries"], json!([]));
             assert!(state["transaction"]["reserved_credential_id"].is_null());
         }
-        // The first HTTP response used the pending reservation before delivery.
+        // The first initiation response used the pending reservation before delivery.
         // The reloaded reservation is actually issued after a refused POST; its
         // projector response retains issued status, but never claims delivery.
-        // This is not a second (non-idempotent) HTTP initiation request.
+        // This is not a second (non-idempotent) HTTP or RPC initiation request.
         for _ in 0..2 {
             let projected = serde_json::to_value(
                 projector
@@ -1527,6 +1554,10 @@ pub(super) async fn run_gateway(database_url: &str) {
     run_mode(database_url, Gate::Gateway).await;
 }
 
+pub(super) async fn run_fresh_grpc(database_url: &str) {
+    run_mode(database_url, Gate::FreshGrpc).await;
+}
+
 pub(super) async fn run_fresh_http(database_url: &str) {
     run_mode(database_url, Gate::Fresh).await;
 }
@@ -1545,12 +1576,13 @@ enum Gate {
     Gateway,
     Fresh,
     FreshGateway,
+    FreshGrpc,
     Historical,
 }
 
 async fn run_mode(database_url: &str, gate: Gate) {
     let gateway = matches!(gate, Gate::Gateway | Gate::FreshGateway);
-    let fresh = matches!(gate, Gate::Fresh | Gate::FreshGateway);
+    let fresh = matches!(gate, Gate::Fresh | Gate::FreshGateway | Gate::FreshGrpc);
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(5))
@@ -1578,7 +1610,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
                         true,
                         None,
                         None,
-                        false,
+                        gate,
                         Some(FreshScenario::Historical(status)),
                     )
                     .await;
@@ -1590,7 +1622,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
                 true,
                 None,
                 None,
-                false,
+                gate,
                 Some(FreshScenario::Historical(
                     CredentialTransactionStatus::Issued,
                 )),
@@ -1606,16 +1638,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
                     FreshScenario::MissingHolder,
                     FreshScenario::WalletRefused,
                 ] {
-                    run_case(
-                        &pool,
-                        authenticated,
-                        true,
-                        None,
-                        None,
-                        gateway,
-                        Some(scenario),
-                    )
-                    .await;
+                    run_case(&pool, authenticated, true, None, None, gate, Some(scenario)).await;
                 }
             }
             run_case(
@@ -1624,10 +1647,22 @@ async fn run_mode(database_url: &str, gate: Gate) {
                 true,
                 None,
                 None,
-                gateway,
+                gate,
                 Some(FreshScenario::MixedWallet),
             )
             .await;
+            if gate == Gate::FreshGrpc {
+                run_case(
+                    &pool,
+                    true,
+                    true,
+                    None,
+                    None,
+                    gate,
+                    Some(FreshScenario::MixedWallet),
+                )
+                .await;
+            }
             return;
         }
         for authenticated in [false, true] {
@@ -1635,19 +1670,10 @@ async fn run_mode(database_url: &str, gate: Gate) {
                 if gateway && automatic {
                     continue;
                 }
-                run_case(&pool, authenticated, automatic, None, None, gateway, None).await;
+                run_case(&pool, authenticated, automatic, None, None, gate, None).await;
             }
             for fault in [Fault::HttpRefused, Fault::UntrustedTls] {
-                run_case(
-                    &pool,
-                    authenticated,
-                    false,
-                    Some(fault),
-                    None,
-                    gateway,
-                    None,
-                )
-                .await;
+                run_case(&pool, authenticated, false, Some(fault), None, gate, None).await;
             }
             run_case(
                 &pool,
@@ -1655,7 +1681,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
                 false,
                 None,
                 Some(Recovery::ConcurrentClaim),
-                gateway,
+                gate,
                 None,
             )
             .await;
@@ -1665,7 +1691,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
                 false,
                 None,
                 Some(Recovery::TlsTrust),
-                gateway,
+                gate,
                 None,
             )
             .await;
@@ -1675,7 +1701,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
                 true,
                 None,
                 Some(Recovery::EventProjection),
-                gateway,
+                gate,
                 None,
             )
             .await;
@@ -1686,7 +1712,7 @@ async fn run_mode(database_url: &str, gate: Gate) {
             false,
             Some(Fault::WrongSenderKey),
             None,
-            gateway,
+            gate,
             None,
         )
         .await;

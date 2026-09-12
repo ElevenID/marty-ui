@@ -1,4 +1,4 @@
-//! Controlled admission dependencies only. The HTTP service, initiation owner,
+//! Controlled admission dependencies only. The HTTP/RPC service, initiation owner,
 //! PostgreSQL reservation and shared DIDComm graph are production implementations.
 use async_trait::async_trait;
 use axum::{
@@ -150,7 +150,7 @@ impl InitiationSeedGenerator for Admission {
         assert_eq!(
             self.seeds.fetch_add(1, Ordering::SeqCst),
             0,
-            "only one fresh HTTP initiation"
+            "only one fresh initiation, not repeated unkeyed admission"
         );
         InitiationSeed {
             transaction_id: self.id.clone(),
@@ -175,14 +175,33 @@ pub(super) fn router(
     id: &str,
     scenario: Scenario,
 ) -> (Router, Arc<Admission>) {
+    let (service, projector, admission) = services(repository, delivery, issuer, id, scenario);
+    let config =
+        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+    let runtime = IssuanceRuntime::new(&config).unwrap();
+    (
+        router_with_initiation(
+            runtime.state(),
+            StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
+            TransportPolicy::new([]),
+            InitiationHttpService::new(service, projector, Some(API_KEY)),
+        ),
+        admission,
+    )
+}
+
+pub(super) fn services(
+    repository: Arc<PostgresCredentialRepository>,
+    delivery: Arc<NativeInitiationDidcommDelivery>,
+    issuer: Arc<ControlledIssuer>,
+    id: &str,
+    scenario: Scenario,
+) -> (InitiationService, InitiationOfferProjector, Arc<Admission>) {
     let admission = Arc::new(Admission {
         id: id.into(),
         scenario,
         seeds: AtomicUsize::new(0),
     });
-    let config =
-        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
-    let runtime = IssuanceRuntime::new(&config).unwrap();
     let service = InitiationService::new(
         InitiationPorts {
             repository,
@@ -200,15 +219,7 @@ pub(super) fn router(
     )
     .unwrap();
     let projector = InitiationOfferProjector::new("https://issuer.example", delivery).unwrap();
-    (
-        router_with_initiation(
-            runtime.state(),
-            StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
-            TransportPolicy::new([]),
-            InitiationHttpService::new(service, projector, Some(API_KEY)),
-        ),
-        admission,
-    )
+    (service, projector, admission)
 }
 
 pub(super) fn request_body(scenario: Scenario) -> Value {
