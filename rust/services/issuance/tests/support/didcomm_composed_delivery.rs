@@ -65,6 +65,7 @@ const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 
 #[path = "didcomm_fresh_initiation.rs"]
 mod fresh_initiation;
+use fresh_initiation::Scenario as FreshScenario;
 
 struct ControlledIssuer;
 
@@ -557,7 +558,7 @@ async fn run_case(
     fault: Option<Fault>,
     recovery: Option<Recovery>,
     gateway: bool,
-    fresh: Option<bool>,
+    fresh: Option<FreshScenario>,
 ) {
     assert!(fault.is_none() || recovery.is_none());
     assert!(fresh.is_none() || (automatic && !gateway && fault.is_none() && recovery.is_none()));
@@ -572,14 +573,16 @@ async fn run_case(
             Some(Recovery::TlsTrust) => "tls-trust",
         },
     );
-    if let Some(mixed) = fresh {
-        id.push_str(if mixed { "-fresh-mixed" } else { "-fresh-http" });
+    if let Some(scenario) = fresh {
+        id.push_str(&format!("-fresh-{scenario:?}"));
     }
-    let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
-        503
-    } else {
-        200
-    });
+    let wallet = WalletFixture::start(
+        if fault == Some(Fault::HttpRefused) || fresh == Some(FreshScenario::WalletRefused) {
+            503
+        } else {
+            200
+        },
+    );
     let endpoint = format!("{}/inbox", wallet.origin);
     let (sender_document, sender_secret, mut recipient_document, recipient_secret) =
         authcrypt_parties_with_ids(ISSUER, HOLDER);
@@ -715,8 +718,8 @@ async fn run_case(
     }
     let projector =
         InitiationOfferProjector::new("https://issuer.example", delivery.clone()).unwrap();
-    let request = if fresh.is_some() {
-        serde_json::from_value(fresh_initiation::request_body()).unwrap()
+    let request = if let Some(scenario) = fresh {
+        serde_json::from_value(fresh_initiation::request_body(scenario)).unwrap()
     } else {
         InitiationRequest {
             organization_id: ORGANIZATION.into(),
@@ -725,24 +728,29 @@ async fn run_case(
             ..Default::default()
         }
     };
-    let (reservation, fresh_response) = if let Some(mixed) = fresh {
+    let (reservation, fresh_response) = if let Some(scenario) = fresh {
         assert_eq!(
             before,
             json!({"transaction":null,"credentials":[],"deliveries":[],"events":[]})
         );
         let (fresh_router, admission) =
-            fresh_initiation::router(repository.clone(), delivery.clone(), issuer, &id, mixed);
+            fresh_initiation::router(repository.clone(), delivery.clone(), issuer, &id, scenario);
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/issuance-initiation.json"
         ))
         .unwrap();
-        if !authenticated && !mixed {
+        if !authenticated
+            && matches!(
+                scenario,
+                FreshScenario::ExplicitHolder | FreshScenario::MixedWallet
+            )
+        {
             let count: i64 =
                 sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_transactions")
                     .fetch_one(pool)
                     .await
                     .unwrap();
-            let rejected = fresh_initiation::request(&fresh_router, true).await;
+            let rejected = fresh_initiation::request(&fresh_router, scenario, true).await;
             assert_eq!(
                 u64::from(rejected.0.as_u16()),
                 contract["idempotency"]["didcomm_push_with_idempotency"]["http_status"]
@@ -769,7 +777,7 @@ async fn run_case(
             assert_eq!(resolutions.load(Ordering::SeqCst), 0);
             assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
         }
-        let (status, response) = fresh_initiation::request(&fresh_router, false).await;
+        let (status, response) = fresh_initiation::request(&fresh_router, scenario, false).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(admission.seeds.load(Ordering::SeqCst), 1);
         let committed = repository
@@ -788,7 +796,18 @@ async fn run_case(
             committed.idempotency_key_hash.is_none()
                 && committed.idempotency_request_hash.is_none()
         );
-        assert_eq!(committed.wallet_configs.len(), if mixed { 2 } else { 1 });
+        assert_eq!(
+            committed.wallet_configs.len(),
+            if scenario == FreshScenario::MixedWallet {
+                2
+            } else {
+                1
+            }
+        );
+        assert_eq!(
+            committed.subject_did.as_deref(),
+            (scenario == FreshScenario::SubjectOnly).then_some(HOLDER)
+        );
         let python: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/didcomm-automatic-response-python-reference.json"
         ))
@@ -797,7 +816,7 @@ async fn run_case(
             .as_array()
             .unwrap()
             .iter()
-            .find(|case| case["case"] == "success_holder")
+            .find(|case| case["case"] == scenario.python_case())
             .unwrap();
         assert_eq!(response["status"], holder["response"]["status"]);
         (
@@ -810,6 +829,122 @@ async fn run_case(
     } else {
         (seeded_reservation.unwrap(), None)
     };
+    if matches!(
+        fresh,
+        Some(FreshScenario::MissingHolder | FreshScenario::WalletRefused)
+    ) {
+        let refused = fresh == Some(FreshScenario::WalletRefused);
+        let pending_uri = format!("didcomm://pending?transaction_id={id}");
+        assert_offer_result(
+            fresh_response.as_ref().unwrap(),
+            &reservation,
+            "pending",
+            &pending_uri,
+        );
+        let state = snapshot(pool, &id).await;
+        let captured = wallet.captures().await;
+        assert_eq!(captured["failures"], 0);
+        assert_eq!(
+            captured["messages"].as_array().unwrap().len(),
+            usize::from(refused)
+        );
+        assert_eq!(state["events"], json!([]));
+        if refused {
+            assert_eq!(state["transaction"]["status"], "issued");
+            assert_eq!(state["credentials"].as_array().unwrap().len(), 1);
+            assert_eq!(state["deliveries"].as_array().unwrap().len(), 1);
+            assert_eq!(state["deliveries"][0]["status"], "delivery_unknown");
+            assert_materialized_binding(&state, &id, &endpoint);
+            let encrypted = captured["messages"][0].as_str().unwrap();
+            assert_eq!(
+                state["deliveries"][0]["metadata"]["encrypted_message"],
+                encrypted
+            );
+            let message = decrypt_capture(
+                encrypted,
+                authenticated,
+                &recipient_secret,
+                &recipient_document,
+                &sender_document,
+            );
+            assert_eq!(message.thid.as_deref(), Some(id.as_str()));
+            assert_eq!(
+                message.id,
+                state["deliveries"][0]["metadata"]["didcomm_message_id"]
+            );
+            assert_eq!(message.attachments.len(), 1);
+            assert_eq!(
+                message.attachments[0].id.as_deref(),
+                state["credentials"][0]["id"].as_str()
+            );
+            assert_eq!(
+                URL_SAFE_NO_PAD
+                    .decode(message.attachments[0].data.base64.as_deref().unwrap())
+                    .unwrap(),
+                SIGNED_CREDENTIAL.as_bytes()
+            );
+            for _ in 0..2 {
+                assert_eq!(
+                    direct_response(&app, &id).await,
+                    (
+                        StatusCode::CONFLICT,
+                        json!({"detail":"DIDComm delivery outcome requires reconciliation"})
+                    )
+                );
+            }
+        } else {
+            assert_eq!(state["transaction"]["status"], "pending");
+            assert_eq!(state["credentials"], json!([]));
+            assert_eq!(state["deliveries"], json!([]));
+            assert!(state["transaction"]["reserved_credential_id"].is_null());
+        }
+        // The first HTTP response used the pending reservation before delivery.
+        // The reloaded reservation is actually issued after a refused POST; its
+        // projector response retains issued status, but never claims delivery.
+        // This is not a second (non-idempotent) HTTP initiation request.
+        for _ in 0..2 {
+            let projected = serde_json::to_value(
+                projector
+                    .project(reservation.clone(), &request)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_offer_result(
+                &projected,
+                &reservation,
+                if refused { "issued" } else { "pending" },
+                &pending_uri,
+            );
+        }
+        assert_eq!(
+            snapshot(pool, &id).await,
+            state,
+            "pending recovery preserves every durable row"
+        );
+        assert_eq!(
+            wallet.captures().await,
+            captured,
+            "pending recovery must not resend"
+        );
+        assert_eq!(allocations.load(Ordering::SeqCst), usize::from(refused));
+        assert_eq!(builder.calls.load(Ordering::SeqCst), usize::from(refused));
+        assert_eq!(
+            resolutions.load(Ordering::SeqCst),
+            if refused {
+                if authenticated {
+                    2
+                } else {
+                    1
+                }
+            } else {
+                0
+            }
+        );
+        peers.close().await;
+        wallet.close_verified();
+        return;
+    }
     if let Some(fault) = fault {
         assert!(
             !automatic,
@@ -1248,9 +1383,34 @@ async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
     tokio::time::timeout(Duration::from_secs(120), async {
         if fresh {
             for authenticated in [false, true] {
-                run_case(&pool, authenticated, true, None, None, false, Some(false)).await;
+                for scenario in [
+                    FreshScenario::ExplicitHolder,
+                    FreshScenario::SubjectOnly,
+                    FreshScenario::MissingHolder,
+                    FreshScenario::WalletRefused,
+                ] {
+                    run_case(
+                        &pool,
+                        authenticated,
+                        true,
+                        None,
+                        None,
+                        false,
+                        Some(scenario),
+                    )
+                    .await;
+                }
             }
-            run_case(&pool, false, true, None, None, false, Some(true)).await;
+            run_case(
+                &pool,
+                false,
+                true,
+                None,
+                None,
+                false,
+                Some(FreshScenario::MixedWallet),
+            )
+            .await;
             return;
         }
         for authenticated in [false, true] {

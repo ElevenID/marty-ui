@@ -31,9 +31,32 @@ use super::{
     StaticDiscoveryDocuments, TransportPolicy, API_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Scenario {
+    ExplicitHolder,
+    MixedWallet,
+    SubjectOnly,
+    MissingHolder,
+    WalletRefused,
+}
+
+impl Scenario {
+    pub(super) fn python_case(self) -> &'static str {
+        match self {
+            Self::ExplicitHolder => "success_holder",
+            Self::MixedWallet => "multiple_wallets",
+            Self::SubjectOnly => "subject_fallback",
+            Self::MissingHolder => "missing_holder",
+            // The frozen projector corpus uses a controlled delivery exception;
+            // this composed case reaches the same pending result after real HTTP 503.
+            Self::WalletRefused => "preflight_failure",
+        }
+    }
+}
+
 pub(super) struct Admission {
     id: String,
-    mixed_wallet: bool,
+    scenario: Scenario,
     pub(super) seeds: AtomicUsize,
 }
 
@@ -51,7 +74,7 @@ impl InitiationClientRepository for Admission {
         _: &str,
         _: &str,
     ) -> Result<Option<InitiationRegisteredClient>, InitiationDependencyError> {
-        panic!("explicit-holder admission has no registered-client lookup")
+        panic!("these admission requests have no registered-client selection")
     }
 }
 #[async_trait]
@@ -59,7 +82,7 @@ impl InitiationTemplateResolver for Admission {
     async fn resolve(&self, id: &str) -> Result<InitiationTemplate, InitiationDependencyError> {
         assert_eq!(id, "didcomm-template");
         let mut wallets = transaction(&self.id).wallet_configs;
-        if self.mixed_wallet {
+        if self.scenario == Scenario::MixedWallet {
             wallets.push(json!({"wallet_id":"ordinary","format_variant":"default","display_name":"Ordinary Wallet","deep_link_scheme":"synthetic-wallet://open?source=fixture"}));
         }
         Ok(InitiationTemplate {
@@ -121,11 +144,11 @@ pub(super) fn router(
     delivery: Arc<NativeInitiationDidcommDelivery>,
     issuer: Arc<ControlledIssuer>,
     id: &str,
-    mixed_wallet: bool,
+    scenario: Scenario,
 ) -> (Router, Arc<Admission>) {
     let admission = Arc::new(Admission {
         id: id.into(),
-        mixed_wallet,
+        scenario,
         seeds: AtomicUsize::new(0),
     });
     let config =
@@ -159,14 +182,25 @@ pub(super) fn router(
     )
 }
 
-pub(super) fn request_body() -> Value {
-    json!({
+pub(super) fn request_body(scenario: Scenario) -> Value {
+    let mut body = json!({
         "organization_id":ORGANIZATION, "credential_template_id":"didcomm-template",
         "issuer_did":ISSUER, "holder_did":HOLDER, "claims":{"given_name":"Synthetic"},
-    })
+    });
+    if matches!(scenario, Scenario::SubjectOnly | Scenario::MissingHolder) {
+        body.as_object_mut().unwrap().remove("holder_did");
+    }
+    if scenario == Scenario::SubjectOnly {
+        body["subject_did"] = json!(HOLDER);
+    }
+    body
 }
 
-pub(super) async fn request(router: &Router, keyed: bool) -> (StatusCode, Value) {
+pub(super) async fn request(
+    router: &Router,
+    scenario: Scenario,
+    keyed: bool,
+) -> (StatusCode, Value) {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../../contracts/issuance-initiation.json"
     ))
@@ -183,7 +217,7 @@ pub(super) async fn request(router: &Router, keyed: bool) -> (StatusCode, Value)
         .clone()
         .oneshot(
             request
-                .body(Body::from(request_body().to_string()))
+                .body(Body::from(request_body(scenario).to_string()))
                 .unwrap(),
         )
         .await
