@@ -103,6 +103,10 @@ missing typed coverage registration found by the initial full run was repaired
 and the final full issuance/composed gates passed. Eighty-two coverage/CI guards
 passed. Native HTTP coverage is now 64 of the frozen 131 operations.
 
+Clean combined integration `3afeb32af` passed 3,135 root/retained-service Python
+tests with three explicit skips in 205.47 seconds, and its read-only Compose
+configuration gate passed independently. Hosted qualification remains separate.
+
 Production and beta deployments are unchanged; this is locally reviewed source,
 not a merge or deployed acceptance claim. Fresh automatic HTTP/Flow admission,
 compatible consumer/image selection and safe Python retirement remain open.

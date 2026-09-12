@@ -43,6 +43,11 @@ suite passed 307 tests. No policy contents were read by that gate, and no
 deployment occurred. Current PR #814 remains draft and its older exact-head
 runtime run is allowed to finish before pushing this batch.
 
+The clean combined integration `3afeb32af` subsequently passed all 3,135 root and
+retained service Python tests, with three explicit skips, in 205.47 seconds.
+Its actual read-only Compose gate also passed independently. This does not
+replace the upcoming exact-head hosted run or aggregate beta acceptance.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
