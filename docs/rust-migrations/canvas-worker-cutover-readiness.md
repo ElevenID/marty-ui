@@ -51,6 +51,18 @@ masking, status-only logs and success validation. The 45 detail vectors remain
 required; add decoding/transport and no-leak controls. This is an audited plan,
 not completed production adoption or permission to overlap active crypto edits.
 
+Further caller inspection separates operation identity from URL: both current
+native context/proof-policy resolvers correspond to Python
+`resolve_remote_issuer_context`, including when its URL is `resolve-issuer-did`.
+They must retain the Context diagnostic prefix. The separate Python Resolve
+helper has no identified issuance production caller; its frozen observations
+can qualify the shared internal adapter without inventing a production route.
+Also preserve the existing lossless `JsonTree`/`PythonText` decoder boundary:
+silently converting non-scalar diagnostics to missing values would lose
+behavior. Non-scalar formatting and status-under-400 continuation require
+explicit source/capture reconciliation before production adoption; the 45
+scalar helper observations alone do not prove those additional cases.
+
 Native worker launch wiring is already implemented in source: base Compose,
 self-host loader, GHCR/bundle and generated beta mappings, Kubernetes image and
 command, Kubernetes `TOKEN_HMAC_KEY`, shared validators and immutable
