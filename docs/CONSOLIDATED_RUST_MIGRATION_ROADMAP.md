@@ -40,7 +40,26 @@ Actual Linux Compose 2.38.2 and 5.4 passed full bundle/native-owner comparisons;
 the installed-version gate remains and the pinned-version bundle gate is now
 mandatory too. Full combined Python regression at `72f966d11` passed **3,523
 tests, three skipped** in 227.43 seconds. These repairs still need fresh hosted
-qualification; unfinished Kubernetes/Envoy work is not included in this checkpoint.
+qualification. Repair run `34724946640` at pushed `6c08438af` has passed Rust
+lint/packaging, release contracts, security, UI and browser lifecycle jobs;
+Rust service tests and image builds remain running at this observation.
+
+Reviewed Kubernetes native-owner configuration is integrated locally at
+`97ff18e48` (author `cc695ee84`). The final author checkpoint passed 30 Rust
+tests, strict Clippy/format checks and 164 Python guards; the integrated focused
+Python regression passed 127 tests in 4.99 seconds. It preserves custom shared
+bindings and legacy ownership, rejects invalid selection before writes, and
+tests captured-model reuse. These are model/command-boundary proofs, not cluster
+acceptance. Release provenance and resolved runtime acceptance remain required;
+see [the Kubernetes qualification boundary](rust-migrations/kubernetes-native-issuance.md).
+
+Envoy routing remains in its separate worktree. Its supplementary actual-image
+attempt failed during Docker container creation before Envoy startup; Windows
+bind-path diagnosis and full Linux runtime coverage remain pending. A separate
+Flow worker is implementing actual-main startup and public service-boundary
+checks. Packaged image boot, real gateway authentication, callback-worker
+delivery and self-host workload TLS remain explicit acceptance requirements.
+Neither workstream authorizes Python deletion, merging or deployment yet.
 
 Self-host native-owner configuration is now integrated locally at `e53cb2704`
 (reviewed author `05f7df2df`). Its full Python regression passed **3,412 tests,
