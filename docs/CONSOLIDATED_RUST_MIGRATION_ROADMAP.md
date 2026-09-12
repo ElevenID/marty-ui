@@ -130,9 +130,15 @@ ordinary-wallet keyed admission recovery now passes in reviewed source `21453158
 response/row equality and conflict rejection across changed TTLs, with no repeated
 template/clock/seed/issuer work. Its eleven configured tests and strict Clippy pass.
 Historical keyed DIDComm admission recovery and initiation gateway selection remain open.
+The gateway candidate is now locally qualified in reviewed `2c4d4ff7e`
+(integration `c5a390593`): nine fresh scenarios traverse real gateway/upstream HTTP,
+the same native PostgreSQL/crypto/HTTPS graph, exact public redaction, upstream
+401 and no legacy fallback. Twelve configured target tests passed in 73.99 seconds
+with strict Clippy and verified cleanup. This is not selection or deployment;
+keyed rejection and subsequent replay controls remain native-only in that fixture.
 See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
-The latest combined native tree `0d50538d2` passed 383 issuance library tests,
+The earlier full-library checkpoint `0d50538d2` passed 383 issuance library tests,
 three initiation and six direct HTTP tests, and ten configured target tests
 (47.55 seconds). Strict package Clippy and formatting across all 19 workspace
 packages passed; all six exact-owned test containers were verified absent.

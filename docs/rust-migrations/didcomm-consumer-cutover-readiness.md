@@ -113,6 +113,44 @@ containers across those runs were verified absent. This ordinary-wallet gate
 deliberately panics if DIDComm delivery is requested: historical keyed DIDComm
 delivery/recovery remains to qualify with the actual shared delivery graph.
 
+## Fresh initiation gateway candidate
+
+Reviewed source `2c4d4ff7e` (integration `c5a390593`) runs the same nine fresh
+scenarios through actual `POST /v1/issuance` gateway admission, its preserved
+`/v1/issuance/initiate` rewrite, real upstream HTTP and the shared native
+PostgreSQL/Core/HTTPS graph. Only that route's candidate owner differs from the
+embedded legacy selection. Both route tables retain every other route/policy.
+Identity and template/signing-identity preflight ports are controlled; the
+issuance upstream is never replaced with a canned response.
+
+Each scenario exercises a real legacy trap baseline and checks denials before
+even ancillary preflights, exact public JSON media type and eight-field response,
+and exactly one template/signing-identity preflight per accepted attempt. The
+native nine-field DTO is independently checked; only its top-level internal
+`pre_auth_code` is removed, not the protocol-required grant in encoded offers.
+A genuine native 401 caused by a deliberately wrong injected management key
+preserves the complete MIP service-error envelope with zero issuance effects.
+Stopping the native listener produces a server error and no legacy fallback.
+
+The exact gateway gate passed in 24.44 seconds; all twelve configured DIDComm
+target tests passed in 73.99 seconds, with strict Clippy in 6.53 seconds and all
+nineteen-package formatting checks. All ten exact-owned containers across both
+runs were independently verified absent. Keyed rejection and direct/projector
+repetition in the shared fixture still call the native service, not the gateway:
+this gate does not claim gateway idempotency forwarding or HTTP replay semantics.
+It is not packaged-ingress, independent-wallet or deployed acceptance. Automatic
+initiation selection remains unchanged pending the remaining historical recovery
+and consumer gates; production and KMS are untouched.
+
+The root's combined integration `c5a390593` subsequently passed all thirteen
+configured target tests in 77.22 seconds, including ordinary keyed recovery and
+the new gateway gate together. Strict target Clippy passed in 6.76 seconds;
+all ten exact-owned containers were independently verified absent. Mandatory
+CI-registration guards passed 79 tests. The older hosted head `184509745` also
+completed its Rust Service Tests job successfully in run `34701797735`; that
+run still failed the two separately repaired security/release-contract jobs.
+This is not exact-head hosted acceptance of the newer local integration.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
