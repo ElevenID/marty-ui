@@ -610,6 +610,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'"
         in published
     )

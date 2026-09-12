@@ -45,6 +45,13 @@ const API_KEY: &str = "synthetic-admission-management-key";
 #[path = "didcomm_flow_grpc_admission.rs"]
 mod flow_grpc;
 
+#[path = "flow_native_consumer.rs"]
+mod flow_consumer;
+
+pub(super) async fn run_flow_consumer(database_url: &str) {
+    flow_consumer::run(database_url).await;
+}
+
 pub(super) async fn run_flow_grpc(database_url: &str) {
     flow_grpc::run(database_url).await;
 }
@@ -220,6 +227,15 @@ fn initiation(
     ports: Arc<Ports>,
     config: &IssuanceServiceConfig,
 ) -> (InitiationService, InitiationOfferProjector) {
+    initiation_with_seeds(repository, ports.clone(), config, ports)
+}
+
+fn initiation_with_seeds(
+    repository: Arc<PostgresCredentialRepository>,
+    ports: Arc<Ports>,
+    config: &IssuanceServiceConfig,
+    seeds: Arc<dyn InitiationSeedGenerator>,
+) -> (InitiationService, InitiationOfferProjector) {
     let service = InitiationService::new(
         InitiationPorts {
             repository,
@@ -230,7 +246,7 @@ fn initiation(
             applications: ports.clone(),
             related_resources: ports.clone(),
             issuer_resolver: ports.clone(),
-            seeds: ports.clone(),
+            seeds,
             clock: ports.clone(),
         },
         "https://issuer.example",

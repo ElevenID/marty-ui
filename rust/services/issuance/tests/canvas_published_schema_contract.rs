@@ -218,6 +218,19 @@ async fn didcomm_flow_grpc_provider_preserves_keyed_admission() {
 }
 
 #[tokio::test]
+async fn flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Flow consumer composition requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_admission_recovery::run_flow_consumer(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
 async fn didcomm_http_admission_recovers_real_keyed_reservation() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Admission recovery requires the exact-owned published schema gate");
