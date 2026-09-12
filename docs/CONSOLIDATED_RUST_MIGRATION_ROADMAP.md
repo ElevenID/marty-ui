@@ -45,7 +45,8 @@ CI `34706838536` has passed security scanning and release-contract tests, with
 Rust image builds and Rust CodeQL also pass. The runtime job subsequently failed
 because a health test selected the first coverage entry after DIDComm insertion:
 actual status 200 was compared with a missing expected value. A scoped test
-selector repair is underway; no runtime health behavior change is inferred.
+selector repair is integrated as `1d722b432`: all twelve HTTP tests, strict
+issuance Clippy and formatting passed. No runtime health behavior changed.
 The later keyed Flow and four delivery-mode Canvas lifecycle
 cases remain local and do not reset that hosted run. Canvas integration
 `9f6679395` qualifies eight of seventeen lifecycle cases with real gateway and

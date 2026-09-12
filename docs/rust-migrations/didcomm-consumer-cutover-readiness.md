@@ -34,7 +34,10 @@ formatting clean and all twenty owned containers independently absent. Mandatory
 CI registration guards passed all 79 Python tests and Ruff. Hosted `f60aefc74`
 predates this slice: run `34706838536` finished with a health-test positional
 contract lookup failure (actual 200 versus missing expected value), not a
-DIDComm failure. Its repair and fresh integrated-head CI remain required.
+DIDComm failure. Reviewed repair `63ac48c3d`, integrated as `1d722b432`, selects
+unique exact `GET /health` with typed response validation and order/missing/
+duplicate/malformed controls. All twelve HTTP tests and strict issuance Clippy
+passed. Fresh integrated-head CI remains required.
 
 ## Latest direct-route checkpoint
 
