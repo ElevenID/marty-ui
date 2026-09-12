@@ -345,6 +345,7 @@ readonly -f kubectl checked_python envsubst
             extracted(name)
             for name in (
                 "resolve_kubernetes_issuance_image",
+                "prepare_kubernetes_native_issuance",
                 "apply_manifest",
                 "cmd_deploy",
             )

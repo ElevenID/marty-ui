@@ -50,6 +50,11 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: GATEWAY_PORT
               value: "8000"
+            - name: ISSUANCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: ISSUANCE_API_KEY
             - name: AUTH_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
@@ -677,6 +682,11 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: ISSUANCE_SERVICE_PORT
               value: "8005"
+            - name: ISSUANCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: ISSUANCE_API_KEY
             - name: ORG_GRPC_TARGET
               value: "organization:9002"
             - name: CT_GRPC_TARGET

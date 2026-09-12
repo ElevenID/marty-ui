@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 pub mod demo_qualification;
 pub mod deployment_bundle;
+pub mod kubernetes_native;
 
 pub const MAX_RUN_BYTES: usize = 1024 * 1024;
 const REPOSITORY: &str = "ElevenID/marty-ui";

@@ -140,7 +140,30 @@ check_prereqs() {
 apply_manifest() {
   local file="$1"
   info "Applying $(basename "$file")…"
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true && "$file" == "${K8S_DIR}/07-microservices.yaml" ]]; then
+    [[ -n "${K8S_NATIVE_RENDERED_MODEL:-}" ]] || { error "Native issuance model was not preflighted."; return 1; }
+    printf '%s\n' "$K8S_NATIVE_RENDERED_MODEL" | kubectl apply -f -
+    return
+  fi
   envsubst < "$file" | kubectl apply -f -
+}
+
+# No build, registry request or cluster mutation: capture the exact full model
+# before any deployment writes. Disabled/default keeps the existing path and
+# does not require the new executable or inspect unused native-only inputs.
+prepare_kubernetes_native_issuance() {
+  K8S_NATIVE_RENDERED_MODEL=""
+  case "${K8S_ISSUANCE_NATIVE_ENABLED-false}" in
+    false) return 0 ;;
+    true) ;;
+    *) error "Kubernetes native issuance selection must be true or false."; return 1 ;;
+  esac
+  K8S_NATIVE_ISSUANCE_BIN="${K8S_NATIVE_ISSUANCE_BIN:-${REPO_ROOT}/rust/target/release/kubernetes-native-issuance}"
+  command -v "$K8S_NATIVE_ISSUANCE_BIN" >/dev/null 2>&1 || { error "Required native issuance deployment executable is unavailable."; return 1; }
+  export K8S_ISSUANCE_NATIVE_ENABLED MARTY_SERVICES_IMAGE
+  "$K8S_NATIVE_ISSUANCE_BIN" validate || return 1
+  K8S_NATIVE_RENDERED_MODEL="$(envsubst < "${K8S_DIR}/07-microservices.yaml" | "$K8S_NATIVE_ISSUANCE_BIN" render --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR")" || return 1
+  [[ -n "$K8S_NATIVE_RENDERED_MODEL" ]] || { error "Native issuance deployment model is empty."; return 1; }
 }
 
 catalog_services() {
@@ -401,6 +424,15 @@ cmd_status() {
 }
 
 cmd_update_images() {
+  prepare_kubernetes_native_issuance || return 1
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+    # Read-only API snapshot, not a lock against concurrent operator changes.
+    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance service/issuance-native configmap/issuance-native-config -n "$NAMESPACE" -o json --request-timeout=10s \
+      | "$K8S_NATIVE_ISSUANCE_BIN" check-update --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR" --namespace "$NAMESPACE"; then
+      error "Native issuance image update refused; apply the reviewed full-manifest selection first."
+      return 1
+    fi
+  fi
   # Image-only updates cannot replace a legacy command or inherited selector.
   # This read-only snapshot is not a lock against concurrent operator changes.
   if ! kubectl get deployment canvas-sync-worker -n "$NAMESPACE" -o json --request-timeout=10s 2>/dev/null \
@@ -409,6 +441,10 @@ cmd_update_images() {
     return 1
   fi
   step "Rolling image update — tag: ${IMAGE_TAG}"
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+    kubectl set image deployment/issuance-native "issuance-native=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
+    kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
+  fi
   while IFS= read -r svc; do
     # The external Python API is not built by this repository's image loop.
     # Advance it only with its matching migration image in a reviewed deploy.
@@ -430,6 +466,7 @@ cmd_deploy() {
     return 1
   }
   export MARTY_ISSUANCE_IMAGE="$issuance_image"
+  prepare_kubernetes_native_issuance || return 1
   step "Full Kubernetes Deploy"
 
   apply_manifest "${K8S_DIR}/00-namespace.yaml"
@@ -508,6 +545,10 @@ cmd_deploy() {
 
   step "Deploying microservices…"
   apply_manifest "${K8S_DIR}/07-microservices.yaml"
+  if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-false}" == true ]]; then
+    kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
+    kubectl rollout status deployment/gateway -n "$NAMESPACE" --timeout=180s || return 1
+  fi
   kubectl rollout status deployment/gateway  -n "$NAMESPACE" --timeout=180s || true
   kubectl rollout status deployment/auth     -n "$NAMESPACE" --timeout=180s || true
 

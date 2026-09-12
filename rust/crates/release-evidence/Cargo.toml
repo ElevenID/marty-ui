@@ -12,6 +12,7 @@ base64.workspace = true
 flate2 = "1.1.9"
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = "0.9.34"
 sha2.workspace = true
 
 [dev-dependencies]
@@ -28,3 +29,7 @@ path = "src/main.rs"
 [[bin]]
 name = "validate-demo-qualification"
 path = "src/demo_cli.rs"
+
+[[bin]]
+name = "kubernetes-native-issuance"
+path = "src/kubernetes_native_cli.rs"

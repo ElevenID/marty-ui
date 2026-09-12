@@ -196,9 +196,12 @@ def test_numeric_exponent_bounds_through_bytes_and_cli(number, accepted):
 
 def extracted_update():
     source = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    matches = re.findall(r"^cmd_update_images\(\) \{\n.*?^\}", source, re.M | re.S)
-    assert len(matches) == 1
-    return matches[0]
+    result = []
+    for name in ("prepare_kubernetes_native_issuance", "cmd_update_images"):
+        matches = re.findall(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S)
+        assert len(matches) == 1
+        result.append(matches[0])
+    return "\n".join(result)
 
 
 @pytest.mark.parametrize("case", ["native", "legacy", "missing", "get-failed"])

@@ -407,6 +407,12 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
+      - name: Require Kubernetes deployment contract executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bash
+          command -v envsubst
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash

@@ -1,0 +1,250 @@
+# Explicit selection template, composed with the full legacy service model by
+# the Rust kubernetes-native-issuance CLI. Never apply this template directly: its image
+# and optional configuration must first pass the closed renderer.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: issuance-native-config
+  namespace: marty-prod
+data: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issuance-native
+  namespace: marty-prod
+  labels:
+    app: issuance-native
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: issuance-native
+  template:
+    metadata:
+      labels:
+        app: issuance-native
+    spec:
+      serviceAccountName: marty-app
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: issuance-native
+          image: ${MARTY_SERVICES_IMAGE}
+          imagePullPolicy: Always
+          command: ["/app/services/entrypoint.sh"]
+          args: []
+          envFrom:
+            - configMapRef:
+                name: issuance-native-config
+          env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ENVIRONMENT
+            - name: UI_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: UI_BASE_URL
+            - name: CREDENTIAL_TEMPLATE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CREDENTIAL_TEMPLATE_SERVICE_URL
+            - name: REVOCATION_PROFILE_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: REVOCATION_PROFILE_SERVICE_URL
+            - name: UNIVERSAL_RESOLVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: UNIVERSAL_RESOLVER_URL
+            - name: CANVAS_LTI_EXPERIENCE_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_EXPERIENCE_BASE_URL
+            - name: CANVAS_OAUTH_COMPLETION_REDIRECT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_OAUTH_COMPLETION_REDIRECT_URL
+            - name: CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID
+            - name: CANVAS_LTI_TOOL_ISSUER_DID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LTI_TOOL_ISSUER_DID
+            - name: CANVAS_PORTABLE_INTEGRATION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_PORTABLE_INTEGRATION_ENABLED
+            - name: CANVAS_PILOT_ORGANIZATION_IDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_PILOT_ORGANIZATION_IDS
+            - name: CANVAS_LEGACY_EVENT_INGEST_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_LEGACY_EVENT_INGEST_ENABLED
+            - name: CANVAS_PRIVATE_ORIGIN_ALLOWLIST
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_PRIVATE_ORIGIN_ALLOWLIST
+            - name: CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST
+            - name: CANVAS_BINDING_READINESS_MAX_AGE_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_BINDING_READINESS_MAX_AGE_SECONDS
+            - name: CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS
+            - name: CANVAS_CREDENTIALS_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_PROVIDER
+            - name: CANVAS_CREDENTIALS_API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_API_BASE_URL
+            - name: CANVAS_CREDENTIALS_ISSUER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ISSUER_ID
+            - name: CANVAS_CREDENTIALS_BADGECLASS_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_BADGECLASS_ID
+            - name: CANVAS_CREDENTIALS_ASSERTION_SCOPE
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CANVAS_CREDENTIALS_ASSERTION_SCOPE
+            - name: SERVICE_NAME
+              value: issuance_native
+            - name: ISSUANCE_SERVICE_PORT
+              value: "8005"
+            - name: ISSUANCE_GRPC_ENABLED
+              value: "true"
+            - name: ISSUANCE_GRPC_PORT
+              value: "9005"
+            - name: ORG_GRPC_TARGET
+              value: organization:9002
+            - name: CT_GRPC_TARGET
+              value: credential-template:9003
+            - name: RP_GRPC_TARGET
+              value: revocation-profile:9013
+            - name: SIGNING_KEYS_INTERNAL_URL
+              value: http://gateway:8000/internal/signing-keys
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: ISSUER_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
+            - name: ISSUANCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: ISSUANCE_API_KEY
+            - name: TOKEN_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: TOKEN_HMAC_KEY
+            - name: INTEGRATION_SECRET_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: INTEGRATION_SECRET_MASTER_KEY
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
+            - name: CANVAS_CREDENTIALS_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: CANVAS_CREDENTIALS_SHARED_SECRET
+            - name: CANVAS_CREDENTIALS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: CANVAS_CREDENTIALS_API_TOKEN
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8005
+            - name: grpc
+              containerPort: 9005
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "150m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: issuance-native
+  namespace: marty-prod
+spec:
+  type: ClusterIP
+  selector:
+    app: issuance-native
+  ports:
+    - name: http
+      port: 8005
+      targetPort: 8005
+    - name: grpc
+      port: 9005
+      targetPort: 9005
