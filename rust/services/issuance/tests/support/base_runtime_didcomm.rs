@@ -44,6 +44,7 @@ pub(super) struct Input<'a> {
     pub(super) authenticated: bool,
     pub(super) recipient_secret: &'a [u8; 32],
     pub(super) renewal_id: &'a str,
+    pub(super) envoy: Option<&'a super::envoy_runtime::EnvoyFixture>,
 }
 
 pub(super) async fn run(input: Input<'_>) {
@@ -55,6 +56,7 @@ pub(super) async fn run(input: Input<'_>) {
         authenticated,
         recipient_secret,
         renewal_id,
+        envoy,
     } = input;
     let endpoint = format!("{}/inbox", wallet.origin);
     let before = wallet.captures().await;
@@ -66,14 +68,20 @@ pub(super) async fn run(input: Input<'_>) {
     let body = json!({"organization_id":ORGANIZATION,"credential_template_id":TEMPLATE,"issuer_did":ISSUER,"holder_did":HOLDER,"claims":{"given_name":"Synthetic"}});
     // This request is intentionally unkeyed: DIDComm automatic initiation is not
     // made idempotent by repeating an admission request.
-    let response = gateway
-        .client
-        .post(format!("{}/v1/issuance/initiate", gateway.origin))
-        .header("x-api-key", CLIENT_KEY)
-        .json(&body)
-        .send()
-        .await
-        .unwrap();
+    let response = if let Some(envoy) = envoy {
+        envoy
+            .initiate_http(&body, Some(super::issuance_named_peers::TOKEN))
+            .await
+    } else {
+        gateway
+            .client
+            .post(format!("{}/v1/issuance/initiate", gateway.origin))
+            .header("x-api-key", CLIENT_KEY)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+    };
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let response: Value = response.json().await.unwrap();
     let id = response["id"].as_str().unwrap();

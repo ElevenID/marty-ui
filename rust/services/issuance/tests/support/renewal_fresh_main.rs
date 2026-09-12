@@ -37,18 +37,31 @@ pub(super) fn assert_offer(uri: &str, pre_auth_code: &Value) {
 }
 
 pub(super) async fn run(database_url: &str) {
-    run_with_profile(database_url, None, false).await;
+    run_with_profile(database_url, None, Ingress::Direct).await;
 }
 
 pub(super) async fn run_rendered(database_url: &str, redis_url: &str) {
-    run_with_profile(database_url, Some(redis_url), false).await;
+    run_with_profile(database_url, Some(redis_url), Ingress::Direct).await;
 }
 
 pub(super) async fn run_gateway(database_url: &str, redis_url: &str) {
-    run_with_profile(database_url, Some(redis_url), true).await;
+    run_with_profile(database_url, Some(redis_url), Ingress::Gateway).await;
 }
 
-async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, gateway: bool) {
+pub(super) async fn run_envoy(database_url: &str, redis_url: &str) {
+    run_with_profile(database_url, Some(redis_url), Ingress::Envoy).await;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ingress {
+    Direct,
+    Gateway,
+    Envoy,
+}
+
+async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingress: Ingress) {
+    let gateway = ingress != Ingress::Direct;
+    let envoy = ingress == Ingress::Envoy;
     use super::{
         didcomm_test_fixtures::authcrypt_parties_with_ids,
         didcomm_wallet_fixture::WalletFixture,
@@ -209,7 +222,15 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, gate
             .bind(source.created_at).bind(source.expires_at).execute(&pool).await.unwrap();
         let source_before = stored(&pool, &source_tx_id).await;
         let (http_listener, http_port) = reserve_port();
-        let (grpc_listener, grpc_port) = reserve_port();
+        let (grpc_listener, grpc_port) = if envoy {
+            (
+                std::net::TcpListener::bind("127.0.0.1:9005")
+                    .expect("owned Envoy native port is free"),
+                9005,
+            )
+        } else {
+            reserve_port()
+        };
         let (gateway_reservation, gateway_port) = reserve_port();
         let mut rendered_model = None;
         let mut command = if let Some(redis_url) = rendered_redis {
@@ -518,6 +539,14 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, gate
         }
         if let Some(gateway_fixture) = gateway_fixture {
             assert_eq!(legacy.as_ref().unwrap().owner_reads(), 1);
+            let envoy_fixture = if envoy {
+                Some(super::envoy_runtime::EnvoyFixture::start().await)
+            } else {
+                None
+            };
+            if let Some(fixture) = &envoy_fixture {
+                fixture.boundaries(&pool, &state).await;
+            }
             super::base_runtime_didcomm::run(super::base_runtime_didcomm::Input {
                 pool: &pool,
                 gateway: &gateway_fixture,
@@ -526,14 +555,22 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, gate
                 authenticated,
                 recipient_secret: &recipient_secret,
                 renewal_id: id,
+                envoy: envoy_fixture.as_ref(),
             })
             .await;
             super::base_runtime_ordinary::run(&pool, &gateway_fixture, &state).await;
             super::base_runtime_canvas::run(&pool, &gateway_fixture, !authenticated).await;
+            if let Some(fixture) = &envoy_fixture {
+                fixture.ordinary_rpc(&pool, &state).await;
+            }
             gateway_fixture.legacy_control().await;
             legacy.as_ref().unwrap().assert_no_fallback();
             child.0.kill().unwrap();
             child.0.wait().unwrap();
+            if let Some(fixture) = envoy_fixture {
+                fixture.native_unavailable(&pool, &state).await;
+                fixture.close().await;
+            }
             gateway_fixture
                 .native_unavailable(&source_id, legacy.as_ref().unwrap())
                 .await;

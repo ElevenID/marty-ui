@@ -70,6 +70,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-release-evidence = { path = "../../crates/release-evidence" }
+serde_yaml = "0.9.34"
 ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
 marty-flow = { path = "../flow" }

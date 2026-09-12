@@ -288,6 +288,10 @@ pub(super) struct OwnedHttp {
 impl OwnedHttp {
     pub(super) async fn start(router: Router) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Self::start_on(router, listener).await
+    }
+
+    pub(super) async fn start_on(router: Router, listener: tokio::net::TcpListener) -> Self {
         let port = listener.local_addr().unwrap().port();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {

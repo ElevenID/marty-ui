@@ -4603,6 +4603,7 @@ dependencies = [
  "marty-gateway",
  "marty-oid4vci",
  "marty-platform-clock",
+ "marty-release-evidence",
  "marty-verification",
  "mmf-config",
  "mmf-core",
@@ -4621,6 +4622,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.20",
@@ -4809,6 +4811,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "flate2",
+ "prost",
  "serde",
  "serde_json",
  "serde_yaml",

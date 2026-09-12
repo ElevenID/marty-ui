@@ -446,6 +446,11 @@ jobs:
           test -x rust/target/debug/marty-issuance-service
           test -x rust/target/debug/marty-gateway
           docker pull redis:7-alpine
+          # Resolve the actual source Dockerfile build to a local immutable ID.
+          # This is runtime identity evidence, not release provenance.
+          docker build --tag marty-envoy:native-contract config/envoy
+          envoy_image_id="$(docker image inspect --format '{{.Id}}' marty-envoy:native-contract)"
+          printf 'MARTY_ENVOY_TEST_IMAGE=%s\n' "$envoy_image_id" >> "$GITHUB_ENV"
           printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
@@ -919,6 +924,8 @@ jobs:
         run: python3 scripts/test_conformance_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Verify opt-in base native issuance configuration
         run: python3 scripts/test_base_native_issuance_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
+      - name: Verify opt-in native Envoy configuration
+        run: python3 scripts/test_envoy_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Expose compiler cache credentials to BuildKit secrets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:

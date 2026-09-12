@@ -60,7 +60,7 @@ pub(super) struct PeerState {
     pub(super) ordinary_wallets: Arc<AtomicBool>,
 }
 
-fn decode_request<M: Message + Default>(bytes: &[u8]) -> M {
+pub(super) fn decode_request<M: Message + Default>(bytes: &[u8]) -> M {
     assert!(bytes.len() >= 5, "complete unary gRPC frame");
     assert_eq!(bytes[0], 0, "uncompressed synthetic unary request");
     let length = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
@@ -68,7 +68,7 @@ fn decode_request<M: Message + Default>(bytes: &[u8]) -> M {
     M::decode(&bytes[5..]).unwrap()
 }
 
-fn grpc_response(message: impl Message) -> Response {
+pub(super) fn grpc_response(message: impl Message) -> Response {
     let payload = message.encode_to_vec();
     let mut encoded = vec![0];
     encoded.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());

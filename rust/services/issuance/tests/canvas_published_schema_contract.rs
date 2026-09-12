@@ -19,6 +19,10 @@ mod base_runtime_ordinary;
 mod base_runtime_redis;
 #[path = "support/bounded_fixture_command.rs"]
 mod bounded_fixture_command;
+#[path = "support/envoy_runtime.rs"]
+mod envoy_runtime;
+#[path = "support/envoy_runtime_sidecar.rs"]
+mod envoy_runtime_sidecar;
 #[path = "support/issuance_named_peers.rs"]
 mod issuance_named_peers;
 #[path = "support/rendered_base_process.rs"]
@@ -31,6 +35,79 @@ mod renewal_fresh_main;
 mod renewal_gateway_replay;
 #[path = "support/renewal_main_replay.rs"]
 mod renewal_main_replay;
+
+#[tokio::test]
+async fn base_profile_envoy_composition_isolated() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Envoy composition requires the configured owned Linux gate");
+        return;
+    }
+    assert_eq!(
+        std::env::consts::OS,
+        "linux",
+        "Actual Envoy composition cannot be qualified with Windows executables"
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
+        .await
+        .unwrap();
+    let result = base_runtime_container::run_envoy(
+        &owned,
+        &redis,
+        &base_runtime_container::source_assets().unwrap(),
+    )
+    .await;
+    redis.close_verified().unwrap();
+    owned.close_verified().unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn envoy_actual_image_validates_candidate() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Actual Envoy configuration requires the configured owned Docker gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let result = async {
+        let mut baseline = envoy_runtime_sidecar::OwnedEnvoy::start_baseline(&owned).await?;
+        match envoy_runtime_sidecar::OwnedEnvoy::start(&owned).await {
+            Ok(mut candidate) => base_runtime_container::retain_failure(
+                candidate.close_verified(),
+                baseline.close_verified(),
+            ),
+            Err(error) => {
+                base_runtime_container::retain_failure(Err(error), baseline.close_verified())
+            }
+        }
+    }
+    .await;
+    base_runtime_container::retain_failure(result, owned.close_verified())
+        .expect("Actual baseline/candidate Envoy image validation and cleanup");
+}
+
+#[tokio::test]
+async fn base_profile_envoy_composition_child() {
+    if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
+        eprintln!("Inner Envoy composition is invoked only by the exact-owned namespace container");
+        return;
+    }
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    renewal_fresh_main::run_envoy(
+        "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
+        "redis://127.0.0.1:6379",
+    )
+    .await;
+    println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
+}
 
 #[tokio::test]
 async fn base_profile_gateway_composition_isolated() {

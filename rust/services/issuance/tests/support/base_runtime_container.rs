@@ -22,6 +22,7 @@ use uuid::Uuid;
 const LABEL: &str = "com.elevenid.test.base-native-container";
 const SENTINEL: &str = "MARTY_BASE_COMPOSITION_COMPLETE_V1";
 const CHILD: &str = "base_profile_gateway_composition_child";
+const ENVOY_CHILD: &str = "base_profile_envoy_composition_child";
 const COMPOSE_SHA256: &str = "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be";
 const ASSETS: &[&str] = &[
     "docker-compose.base.yml",
@@ -59,7 +60,7 @@ fn exact_id(id: &str) -> Result<(), String> {
     )
 }
 
-fn regular_file(path: &Path) -> Result<PathBuf, String> {
+pub(super) fn regular_file(path: &Path) -> Result<PathBuf, String> {
     let metadata = path
         .symlink_metadata()
         .map_err(|_| "Required base runtime artifact is missing")?;
@@ -82,7 +83,7 @@ fn regular_file(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn digest(path: &Path) -> Result<String, String> {
+pub(super) fn digest(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|_| "Base runtime artifact cannot be read")?;
     require(
         file.metadata()
@@ -160,6 +161,7 @@ struct OwnedContainer {
     mounts: BTreeSet<String>,
     id: Option<String>,
     creation_attempted: bool,
+    child: &'static str,
 }
 
 impl OwnedContainer {
@@ -171,7 +173,12 @@ impl OwnedContainer {
                 && info["Config"]["Image"] == self.image
                 && info["Config"]["Entrypoint"] == serde_json::json!([self.executable])
                 && info["Config"]["Cmd"]
-                    == serde_json::json!([CHILD, "--exact", "--nocapture", "--test-threads=1"])
+                    == serde_json::json!([
+                        self.child,
+                        "--exact",
+                        "--nocapture",
+                        "--test-threads=1"
+                    ])
                 && info["HostConfig"]["NetworkMode"] == self.network
                 && info["HostConfig"]["ReadonlyRootfs"] == true
                 && info["HostConfig"]["Tmpfs"] == serde_json::json!({"/tmp":"rw,mode=1777"})
@@ -285,6 +292,37 @@ pub(super) async fn run(
     redis: &OwnedRedis,
     assets: &[PathBuf],
 ) -> Result<(), String> {
+    run_child(owned, redis, assets, CHILD).await
+}
+
+pub(super) async fn run_envoy(
+    owned: &PublishedDatabase,
+    redis: &OwnedRedis,
+    assets: &[PathBuf],
+) -> Result<(), String> {
+    run_child(owned, redis, assets, ENVOY_CHILD).await
+}
+
+pub(super) fn retain_failure(
+    result: Result<(), String>,
+    verification: Result<(), String>,
+) -> Result<(), String> {
+    match (result, verification) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(primary), Err(secondary)) => Err(format!("{primary}; additionally: {secondary}")),
+    }
+}
+
+async fn run_child(
+    owned: &PublishedDatabase,
+    redis: &OwnedRedis,
+    assets: &[PathBuf],
+    child: &'static str,
+) -> Result<(), String> {
+    require(
+        matches!(child, CHILD | ENVOY_CHILD),
+        "Unrecognized owned base child",
+    )?;
     require(
         cfg!(target_os = "linux"),
         "Isolated base runtime requires Linux artifacts; not qualified on this host",
@@ -352,19 +390,57 @@ pub(super) async fn run(
             .collect(),
         id: None,
         creation_attempted: false,
+        child,
     };
+    // All Linux executable, renderer, asset and image preconditions above are
+    // checked before creating the optional sidecar. The separate image-only
+    // gate may still validate Linux Envoy from a Windows host.
+    let mut envoy = Vec::new();
+    if child == ENVOY_CHILD {
+        envoy.push(super::envoy_runtime_sidecar::OwnedEnvoy::start_baseline(owned).await?);
+        match super::envoy_runtime_sidecar::OwnedEnvoy::start(owned).await {
+            Ok(candidate) => envoy.push(candidate),
+            Err(error) => return retain_failure(Err(error), envoy[0].close_verified()),
+        }
+    }
     let result = execute(&mut container).await;
     let cleanup = container.cleanup();
-    cleanup?;
-    for (path, expected) in hashes {
-        require(
-            digest(&path)? == expected,
-            "Base runtime source/artifact changed during qualification",
-        )?;
+    // Never short-circuit cleanup of the second owner after the first fails.
+    let mut envoy_cleanup = Ok(());
+    for envoy in &mut envoy {
+        envoy_cleanup = retain_failure(envoy_cleanup, envoy.close_verified());
     }
-    PublishedDatabase::borrowed_url(&descriptor)?;
-    redis.verify_published_namespace(owned)?;
-    result
+    let verification = (|| {
+        for (path, expected) in hashes {
+            require(
+                digest(&path)? == expected,
+                "Base runtime source/artifact changed during qualification",
+            )?;
+        }
+        PublishedDatabase::borrowed_url(&descriptor)?;
+        redis.verify_published_namespace(owned)
+    })();
+    retain_failure(
+        retain_failure(retain_failure(result, cleanup), envoy_cleanup),
+        verification,
+    )
+}
+
+#[test]
+fn child_failure_is_retained_when_cleanup_or_verification_also_fails() {
+    assert_eq!(retain_failure(Ok(()), Ok(())), Ok(()));
+    assert_eq!(
+        retain_failure(Err("child".into()), Ok(())),
+        Err("child".into())
+    );
+    assert_eq!(
+        retain_failure(Ok(()), Err("cleanup".into())),
+        Err("cleanup".into())
+    );
+    assert_eq!(
+        retain_failure(Err("child".into()), Err("cleanup".into())),
+        Err("child; additionally: cleanup".into())
+    );
 }
 
 fn executable_path() -> Result<PathBuf, String> {
@@ -411,7 +487,7 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         "--entrypoint",
         &container.executable,
         &container.image,
-        CHILD,
+        container.child,
         "--exact",
         "--nocapture",
         "--test-threads=1",
@@ -457,6 +533,7 @@ mod tests {
     fn container_inspection_closes_network_mount_and_child_identity_boundaries() {
         let id = "a".repeat(64);
         let mut container = OwnedContainer {
+            child: CHILD,
             scope: "12345678-1234-4234-8234-123456789abc".into(),
             network: format!("container:{}", "b".repeat(64)),
             image: format!("synthetic.invalid/runtime@sha256:{}", "c".repeat(64)),
