@@ -72,9 +72,9 @@ for this test-only strengthening. The initial whole-workspace formatting command
 hit Windows argument-length limits before any test ran; the scoped issuance
 format command succeeded and corrected one changed assertion's wrapping.
 
-## Recoverability before cleanup
+## Recovery evidence and completed checkout cleanup
 
-The old dirty tree remains untouched:
+The old dirty tree was preserved through qualification:
 `_codex-worktrees/marty-ui-didcomm-state-response-parity-v1`, base
 `c2cc53e15a5fc344f4ad2565e3e46444a39fc485`.
 An exact recoverable patch of its three tracked changes plus untracked artifact
@@ -82,6 +82,18 @@ is retained locally at
 `_codex-tmp/didcomm-state-response-old-dirty-20260913.patch` (workspace-relative).
 SHA-256: `c55a642c97491dbe38c7c3e8bbb73082723fda86d37e36033a1e24a7efe268df`.
 `git apply --reverse --check` passed against the still-dirty old tree. This patch
-is local recovery evidence, not a release artifact. No branch, worktree, source
-file, or artifact is deleted by this change. Cleanup requires the maintainer's
-independent mapping/patch review and approval after the retained gates pass.
+is local recovery evidence, not a release artifact.
+
+The reviewed reconciliation was integrated as `1e04322c8` after 36 unit tests,
+six direct HTTP tests, strict Clippy, package formatting, reference replay and
+33 reference guards passed. The integration owner independently replayed the
+reference, repeated all 33 guards on the integrated tree, checked the patch hash
+and reverse applicability, and matched all four patch paths to the dirty files.
+
+The superseded old checkout was then removed after confirming no ignored files
+and no matching container mounts or application processes. Its original branch
+`feat/didcomm-state-response-parity-v1` still points to `c2cc53e15`; the exact
+recovery patch above remains unchanged. A new worktree at that branch plus the
+patch can recover the old draft if needed. The newly integrated assertions and
+existing production implementation preserve its intended functionality. This
+local reconciliation is not a claim of protected-main landing or deployment.
