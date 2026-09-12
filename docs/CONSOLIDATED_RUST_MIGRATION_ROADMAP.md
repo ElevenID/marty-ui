@@ -31,6 +31,24 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+Latest local integration is `20e2a9d14`: reviewed token rate/window parity
+(`3552a9f84`) and the isolated base native issuance opt-in profile are integrated.
+The combined issuance library passed **408 tests**. Base-profile qualification
+passed 492 configuration regressions, twelve base rendered models, twenty
+conformance models and the unchanged beta comparison; this is not packaged
+application acceptance. See [rate parity](rust-migrations/token-rate-config-parity.md)
+and [base profile and remaining acceptance](rust-migrations/base-native-issuance-profile.md).
+Hosted CI `34713842275` completed successfully at older pushed `cb1a01656`;
+the newer integrated tree still needs exact-head hosted CI and landing.
+
+Self-host packaging audit found that `a8d238fe12f180621085c8ba5216455e6545bcf9`
+deleted the documented bundle packager without a replacement. A feature-preserving
+Rust restoration is in progress with frozen directory/archive behavior and actual
+extracted-bundle validation required. Do not treat staged source assets as proof
+of a working bundle. Base packaged-runtime, self-host, Flow, Envoy and Kubernetes
+consumer gates remain open; active Python features, production and KMS scope are
+unchanged.
+
 Credentials [PR #275](https://github.com/ElevenID/marty-credentials/pull/275)
 merged through the protected queue at `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
 Protected main and the merged tree were independently verified; the tree is
