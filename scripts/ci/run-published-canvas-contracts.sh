@@ -119,6 +119,7 @@ fi
 "${executables[0]}" --list | grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_flow_grpc_provider_preserves_keyed_admission: test'
+"${executables[0]}" --list | grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_historical_keyed_http_recovers_before_fresh_admission_guard: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_fresh_gateway_admission_preserves_public_projection_without_legacy_fallback: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback: test'

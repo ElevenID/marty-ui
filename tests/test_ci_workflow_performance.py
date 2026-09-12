@@ -606,6 +606,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback: test'"
         in published
     )

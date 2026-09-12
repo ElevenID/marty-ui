@@ -16,6 +16,26 @@ and opaque key-agreement corrections are outside this slice. Both anoncrypt and
 sender-authenticated authcrypt remain; failure must not select a weaker mode.
 Retained native local-key compatibility is not KMS-only custody.
 
+## Unkeyed native RPC checkpoint
+
+Reviewed `d7a12bc8d`, integrated locally as `8ae16c026`, qualifies ten unkeyed
+protobuf initiation scenarios: explicit holder, subject fallback, missing holder,
+wallet refusal and mixed wallet offers, each in anoncrypt and authcrypt modes.
+The complete native tonic platform reuses the actual PostgreSQL/Core/HTTPS
+delivery graph and shared test-only fixtures; no production API or Flow key
+semantics changed. All nine response fields, creation event and durable effects
+are checked. Direct/projector replay proves no resend, not idempotence of a
+second unkeyed RPC. This is the governed HTTP-equivalent native target; legacy
+gRPC was offer-only. It does not establish full Flow orchestration or KMS custody.
+
+Focused RPC passed in 6.45s; unchanged keyed Flow regression in 3.73s. The combined
+sixteen DIDComm tests passed in 92.10s and strict target Clippy in 31.14s, with
+formatting clean and all twenty owned containers independently absent. Mandatory
+CI registration guards passed all 79 Python tests and Ruff. Hosted `f60aefc74`
+predates this slice: run `34706838536` finished with a health-test positional
+contract lookup failure (actual 200 versus missing expected value), not a
+DIDComm failure. Its repair and fresh integrated-head CI remain required.
+
 ## Latest direct-route checkpoint
 
 Reviewed source `ff7d3462f`, integrated as `d4a8cae53`, selects only

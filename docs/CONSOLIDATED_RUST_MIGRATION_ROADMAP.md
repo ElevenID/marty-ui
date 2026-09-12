@@ -42,12 +42,17 @@ supersedes historical pending-failure and unimplemented-launch statements.
 
 PR #814 remains draft and not deployed. Reviewed batch `f60aefc74` is pushed;
 CI `34706838536` has passed security scanning and release-contract tests, with
-Rust image builds and Rust CodeQL also pass; the runtime job is still running
-at this checkpoint. The later keyed Flow and four delivery-mode Canvas lifecycle
+Rust image builds and Rust CodeQL also pass. The runtime job subsequently failed
+because a health test selected the first coverage entry after DIDComm insertion:
+actual status 200 was compared with a missing expected value. A scoped test
+selector repair is underway; no runtime health behavior change is inferred.
+The later keyed Flow and four delivery-mode Canvas lifecycle
 cases remain local and do not reset that hosted run. Canvas integration
 `9f6679395` qualifies eight of seventeen lifecycle cases with real gateway and
 main-process publication, preserving lossless delivery snapshots. Unkeyed native
-gRPC delivery qualification is running separately; no result is claimed yet.
+gRPC delivery qualification is now integrated locally as `8ae16c026`: ten scenarios,
+the retained keyed Flow regression and combined sixteen DIDComm tests passed,
+along with strict Clippy. Consumer activation and new exact-head CI remain open.
 Hosted `184509745` passed Rust
 formatting/packaging, service-image builds, all four runtime preflights and the
 complete Rust Service Tests job in run `34701797735`. Its security scan found stale Bun Vitest
