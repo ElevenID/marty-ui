@@ -42,11 +42,22 @@ def models():
                 "environment": {"ISSUANCE_SERVICE_URL": "http://issuance:8005"},
                 "depends_on": {},
             },
-            "flow": {"environment": {"ISSUANCE_GRPC_TARGET": "issuance:9005"}},
+            "flow": {
+                "environment": {"ISSUANCE_GRPC_TARGET": "issuance:9005"},
+                "secrets": [],
+            },
         },
         "volumes": {"preserved": {}},
     }
     after = deepcopy(before)
+    after["services"]["flow"]["environment"].update(
+        ISSUANCE_GRPC_TARGET="issuance-native:9005",
+        ISSUANCE_API_KEY_FILE="/run/secrets/issuance_api_key",
+        SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/issuance_api_key",
+    )
+    after["services"]["flow"]["secrets"].append(
+        {"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"}
+    )
     after["x-issuance-application-env"] = {
         "ENVIRONMENT": "production",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
@@ -121,13 +132,41 @@ def test_every_native_field_is_closed(models, field):
 
 @pytest.mark.parametrize(
     "fault",
+    ["issuance-key", "signing-key", "mount", "unpaired", "physical", "token", "tls"],
+)
+def test_flow_selection_preserves_secret_identity_and_sibling_transports(models, fault):
+    before, after = models
+    flow = after["services"]["flow"]
+    if fault in {"issuance-key", "signing-key"}:
+        key = (
+            "ISSUANCE_API_KEY_FILE"
+            if fault == "issuance-key"
+            else "SIGNING_KEYS_INTERNAL_API_KEY_FILE"
+        )
+        flow["environment"].pop(key)
+    elif fault == "mount":
+        flow["secrets"][0]["source"] = "unowned"
+    elif fault == "unpaired":
+        flow["environment"]["SIGNING_KEYS_INTERNAL_API_KEY_FILE"] = "/run/secrets/other"
+    elif fault == "physical":
+        flow["environment"]["ISSUANCE_SERVICE_URL"] = "http://issuance-native:8005"
+    elif fault == "token":
+        flow["environment"]["GRPC_SERVICE_TOKEN"] = "unpaired"
+    else:
+        flow["environment"]["GRPC_WORKLOAD_TLS_CA_CERT"] = "/unowned.pem"
+    with pytest.raises((AssertionError, KeyError)):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize(
+    "fault",
     ["flow", "legacy", "volume", "gateway", "readiness", "extra-secret", "shared"],
 )
 def test_siblings_resources_and_secret_boundary_are_closed(models, fault):
     before, after = models
     if fault == "flow":
         after["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] = (
-            "issuance-native:9005"
+            "issuance:9005"
         )
     elif fault == "legacy":
         after["services"]["issuance"]["environment"].pop("BAO_ADDR")

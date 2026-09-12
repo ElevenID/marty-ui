@@ -96,6 +96,15 @@ def assert_models(before, after):
         "condition": "service_healthy",
         "required": True,
     }
+    flow = preserved["services"]["flow"]
+    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    flow["environment"]["ISSUANCE_GRPC_TARGET"] = "issuance:9005"
+    for key in ("ISSUANCE_API_KEY_FILE", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"):
+        assert flow["environment"].pop(key) == "/run/secrets/issuance_api_key"
+    assert flow["secrets"].pop() == {
+        "source": "issuance_api_key",
+        "target": "/run/secrets/issuance_api_key",
+    }
     assert preserved == before, "Unowned self-host model change"
     legacy = before["services"]["issuance"]
     environment = {

@@ -106,6 +106,15 @@ impl Legacy {
             "all issuance RPC success/failures stay off legacy HTTP"
         );
     }
+    pub(super) fn origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.owned.port)
+    }
+    pub(super) fn assert_health_requests(&self, count: usize) {
+        assert_eq!(
+            *self.peer.calls.lock().unwrap(),
+            vec![("GET".into(), "/health".into(), Value::Null); count]
+        );
+    }
     pub(super) async fn close(self) {
         self.owned.close().await;
     }

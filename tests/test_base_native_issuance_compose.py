@@ -61,7 +61,7 @@ def test_source_guard_rejects_config_drift(fault):
         native["environment"]["BAO_TOKEN"] = "synthetic"
     elif fault == "flow-target":
         profile["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] = (
-            "issuance-native:9005"
+            "issuance:9005"
         )
     elif fault == "sibling":
         profile["services"]["applicant"] = {"environment": {}}
@@ -166,7 +166,7 @@ def test_model_guard_rejects_every_unowned_delta(modeled, fault):
     elif fault == "physical-url":
         flow["environment"]["ISSUANCE_SERVICE_URL"] = GATE["NATIVE"]["NATIVE_URL"]
     elif fault == "flow-grpc":
-        flow["environment"]["ISSUANCE_GRPC_TARGET"] = "issuance-native:9005"
+        flow["environment"]["ISSUANCE_GRPC_TARGET"] = "issuance:9005"
     elif fault == "loopback":
         actual["services"]["issuance"]["ports"][0]["host_ip"] = "0.0.0.0"
     elif fault == "health":

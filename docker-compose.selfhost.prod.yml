@@ -897,8 +897,10 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
-      ISSUANCE_GRPC_TARGET: issuance:9005
+      ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -921,6 +923,7 @@ services:
       - workload_identity_ca_cert
       - flow_webhook_secret
       - flow_application_event_hmac_key
+      - issuance_api_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully

@@ -177,8 +177,10 @@ Configuration-only checkpoint: the opt-in base profile, neutral structural
 runtime extraction, shared immutable-image overlay and paired explicit policy
 profile are implemented in the isolated follow-up. See
 [the complete inventory and qualification boundary](base-native-issuance-profile.md).
-The default base, Flow/Envoy, legacy loopback ports and unselected consumers remain
-unchanged. This is not packaged runtime acceptance or authorization to delete
+The default base, Envoy, legacy loopback ports and unselected HTTP consumers remain
+unchanged. Flow's opt-in/self-host gRPC target has since received
+[rendered loader/provider-factory qualification](flow-native-consumer-selection.md).
+This is not packaged runtime acceptance or authorization to delete
 Python; the required runtime gates below remain outstanding.
 
 - Add a distinct native owner and explicit gateway URL in a general opt-in
@@ -191,7 +193,8 @@ Python; the required runtime gates below remain outstanding.
   the beta-specific shared definition is not a substitute for that inventory.
   If token authentication is enabled, pair all thirteen existing clients/peers
   identified by the conformance validator, not only the three native targets.
-- Keep legacy loopback ports, Flow/Envoy targets and all unselected HTTP routes.
+- Keep legacy loopback ports, Envoy targets and all unselected HTTP routes.
+  Flow initiation selection is covered by its separate qualification above.
   Authcrypt remains explicitly opt-in with paired owner-only read-only mounts;
   no conformance trust configuration becomes a production default.
 

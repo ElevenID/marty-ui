@@ -26,7 +26,13 @@ use marty_issuance_service::{
     transaction_postgres::PostgresTransactionReadRepository,
     transaction_reads::TransactionReadService,
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use marty_issuance_service::{
     credential_postgres::PostgresCredentialRepository, initiation::InitiationService,
@@ -153,18 +159,51 @@ pub(super) fn native_server(
 }
 pub(super) struct OwnedGrpc {
     channel: Channel,
+    origin: String,
+    attempts: Arc<AtomicUsize>,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), tonic::transport::Error>>,
 }
 
 impl OwnedGrpc {
     pub(super) async fn start(service: CredentialManagementGrpcService) -> Self {
+        Self::start_with_rejection(service, None).await
+    }
+
+    pub(super) async fn start_with_rejection(
+        service: CredentialManagementGrpcService,
+        reject_authenticated_token: Option<&str>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = attempts.clone();
+        let reject = reject_authenticated_token.map(str::to_owned);
+        let interceptor = move |request: tonic::Request<()>| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            if let Some(token) = &reject {
+                return if request
+                    .metadata()
+                    .get("x-service-token")
+                    .and_then(|value| value.to_str().ok())
+                    == Some(token.as_str())
+                {
+                    Err(tonic::Status::unavailable("controlled legacy RPC trap"))
+                } else {
+                    Err(tonic::Status::unauthenticated(
+                        "controlled legacy RPC authentication",
+                    ))
+                };
+            }
+            Ok(request)
+        };
         let (shutdown, stopped) = oneshot::channel();
         let task = tokio::spawn(
             Server::builder()
-                .add_service(IssuanceServiceServer::new(service))
+                .add_service(IssuanceServiceServer::with_interceptor(
+                    service,
+                    interceptor,
+                ))
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
                     let _ = stopped.await;
                 }),
@@ -180,6 +219,8 @@ impl OwnedGrpc {
         // Construct the guard before connect so a connection panic aborts the server too.
         let mut owned = Self {
             channel: factory.connect_lazy().unwrap(),
+            origin: format!("http://{address}"),
+            attempts,
             shutdown: Some(shutdown),
             task,
         };
@@ -192,6 +233,14 @@ impl OwnedGrpc {
 
     pub(super) fn channel(&self) -> Channel {
         self.channel.clone()
+    }
+
+    pub(super) fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    pub(super) fn attempts(&self) -> usize {
+        self.attempts.load(Ordering::SeqCst)
     }
 
     pub(super) async fn close(mut self) {

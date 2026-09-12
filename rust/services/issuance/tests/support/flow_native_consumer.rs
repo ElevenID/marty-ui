@@ -32,6 +32,16 @@ use std::{
 #[path = "flow_legacy_physical_http.rs"]
 mod physical;
 
+#[path = "flow_rendered_selection.rs"]
+mod rendered;
+
+pub(super) async fn run_rendered(database_url: &str) {
+    rendered::run(database_url).await;
+}
+pub(super) async fn rendered_child() {
+    rendered::child().await;
+}
+
 const TOKEN: &str = "synthetic-flow-composed-service-token";
 const HMAC: &[u8] = b"synthetic-flow-composed-hmac";
 const PUBLIC: &str = "https://issuer.example";
@@ -332,24 +342,36 @@ fn assert_prepared(
 }
 
 async fn server(pool: &PgPool, ports: Arc<Ports>, seeds: Arc<Seeds>) -> OwnedGrpc {
+    server_with_rejection(pool, ports, seeds, None).await
+}
+
+async fn server_with_rejection(
+    pool: &PgPool,
+    ports: Arc<Ports>,
+    seeds: Arc<Seeds>,
+    reject: Option<&str>,
+) -> OwnedGrpc {
     let repository = Arc::new(PostgresCredentialRepository::new(pool.clone(), HMAC));
     let config =
         IssuanceServiceConfig::from_values([("ISSUANCE_OFFER_TTL_MINUTES".into(), "45".into())])
             .unwrap();
     let (service, projector) =
         initiation_with_seeds(repository.clone(), ports.clone(), &config, seeds);
-    OwnedGrpc::start(didcomm_native_grpc_fixture::native_server(
-        pool,
-        NativeInitiation {
-            repository,
-            service,
-            projector,
-            issuer_resolver: ports,
-        },
-        CredentialLifecycleEventBus::default(),
-        TOKEN,
-        HMAC,
-    ))
+    OwnedGrpc::start_with_rejection(
+        didcomm_native_grpc_fixture::native_server(
+            pool,
+            NativeInitiation {
+                repository,
+                service,
+                projector,
+                issuer_resolver: ports,
+            },
+            CredentialLifecycleEventBus::default(),
+            TOKEN,
+            HMAC,
+        ),
+        reject,
+    )
     .await
 }
 

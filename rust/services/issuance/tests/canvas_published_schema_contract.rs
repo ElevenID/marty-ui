@@ -231,6 +231,27 @@ async fn flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_ht
 }
 
 #[tokio::test]
+async fn flow_rendered_provider_child() {
+    if std::env::var("MARTY_FLOW_RENDERED_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    didcomm_admission_recovery::flow_rendered_child().await;
+}
+
+#[tokio::test]
+async fn flow_rendered_settings_select_native_rpc_and_preserve_legacy_http() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Rendered Flow selection requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_admission_recovery::run_flow_rendered(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
 async fn didcomm_http_admission_recovers_real_keyed_reservation() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Admission recovery requires the exact-owned published schema gate");

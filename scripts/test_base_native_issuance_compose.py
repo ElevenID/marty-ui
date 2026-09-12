@@ -118,7 +118,13 @@ def assert_sources(base, profile, runtime):
     }
     assert set(profile) == {"services", "x-native-issuance-grpc-auth"}
     assert set(profile["services"]) == {"issuance-native", *NATIVE["TOKEN_CONSUMERS"]}
-    for name in set(NATIVE["TOKEN_CONSUMERS"]) - {"gateway"}:
+    assert profile["services"]["flow"] == {
+        "environment": {
+            "GRPC_SERVICE_TOKEN": NATIVE_ONLY["GRPC_SERVICE_TOKEN"],
+            "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
+        }
+    }
+    for name in set(NATIVE["TOKEN_CONSUMERS"]) - {"gateway", "flow"}:
         assert profile["services"][name] == {
             "environment": {"GRPC_SERVICE_TOKEN": NATIVE_ONLY["GRPC_SERVICE_TOKEN"]}
         }
@@ -198,6 +204,9 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
         expected_native.update(image=IMAGE, pull_policy="always")
     expected = deepcopy(baseline)
     expected["services"]["issuance-native"] = expected_native
+    expected["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] = (
+        "issuance-native:9005"
+    )
     for name in NATIVE["TOKEN_CONSUMERS"]:
         expected["services"][name]["environment"]["GRPC_SERVICE_TOKEN"] = token
     edge = expected["services"]["gateway"]
@@ -253,7 +262,7 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
     POLICY["validate_model"](actual, authcrypt_enabled=authcrypt)
     assert (
         actual["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"]
-        == "issuance:9005"
+        == "issuance-native:9005"
     )
     assert (
         actual["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"]

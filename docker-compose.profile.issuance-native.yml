@@ -1,6 +1,7 @@
 # Explicit general-base opt-in; does not replace the partial legacy owner.
 # Runtime acceptance is required before deployment/Python retirement.
-# All existing HTTP URLs, Flow/Envoy targets and host publications stay unchanged.
+# Existing HTTP URLs, Envoy targets and host publications stay unchanged.
+# Flow initiation selects native gRPC; physical-document HTTP remains legacy.
 x-native-issuance-grpc-auth: &native-issuance-grpc-auth
   GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
 
@@ -91,7 +92,9 @@ services:
   deployment-profile:
     environment: *native-issuance-grpc-auth
   flow:
-    environment: *native-issuance-grpc-auth
+    environment:
+      <<: *native-issuance-grpc-auth
+      ISSUANCE_GRPC_TARGET: issuance-native:9005
   issuance:
     environment: *native-issuance-grpc-auth
   revocation-profile:

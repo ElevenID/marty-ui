@@ -2,8 +2,9 @@
 
 This source change adds a distinct native owner for the already-selected gateway
 routes. It does not deploy a persistent self-host or production environment, retire
-Python, or correct DIDComm KMS. Flow gRPC and all direct legacy HTTP consumers
-remain unchanged.
+Python, or correct DIDComm KMS. All direct legacy HTTP consumers remain unchanged.
+Flow initiation now has a separately qualified native target and repaired existing
+secret bindings; see [its precise qualification boundary](flow-native-consumer-selection.md).
 
 The shared issuance application environment preserves the original service's
 entire resolved definition. Nine settings remain exclusively on legacy: BAO

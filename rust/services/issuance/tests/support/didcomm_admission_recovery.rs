@@ -52,6 +52,13 @@ pub(super) async fn run_flow_consumer(database_url: &str) {
     flow_consumer::run(database_url).await;
 }
 
+pub(super) async fn run_flow_rendered(database_url: &str) {
+    flow_consumer::run_rendered(database_url).await;
+}
+pub(super) async fn flow_rendered_child() {
+    flow_consumer::rendered_child().await;
+}
+
 pub(super) async fn run_flow_grpc(database_url: &str) {
     flow_grpc::run(database_url).await;
 }
