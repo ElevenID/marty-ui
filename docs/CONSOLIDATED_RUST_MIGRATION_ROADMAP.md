@@ -42,7 +42,7 @@ Rust bundle restoration and isolated executable acceptance remain in progress.
 Hosted CI `34718953669` is still testing pushed `98e78b8d0`; the self-host commit
 has not been pushed over that live run. Production remains unchanged.
 
-Latest local integration is `20e2a9d14`: reviewed token rate/window parity
+The preceding local checkpoint was `20e2a9d14`: reviewed token rate/window parity
 (`3552a9f84`) and the isolated base native issuance opt-in profile are integrated.
 The combined issuance library passed **408 tests**. Base-profile qualification
 passed 492 configuration regressions, twelve base rendered models, twenty
