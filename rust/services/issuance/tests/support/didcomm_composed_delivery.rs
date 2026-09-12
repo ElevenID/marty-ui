@@ -44,7 +44,10 @@ use marty_issuance_service::{
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::{
+    sync::{oneshot, Semaphore},
+    task::JoinHandle,
+};
 use tower::ServiceExt;
 
 use super::{
@@ -87,6 +90,23 @@ impl IssuerContextResolver for ControlledIssuer {
 struct ControlledBuilder {
     calls: AtomicUsize,
     allocations: Arc<Mutex<Vec<Value>>>,
+    gate: Option<Arc<BuildGate>>,
+}
+
+/// Test-only rendezvous at the already-controlled signing port, after the actual
+/// PostgreSQL claim and HTTP status allocation. No scheduling sleeps or mock claims.
+struct BuildGate {
+    entered: Semaphore,
+    release: Semaphore,
+}
+
+impl BuildGate {
+    fn new() -> Self {
+        Self {
+            entered: Semaphore::new(0),
+            release: Semaphore::new(0),
+        }
+    }
 }
 
 #[async_trait]
@@ -106,6 +126,14 @@ impl CredentialBuilder for ControlledBuilder {
             request.credential_id
         );
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.gate {
+            gate.entered.add_permits(1);
+            tokio::time::timeout(Duration::from_secs(10), gate.release.acquire())
+                .await
+                .expect("bounded controlled signing release")
+                .unwrap()
+                .forget();
+        }
         Ok(BuiltCredential {
             credential_id: request.credential_id.clone(),
             credential: SIGNED_CREDENTIAL.into(),
@@ -351,6 +379,76 @@ enum Fault {
     WrongSenderKey,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Recovery {
+    ConcurrentClaim,
+    EventProjection,
+}
+
+/// Scoped to one synthetic transaction in the caller's exact-owned disposable
+/// database. The outer PublishedDatabase guard removes this object on panic;
+/// successful recovery explicitly removes it and verifies all catalog entries.
+async fn install_event_fault(pool: &PgPool, id: &str) {
+    sqlx::query(
+        "CREATE TABLE issuance_service.didcomm_composed_event_fault_target
+         (transaction_id text PRIMARY KEY)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issuance_service.didcomm_composed_event_fault_target VALUES ($1)")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE FUNCTION issuance_service.didcomm_composed_event_fault() RETURNS trigger
+         LANGUAGE plpgsql AS $$ BEGIN
+             IF EXISTS (SELECT 1 FROM issuance_service.didcomm_composed_event_fault_target
+                        WHERE transaction_id = NEW.transaction_id) THEN
+                 RAISE EXCEPTION 'synthetic exact-transaction event fault';
+             END IF;
+             RETURN NEW;
+         END $$",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER didcomm_composed_event_fault BEFORE INSERT
+         ON issuance_service.issuance_events FOR EACH ROW
+         EXECUTE FUNCTION issuance_service.didcomm_composed_event_fault()",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn remove_event_fault(pool: &PgPool) {
+    sqlx::query("DROP TRIGGER didcomm_composed_event_fault ON issuance_service.issuance_events")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP FUNCTION issuance_service.didcomm_composed_event_fault()")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.didcomm_composed_event_fault_target")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(sqlx::query_scalar::<_, bool>(
+        "SELECT NOT EXISTS (SELECT 1 FROM pg_trigger
+            WHERE tgrelid = 'issuance_service.issuance_events'::regclass
+              AND tgname = 'didcomm_composed_event_fault')
+         AND to_regprocedure('issuance_service.didcomm_composed_event_fault()') IS NULL
+         AND to_regclass('issuance_service.didcomm_composed_event_fault_target') IS NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap());
+}
+
 fn decrypt_capture(
     encrypted: &str,
     authenticated: bool,
@@ -378,11 +476,23 @@ fn decrypt_capture(
     message
 }
 
-async fn run_case(pool: &PgPool, authenticated: bool, automatic: bool, fault: Option<Fault>) {
+async fn run_case(
+    pool: &PgPool,
+    authenticated: bool,
+    automatic: bool,
+    fault: Option<Fault>,
+    recovery: Option<Recovery>,
+) {
+    assert!(fault.is_none() || recovery.is_none());
     let id = format!(
-        "didcomm-composed-{}-{}-{fault:?}",
+        "didcomm-composed-{}-{}-{fault:?}-{}",
         if authenticated { "auth" } else { "anon" },
-        if automatic { "automatic" } else { "direct" }
+        if automatic { "automatic" } else { "direct" },
+        match recovery {
+            None => "ordinary",
+            Some(Recovery::ConcurrentClaim) => "concurrent",
+            Some(Recovery::EventProjection) => "projection",
+        },
     );
     let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
         503
@@ -431,9 +541,11 @@ async fn run_case(pool: &PgPool, authenticated: bool, automatic: bool, fault: Op
         .unwrap();
     assert!(reservation.created);
     let before = snapshot(pool, &id).await;
+    let gate = (recovery == Some(Recovery::ConcurrentClaim)).then(|| Arc::new(BuildGate::new()));
     let builder = Arc::new(ControlledBuilder {
         calls: AtomicUsize::new(0),
         allocations: allocation_requests.clone(),
+        gate: gate.clone(),
     });
     let lifecycle = PostgresCredentialLifecycle::new(
         pool.clone(),
@@ -586,7 +698,102 @@ async fn run_case(pool: &PgPool, authenticated: bool, automatic: bool, fault: Op
         wallet.close_verified();
         return;
     }
-    let first = if automatic {
+    let first = if let Some(gate) = gate {
+        assert!(!automatic);
+        // Keep the actual request future locally owned: timeout/panic drops it,
+        // rather than leaving a detached request racing database teardown.
+        let pending = direct(&app, &id);
+        tokio::pin!(pending);
+        tokio::select! {
+            _ = &mut pending => panic!("first delivery escaped the controlled signing gate"),
+            entered = tokio::time::timeout(Duration::from_secs(10), gate.entered.acquire()) => {
+                entered.expect("bounded first claimed builder entry").unwrap().forget();
+            }
+        }
+        let claimed = snapshot(pool, &id).await;
+        assert_eq!(claimed["transaction"]["status"], "signing");
+        assert!(claimed["transaction"]["reserved_credential_id"]
+            .as_str()
+            .is_some());
+        for key in ["credentials", "deliveries", "events"] {
+            assert_eq!(claimed[key], json!([]));
+        }
+        // This arriving HTTP request reloads Signing, whose frozen public
+        // response is 400. A stale-read claim race instead has the separate 409
+        // contract; do not conflate the two or weaken the existing state parity.
+        assert_eq!(
+            direct_response(&app, &id).await,
+            (
+                StatusCode::BAD_REQUEST,
+                json!({"detail":"Transaction in signing state"})
+            ),
+        );
+        assert_eq!(snapshot(pool, &id).await, claimed);
+        assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
+        assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(allocations.load(Ordering::SeqCst), 1);
+        gate.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(10), &mut pending)
+            .await
+            .expect("bounded first delivery completion")
+    } else if recovery == Some(Recovery::EventProjection) {
+        assert!(
+            automatic,
+            "recover the direct failure through the other entrypoint"
+        );
+        install_event_fault(pool, &id).await;
+        assert_eq!(
+            direct_response(&app, &id).await,
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail":"DIDComm delivery is unavailable"})
+            ),
+        );
+        let transported = snapshot(pool, &id).await;
+        assert_eq!(transported["transaction"]["status"], "issued");
+        assert_eq!(transported["credentials"].as_array().unwrap().len(), 1);
+        assert_eq!(transported["deliveries"].as_array().unwrap().len(), 1);
+        assert_eq!(transported["deliveries"][0]["status"], "transported");
+        assert_eq!(transported["events"], json!([]));
+        assert_materialized_binding(&transported, &id, &endpoint);
+        assert!(
+            transported["deliveries"][0]["metadata"]["encrypted_message"]
+                .as_str()
+                .is_some()
+        );
+        let sent = wallet.captures().await;
+        assert_eq!(sent["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(sent["failures"], 0);
+        let resolution_count = resolutions.load(Ordering::SeqCst);
+        assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(allocations.load(Ordering::SeqCst), 1);
+        remove_event_fault(pool).await;
+        let response = serde_json::to_value(
+            projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let recovered = snapshot(pool, &id).await;
+        assert_eq!(recovered["transaction"], transported["transaction"]);
+        assert_eq!(recovered["credentials"], transported["credentials"]);
+        assert_eq!(
+            recovered["deliveries"][0]["id"],
+            transported["deliveries"][0]["id"]
+        );
+        assert_eq!(
+            recovered["deliveries"][0]["metadata"]["didcomm_message_id"],
+            transported["deliveries"][0]["metadata"]["didcomm_message_id"]
+        );
+        assert_eq!(
+            wallet.captures().await,
+            sent,
+            "projection retry must not POST again"
+        );
+        assert_eq!(resolutions.load(Ordering::SeqCst), resolution_count);
+        response
+    } else if automatic {
         serde_json::to_value(
             projector
                 .project(reservation.clone(), &request)
@@ -730,13 +937,29 @@ pub(super) async fn run(database_url: &str) {
     tokio::time::timeout(Duration::from_secs(120), async {
         for authenticated in [false, true] {
             for automatic in [false, true] {
-                run_case(&pool, authenticated, automatic, None).await;
+                run_case(&pool, authenticated, automatic, None, None).await;
             }
             for fault in [Fault::HttpRefused, Fault::UntrustedTls] {
-                run_case(&pool, authenticated, false, Some(fault)).await;
+                run_case(&pool, authenticated, false, Some(fault), None).await;
             }
+            run_case(
+                &pool,
+                authenticated,
+                false,
+                None,
+                Some(Recovery::ConcurrentClaim),
+            )
+            .await;
+            run_case(
+                &pool,
+                authenticated,
+                true,
+                None,
+                Some(Recovery::EventProjection),
+            )
+            .await;
         }
-        run_case(&pool, true, false, Some(Fault::WrongSenderKey)).await;
+        run_case(&pool, true, false, Some(Fault::WrongSenderKey), None).await;
     })
     .await
     .expect("bounded composed DIDComm acceptance");
