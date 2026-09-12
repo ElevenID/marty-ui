@@ -41,6 +41,9 @@ def test_shared_bundle_resets_builds_at_service_keys_for_legacy_compose():
     root = Path(__file__).resolve().parents[1]
     base = yaml.safe_load((root / "docker-compose.selfhost.prod.yml").read_text())
     native = base["services"]["issuance-native"]
+    # Retain the explicit source reset even when older Compose emits JSON null.
+    assert "command" in native and native["command"] == []
+    assert native["entrypoint"] == ["/app/services/entrypoint.sh"]
     assert native["extends"] == {
         "file": "docker-compose.service.issuance-native-runtime.yml",
         "service": "issuance-native",
@@ -292,8 +295,9 @@ def test_base_explicit_launch_override_requires_review(gate, models, field):
 @pytest.mark.parametrize(
     "fault", [None, "selector", "entrypoint", "command", "bundle-entrypoint", "secret"]
 )
+@pytest.mark.parametrize("rendered_command", [None, []])
 def test_native_dispatcher_exception_is_exact_and_preserves_full_model(
-    gate, models, fault
+    gate, models, fault, rendered_command
 ):
     base, bundle = models
     original = base["services"].pop("from-target")
@@ -307,7 +311,7 @@ def test_native_dispatcher_exception_is_exact_and_preserves_full_model(
     for service in (original, actual):
         service["environment"]["SERVICE_NAME"] = "issuance_native"
         service["entrypoint"] = ["/app/services/entrypoint.sh"]
-        service["command"] = []
+        service["command"] = deepcopy(rendered_command)
     assert "issuance-native" in gate["assert_shared_rust_services"](base, bundle)
     if fault == "selector":
         original["environment"]["SERVICE_NAME"] = "issuance"
@@ -322,6 +326,52 @@ def test_native_dispatcher_exception_is_exact_and_preserves_full_model(
     if fault:
         with pytest.raises(AssertionError):
             gate["assert_shared_rust_services"](base, bundle)
+
+
+@pytest.mark.parametrize(
+    "command", ["", "synthetic", False, 0, {}, [""], ["python"], [None]]
+)
+def test_native_empty_command_normalization_rejects_other_values(gate, command):
+    with pytest.raises(AssertionError):
+        gate["native_dispatcher_model"](
+            {
+                "environment": {"SERVICE_NAME": "issuance_native"},
+                "entrypoint": ["/app/services/entrypoint.sh"],
+                "command": command,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "entrypoint", [None, [], "", ["python"], ["/app/services/entrypoint.sh", "extra"]]
+)
+def test_native_empty_command_normalization_requires_exact_entrypoint(gate, entrypoint):
+    with pytest.raises(AssertionError):
+        gate["native_dispatcher_model"](
+            {
+                "environment": {"SERVICE_NAME": "issuance_native"},
+                "entrypoint": entrypoint,
+                "command": None,
+            }
+        )
+
+
+def test_native_empty_command_normalization_requires_present_key_and_preserves_model(
+    gate,
+):
+    service = {
+        "environment": {"SERVICE_NAME": "issuance_native"},
+        "entrypoint": ["/app/services/entrypoint.sh"],
+        "future": {"value": [1]},
+    }
+    with pytest.raises(AssertionError):
+        gate["native_dispatcher_model"](service)
+    service["command"] = None
+    before = deepcopy(service)
+    normalized = gate["native_dispatcher_model"](service)
+    assert normalized == {**before, "command": []}
+    normalized["future"]["value"].append(2)
+    assert service == before
 
 
 def test_gate_rejects_missing_base_selector(gate, models):

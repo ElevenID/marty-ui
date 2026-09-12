@@ -69,8 +69,17 @@ def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
     )
     production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     assert production["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance:9005"
+        "issuance-native:9005"
     )
+    assert production["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"] == (
+        "http://issuance:8005"
+    )
+    for key in ("ISSUANCE_API_KEY_FILE", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"):
+        assert (
+            production["services"]["flow"]["environment"][key]
+            == "/run/secrets/issuance_api_key"
+        )
+    assert production["services"]["flow"]["secrets"].count("issuance_api_key") == 1
     assert (
         production["services"]["gateway"]["environment"]["ISSUANCE_NATIVE_SERVICE_URL"]
         == "http://issuance-native:8005"

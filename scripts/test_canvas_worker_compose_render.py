@@ -41,6 +41,26 @@ def environment_mapping(value):
     return result
 
 
+def native_dispatcher_model(service):
+    """Canonicalize only the two independently observed empty-command forms.
+
+    Installed Linux Compose 2.38.2 renders source `command: []` as JSON null;
+    pinned 5.4 renders []. Both retain this exact nonempty dispatcher entrypoint.
+    Source reset identity is independently guarded; never accept a missing key
+    or normalize an executable/string/boolean into an empty command.
+    """
+    assert (
+        environment_mapping(service.get("environment", {})).get("SERVICE_NAME")
+        == "issuance_native"
+    )
+    assert service.get("entrypoint") == ["/app/services/entrypoint.sh"]
+    assert "command" in service
+    assert service["command"] is None or service["command"] == []
+    result = deepcopy(service)
+    result["command"] = []
+    return result
+
+
 def assert_shared_rust_services(base, bundle):
     anchor = bundle["x-selfhost-service-image"]
     assert anchor["pull_policy"] == "always"
@@ -64,8 +84,7 @@ def assert_shared_rust_services(base, bundle):
         assert isinstance(selector, str) and selector, f"Missing base selector: {name}"
         if name == "issuance-native":
             assert selector == "issuance_native"
-            assert original.get("entrypoint") == ["/app/services/entrypoint.sh"]
-            assert original.get("command") == []
+            original = native_dispatcher_model(original)
         else:
             assert not original.get("command") and not original.get("entrypoint"), (
                 f"Review explicit Rust launch override: {name}"
@@ -76,6 +95,8 @@ def assert_shared_rust_services(base, bundle):
         expected["environment"] = environment_mapping(original.get("environment", {}))
         expected["environment"]["SERVICE_NAME"] = selector.replace("-", "_")
         actual = deepcopy(bundle["services"][name])
+        if name == "issuance-native":
+            actual = native_dispatcher_model(actual)
         actual["environment"] = environment_mapping(actual.get("environment", {}))
         differences = sorted(
             field

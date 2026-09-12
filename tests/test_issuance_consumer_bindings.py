@@ -144,6 +144,10 @@ def assert_kubernetes_bindings(documents, config):
 
 def assert_selfhost_bindings(compose):
     services = compose["services"]
+    flow = services["flow"]
+    for key in ("ISSUANCE_API_KEY_FILE", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"):
+        assert flow["environment"][key] == "/run/secrets/issuance_api_key"
+    assert flow["secrets"].count("issuance_api_key") == 1
     assert services["issuance-native"]["extends"] == {
         "file": "docker-compose.service.issuance-native-runtime.yml",
         "service": "issuance-native",
@@ -205,7 +209,7 @@ def assert_selfhost_bindings(compose):
     for name in ("gateway", "auth", "applicant", "presentation-policy", "flow"):
         expected[name]["ISSUANCE_SERVICE_URL"] = "http://issuance:8005"
     expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
-    expected["flow"][TARGET] = "issuance:9005"
+    expected["flow"][TARGET] = "issuance-native:9005"
     expected["issuance-native"] = {
         "ES_GRPC_TARGET": "event-stream:9015",
         "ORG_GRPC_TARGET": "organization:9002",
@@ -331,7 +335,7 @@ def test_selfhost_guard_rejects_policy_drift_and_unrelated_target_changes(mutati
     elif mutation == "duplicate-owner":
         services["flow"]["environment"][PRIVATE] = "false"
     elif mutation == "native-target":
-        services["flow"]["environment"][TARGET] = "issuance-native:9005"
+        services["flow"]["environment"][TARGET] = "issuance:9005"
     elif mutation == "physical-http":
         services["flow"]["environment"]["ISSUANCE_SERVICE_URL"] = (
             "http://issuance-native:8005"
@@ -340,5 +344,25 @@ def test_selfhost_guard_rejects_policy_drift_and_unrelated_target_changes(mutati
         services["flow"]["environment"]["CT_GRPC_TARGET"] = "other:9003"
     else:
         services["issuance"]["command"] = ["/usr/local/bin/marty-issuance-service"]
+    with pytest.raises(AssertionError):
+        assert_selfhost_bindings(compose)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["issuance-key", "signing-key", "mount", "duplicate-mount"]
+)
+def test_selfhost_flow_requires_paired_existing_secret_identity(mutation):
+    _, _, compose = source_models()
+    flow = compose["services"]["flow"]
+    if mutation == "issuance-key":
+        flow["environment"]["ISSUANCE_API_KEY_FILE"] = "/run/secrets/unowned"
+    elif mutation == "signing-key":
+        flow["environment"]["SIGNING_KEYS_INTERNAL_API_KEY_FILE"] = (
+            "/run/secrets/unowned"
+        )
+    elif mutation == "mount":
+        flow["secrets"].remove("issuance_api_key")
+    else:
+        flow["secrets"].append("issuance_api_key")
     with pytest.raises(AssertionError):
         assert_selfhost_bindings(compose)

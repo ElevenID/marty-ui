@@ -902,6 +902,8 @@ jobs:
           bash scripts/ci/install-compose-renderer.sh
           compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"
           python3 scripts/test_canvas_worker_compose_render.py \
+            --suite bundle --compose-command "$compose_renderer"
+          python3 scripts/test_canvas_worker_compose_render.py \
             --suite consumers --compose-command "$compose_renderer"
       - name: Verify generated beta application image configuration
         run: python3 scripts/test_beta_application_image_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"

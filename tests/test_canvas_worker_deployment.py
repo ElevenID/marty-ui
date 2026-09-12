@@ -874,7 +874,10 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
     execute = commands.index("python3 scripts/test_canvas_worker_compose_render.py")
     assert download < checksum < verify < commands.index("chmod +x") < execute
     assert 'compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"' in commands
+    assert '--suite bundle --compose-command "$compose_renderer"' in commands
     assert '--suite consumers --compose-command "$compose_renderer"' in commands
+    assert commands.count("python3 scripts/test_canvas_worker_compose_render.py") == 2
+    assert commands.index("--suite bundle") < commands.index("--suite consumers")
     builds = [
         index
         for index, step in enumerate(steps)

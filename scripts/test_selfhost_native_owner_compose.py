@@ -84,7 +84,9 @@ def assert_input_inventory():
 
 def assert_models(before, after):
     preserved = deepcopy(after)
-    native = preserved["services"].pop("issuance-native")
+    native = GATE["native_dispatcher_model"](
+        preserved["services"].pop("issuance-native")
+    )
     shared = preserved.pop("x-issuance-application-env")
     gateway = preserved["services"]["gateway"]
     assert (
