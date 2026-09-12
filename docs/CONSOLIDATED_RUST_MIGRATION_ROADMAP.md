@@ -123,6 +123,8 @@ is corrected and tested without rewriting meaningful IDs. Root verified the
 integrated production files match the reviewed source; 178 focused integrated
 guards passed. Exact-head hosted CI, merge and beta acceptance remain required;
 no active Python renewal or encryption feature has been removed.
+The complete combined repository Python suite then passed **3,290 tests, three
+skipped in 203.40s** at `b7c5d7746`, after activation and conformance integration.
 
 The integrated `424e25ba5` tree passed the full repository `tests/` suite:
 **3,080 passed, three skipped in 200.78s**. This includes the fixed synthetic
