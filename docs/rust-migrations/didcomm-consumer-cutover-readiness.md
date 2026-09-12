@@ -174,12 +174,29 @@ formatting, and the CI/preflight registration suite passed 166 tests. The new
 gateway gate is mandatory in the full published-contract runner. These are local
 results, not exact-head hosted qualification or deployed consumer selection.
 
-Direct cutover still needs native startup/configuration parity. Beta native
-issuance lacks the legacy resolver settings; authcrypt and conformance overlays
-currently mount policy and CA only into legacy issuance. The native transport
-also loads its CA at startup rather than per delivery, changing invalid-file and
-rotation behavior. Correct these without broad key mounts, weaker defaults or a
-KMS redesign. Production route ownership and reachable Python remain unchanged.
+Reviewed configuration source `671cd18ba` (integration `db9fcf058`) now forwards
+the legacy resolver/default-private-IP settings to beta native issuance and adds
+explicit native-only policy/CA overlays. Full Compose rendering and synthetic
+binding checks pass, including rejection of legacy authcrypt without native
+policy pairing. The deployment runner still needs to enforce that guard before
+cutover; an optional overlay alone does not prevent a downgrade. See the
+[configuration boundary](didcomm-native-configuration.md).
+
+Reviewed TLS source `d9740b515` (integration `af6e54d44`) closes CA startup/reload
+parity as described above: fifteen native and thirteen gateway composition cases,
+actual trust rotation/bundle controls, six HTTP tests, real executable health
+with invalid trust, all 378 library tests and strict Clippy passed. No KMS change
+is included. Single-route selection is being qualified separately; this document
+does not establish a merged or deployed cutover.
+
+The [retirement audit](didcomm-retirement-audit.md) and source `25f14fb3a`
+(integration `627d977d3`) preserve eight full HTTP/gRPC response pairs and four
+isolated idempotency guards. Exact unchanged-source capture matched; fifteen
+repository-only tests passed separately. Python automatic HTTP is a delivery
+caller; old gRPC is offer-only, with an explicitly governed native push target.
+Neither snapshot projection nor isolated rejection is full admission evidence.
+Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
+not demonstrated migration regressions; working full peer2 has old/new evidence.
 
 1. Qualify direct and automatic delivery through the shared actual native owner,
    including whole response fields, true crypto, durable finalization, failure,
