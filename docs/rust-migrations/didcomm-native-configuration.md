@@ -1,7 +1,8 @@
 # Native DIDComm configuration ownership
 
-This configuration prepares selective native delivery; it does not switch gateway
-routes, change production, remove Python, or qualify KMS-only custody.
+This configuration prepares selective native delivery and selects beta Flow's
+qualified initiation RPC consumer. It does not switch gateway routes, change
+production, remove Python, or qualify KMS-only custody.
 
 The beta `issuance-native` service now receives the same resolver and endpoint
 policy expressions as legacy `issuance`:
@@ -18,6 +19,38 @@ is changed. Native Rust also supports the explicit
 `DIDCOMM_UNIVERSAL_RESOLVER_URL` environment override, but this beta composition
 mirrors the existing legacy resolver variable rather than introducing different
 resolver precedence between the two services.
+
+## Initiation consumer configuration
+
+Beta Flow uses `ISSUANCE_GRPC_TARGET=issuance-native:9005`. Its existing
+`ISSUANCE_SERVICE_URL=http://issuance:8005` remains inherited from base: that
+separate HTTP provider serves physical-document operations, not this RPC.
+Base/self-host profiles and Envoy's shared issuance gRPC cluster are unchanged.
+Native issuance explicitly retains its enabled port 9005 and the same service
+token as Flow and legacy issuance. Existing health and published-migration
+dependencies remain; rendered checks verify configuration, not live readiness.
+
+Native initiation's organization, template and revocation gRPC targets and
+template HTTP URL now explicitly equal the legacy Compose bindings. These are
+fixed service addresses, matching the previous Rust defaults; this does not add
+new interpolation precedence. `VCDM_RELATED_RESOURCE_URLS` forwards the exact
+legacy `${VCDM_RELATED_RESOURCE_URLS:-}` expression. Empty stays fail-closed;
+operator-authorized resource URLs must not disappear for ordinary issuance or
+the gateway VC-API adapter, which also calls `/v1/issuance/initiate`.
+
+This selection relies on the actual keyed Flow provider gate (ordinary creation,
+recovery/conflict, pure/mixed DIDComm rejection) and the separate ten-case
+unkeyed native RPC gate. Flow keeps its idempotency keys; this does not make
+current Flow requests perform unkeyed DIDComm push. Gateway initiation selection
+is separate. No additional Core or KMS behavior is introduced.
+
+Python retirement remains a published-consumer boundary: standalone base,
+self-host and Kubernetes manifests still select the external Python issuance
+image. Beta routing alone does not make their direct/automatic DIDComm endpoints
+unreachable. Preserve those consumers or migrate their supported routing before
+removing reachable helpers/startup capabilities from their future image. Unused
+Python decrypt/unpack wrappers can be reviewed separately; canonical Rust
+capabilities and language-neutral reference fixtures remain.
 
 ## Explicit overlays
 
@@ -79,7 +112,8 @@ local sender private keys and are not a KMS-only solution.
 Run `python scripts/test_didcomm_native_compose.py` with Docker Compose available.
 The gate uses `compose config` only: no daemon operations, pulls, builds, or
 deployments. It compares complete merged models, preserving every unrelated
-service and resource; checks synthetic resolver/mount bindings and missing-input
+service and resource; checks synthetic resolver/mount/related-resource bindings,
+Flow-only RPC selection, shared token/control-plane/health ownership and missing-input
 rejection; rejects an unpaired authcrypt configuration; and verifies legacy
 conformance still does not introduce a native service. CI runs this gate with
 the existing pinned Compose renderer before image builds.

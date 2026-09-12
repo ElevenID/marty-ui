@@ -20,6 +20,7 @@ def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
     native = beta["services"]["issuance-native"]["environment"]
     for name in (
         "ISSUANCE_OFFER_TTL_MINUTES",
+        "VCDM_RELATED_RESOURCE_URLS",
         "UNIVERSAL_RESOLVER_URL",
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         "DIDCOMM_ALLOW_PRIVATE_IPS",
@@ -28,6 +29,50 @@ def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
     assert native["DIDCOMM_ALLOW_PRIVATE_IPS"] == "${DIDCOMM_ALLOW_PRIVATE_IPS:-false}"
     assert "DIDCOMM_ENCRYPTION_POLICY_FILE" not in native
     assert "DIDCOMM_TLS_CA_FILE" not in native
+
+
+def _source_initiation_model():
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
+    beta = yaml.safe_load((ROOT / "docker-compose.beta.yml").read_text())
+    # Source-only guard; the explicit Compose gate checks the actual merge.
+    services = deepcopy(base["services"])
+    services["issuance-native"] = beta["services"]["issuance-native"]
+    for name in ("flow", "issuance"):
+        services[name]["environment"].update(beta["services"][name]["environment"])
+    return base, beta, {"services": services}
+
+
+def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
+    base, beta, model = _source_initiation_model()
+    gate = runpy.run_path(str(ROOT / "scripts/test_didcomm_native_compose.py"))
+    gate["assert_initiation_consumer_bindings"](model)
+    assert "ISSUANCE_SERVICE_URL" not in beta["services"]["flow"]["environment"]
+    assert base["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
+        "issuance:9005"
+    )
+    production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    assert production["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
+        "issuance:9005"
+    )
+    assert "issuance-native" not in production["services"]
+
+
+@pytest.mark.parametrize(
+    "service,key,value",
+    (
+        ("flow", "ISSUANCE_GRPC_TARGET", "issuance:9005"),
+        ("flow", "ISSUANCE_SERVICE_URL", "http://issuance-native:8005"),
+        ("flow", "GRPC_SERVICE_TOKEN", "wrong-synthetic-token"),
+        ("issuance-native", "CT_GRPC_TARGET", "wrong-template:9003"),
+        ("issuance-native", "ISSUANCE_GRPC_ENABLED", "false"),
+    ),
+)
+def test_initiation_binding_guard_rejects_consumer_drift(service, key, value) -> None:
+    _, _, model = _source_initiation_model()
+    model["services"][service]["environment"][key] = value
+    gate = runpy.run_path(str(ROOT / "scripts/test_didcomm_native_compose.py"))
+    with pytest.raises(AssertionError):
+        gate["assert_initiation_consumer_bindings"](model)
 
 
 def test_native_authcrypt_mount_is_exact_read_only_and_explicit() -> None:

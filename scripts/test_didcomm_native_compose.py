@@ -28,6 +28,40 @@ CA_DIRECTORY = (
 )
 POLICY_TARGET = "/run/secrets/didcomm-authcrypt"
 CA_TARGET = "/run/secrets/didcomm-conformance-root-ca.pem"
+INITIATION_CONTROL_PLANE = {
+    "ORG_GRPC_TARGET": "organization:9002",
+    "CT_GRPC_TARGET": "credential-template:9003",
+    "RP_GRPC_TARGET": "revocation-profile:9013",
+    "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+}
+
+
+def assert_initiation_consumer_bindings(model):
+    services = model["services"]
+    native = services["issuance-native"]
+    legacy = services["issuance"]
+    flow = services["flow"]
+    for name, expected in INITIATION_CONTROL_PLANE.items():
+        assert native["environment"][name] == legacy["environment"][name] == expected
+    assert native["environment"]["ISSUANCE_GRPC_ENABLED"] == "true"
+    assert native["environment"]["ISSUANCE_GRPC_PORT"] == "9005"
+    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    assert flow["environment"]["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+    assert (
+        flow["environment"]["GRPC_SERVICE_TOKEN"]
+        == native["environment"]["GRPC_SERVICE_TOKEN"]
+        == legacy["environment"]["GRPC_SERVICE_TOKEN"]
+    )
+    assert native["healthcheck"]["test"] == [
+        "CMD",
+        "curl",
+        "--fail",
+        "http://localhost:8005/health",
+    ]
+    assert native["depends_on"]["issuance-migrations"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert native["depends_on"]["postgres"]["condition"] == "service_healthy"
 
 
 def mount(source, target):
@@ -95,7 +129,25 @@ def assert_bindings(model, compose_command):
                 "image": "synthetic.invalid/issuance-native:test",
                 "environment": native["environment"],
                 "volumes": native.get("volumes", []),
-            }
+            },
+            # Only synthetic interpolation inputs are used for these ports.
+            # Preserve the real merged consumer and legacy expressions too.
+            **{
+                name: {
+                    "image": "synthetic.invalid/unused:test",
+                    "environment": {
+                        key: model["services"][name]["environment"][key] for key in keys
+                    },
+                }
+                for name, keys in {
+                    "flow": (
+                        "ISSUANCE_GRPC_TARGET",
+                        "ISSUANCE_SERVICE_URL",
+                        "GRPC_SERVICE_TOKEN",
+                    ),
+                    "issuance": ("VCDM_RELATED_RESOURCE_URLS", "GRPC_SERVICE_TOKEN"),
+                }.items()
+            },
         }
     }
     with tempfile.TemporaryDirectory(prefix="didcomm-config-binding-") as temporary:
@@ -125,8 +177,22 @@ def assert_bindings(model, compose_command):
             )
             return binding_owner["render_binding"](directory, compose_command, source)
 
-        default = render()["services"]["issuance-native"]
+        default_model = render()
+        default = default_model["services"]["issuance-native"]
         environment = default["environment"]
+        assert environment["VCDM_RELATED_RESOURCE_URLS"] == ""
+        assert (
+            default_model["services"]["issuance"]["environment"][
+                "VCDM_RELATED_RESOURCE_URLS"
+            ]
+            == ""
+        )
+        for name, expected in INITIATION_CONTROL_PLANE.items():
+            assert environment[name] == expected
+        flow = default_model["services"]["flow"]["environment"]
+        assert flow["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+        assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+        assert flow["GRPC_SERVICE_TOKEN"] == environment["GRPC_SERVICE_TOKEN"]
         assert environment["ISSUANCE_OFFER_TTL_MINUTES"] == "10080"
         assert environment["UNIVERSAL_RESOLVER_URL"] == ""
         assert environment["DIDCOMM_DID_WEB_INTERNAL_BASE_URL"] == "http://gateway:8000"
@@ -165,6 +231,19 @@ def assert_bindings(model, compose_command):
         )
         assert explicit["DIDCOMM_ALLOW_PRIVATE_IPS"] == ("true" if has_ca else "yes")
         assert explicit["ISSUANCE_OFFER_TTL_MINUTES"] == "1_440"
+        for resources in (
+            "",
+            "https://resources.example/context.json",
+            "https://resources.example/a.json,https://resources.example/b.json",
+        ):
+            configured = render({"VCDM_RELATED_RESOURCE_URLS": resources})["services"]
+            assert (
+                configured["issuance-native"]["environment"][
+                    "VCDM_RELATED_RESOURCE_URLS"
+                ]
+                == configured["issuance"]["environment"]["VCDM_RELATED_RESOURCE_URLS"]
+                == resources
+            )
         for minutes in ("0", "-5"):
             configured = render({"ISSUANCE_OFFER_TTL_MINUTES": minutes})
             assert (
@@ -202,10 +281,12 @@ def run(compose_command=None):
         return model
 
     base = render(BASE, BETA)
+    assert_initiation_consumer_bindings(base)
     native = base["services"]["issuance-native"]
     legacy = base["services"]["issuance"]
     for name in (
         "ISSUANCE_OFFER_TTL_MINUTES",
+        "VCDM_RELATED_RESOURCE_URLS",
         "UNIVERSAL_RESOLVER_URL",
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         "DIDCOMM_ALLOW_PRIVATE_IPS",
@@ -227,6 +308,7 @@ def run(compose_command=None):
             *([CONFORMANCE] if conformance else []),
         ]
         actual = render(*files, *overlays)
+        assert_initiation_consumer_bindings(actual)
         assert_model(
             actual,
             expected_model(baseline, authcrypt=authcrypt, conformance=conformance),

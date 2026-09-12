@@ -129,6 +129,9 @@ services:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
       GRPC_INSECURE_ALLOWED: "true"
+      # Only the qualified initiation RPC consumer moves; physical-document
+      # HTTP operations retain the legacy ISSUANCE_SERVICE_URL from base.
+      ISSUANCE_GRPC_TARGET: issuance-native:9005
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
@@ -172,7 +175,8 @@ services:
 
   # Only operations enumerated by contracts/issuance-native-coverage.json are
   # sent here. The Python issuance service remains the fail-closed fallback for
-  # every unmigrated HTTP route and all gRPC methods.
+  # every unmigrated HTTP route. Flow selects only its qualified initiation RPC;
+  # the shared legacy gRPC service/Envoy alias remains unchanged.
   issuance-native:
     build:
       context: .
@@ -183,6 +187,8 @@ services:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
       ISSUANCE_SERVICE_PORT: "8005"
+      ISSUANCE_GRPC_ENABLED: "true"
+      ISSUANCE_GRPC_PORT: "9005"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:?MARTY_DB_PASSWORD must be set for beta}@postgres:5432/marty
       ISSUER_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
       CORS_ALLOWED_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set for beta}
@@ -191,6 +197,14 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      # Keep initiation's control-plane ports equal to the legacy service.
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
+      RP_GRPC_TARGET: revocation-profile:9013
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      # Initiation also serves ordinary/VC-API callers. Preserve their exact
+      # operator-authorized resources; an empty value remains fail-closed.
+      VCDM_RELATED_RESOURCE_URLS: ${VCDM_RELATED_RESOURCE_URLS:-}
       # Match legacy issuance resolution without enabling private wallet endpoints.
       # Authcrypt policy and conformance CA mounts remain separate explicit overlays.
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
