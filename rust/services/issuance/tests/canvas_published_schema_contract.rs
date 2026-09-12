@@ -5,6 +5,24 @@ use tracing::instrument::WithSubscriber;
 #[path = "support/renewal_reference_fixture.rs"]
 mod renewal_reference_fixture;
 
+#[path = "support/base_runtime_canvas.rs"]
+mod base_runtime_canvas;
+#[path = "support/base_runtime_container.rs"]
+mod base_runtime_container;
+#[path = "support/base_runtime_didcomm.rs"]
+mod base_runtime_didcomm;
+#[path = "support/base_runtime_gateway.rs"]
+mod base_runtime_gateway;
+#[path = "support/base_runtime_ordinary.rs"]
+mod base_runtime_ordinary;
+#[path = "support/base_runtime_redis.rs"]
+mod base_runtime_redis;
+#[path = "support/bounded_fixture_command.rs"]
+mod bounded_fixture_command;
+#[path = "support/issuance_named_peers.rs"]
+mod issuance_named_peers;
+#[path = "support/rendered_base_process.rs"]
+mod rendered_base_process;
 #[path = "support/renewal_binding_postgres.rs"]
 mod renewal_binding_postgres;
 #[path = "support/renewal_fresh_main.rs"]
@@ -13,6 +31,81 @@ mod renewal_fresh_main;
 mod renewal_gateway_replay;
 #[path = "support/renewal_main_replay.rs"]
 mod renewal_main_replay;
+
+#[tokio::test]
+async fn base_profile_gateway_composition_isolated() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Base executable composition requires the configured owned Linux gate");
+        return;
+    }
+    assert_eq!(
+        std::env::consts::OS,
+        "linux",
+        "required isolated composition cannot be qualified with Windows artifacts"
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    base_runtime_redis::OwnedRedis::assert_constructor_timeout_cleanup(&owned)
+        .await
+        .unwrap();
+    let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
+        .await
+        .unwrap();
+    let result = base_runtime_container::run(
+        &owned,
+        &redis,
+        &base_runtime_container::source_assets().unwrap(),
+    )
+    .await;
+    redis.close_verified().unwrap();
+    owned.close_verified().unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn base_profile_gateway_composition_child() {
+    if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
+        eprintln!("Inner composition is invoked only by the exact-owned namespace container");
+        return;
+    }
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    rendered_base_process::assert_renderer_deadlines();
+    renewal_fresh_main::run_gateway(
+        "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
+        "redis://127.0.0.1:6379",
+    )
+    .await;
+    println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
+}
+
+#[tokio::test]
+async fn base_profile_native_renewal_uses_actual_rendered_configuration() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Rendered base native process requires the exact-owned published schema gate");
+        return;
+    }
+    rendered_base_process::assert_renderer_deadlines();
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    base_runtime_redis::OwnedRedis::assert_constructor_timeout_cleanup(&owned)
+        .await
+        .unwrap();
+    let namespace_redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
+        .await
+        .unwrap();
+    namespace_redis.verify_published_namespace(&owned).unwrap();
+    namespace_redis.close_verified().unwrap();
+    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
+    renewal_fresh_main::run_rendered(&owned.url, redis.url()).await;
+    redis.close_verified().unwrap();
+    owned.close_verified().unwrap();
+}
 
 #[tokio::test]
 async fn didcomm_renewal_canvas_preserves_real_association_and_delivery_phases() {

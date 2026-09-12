@@ -860,7 +860,10 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
     assert bundle < consumers
     gate = steps[consumers]
     assert "if" not in gate and not gate.get("continue-on-error", False)
-    commands = gate["run"]
+    assert "bash scripts/ci/install-compose-renderer.sh" in gate["run"]
+    commands = (ROOT / "scripts/ci/install-compose-renderer.sh").read_text() + gate[
+        "run"
+    ]
     download = commands.index(
         "https://github.com/docker/compose/releases/download/v5.4.0/docker-compose-linux-x86_64"
     )

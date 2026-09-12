@@ -36,6 +36,9 @@ if [[ -n "$preflight_target" ]]; then
   exit 0
 fi
 "${executables[0]}" --list | grep -Fx 'heartbeat_readiness_matches_published_python: test'
+"${executables[0]}" --list | grep -Fx 'base_profile_native_renewal_uses_actual_rendered_configuration: test'
+"${executables[0]}" --list | grep -Fx 'base_profile_gateway_composition_isolated: test'
+"${executables[0]}" --list | grep -Fx 'base_profile_gateway_composition_child: test'
 "${executables[0]}" --list | grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'
 "${executables[0]}" --list | grep -Fx 'worker_rest_reference_matches_published_process: test'
 "${executables[0]}" --list | grep -Fx 'worker_facts_reference_matches_published_process: test'

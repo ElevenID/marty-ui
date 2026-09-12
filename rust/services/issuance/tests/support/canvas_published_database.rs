@@ -27,22 +27,47 @@ fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
     .then_some(diagnostics)
 }
 
-fn docker(arguments: &[&str]) -> Result<String, String> {
-    let output = Command::new("docker")
-        .args(arguments)
-        .output()
-        .map_err(|_| "Docker execution unavailable".to_owned())?;
+pub(super) fn docker(arguments: &[&str]) -> Result<String, String> {
+    docker_with_timeout(arguments, Duration::from_secs(120))
+}
+
+pub(super) fn docker_with_timeout(arguments: &[&str], timeout: Duration) -> Result<String, String> {
+    use super::bounded_fixture_command::{run, CommandFailure};
+    let limit = if arguments.first() == Some(&"logs") {
+        64 * 1024 * 1024
+    } else {
+        8 * 1024 * 1024
+    };
+    let output =
+        run(Command::new("docker").args(arguments), None, timeout, limit).map_err(|error| {
+            match error {
+                CommandFailure::Io(_) => "Docker execution unavailable".to_owned(),
+                CommandFailure::TimedOut => "Docker command exceeded deadline".to_owned(),
+                CommandFailure::OutputTooLarge => "Docker command output exceeded limit".to_owned(),
+                CommandFailure::TerminationFailed => "Docker command cleanup failed".to_owned(),
+            }
+        })?;
     if !output.status.success() {
-        return Err(format!("Docker {} failed", arguments[0]));
+        return Err(format!(
+            "Docker {} failed",
+            arguments.first().copied().unwrap_or("command")
+        ));
     }
     String::from_utf8(output.stdout)
         .map(|s| s.trim().to_owned())
         .map_err(|_| "Docker returned invalid UTF-8".to_owned())
 }
 
-fn inspect(id: &str) -> Result<Value, String> {
-    serde_json::from_str(&docker(&["inspect", "--format", "{{json .}}", id])?)
-        .map_err(|_| "Invalid container inspection".into())
+pub(super) fn inspect(id: &str) -> Result<Value, String> {
+    inspect_with_timeout(id, Duration::from_secs(120))
+}
+
+pub(super) fn inspect_with_timeout(id: &str, timeout: Duration) -> Result<Value, String> {
+    serde_json::from_str(&docker_with_timeout(
+        &["inspect", "--format", "{{json .}}", id],
+        timeout,
+    )?)
+    .map_err(|_| "Invalid container inspection".into())
 }
 
 fn checked_database_storage(info: &Value, id: &str, scope: &str) -> Result<(), String> {

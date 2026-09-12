@@ -1,239 +1,20 @@
-//! Fresh renewal through the packaged binary. Only named control-plane/signing
-//! peers are synthetic; admission, Core assembly/encryption and delivery are real.
-use std::{
-    collections::BTreeMap,
-    convert::Infallible,
-    sync::{Arc, Mutex},
-};
+//! Fresh renewal through the packaged binary. Shared named peers are test ports;
+//! admission, Core assembly/encryption, durable delivery and assertions stay real.
+use std::sync::Arc;
 
-use axum::{
-    body::{to_bytes, Body},
-    extract::State,
-    http::{HeaderMap, Request, StatusCode},
-    response::{IntoResponse, Response},
-    Json, Router,
-};
+use axum::http::StatusCode;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use bytes::Bytes;
-use ed25519_dalek::{Signer, SigningKey};
-use http_body_util::StreamBody;
-use hyper::body::Frame;
-use marty_didcomm::DidDocument;
-use marty_issuance_service::{
-    credential_template_proto as template, organization_proto as organization,
-    revocation_profile_proto as revocation,
-};
-use prost::Message;
+use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
-use super::didcomm_gateway_replay::OwnedHttp;
-
-const ORGANIZATION: &str = "synthetic-org";
-const ISSUER: &str = "did:web:issuer.example:issuer";
-const HOLDER: &str = "did:web:issuer.example:holder";
-const TEMPLATE: &str = "didcomm-template";
-const PROFILE: &str = "didcomm-status";
-const TOKEN: &str = "synthetic-renewal-fresh-main-service-token";
-const API_KEY: &str = "synthetic-renewal-fresh-main-management-key";
-const SIGNING_KEY: &str = "synthetic-renewal-fresh-main-signing-key";
-const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
-
-#[derive(Clone)]
-struct PeerState {
-    source_id: String,
-    sender: DidDocument,
-    recipient: DidDocument,
-    signer: Arc<SigningKey>,
-    // Record before decoding or validation so failed requests cannot disappear.
-    attempts: Arc<Mutex<Vec<String>>>,
-    accepted: Arc<Mutex<Vec<String>>>,
-    signed: Arc<Mutex<Vec<Vec<u8>>>>,
-    allocations: Arc<Mutex<Vec<Value>>>,
-    publications: Arc<Mutex<Vec<Value>>>,
-}
-
-fn decode_request<M: Message + Default>(bytes: &[u8]) -> M {
-    assert!(bytes.len() >= 5, "complete unary gRPC frame");
-    assert_eq!(bytes[0], 0, "uncompressed synthetic unary request");
-    let length = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
-    assert_eq!(bytes.len(), length + 5, "exactly one request frame");
-    M::decode(&bytes[5..]).unwrap()
-}
-
-fn grpc_response(message: impl Message) -> Response {
-    let payload = message.encode_to_vec();
-    let mut encoded = vec![0];
-    encoded.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
-    encoded.extend_from_slice(&payload);
-    let mut trailers = HeaderMap::new();
-    trailers.insert("grpc-status", "0".parse().unwrap());
-    let frames: Vec<Result<Frame<Bytes>, Infallible>> = vec![
-        Ok(Frame::data(Bytes::from(encoded))),
-        Ok(Frame::trailers(trailers)),
-    ];
-    Response::builder()
-        .header("content-type", "application/grpc")
-        .body(Body::new(StreamBody::new(futures_util::stream::iter(
-            frames,
-        ))))
-        .unwrap()
-}
-
-fn query(request: &Request<Body>) -> BTreeMap<String, String> {
-    url::form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect()
-}
-
-async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Response {
-    let path = request.uri().path().to_owned();
-    state.attempts.lock().unwrap().push(path.clone());
-    let method = request.method().clone();
-    let args = query(&request);
-    let headers = request.headers().clone();
-    if path.starts_with("/marty.ui.") {
-        assert_eq!(request.version(), axum::http::Version::HTTP_2);
-        assert_eq!(headers["content-type"], "application/grpc");
-        assert!(args.is_empty());
-    }
-    let bytes = to_bytes(request.into_body(), 128 * 1024).await.unwrap();
-    let response = match path.as_str() {
-        "/marty.ui.organization.v1.OrganizationService/GetOrganization" => {
-            assert_eq!(method, "POST");
-            assert_eq!(headers["x-service-token"], TOKEN);
-            let request: organization::GetOrganizationRequest = decode_request(&bytes);
-            assert_eq!(
-                request,
-                organization::GetOrganizationRequest {
-                    organization_id: ORGANIZATION.into()
-                }
-            );
-            grpc_response(organization::OrganizationResponse {
-                id: ORGANIZATION.into(),
-                ..Default::default()
-            })
-        }
-        "/marty.ui.credential_template.v1.CredentialTemplateService/GetTemplate" => {
-            assert_eq!(method, "POST");
-            assert_eq!(headers["x-service-token"], TOKEN);
-            let request: template::GetTemplateRequest = decode_request(&bytes);
-            assert_eq!(
-                request,
-                template::GetTemplateRequest {
-                    template_id: TEMPLATE.into()
-                }
-            );
-            grpc_response(template::TemplateResponse {
-                id: TEMPLATE.into(), organization_id: ORGANIZATION.into(), status: "active".into(),
-                credential_type: "EmployeeCredential".into(),
-                vct: "https://issuer.example/credentials/EmployeeCredential".into(),
-                credential_payload_format: FORMAT.into(), issuer_did: ISSUER.into(),
-                issuer_algorithm: "EdDSA".into(), revocation_profile_id: PROFILE.into(),
-                wallet_configs_json: json!([{"wallet_id":"didcomm","format_variant":"didcomm_v2","display_name":"Synthetic Wallet"}]).to_string(),
-                validity_rules: Some(template::ValidityRules { default_validity_days: 365, renewable: true, renewal_window_days: 30, ..Default::default() }),
-                ..Default::default()
-            })
-        }
-        "/marty.ui.revocation_profile.v1.RevocationProfileService/GetRevocationProfile" => {
-            assert_eq!(method, "POST");
-            assert_eq!(headers["x-service-token"], TOKEN);
-            let request: revocation::GetRevocationProfileRequest = decode_request(&bytes);
-            assert_eq!(
-                request,
-                revocation::GetRevocationProfileRequest {
-                    profile_id: PROFILE.into()
-                }
-            );
-            grpc_response(revocation::RevocationProfileResponse {
-                id: PROFILE.into(),
-                organization_id: ORGANIZATION.into(),
-                status: "active".into(),
-                ..Default::default()
-            })
-        }
-        "/issuer/did.json" | "/holder/did.json" => {
-            assert_eq!(method, "GET");
-            assert!(bytes.is_empty());
-            assert!(args.is_empty());
-            Json(if path.starts_with("/issuer/") {
-                state.sender.clone()
-            } else {
-                state.recipient.clone()
-            })
-            .into_response()
-        }
-        "/resolve-issuer-did" => {
-            assert_eq!(method, "GET");
-            assert_eq!(headers["x-api-key"], SIGNING_KEY);
-            assert_eq!(
-                args.get("organization_id").map(String::as_str),
-                Some(ORGANIZATION)
-            );
-            assert_eq!(args.get("issuer_did").map(String::as_str), Some(ISSUER));
-            assert_eq!(args.get("algorithm").map(String::as_str), Some("EdDSA"));
-            assert!(bytes.is_empty());
-            Json(json!({"ok":true,"issuer_did":ISSUER,"algorithm":"EdDSA",
-                "issuer_profile":{"id":"synthetic-fresh-main-profile","status":"active"},
-                "signing_service_id":"synthetic-fresh-main-signer","signing_key_reference":"synthetic-opaque-signing-key",
-                "verification_method_id":format!("{ISSUER}#signing-1"),
-                "public_jwk":{"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(state.signer.verifying_key().as_bytes())}})).into_response()
-        }
-        "/issuer-dids/sign" => {
-            assert_eq!(method, "POST");
-            assert_eq!(headers["x-api-key"], SIGNING_KEY);
-            assert_eq!(
-                args,
-                BTreeMap::from([("organization_id".into(), ORGANIZATION.into())])
-            );
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body["issuer_did"], ISSUER);
-            assert_eq!(body["algorithm"], "EdDSA");
-            let payload = URL_SAFE_NO_PAD
-                .decode(body["payload_b64"].as_str().unwrap())
-                .unwrap();
-            let signature = state.signer.sign(&payload);
-            state.signed.lock().unwrap().push(payload);
-            Json(json!({"ok":true,"issuer_did":ISSUER,"algorithm":"EdDSA",
-                "verification_method_id":format!("{ISSUER}#signing-1"),
-                "signature_b64":URL_SAFE_NO_PAD.encode(signature.to_bytes())}))
-            .into_response()
-        }
-        "/internal/revocation-profiles/didcomm-status/reserve-index" => {
-            assert_eq!(method, "POST");
-            assert_eq!(headers["x-service-token"], TOKEN);
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body["organization_id"], ORGANIZATION);
-            assert_eq!(body["credential_format"], "sd_jwt_vc");
-            assert!(body["credential_id"]
-                .as_str()
-                .is_some_and(|id| !id.is_empty()));
-            state.allocations.lock().unwrap().push(body);
-            Json(json!({"organization_id":ORGANIZATION,"index":8,"status_list_url":"https://status.example/synthetic"})).into_response()
-        }
-        "/internal/revocation-profiles/didcomm-status/process-revocation" => {
-            assert_eq!(method, "POST");
-            assert_eq!(headers["x-service-token"], TOKEN);
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(
-                body,
-                json!({"organization_id":ORGANIZATION,"credential_id":state.source_id,"index":7,"status":"revoked","credential_format":"sd_jwt_vc","reason":"Superseded by renewed credential"})
-            );
-            state.publications.lock().unwrap().push(body);
-            Json(json!({"success":true,"organization_id":ORGANIZATION,"index":7,"status_list_url":"https://status.example/synthetic"})).into_response()
-        }
-        _ => return StatusCode::NOT_FOUND.into_response(),
-    };
-    state.accepted.lock().unwrap().push(path);
-    response
-}
-
-async fn start_peers(state: PeerState) -> OwnedHttp {
-    OwnedHttp::start(Router::new().fallback(peer).with_state(state)).await
-}
+use super::issuance_named_peers::{
+    counts, start_peers, PeerState, API_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION, PROFILE,
+    SIGNING_KEY, TEMPLATE, TOKEN,
+};
 
 use super::renewal_reference_fixture as reference;
 
-async fn stored(pool: &sqlx::PgPool, id: &str) -> Value {
+pub(super) async fn stored(pool: &sqlx::PgPool, id: &str) -> Value {
     sqlx::query_scalar("SELECT jsonb_build_object(
       'transaction',(SELECT to_jsonb(t) FROM issuance_service.issuance_transactions t WHERE id=$1),
       'credentials',(SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM issuance_service.issued_credentials c WHERE transaction_id=$1),
@@ -242,15 +23,32 @@ async fn stored(pool: &sqlx::PgPool, id: &str) -> Value {
         .bind(id).fetch_one(pool).await.unwrap()
 }
 
-fn counts(values: &[String]) -> BTreeMap<&str, usize> {
-    let mut counts = BTreeMap::new();
-    for value in values {
-        *counts.entry(value.as_str()).or_default() += 1;
-    }
-    counts
+pub(super) fn assert_offer(uri: &str, pre_auth_code: &Value) {
+    let offer = url::Url::parse(uri).unwrap();
+    assert_eq!(offer.scheme(), "openid-credential-offer");
+    let parameters: Vec<_> = offer.query_pairs().collect();
+    assert_eq!(parameters.len(), 1);
+    assert_eq!(parameters[0].0, "credential_offer");
+    let offer: Value = serde_json::from_str(&parameters[0].1).unwrap();
+    assert_eq!(
+        offer,
+        json!({"credential_issuer":"https://issuer.example/org/synthetic-org","credential_configuration_ids":["EmployeeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":pre_auth_code}}})
+    );
 }
 
 pub(super) async fn run(database_url: &str) {
+    run_with_profile(database_url, None, false).await;
+}
+
+pub(super) async fn run_rendered(database_url: &str, redis_url: &str) {
+    run_with_profile(database_url, Some(redis_url), false).await;
+}
+
+pub(super) async fn run_gateway(database_url: &str, redis_url: &str) {
+    run_with_profile(database_url, Some(redis_url), true).await;
+}
+
+async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, gateway: bool) {
     use super::{
         didcomm_test_fixtures::authcrypt_parties_with_ids,
         didcomm_wallet_fixture::WalletFixture,
@@ -270,14 +68,24 @@ pub(super) async fn run(database_url: &str) {
         .connect(database_url)
         .await
         .unwrap();
-    for authenticated in [false, true] {
+    let cases: &[(bool, bool)] = if gateway {
+        &[(false, false), (true, false), (false, true), (true, true)]
+    } else {
+        &[(false, true), (true, true)]
+    };
+    for &(authenticated, allow_private_ips) in cases {
         let mode = if authenticated {
             "authcrypt"
         } else {
             "anoncrypt"
         };
-        let source_id = format!("fresh-main-source-{mode}");
-        let source_tx_id = format!("fresh-main-source-tx-{mode}");
+        let suffix = if allow_private_ips {
+            ""
+        } else {
+            "-default-refusal"
+        };
+        let source_id = format!("fresh-main-source-{mode}{suffix}");
+        let source_tx_id = format!("fresh-main-source-tx-{mode}{suffix}");
         let wallet = WalletFixture::start(200);
         let endpoint = format!("{}/inbox", wallet.origin);
         let (sender, sender_secret, mut recipient, recipient_secret) =
@@ -319,14 +127,25 @@ pub(super) async fn run(database_url: &str) {
             signed: Arc::default(),
             allocations: Arc::default(),
             publications: Arc::default(),
+            base_gateway: gateway,
+            ordinary_wallets: Arc::default(),
         };
         let peers = start_peers(state.clone()).await;
+        let legacy = if gateway {
+            Some(super::base_runtime_gateway::LegacyFixture::start(pool.clone()).await)
+        } else {
+            None
+        };
         let origin = format!("http://127.0.0.1:{}", peers.port);
         let policy = wallet
             .ca_file
             .parent()
             .unwrap()
-            .join("fresh-main-policy.json");
+            .join(if rendered_redis.is_some() {
+                "didcomm-encryption-policy.json"
+            } else {
+                "fresh-main-policy.json"
+            });
         let encryption = if authenticated {
             json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(sender_secret)})
         } else {
@@ -391,24 +210,52 @@ pub(super) async fn run(database_url: &str) {
         let source_before = stored(&pool, &source_tx_id).await;
         let (http_listener, http_port) = reserve_port();
         let (grpc_listener, grpc_port) = reserve_port();
-        let mut command = isolated_smoke_command(http_port, grpc_port);
-        command
-            .env("DATABASE_URL", database_url)
-            .env("ISSUANCE_API_KEY", API_KEY)
-            .env("GRPC_SERVICE_TOKEN", TOKEN)
-            .env("TOKEN_HMAC_KEY", "synthetic-fresh-main-hmac")
-            .env("ORG_GRPC_TARGET", &origin)
-            .env("CT_GRPC_TARGET", &origin)
-            .env("RP_GRPC_TARGET", &origin)
-            .env("CREDENTIAL_TEMPLATE_SERVICE_URL", &origin)
-            .env("REVOCATION_PROFILE_SERVICE_URL", &origin)
-            .env("SIGNING_KEYS_INTERNAL_URL", &origin)
-            .env("SIGNING_KEYS_INTERNAL_API_KEY", SIGNING_KEY)
-            .env("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", &origin)
-            .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
-            .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)
-            .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
-        drop((http_listener, grpc_listener));
+        let (gateway_reservation, gateway_port) = reserve_port();
+        let mut rendered_model = None;
+        let mut command = if let Some(redis_url) = rendered_redis {
+            let spec = json!({
+                "inputs": {
+                    "ISSUANCE_API_KEY":API_KEY, "GRPC_SERVICE_TOKEN":TOKEN,
+                    "SIGNING_KEYS_INTERNAL_API_KEY":SIGNING_KEY,
+                    "TOKEN_HMAC_KEY":"synthetic-fresh-main-hmac",
+                    "INTEGRATION_SECRET_MASTER_KEY":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                    "PUBLIC_API_URL":"https://issuer.example", "UI_BASE_URL":"http://localhost:3000",
+                    "ISSUANCE_OFFER_TTL_MINUTES":"10080", "TOKEN_RATE_LIMIT":"30",
+                    "CANVAS_PORTABLE_INTEGRATION_ENABLED":"false", "CANVAS_PILOT_ORGANIZATION_IDS":""
+                },
+                "http_port":http_port, "grpc_port":grpc_port, "gateway_port":gateway_port,
+                "database_url":database_url, "redis_url":redis_url,
+                "peer_origin":origin, "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
+                "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
+                "authcrypt":authenticated, "allow_private_ips":allow_private_ips
+            });
+            // Native-only stage reserves but does not launch the gateway. The
+            // final composed gate supplies its actual legacy peer and binary.
+            let model = super::rendered_base_process::RenderedBase::render(&spec);
+            let command = model.native_command();
+            rendered_model = Some(model);
+            command
+        } else {
+            let mut command = isolated_smoke_command(http_port, grpc_port);
+            command
+                .env("DATABASE_URL", database_url)
+                .env("ISSUANCE_API_KEY", API_KEY)
+                .env("GRPC_SERVICE_TOKEN", TOKEN)
+                .env("TOKEN_HMAC_KEY", "synthetic-fresh-main-hmac")
+                .env("ORG_GRPC_TARGET", &origin)
+                .env("CT_GRPC_TARGET", &origin)
+                .env("RP_GRPC_TARGET", &origin)
+                .env("CREDENTIAL_TEMPLATE_SERVICE_URL", &origin)
+                .env("REVOCATION_PROFILE_SERVICE_URL", &origin)
+                .env("SIGNING_KEYS_INTERNAL_URL", &origin)
+                .env("SIGNING_KEYS_INTERNAL_API_KEY", SIGNING_KEY)
+                .env("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", &origin)
+                .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
+                .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)
+                .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
+            command
+        };
+        drop((http_listener, grpc_listener, gateway_reservation));
         let mut child = ChildGuard(command.spawn().unwrap());
         let client = bounded_http_client(Duration::from_secs(20));
         assert_eq!(
@@ -420,11 +267,29 @@ pub(super) async fn run(database_url: &str) {
             .unwrap(),
             Some(json!({"status":"healthy","service":"issuance-service"}))
         );
+        let gateway_fixture = if gateway {
+            let fixture = super::base_runtime_gateway::GatewayFixture::start(
+                rendered_model.as_ref().unwrap(),
+                gateway_port,
+            )
+            .await;
+            fixture.deny_invalid_client().await;
+            assert_eq!(legacy.as_ref().unwrap().owner_reads(), 0);
+            Some(fixture)
+        } else {
+            None
+        };
+        let request_port = if gateway { gateway_port } else { http_port };
+        let request_key = if gateway {
+            super::issuance_named_peers::CLIENT_KEY
+        } else {
+            API_KEY
+        };
         let response = client
             .post(format!(
-                "http://127.0.0.1:{http_port}/v1/issued-credentials/{source_id}/renew"
+                "http://127.0.0.1:{request_port}/v1/issued-credentials/{source_id}/renew"
             ))
-            .header("x-api-key", API_KEY)
+            .header("x-api-key", request_key)
             .header("x-organization-id", ORGANIZATION)
             .send()
             .await
@@ -435,6 +300,48 @@ pub(super) async fn run(database_url: &str) {
         let id = response["transaction_id"].as_str().unwrap();
         assert!(uuid::Uuid::parse_str(id).is_ok());
         let result = stored(&pool, id).await;
+        assert_offer(
+            response["credential_offer_uri"].as_str().unwrap(),
+            &result["transaction"]["pre_auth_code"],
+        );
+        if !allow_private_ips {
+            assert_eq!(
+                response,
+                json!({
+                    "source_credential_id":source_id,"transaction_id":id,
+                    "credential_offer_uri":response["credential_offer_uri"],
+                    "credential_offer_uris":{"didcomm":format!("didcomm://pending?transaction_id={id}")},
+                    "credential_offer_labels":{"didcomm":"Synthetic Wallet"},
+                    "expires_at":response["expires_at"]
+                })
+            );
+            assert_eq!(
+                response["expires_at"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap(),
+                result["transaction"]["expires_at"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap()
+            );
+            assert_eq!(stored(&pool, &source_tx_id).await, source_before);
+            let capture = wallet.captures().await;
+            assert_eq!(capture["messages"], json!([]));
+            assert_eq!(capture["failures"], 0);
+            assert_eq!(result["events"], json!([]));
+            assert!(state.publications.lock().unwrap().is_empty());
+            legacy.as_ref().unwrap().assert_no_fallback();
+            gateway_fixture.unwrap().close();
+            child.0.kill().unwrap();
+            child.0.wait().unwrap();
+            peers.close().await;
+            legacy.unwrap().close().await;
+            wallet.close_verified();
+            continue;
+        }
         assert_eq!(
             result["transaction"]["status"],
             "issued",
@@ -468,17 +375,6 @@ pub(super) async fn run(database_url: &str) {
             .parse()
             .unwrap();
         assert_eq!(expiry, persisted_expiry);
-        let offer = url::Url::parse(response["credential_offer_uri"].as_str().unwrap()).unwrap();
-        assert_eq!(offer.scheme(), "openid-credential-offer");
-        let parameters: Vec<_> = offer.query_pairs().collect();
-        assert_eq!(parameters.len(), 1);
-        assert_eq!(parameters[0].0, "credential_offer");
-        let offer: Value = serde_json::from_str(&parameters[0].1).unwrap();
-        assert_eq!(
-            offer,
-            json!({"credential_issuer":"https://issuer.example/org/synthetic-org","credential_configuration_ids":["EmployeeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":result["transaction"]["pre_auth_code"]}}})
-        );
-
         let captures = wallet.captures().await;
         assert_eq!(captures["failures"], 0);
         assert_eq!(captures["messages"].as_array().unwrap().len(), 1);
@@ -620,10 +516,42 @@ pub(super) async fn run(database_url: &str) {
                 "healthy exact admission dependency"
             );
         }
-        assert!(child.0.try_wait().unwrap().is_none());
-        child.0.kill().unwrap();
-        child.0.wait().unwrap();
+        if let Some(gateway_fixture) = gateway_fixture {
+            assert_eq!(legacy.as_ref().unwrap().owner_reads(), 1);
+            super::base_runtime_didcomm::run(super::base_runtime_didcomm::Input {
+                pool: &pool,
+                gateway: &gateway_fixture,
+                peers: &state,
+                wallet: &wallet,
+                authenticated,
+                recipient_secret: &recipient_secret,
+                renewal_id: id,
+            })
+            .await;
+            super::base_runtime_ordinary::run(&pool, &gateway_fixture, &state).await;
+            super::base_runtime_canvas::run(&pool, &gateway_fixture, !authenticated).await;
+            gateway_fixture.legacy_control().await;
+            legacy.as_ref().unwrap().assert_no_fallback();
+            child.0.kill().unwrap();
+            child.0.wait().unwrap();
+            gateway_fixture
+                .native_unavailable(&source_id, legacy.as_ref().unwrap())
+                .await;
+            gateway_fixture.close();
+        } else {
+            assert!(child.0.try_wait().unwrap().is_none());
+            child.0.kill().unwrap();
+            child.0.wait().unwrap();
+        }
+        assert_eq!(
+            counts(&state.attempts.lock().unwrap()),
+            counts(&state.accepted.lock().unwrap()),
+            "every final-stage peer request must be validated"
+        );
         peers.close().await;
+        if let Some(legacy) = legacy {
+            legacy.close().await;
+        }
         wallet.close_verified();
     }
     pool.close().await;

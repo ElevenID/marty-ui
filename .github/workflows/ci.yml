@@ -432,6 +432,17 @@ jobs:
           test_list="$("$https_executable" --list)"
           [[ "$test_list" == *"$https_test: test"* ]]
           "$https_executable" "$https_test" --exact --nocapture --test-threads=1
+      - name: Prepare required rendered base executable acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-compose-renderer.sh
+          test -x rust/target/debug/marty-issuance-service
+          test -x rust/target/debug/marty-gateway
+          docker pull redis:7-alpine
+          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
+          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
+          printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
       - name: Prepare database contract executables
         working-directory: rust
         shell: bash
@@ -888,16 +899,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Standalone config-only renderer; do not replace the Docker plugin or
-          # change the older bundle compatibility and image-build environment.
+          bash scripts/ci/install-compose-renderer.sh
           compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"
-          curl --fail --location --retry 3 \
-            --output "$compose_renderer" \
-            https://github.com/docker/compose/releases/download/v5.4.0/docker-compose-linux-x86_64
-          printf '%s  %s\n' \
-            837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be \
-            "$compose_renderer" | sha256sum --check --strict
-          chmod +x "$compose_renderer"
           python3 scripts/test_canvas_worker_compose_render.py \
             --suite consumers --compose-command "$compose_renderer"
       - name: Verify generated beta application image configuration

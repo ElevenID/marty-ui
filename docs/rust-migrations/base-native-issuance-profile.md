@@ -204,3 +204,8 @@ initiation/renewal, actual PG/signing/wallet decryption, and legacy-fallback tra
 Existing main/gateway behavior gates are reusable evidence but do not by themselves
 prove the new composition works. Keep Python, all direct consumers, and production
 unchanged until that acceptance and subsequent consumer batches pass.
+
+The [runtime acceptance checkpoint](base-native-runtime-acceptance.md) records
+the now-passing rendered native-main stage and the separate, still-unqualified
+isolated executable gateway composition. Native-only evidence does not close
+the remaining Batch 1 gate.

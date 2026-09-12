@@ -50,7 +50,11 @@ def test_generated_application_image_gate_is_mandatory_and_additive():
         'compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"'
         in steps[consumer]["run"]
     )
-    assert "sha256sum --check --strict" in steps[consumer]["run"]
+    assert "bash scripts/ci/install-compose-renderer.sh" in steps[consumer]["run"]
+    assert (
+        "sha256sum --check --strict"
+        in (ROOT / "scripts/ci/install-compose-renderer.sh").read_text()
+    )
     assert "if" not in steps[consumer]
     assert not steps[consumer].get("continue-on-error", False)
     builds = [
