@@ -41,7 +41,9 @@ see [self-host evidence and remaining gates](rust-migrations/selfhost-native-own
 Rust bundle restoration is integrated locally at `dad9508d9` (reviewed author
 `3d9578387`). All **20 packager tests** passed on the combined integration tree,
 including actual CLI directory/ZIP/no-archive generation and extracted asset
-reference closure against the native-owner descriptor. The separate frozen path
+reference closure against the native-owner descriptor. The full combined Python
+regression at `b4bde6230` passed **3,433 tests, three skipped** in 211.43 seconds.
+The separate frozen path
 reference covers 17 Windows and nine POSIX cases; Windows replay passed, while
 Linux account lookup, permission and atomic-publication tests still require hosted
 qualification. See [packager evidence](rust-migrations/selfhost-bundle-packager.md).
