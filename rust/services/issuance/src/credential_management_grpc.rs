@@ -755,6 +755,10 @@ fn credential_status(error: CredentialIssuanceError) -> Status {
         Error::IssuerUnavailable(_)
         | Error::SigningUnavailable(_)
         | Error::LifecycleUnavailable(_) => Status::unavailable(error.to_string()),
+        Error::SigningResponse(cause) => match cause.credential_detail() {
+            Some(detail) => Status::unavailable(detail),
+            None => Status::internal("Internal Server Error"),
+        },
         Error::NonceRepositoryUnavailable
         | Error::RepositoryUnavailable
         | Error::BuilderChangedCredentialId
@@ -822,6 +826,46 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn remote_diagnostics_use_the_exact_existing_grpc_prefix_not_display() {
+        use crate::signing_error_detail::SigningOperation;
+        use crate::signing_http_response::tests::Peer;
+        for operation in [
+            SigningOperation::Context,
+            SigningOperation::Resolve,
+            SigningOperation::Sign,
+        ] {
+            for body in [
+                br#"{"detail":"synthetic-private-diagnostic"}"#.as_slice(),
+                br#"{"detail":"\ud800"}"#.as_slice(),
+                br#"{"detail":"\u0000"}"#.as_slice(),
+            ] {
+                let (peer, cause) = Peer::failure_for(body, operation).await;
+                let expected = cause.scalar_detail().map(|detail| {
+                    if operation == SigningOperation::Sign {
+                        CredentialIssuanceError::SigningUnavailable(detail.into())
+                    } else {
+                        CredentialIssuanceError::IssuerUnavailable(detail.into())
+                    }
+                    .to_string()
+                });
+                let status = credential_status(CredentialIssuanceError::SigningResponse(cause));
+                assert_eq!(
+                    status.code(),
+                    if expected.is_some() {
+                        tonic::Code::Unavailable
+                    } else {
+                        tonic::Code::Internal
+                    }
+                );
+                assert_eq!(
+                    status.message(),
+                    expected.as_deref().unwrap_or("Internal Server Error")
+                );
+                peer.close().await;
+            }
+        }
+    }
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},

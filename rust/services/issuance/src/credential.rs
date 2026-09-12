@@ -733,7 +733,7 @@ impl CredentialIssuanceService {
             let _ = self
                 .ports
                 .repository
-                .mark_failed_if_signing(&transaction.id, &error.to_string())
+                .mark_failed_if_signing(&transaction.id, &error.repository_failure_reason())
                 .await;
         }
         result
@@ -1333,6 +1333,8 @@ pub enum CredentialIssuanceError {
     IssuerUnavailable(String),
     #[error("credential signing is unavailable: {0}")]
     SigningUnavailable(String),
+    #[error("{0}")]
+    SigningResponse(crate::SigningResponseFailure),
     #[error("credential lifecycle dependency is unavailable: {0}")]
     LifecycleUnavailable(String),
     #[error("the credential template has no revocation profile")]
@@ -1341,6 +1343,28 @@ pub enum CredentialIssuanceError {
     CanvasEligibilityDenied,
     #[error("credential repository is unavailable")]
     RepositoryUnavailable,
+}
+
+impl CredentialIssuanceError {
+    pub(crate) fn repository_failure_reason(&self) -> String {
+        match self {
+            Self::SigningResponse(cause) => cause
+                .credential_detail()
+                .filter(|detail| !detail.contains('\0'))
+                .unwrap_or_else(|| {
+                    // Text-oriented reason consumers cannot represent unpaired Python
+                    // surrogates or PostgreSQL NUL. The current PostgreSQL adapter
+                    // ignores this reason and updates status only; this projection
+                    // preserves the port argument, not persisted diagnostic parity.
+                    // Keep the typed cause for the HTTP renderer, without replacing
+                    // characters or introducing a new persisted encoding. This marker
+                    // is a native text-storage boundary, not Python persistence parity.
+                    "Remote signing response diagnostic is not representable as database text"
+                        .into()
+                }),
+            _ => self.to_string(),
+        }
+    }
 }
 
 #[cfg(test)]

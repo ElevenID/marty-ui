@@ -32,6 +32,8 @@ pub enum CanvasLtiToolSigningError {
     InvalidVerificationMethod,
     #[error("Canvas LTI DID-mediated signing failed: {0}")]
     SigningFailed(String),
+    #[error("{0}")]
+    RemoteResponse(crate::SigningResponseFailure),
     #[error("Canvas LTI DID-mediated signer returned no signature")]
     MissingSignature,
     #[error("Canvas LTI DID-mediated signer returned invalid signature encoding")]
@@ -346,7 +348,8 @@ impl CanvasLtiToolIdentityResolver for HttpCanvasLtiToolIdentityResolver {
         issuer_did: &str,
     ) -> Result<Value, CanvasLtiToolSigningError> {
         self.resolver
-            .resolve_raw(
+            .resolve_raw_for(
+                crate::signing_error_detail::SigningOperation::Resolve,
                 organization_id,
                 issuer_did,
                 None,
@@ -355,7 +358,12 @@ impl CanvasLtiToolIdentityResolver for HttpCanvasLtiToolIdentityResolver {
                 ALGORITHM,
             )
             .await
-            .map_err(|cause| CanvasLtiToolSigningError::ResolutionFailed(cause.to_string()))
+            .map_err(|cause| match cause {
+                crate::credential::CredentialIssuanceError::SigningResponse(cause) => {
+                    CanvasLtiToolSigningError::RemoteResponse(cause)
+                }
+                cause => CanvasLtiToolSigningError::ResolutionFailed(cause.to_string()),
+            })
     }
 }
 
@@ -398,6 +406,11 @@ impl CanvasLtiToolSignatureProvider for HttpCanvasLtiToolSignatureProvider {
             })
             .await
             .map(|response| response.signature_b64)
-            .map_err(|cause| CanvasLtiToolSigningError::SigningFailed(cause.to_string()))
+            .map_err(|cause| match cause {
+                crate::credential::CredentialIssuanceError::SigningResponse(cause) => {
+                    CanvasLtiToolSigningError::RemoteResponse(cause)
+                }
+                cause => CanvasLtiToolSigningError::SigningFailed(cause.to_string()),
+            })
     }
 }

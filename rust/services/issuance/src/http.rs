@@ -2668,6 +2668,10 @@ impl IntoResponse for CanvasLtiToolSigningHttpError {
     }
 }
 
+#[cfg(test)]
+#[path = "signing_http_projection_tests.rs"]
+mod signing_http_projection_tests;
+
 enum CanvasLtiExperienceExchangeHttpError {
     Service(CanvasLtiExperienceExchangeError),
     Validation(Vec<Value>),
@@ -3047,7 +3051,7 @@ impl IntoResponse for CanvasLtiDeepLinkingHttpError {
                 | Error::SigningClaimsInvalid
                 | Error::ConfigurationDrift),
             ) => (StatusCode::CONFLICT, Json(json!({"detail": error.to_string()}))).into_response(),
-            Self::Service(Error::NonceGenerationFailed | Error::SigningUnavailable(_)) => {
+            Self::Service(Error::NonceGenerationFailed | Error::SigningUnavailable(_) | Error::RemoteSigningResponse(_)) => {
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
@@ -3414,6 +3418,13 @@ impl IntoResponse for CredentialIssuanceHttpError {
             | Error::LifecycleUnavailable(detail) => {
                 (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": detail}))
             }
+            Error::SigningResponse(cause) => {
+                let Some(detail) = cause.scalar_detail() else {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                        .into_response();
+                };
+                (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": detail}))
+            }
             Error::RevocationProfileRequired => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({"detail": "The Credential Template has no Revocation Profile."}),
@@ -3615,6 +3626,10 @@ impl IntoResponse for TokenExchangeHttpError {
 impl IntoResponse for TenantDiscoveryHttpError {
     fn into_response(self) -> Response {
         let (status, detail) = match self.0 {
+            TenantDiscoveryError::ProofPolicyResponseInvalid => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                    .into_response();
+            }
             TenantDiscoveryError::ProofPolicyUnavailable | TenantDiscoveryError::IncompletePlan => {
                 (
                     StatusCode::SERVICE_UNAVAILABLE,

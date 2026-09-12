@@ -40,6 +40,7 @@ struct SigningState {
     authorization_only: bool,
     ensure_transaction_count: usize,
     block_builder: bool,
+    repository_failure_reason: Option<String>,
 }
 
 impl SigningHarness {
@@ -119,6 +120,7 @@ impl SigningHarness {
                 authorization_only: false,
                 ensure_transaction_count: 0,
                 block_builder: false,
+                repository_failure_reason: None,
             })),
             build_started: Arc::new(Notify::new()),
             release_build: Arc::new(Notify::new()),
@@ -229,11 +231,18 @@ impl CredentialRepository for SigningHarness {
     async fn mark_failed_if_signing(
         &self,
         _transaction_id: &str,
-        _reason: &str,
+        reason: &str,
     ) -> Result<(), CredentialIssuanceError> {
+        // Controlled reason consumer enforces a text representability boundary.
+        // The actual PostgreSQL adapter ignores this argument and updates status
+        // only; this test does not claim persisted diagnostic parity.
+        if reason.contains('\0') {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         let mut state = self.state.lock().unwrap();
         if state.transaction.status == CredentialTransactionStatus::Signing {
             state.transaction.status = CredentialTransactionStatus::Failed;
+            state.repository_failure_reason = Some(reason.into());
         }
         Ok(())
     }
@@ -399,6 +408,14 @@ fn builder_name(kind: CredentialBuilderKind) -> &'static str {
 }
 
 fn app(harness: SigningHarness, contract: &Value) -> axum::Router {
+    app_with_builder(harness.clone(), contract, Arc::new(harness))
+}
+
+fn app_with_builder(
+    harness: SigningHarness,
+    contract: &Value,
+    builder: Arc<dyn CredentialBuilder>,
+) -> axum::Router {
     let config =
         IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
     let runtime = IssuanceRuntime::new(&config).unwrap();
@@ -409,7 +426,7 @@ fn app(harness: SigningHarness, contract: &Value) -> axum::Router {
             dpop_verifier: Arc::new(harness.clone()),
             proof_verifier: Arc::new(harness.clone()),
             issuer_resolver: Arc::new(harness.clone()),
-            builder: Arc::new(harness.clone()),
+            builder,
             lifecycle: Arc::new(harness),
             notification_ids: Arc::new(FixedNotification(
                 contract["inputs"]["notification_id"]
@@ -426,6 +443,76 @@ fn app(harness: SigningHarness, contract: &Value) -> axum::Router {
         TransportPolicy::new([]),
         service,
     )
+}
+
+#[tokio::test]
+async fn actual_remote_diagnostic_failure_releases_the_claim_and_preserves_http_projection() {
+    use marty_issuance_service::credential_builder::HttpCredentialBuilder;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    struct Server(tokio::task::JoinHandle<()>);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = contract["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "jwt_vc_json")
+        .unwrap();
+    for (remote_body, expected_status, expected_reason) in [
+        (br#"{"detail":"synthetic-signing-diagnostic"}"#.as_slice(), 503, "credential signing is unavailable: DID-mediated signing failed (HTTP 503): synthetic-signing-diagnostic"),
+        (br#"{"detail":"\u0000"}"#.as_slice(), 503, "Remote signing response diagnostic is not representable as database text"),
+        (br#"{"detail":"\ud800"}"#.as_slice(), 500, "Remote signing response diagnostic is not representable as database text"),
+    ] {
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let server_app = axum::Router::new().route("/internal/issuer-dids/sign", axum::routing::post(move |headers: axum::http::HeaderMap| {
+            let observed = observed.clone();
+            async move {
+                assert_eq!(headers["x-api-key"], "synthetic-key");
+                observed.fetch_add(1, Ordering::SeqCst);
+                (axum::http::StatusCode::SERVICE_UNAVAILABLE, [("content-type", "application/json")], remote_body)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut server = Server(tokio::spawn(async move { axum::serve(listener, server_app).await.unwrap(); }));
+        let builder = HttpCredentialBuilder::new(format!("http://{address}/internal").parse().unwrap(), Some("synthetic-key"), Duration::from_secs(2)).unwrap();
+        let harness = SigningHarness::new(case, &contract);
+        // The original controlled-builder corpus intentionally carries both
+        // explicit subject and ordinary claims. A real JWT preparation accepts
+        // one form; keep the ordinary claims for this distinct HTTP scenario.
+        harness.state.lock().unwrap().transaction.claims.remove("_credential_subject");
+        let response = app_with_builder(harness.clone(), &contract, Arc::new(builder)).oneshot(request(case, &contract)).await.unwrap();
+        assert_eq!(response.status(), expected_status);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        if expected_status == 500 {
+            assert_eq!(bytes.as_ref(), b"Internal Server Error");
+        } else {
+            let remote: Value = serde_json::from_slice(remote_body).unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({"detail": format!("DID-mediated signing failed (HTTP 503): {}", remote["detail"].as_str().unwrap())}));
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        {
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.transaction.status, CredentialTransactionStatus::Failed);
+            assert_eq!(state.repository_failure_reason.as_deref(), Some(expected_reason));
+            assert!(state.transaction.reserved_credential_id.is_some());
+            assert!(state.existing.is_none());
+            assert!(!state.events.iter().any(|event| event == "finalize_credential_issuance" || event == "post_issuance_side_effects"));
+        }
+        server.0.abort();
+        assert!((&mut server.0).await.as_ref().is_err_and(|error| error.is_cancelled()));
+    }
 }
 
 fn encode(value: Value) -> String {

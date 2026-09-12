@@ -779,12 +779,39 @@ fn attach_issuer_context(transaction: &mut CredentialTransaction, issuer: &Issue
 
 fn approval_issuer_error(error: CredentialIssuanceError) -> CanvasAwardCandidateApprovalError {
     match error {
+        CredentialIssuanceError::SigningResponse(cause) if cause.is_signing() => {
+            CanvasAwardCandidateApprovalError::Unavailable
+        }
         CredentialIssuanceError::RepositoryUnavailable
         | CredentialIssuanceError::SigningUnavailable(_)
         | CredentialIssuanceError::LifecycleUnavailable(_) => {
             CanvasAwardCandidateApprovalError::Unavailable
         }
         _ => CanvasAwardCandidateApprovalError::ReadinessDrift,
+    }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn typed_remote_failure_preserves_approval_operation_classification() {
+    use crate::{signing_error_detail::SigningOperation, signing_http_response::tests::Peer};
+    for operation in [
+        SigningOperation::Context,
+        SigningOperation::Resolve,
+        SigningOperation::Sign,
+    ] {
+        let (peer, cause) =
+            Peer::failure_for(br#"{"detail":"synthetic-private-diagnostic"}"#, operation).await;
+        let actual = approval_issuer_error(CredentialIssuanceError::SigningResponse(cause));
+        assert_eq!(
+            actual,
+            if operation == SigningOperation::Sign {
+                CanvasAwardCandidateApprovalError::Unavailable
+            } else {
+                CanvasAwardCandidateApprovalError::ReadinessDrift
+            }
+        );
+        peer.close().await;
     }
 }
 
