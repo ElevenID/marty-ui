@@ -79,6 +79,13 @@ The [DIDComm consumer retirement checklist](rust-migrations/didcomm-consumer-ret
 records remaining profile, direct-ingress, Flow, Envoy and conformance gates.
 Renewal cutover alone will not authorize deletion of every Python DIDComm owner.
 
+The integrated `424e25ba5` tree passed the full repository `tests/` suite:
+**3,080 passed, three skipped in 200.78s**. This includes the fixed synthetic
+renewal public vectors and CI group-progress reporting. The preceding run caught
+the reference script's Python crypto imports; replacing fixture-only derivation
+with exact constants passed the unchanged ownership guard and exact live replay.
+No frozen observation or ownership exception was changed to obtain this result.
+
 Latest local initiation selection is `845de6a62`: exact native POST initiation,
 unchanged public rewrite/authentication, 65 native plus 66 remaining operations
 from the frozen 131. Full gateway/issuance and sixteen composed DIDComm tests,
