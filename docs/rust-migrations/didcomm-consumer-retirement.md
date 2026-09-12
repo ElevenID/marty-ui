@@ -55,8 +55,12 @@ actual runtime configuration root.
 - Self-hosted uses `DIDCOMM_ALLOW_PRIVATE_ENDPOINTS`; both retained Python and
   native Rust consume `DIDCOMM_ALLOW_PRIVATE_IPS`. Defaults remain restrictive.
 
-These findings require scoped configuration repairs and parsed/rendered tests;
-they are not claims of observed deployed failures or native activation.
+Reviewed source repair `5a4d2abae` sets the explicit legacy Flow target to 9005
+and the recognized private-IP setting to literal `false`. It also removes one
+byte-identical duplicate gateway secret reference without changing the surviving
+reference. Parsed positive/mutation and existing configuration regressions passed
+(147 author checks; 40 independently repeated). These are source repairs, not
+rendered deployment, observed failure recovery or native activation evidence.
 
 Do not delete active Python encryption, policy or startup requirements until all
 intended consumers above have passed their gates. The unused decrypt/unpack
