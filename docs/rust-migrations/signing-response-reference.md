@@ -20,6 +20,14 @@ but is not the published service's route graph or gateway. The artifact records
 the actual local dependency versions: Python 3.12.10, HTTPX 0.28.1, FastAPI
 0.135.3, Starlette 1.0.0, Pydantic 2.13.0, recursion limit 1000. Those versions
 are evidence boundaries, not a claim of equivalence to every published image.
+Pinned `main.py` installs CORS and request-ID middleware, with no custom exception
+handler or debug override. Its request-ID middleware resets context in `finally`
+without swallowing exceptions. Eight additive `outward_http_responses` entries
+use `raise_app_exceptions=False` to observe actual controlled HTTP status/body:
+unhandled decoder errors and LTI surrogate-rendering failures return plain-text
+500 `Internal Server Error`; handled RuntimeError paths retain JSON 503. The
+original exception-propagating observations remain unchanged. This confirms
+controlled response behavior, not the entire published service middleware graph.
 
 `contracts/signing-response-python-reference.json` contains 35 explicit inputs,
 16 helper observations, 105 remote operation observations, and 102 caller
@@ -85,6 +93,9 @@ Preserve all existing success/crypto validation and proof-policy/readiness
 privacy. The six original 401/503 helper vectors still require real native HTTP
 adapter and caller qualification; these Python mock requests do not satisfy it.
 
-Local guards: `python -m unittest discover -s scripts -p
-test_signing_response_reference.py -v` (eight tests), capture `--check`, Ruff and
+Local guards: `python -m pytest tests/test_signing_response_reference.py`
+(nine tests), capture `--check`, Ruff and
 formatting. No Cargo lease was used and no production Rust was edited.
+The guards are collected by root CI's `pytest tests`; they extract inert source
+identity literals with the standard-library AST reader and do not import the
+capture runtime, FastAPI, or HTTPX.

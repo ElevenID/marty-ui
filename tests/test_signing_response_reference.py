@@ -1,14 +1,23 @@
 """Guards for captured observations, not a substitute for Rust adoption gates."""
 
+import ast
 import hashlib
 import json
 from pathlib import Path
 import unittest
 
-import capture_signing_response_reference as capture
-
-
 ROOT = Path(__file__).resolve().parents[1]
+_CAPTURE_TREE = ast.parse(
+    (ROOT / "scripts/capture_signing_response_reference.py").read_text(encoding="utf-8")
+)
+_CAPTURE_LITERALS = {
+    node.targets[0].id: ast.literal_eval(node.value)
+    for node in _CAPTURE_TREE.body
+    if isinstance(node, ast.Assign)
+    and len(node.targets) == 1
+    and isinstance(node.targets[0], ast.Name)
+    and node.targets[0].id in {"REVISION", "SOURCES"}
+}
 REFERENCE = json.loads(
     (ROOT / "contracts/signing-response-python-reference.json").read_text(
         encoding="utf-8"
@@ -30,13 +39,15 @@ def outward(name, caller):
 
 class SigningResponseReferenceTests(unittest.TestCase):
     def test_scope_counts_sources_and_original_corpus_unchanged(self):
-        self.assertEqual(REFERENCE["reference"]["commit"], capture.REVISION)
+        self.assertEqual(
+            REFERENCE["reference"]["commit"], _CAPTURE_LITERALS["REVISION"]
+        )
         self.assertEqual(
             {
                 path: value["git_blob"]
                 for path, value in REFERENCE["reference"]["sources"].items()
             },
-            capture.SOURCES,
+            _CAPTURE_LITERALS["SOURCES"],
         )
         self.assertEqual(
             [
@@ -191,6 +202,29 @@ class SigningResponseReferenceTests(unittest.TestCase):
             self.assertEqual(lti["direct"]["return_type"], "tuple")
             self.assertEqual(lti["direct"]["returned"], lti["controlled_asgi"]["body"])
             self.assertEqual(lti["controlled_asgi"]["status"], 200)
+
+    def test_nonraising_asgi_observes_actual_500_and_503_responses(self):
+        rows = REFERENCE["outward_http_responses"]
+        self.assertEqual(len(rows), 8)
+        for row in rows:
+            response = row["controlled_asgi"]
+            if (
+                row["name"] == "selected-surrogate" and row["caller"].startswith("lti-")
+            ) or (
+                row["caller"] == "proof-policy" and row["name"] != "selected-surrogate"
+            ):
+                self.assertEqual(
+                    response,
+                    {
+                        "status": 500,
+                        "content_type": "text/plain; charset=utf-8",
+                        "body": "Internal Server Error",
+                    },
+                )
+            else:
+                self.assertEqual(response["status"], 503)
+                self.assertEqual(response["content_type"], "application/json")
+                self.assertEqual(response["body"], {"detail": row["direct"]["detail"]})
 
 
 if __name__ == "__main__":

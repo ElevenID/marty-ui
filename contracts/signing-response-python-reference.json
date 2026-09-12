@@ -5093,5 +5093,221 @@
         }
       }
     }
+  ],
+  "outward_http_responses": [
+    {
+      "name": "selected-surrogate",
+      "caller": "lti-resolve",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        }
+      ],
+      "direct": {
+        "error_class": "HTTPException",
+        "status": 503,
+        "detail": "Canvas LTI issuer DID resolution failed: Issuer DID resolution failed (HTTP 503): \ud800"
+      },
+      "controlled_asgi": {
+        "status": 500,
+        "content_type": "text/plain; charset=utf-8",
+        "body": "Internal Server Error"
+      }
+    },
+    {
+      "name": "selected-surrogate",
+      "caller": "lti-sign",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "POST",
+          "path": "/internal/issuer-dids/sign"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "POST",
+          "path": "/internal/issuer-dids/sign"
+        }
+      ],
+      "direct": {
+        "error_class": "HTTPException",
+        "status": 503,
+        "detail": "Canvas LTI DID-mediated signing failed: DID-mediated signing failed (HTTP 503): \ud800"
+      },
+      "controlled_asgi": {
+        "status": 500,
+        "content_type": "text/plain; charset=utf-8",
+        "body": "Internal Server Error"
+      }
+    },
+    {
+      "name": "selected-surrogate",
+      "caller": "proof-policy",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        }
+      ],
+      "direct": {
+        "error_class": "HTTPException",
+        "status": 503,
+        "detail": "Issuer proof policy is temporarily unavailable"
+      },
+      "controlled_asgi": {
+        "status": 503,
+        "content_type": "application/json",
+        "body": {
+          "detail": "Issuer proof policy is temporarily unavailable"
+        }
+      }
+    },
+    {
+      "name": "json-valid-text-codec-fails",
+      "caller": "lti-resolve",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        }
+      ],
+      "direct": {
+        "error_class": "HTTPException",
+        "status": 503,
+        "detail": "Canvas LTI issuer DID resolution failed: UTF-16 stream does not start with BOM"
+      },
+      "controlled_asgi": {
+        "status": 503,
+        "content_type": "application/json",
+        "body": {
+          "detail": "Canvas LTI issuer DID resolution failed: UTF-16 stream does not start with BOM"
+        }
+      }
+    },
+    {
+      "name": "json-valid-text-codec-fails",
+      "caller": "lti-sign",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "POST",
+          "path": "/internal/issuer-dids/sign"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "POST",
+          "path": "/internal/issuer-dids/sign"
+        }
+      ],
+      "direct": {
+        "error_class": "HTTPException",
+        "status": 503,
+        "detail": "Canvas LTI DID-mediated signing failed: UTF-16 stream does not start with BOM"
+      },
+      "controlled_asgi": {
+        "status": 503,
+        "content_type": "application/json",
+        "body": {
+          "detail": "Canvas LTI DID-mediated signing failed: UTF-16 stream does not start with BOM"
+        }
+      }
+    },
+    {
+      "name": "json-valid-text-codec-fails",
+      "caller": "proof-policy",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        }
+      ],
+      "direct": {
+        "error_class": "UnicodeError",
+        "message": "UTF-16 stream does not start with BOM"
+      },
+      "controlled_asgi": {
+        "status": 500,
+        "content_type": "text/plain; charset=utf-8",
+        "body": "Internal Server Error"
+      }
+    },
+    {
+      "name": "redirect-302-malformed",
+      "caller": "lti-resolve",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        }
+      ],
+      "direct": {
+        "error_class": "HTTPException",
+        "status": 503,
+        "detail": "Canvas LTI issuer DID resolution failed: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+      },
+      "controlled_asgi": {
+        "status": 503,
+        "content_type": "application/json",
+        "body": {
+          "detail": "Canvas LTI issuer DID resolution failed: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+        }
+      }
+    },
+    {
+      "name": "redirect-302-malformed",
+      "caller": "proof-policy",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        },
+        {
+          "method": "GET",
+          "path": "/internal/resolve-issuer-did"
+        }
+      ],
+      "direct": {
+        "error_class": "JSONDecodeError",
+        "message": "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+      },
+      "controlled_asgi": {
+        "status": 500,
+        "content_type": "text/plain; charset=utf-8",
+        "body": "Internal Server Error"
+      }
+    }
   ]
 }

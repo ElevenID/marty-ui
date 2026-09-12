@@ -295,7 +295,15 @@ async def remote_observation(signing, case, operation_name, client_type):
 
 
 async def outward_observation(
-    signing, lti, policy, readiness, case, caller, client_type
+    signing,
+    lti,
+    policy,
+    readiness,
+    case,
+    caller,
+    client_type,
+    *,
+    raise_app_exceptions=True,
 ):
     requests = []
 
@@ -365,7 +373,9 @@ async def outward_observation(
         # exception handler/JSON renderer. This wrapper adds no error mapping.
         app = FastAPI()
         app.get("/controlled-caller")(call)
-        transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
+        transport = httpx.ASGITransport(
+            app=app, raise_app_exceptions=raise_app_exceptions
+        )
         async with client_type(
             transport=transport, base_url="http://controlled.invalid", trust_env=False
         ) as client:
@@ -374,7 +384,9 @@ async def outward_observation(
                 rendered = {
                     "status": response.status_code,
                     "content_type": response.headers["content-type"],
-                    "body": response.json(),
+                    "body": response.json()
+                    if response.headers["content-type"].startswith("application/json")
+                    else response.text,
                 }
             except Exception as error:
                 rendered = error_record(error)
@@ -513,6 +525,30 @@ async def capture(checkout: Path) -> dict:
             for case in redirects
             for caller in ("lti-resolve", "proof-policy")
         ]
+        outward_http_responses = [
+            await outward_observation(
+                signing,
+                lti,
+                policy,
+                readiness,
+                case,
+                caller,
+                client_type,
+                raise_app_exceptions=False,
+            )
+            for case in details + redirects
+            if case["name"]
+            in {
+                "selected-surrogate",
+                "json-valid-text-codec-fails",
+                "redirect-302-malformed",
+            }
+            for caller in (
+                ("lti-resolve", "proof-policy")
+                if case["name"].startswith("redirect-")
+                else ("lti-resolve", "lti-sign", "proof-policy")
+            )
+        ]
     return {
         "schema": "marty.signing-response-python-reference/v1",
         "reference": {
@@ -538,6 +574,7 @@ async def capture(checkout: Path) -> dict:
         "details": detail_results,
         "remote_operations": remote_results,
         "outward_callers": outward_results,
+        "outward_http_responses": outward_http_responses,
     }
 
 
@@ -562,6 +599,7 @@ def main():
             "details": len(result["details"]),
             "remote_operations": len(result["remote_operations"]),
             "outward_callers": len(result["outward_callers"]),
+            "outward_http_responses": len(result["outward_http_responses"]),
             "check": args.check,
         }
     print(json.dumps(result, ensure_ascii=True, allow_nan=False, indent=2))
