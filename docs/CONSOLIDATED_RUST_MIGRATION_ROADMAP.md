@@ -38,9 +38,16 @@ interpolation, all ten missing/empty required-input controls and independent
 settings/readiness review. Legacy issuance, Flow and direct HTTP consumers are
 preserved. This is configuration qualification, not packaged-runtime acceptance;
 see [self-host evidence and remaining gates](rust-migrations/selfhost-native-owner.md).
-Rust bundle restoration and isolated executable acceptance remain in progress.
+Rust bundle restoration is integrated locally at `dad9508d9` (reviewed author
+`3d9578387`). All **20 packager tests** passed on the combined integration tree,
+including actual CLI directory/ZIP/no-archive generation and extracted asset
+reference closure against the native-owner descriptor. The separate frozen path
+reference covers 17 Windows and nine POSIX cases; Windows replay passed, while
+Linux account lookup, permission and atomic-publication tests still require hosted
+qualification. See [packager evidence](rust-migrations/selfhost-bundle-packager.md).
+Isolated full gateway executable acceptance remains in progress.
 Hosted CI `34718953669` is still testing pushed `98e78b8d0`; the self-host commit
-has not been pushed over that live run. Production remains unchanged.
+and packager commits have not been pushed over that live run. Production remains unchanged.
 
 The preceding local checkpoint was `20e2a9d14`: reviewed token rate/window parity
 (`3552a9f84`) and the isolated base native issuance opt-in profile are integrated.
@@ -54,9 +61,13 @@ the newer integrated tree still needs exact-head hosted CI and landing.
 
 Self-host packaging audit found that `a8d238fe12f180621085c8ba5216455e6545bcf9`
 deleted the documented bundle packager without a replacement. A feature-preserving
-Rust restoration is in progress with frozen directory/archive behavior and actual
-extracted-bundle validation required. Do not treat staged source assets as proof
-of a working bundle. Base packaged-runtime, self-host, Flow, Envoy and Kubernetes
+Rust restoration now has local frozen directory/archive and actual extracted-bundle
+validation. Shared bounded-process controls passed eight focused tests and strict
+Clippy; rendered-native acceptance passed in both encryption modes (9.60 seconds),
+and unchanged fresh-main acceptance passed (5.22 seconds). All seven exact owned
+fixture containers were independently verified absent. These are native-stage
+results, not full isolated gateway acceptance: ordinary initiation/token/discovery
+coverage and Linux execution remain outstanding. Base packaged-runtime, self-host, Flow, Envoy and Kubernetes
 consumer gates remain open; active Python features, production and KMS scope are
 unchanged.
 
