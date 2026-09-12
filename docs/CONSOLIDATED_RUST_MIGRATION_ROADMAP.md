@@ -31,6 +31,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+The next hosted run `34724081112` at `5876e4ffc` completed with failures in
+example compilation and deployment guards. Repairs are integrated at `71e8aca8a`
+(register the shared bounded helper in the capture example) and `72f966d11`
+(strict native-only Compose null/empty-command equivalence and updated Flow
+binding guards). The example passed compilation, strict Clippy and seven tests.
+Actual Linux Compose 2.38.2 and 5.4 passed full bundle/native-owner comparisons;
+the installed-version gate remains and the pinned-version bundle gate is now
+mandatory too. Full combined Python regression at `72f966d11` passed **3,523
+tests, three skipped** in 227.43 seconds. These repairs still need fresh hosted
+qualification; unfinished Kubernetes/Envoy work is not included in this checkpoint.
+
 Self-host native-owner configuration is now integrated locally at `e53cb2704`
 (reviewed author `05f7df2df`). Its full Python regression passed **3,412 tests,
 three skipped**, with frozen full-model preservation, default/empty/custom
