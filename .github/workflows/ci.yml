@@ -880,6 +880,8 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
+      - name: Verify self-host native owner preservation
+        run: python3 scripts/test_selfhost_native_owner_compose.py
       - name: Verify captured worker rollback launch configuration
         run: python3 scripts/test_beta_worker_launch_compose.py
       - name: Verify complete Canvas worker consumer configurations

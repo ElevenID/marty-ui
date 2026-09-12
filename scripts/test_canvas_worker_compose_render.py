@@ -62,9 +62,14 @@ def assert_shared_rust_services(base, bundle):
         else:
             continue
         assert isinstance(selector, str) and selector, f"Missing base selector: {name}"
-        assert not original.get("command") and not original.get("entrypoint"), (
-            f"Review explicit Rust launch override: {name}"
-        )
+        if name == "issuance-native":
+            assert selector == "issuance_native"
+            assert original.get("entrypoint") == ["/app/services/entrypoint.sh"]
+            assert original.get("command") == []
+        else:
+            assert not original.get("command") and not original.get("entrypoint"), (
+                f"Review explicit Rust launch override: {name}"
+            )
         expected = deepcopy(original)
         del expected["build"]
         expected.update(image=anchor["image"], pull_policy=anchor["pull_policy"])

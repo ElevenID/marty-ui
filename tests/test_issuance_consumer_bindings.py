@@ -144,7 +144,10 @@ def assert_kubernetes_bindings(documents, config):
 
 def assert_selfhost_bindings(compose):
     services = compose["services"]
-    assert "issuance-native" not in services
+    assert services["issuance-native"]["extends"] == {
+        "file": "docker-compose.service.issuance-native-runtime.yml",
+        "service": "issuance-native",
+    }
     issuance = services["issuance"]
     assert (
         issuance["image"]
@@ -170,7 +173,8 @@ def assert_selfhost_bindings(compose):
         for name, item in services.items()
     }
     assert {name: values for name, values in flags.items() if values} == {
-        "issuance": {PRIVATE: "false"}
+        "issuance": {PRIVATE: "false"},
+        "issuance-native": {PRIVATE: "false"},
     }
 
     common = "revocation-profile-migrate db-migrate issuance-migrations gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile signing-keys flow verification revocation-profile device-registration event-stream".split()
@@ -202,6 +206,13 @@ def assert_selfhost_bindings(compose):
         expected[name]["ISSUANCE_SERVICE_URL"] = "http://issuance:8005"
     expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
     expected["flow"][TARGET] = "issuance:9005"
+    expected["issuance-native"] = {
+        "ES_GRPC_TARGET": "event-stream:9015",
+        "ORG_GRPC_TARGET": "organization:9002",
+        "CT_GRPC_TARGET": "credential-template:9003",
+        "RP_GRPC_TARGET": "revocation-profile:9013",
+    }
+    expected["gateway"]["ISSUANCE_NATIVE_SERVICE_URL"] = "http://issuance-native:8005"
     actual = {
         name: {
             key: value

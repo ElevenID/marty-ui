@@ -17,50 +17,6 @@ x-runtime-env: &runtime-env
 x-database-url-template: &database-url-template postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
 x-database-url-sync-template: &database-url-sync-template postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
 
-x-issuance-application-env: &issuance-application-env
-  <<: *runtime-env
-  GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
-  ISSUANCE_SERVICE_PORT: "8005"
-  DATABASE_URL_TEMPLATE: *database-url-template
-  MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-  ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
-  CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
-  CANVAS_OAUTH_COMPLETION_REDIRECT_URL: ${CANVAS_OAUTH_COMPLETION_REDIRECT_URL:-${CANVAS_LTI_EXPERIENCE_BASE_URL:-https://prod.example.com}/console/org/deploy/canvas}
-  CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
-  CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
-  CANVAS_PORTABLE_INTEGRATION_ENABLED: ${CANVAS_PORTABLE_INTEGRATION_ENABLED:-false}
-  CANVAS_PILOT_ORGANIZATION_IDS: ${CANVAS_PILOT_ORGANIZATION_IDS:-}
-  CANVAS_LEGACY_EVENT_INGEST_ENABLED: ${CANVAS_LEGACY_EVENT_INGEST_ENABLED:-false}
-  CANVAS_PRIVATE_ORIGIN_ALLOWLIST: ${CANVAS_PRIVATE_ORIGIN_ALLOWLIST:-}
-  CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST: ${CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:-}
-  CANVAS_BINDING_READINESS_MAX_AGE_SECONDS: ${CANVAS_BINDING_READINESS_MAX_AGE_SECONDS:-900}
-  CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS: ${CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS:-900}
-  ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
-  ORG_GRPC_TARGET: organization:9002
-  CT_GRPC_TARGET: credential-template:9003
-  CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
-  REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
-  MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
-  ISSUANCE_GRPC_PORT: "9005"
-  ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
-  INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
-  TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
-  SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
-  SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
-  CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
-  CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
-  CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
-  CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
-  CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
-  CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST: ${CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:-}
-  CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
-  CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
-  CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
-  CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
-  CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
-  UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
-  DIDCOMM_ALLOW_PRIVATE_IPS: "false"
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -305,8 +261,6 @@ services:
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
-      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
@@ -352,8 +306,6 @@ services:
       revocation-profile:
         condition: service_healthy
       issuance:
-        condition: service_healthy
-      issuance-native:
         condition: service_healthy
       event-stream:
         condition: service_healthy
@@ -535,16 +487,57 @@ services:
     entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
     command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
     environment:
-      <<: *issuance-application-env
+      <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://prod.example.com}
+      CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
+      CANVAS_OAUTH_COMPLETION_REDIRECT_URL: ${CANVAS_OAUTH_COMPLETION_REDIRECT_URL:-${CANVAS_LTI_EXPERIENCE_BASE_URL:-https://prod.example.com}/console/org/deploy/canvas}
+      CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
+      CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
       CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: ${CANVAS_PORTABLE_INTEGRATION_ENABLED:-false}
+      CANVAS_PILOT_ORGANIZATION_IDS: ${CANVAS_PILOT_ORGANIZATION_IDS:-}
+      CANVAS_LEGACY_EVENT_INGEST_ENABLED: ${CANVAS_LEGACY_EVENT_INGEST_ENABLED:-false}
+      CANVAS_PRIVATE_ORIGIN_ALLOWLIST: ${CANVAS_PRIVATE_ORIGIN_ALLOWLIST:-}
+      CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST: ${CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:-}
+      CANVAS_BINDING_READINESS_MAX_AGE_SECONDS: ${CANVAS_BINDING_READINESS_MAX_AGE_SECONDS:-900}
+      CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS: ${CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS:-900}
+      ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
       ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
+      ISSUANCE_GRPC_PORT: "9005"
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
+      TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
+      CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
+      CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
+      CANVAS_CREDENTIALS_STATUS_SYNC_URL: ${CANVAS_CREDENTIALS_STATUS_SYNC_URL:-}
+      CANVAS_CREDENTIALS_API_BASE_URL: ${CANVAS_CREDENTIALS_API_BASE_URL:-https://api.badgr.io}
+      CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST: ${CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:-}
+      CANVAS_CREDENTIALS_ISSUER_ID: ${CANVAS_CREDENTIALS_ISSUER_ID:-}
+      CANVAS_CREDENTIALS_BADGECLASS_ID: ${CANVAS_CREDENTIALS_BADGECLASS_ID:-}
+      CANVAS_CREDENTIALS_ASSERTION_SCOPE: ${CANVAS_CREDENTIALS_ASSERTION_SCOPE:-badgeclasses}
       CANVAS_CREDENTIALS_PROVENANCE_BASE_URL: ${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}
       CANVAS_CREDENTIALS_RECIPIENT_HASHED: ${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}
       CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS: ${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}
+      CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
+      CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
+      UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
+      DIDCOMM_ALLOW_PRIVATE_IPS: "false"
     secrets:
       - marty_db_password
       - openbao_service_token
@@ -567,29 +560,6 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
-
-  # Native owner for selected routes; legacy siblings remain on issuance.
-  issuance-native:
-    extends:
-      file: docker-compose.service.issuance-native-runtime.yml
-      service: issuance-native
-    entrypoint: ["/app/services/entrypoint.sh"]
-    command: []
-    environment:
-      <<: *issuance-application-env
-      SERVICE_NAME: issuance_native
-      ISSUANCE_GRPC_ENABLED: "true"
-      RP_GRPC_TARGET: revocation-profile:9013
-    secrets:
-      - marty_db_password
-      - issuance_api_key
-      - integration_secret_master_key
-      - token_hmac_key
-      - canvas_credentials_shared_secret
-      - grpc_service_token
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
 
   # Durable Canvas jobs must never run inside the web-service lifespan.
   canvas-sync-worker:

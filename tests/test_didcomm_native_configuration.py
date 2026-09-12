@@ -71,7 +71,18 @@ def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
     assert production["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
         "issuance:9005"
     )
-    assert "issuance-native" not in production["services"]
+    assert (
+        production["services"]["gateway"]["environment"]["ISSUANCE_NATIVE_SERVICE_URL"]
+        == "http://issuance-native:8005"
+    )
+    assert (
+        production["services"]["gateway"]["environment"]["ISSUANCE_SERVICE_URL"]
+        == "http://issuance:8005"
+    )
+    assert production["services"]["issuance-native"]["extends"] == {
+        "file": "docker-compose.service.issuance-native-runtime.yml",
+        "service": "issuance-native",
+    }
 
 
 @pytest.mark.parametrize(

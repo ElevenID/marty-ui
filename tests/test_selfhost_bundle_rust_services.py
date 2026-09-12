@@ -40,6 +40,16 @@ def assert_service_local_build_resets(document):
 def test_shared_bundle_resets_builds_at_service_keys_for_legacy_compose():
     root = Path(__file__).resolve().parents[1]
     base = yaml.safe_load((root / "docker-compose.selfhost.prod.yml").read_text())
+    native = base["services"]["issuance-native"]
+    assert native["extends"] == {
+        "file": "docker-compose.service.issuance-native-runtime.yml",
+        "service": "issuance-native",
+    }
+    runtime = yaml.safe_load((root / native["extends"]["file"]).read_text())[
+        "services"
+    ]["issuance-native"]
+    assert "build" not in native
+    native["build"] = deepcopy(runtime["build"])
     expected = {
         name
         for name, service in base["services"].items()
@@ -277,6 +287,41 @@ def test_base_explicit_launch_override_requires_review(gate, models, field):
     bundle["services"]["from-target"][field] = ["synthetic-command"]
     with pytest.raises(AssertionError, match="Review explicit Rust launch override"):
         gate["assert_shared_rust_services"](base, bundle)
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "selector", "entrypoint", "command", "bundle-entrypoint", "secret"]
+)
+def test_native_dispatcher_exception_is_exact_and_preserves_full_model(
+    gate, models, fault
+):
+    base, bundle = models
+    original = base["services"].pop("from-target")
+    actual = bundle["services"].pop("from-target")
+    base["services"]["issuance-native"] = original
+    bundle["services"]["issuance-native"] = actual
+    original["build"] = {
+        "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "issuance-native"},
+    }
+    for service in (original, actual):
+        service["environment"]["SERVICE_NAME"] = "issuance_native"
+        service["entrypoint"] = ["/app/services/entrypoint.sh"]
+        service["command"] = []
+    assert "issuance-native" in gate["assert_shared_rust_services"](base, bundle)
+    if fault == "selector":
+        original["environment"]["SERVICE_NAME"] = "issuance"
+    elif fault == "entrypoint":
+        original["entrypoint"] = ["python"]
+    elif fault == "command":
+        original["command"] = ["python"]
+    elif fault == "bundle-entrypoint":
+        actual["entrypoint"] = ["python"]
+    elif fault == "secret":
+        actual["secrets"] = []
+    if fault:
+        with pytest.raises(AssertionError):
+            gate["assert_shared_rust_services"](base, bundle)
 
 
 def test_gate_rejects_missing_base_selector(gate, models):

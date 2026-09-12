@@ -646,6 +646,9 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "CANVAS_CREDENTIALS_SHARED_SECRET:" in beta
     assert "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:" in beta
     assert "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS:" in beta
-    assert "issuance-native:" not in production
+    assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in production
+    assert "ISSUANCE_SERVICE_URL: http://issuance:8005" in production
+    assert "file: docker-compose.service.issuance-native-runtime.yml" in production
+    assert "MARTY_ISSUANCE_IMAGE" in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose
