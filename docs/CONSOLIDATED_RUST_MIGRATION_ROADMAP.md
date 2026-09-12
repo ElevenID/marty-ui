@@ -75,6 +75,10 @@ privacy and typed error handling; it changes no Core/KMS pins, SQL, routes or
 deployment configuration. See [qualification and limits](rust-migrations/signing-response-adoption.md).
 These local results do not replace exact-head hosted CI or beta acceptance.
 
+The [DIDComm consumer retirement checklist](rust-migrations/didcomm-consumer-retirement.md)
+records remaining profile, direct-ingress, Flow, Envoy and conformance gates.
+Renewal cutover alone will not authorize deletion of every Python DIDComm owner.
+
 Latest local initiation selection is `845de6a62`: exact native POST initiation,
 unchanged public rewrite/authentication, 65 native plus 66 remaining operations
 from the frozen 131. Full gateway/issuance and sixteen composed DIDComm tests,
