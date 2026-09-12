@@ -26,6 +26,12 @@ Beta Flow uses `ISSUANCE_GRPC_TARGET=issuance-native:9005`. Its existing
 `ISSUANCE_SERVICE_URL=http://issuance:8005` remains inherited from base: that
 separate HTTP provider serves physical-document operations, not this RPC.
 Base/self-host profiles and Envoy's shared issuance gRPC cluster are unchanged.
+The gateway's native service alias defaults to the configured legacy issuance
+URL when `ISSUANCE_NATIVE_SERVICE_URL` is absent (`GatewayConfig::from_values`).
+Thus embedded route selection alone does not migrate standalone consumers:
+beta supplies the split native URL explicitly. This is static configuration,
+not retrying a failed native request against Python; explicit split-upstream
+gates retain their no-fallback assertions.
 Native issuance explicitly retains its enabled port 9005 and the same service
 token as Flow and legacy issuance. Existing health and published-migration
 dependencies remain; rendered checks verify configuration, not live readiness.
