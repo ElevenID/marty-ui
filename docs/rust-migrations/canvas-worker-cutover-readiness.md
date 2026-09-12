@@ -51,12 +51,14 @@ masking, status-only logs and success validation. The 45 detail vectors remain
 required; add decoding/transport and no-leak controls. This is an audited plan,
 not completed production adoption or permission to overlap active crypto edits.
 
-Further caller inspection separates operation identity from URL: both current
-native context/proof-policy resolvers correspond to Python
-`resolve_remote_issuer_context`, including when its URL is `resolve-issuer-did`.
-They must retain the Context diagnostic prefix. The separate Python Resolve
-helper has no identified issuance production caller; its frozen observations
-can qualify the shared internal adapter without inventing a production route.
+Full caller inspection separates operation identity from URL: credential and
+proof-policy callers correspond to Python `resolve_remote_issuer_context`,
+including when its URL is `resolve-issuer-did`; they retain the Context prefix.
+However, Python Canvas LTI (`canvas_routes.py:1923`) and readiness
+(`canvas_readiness.py:573`) call the separate Resolve helper. Their Rust wrappers
+currently reuse `HttpIssuerContextResolver::resolve_raw`, hiding that distinction.
+Adoption must add an explicit caller-operation seam to that same resolver and
+select Resolve for those two wrappers, without adding an endpoint or crypto owner.
 Also preserve the existing lossless `JsonTree`/`PythonText` decoder boundary:
 silently converting non-scalar diagnostics to missing values would lose
 behavior. Non-scalar formatting and status-under-400 continuation require
