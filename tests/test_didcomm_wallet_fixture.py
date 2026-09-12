@@ -11,6 +11,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -198,6 +199,17 @@ def test_partial_connection_has_bounded_close(module, monkeypatch, tmp_path, pha
     monkeypatch.setattr(module, "READ_TIMEOUT", 0.2)
     monkeypatch.setattr(module, "REQUEST_TIMEOUT", 0.4)
     fixture = module.WalletFixture(tmp_path)
+    accepted = threading.Event()
+    wrap_socket = fixture.server.context.wrap_socket
+
+    def accepted_tls_socket(*args, **kwargs):
+        # A completed TCP connect may still be queued in the listening socket.
+        # Exercise shutdown of an accepted, incomplete request, not a race
+        # between serve_forever accepting it and shutdown discarding the queue.
+        accepted.set()
+        return wrap_socket(*args, **kwargs)
+
+    monkeypatch.setattr(fixture.server.context, "wrap_socket", accepted_tls_socket)
     raw = socket.create_connection(("127.0.0.1", fixture.server.server_port), timeout=2)
     stream = raw
     try:
@@ -211,6 +223,7 @@ def test_partial_connection_has_bounded_close(module, monkeypatch, tmp_path, pha
                 stream.sendall(
                     b"POST /inbox HTTP/1.1\r\nContent-Type: application/didcomm-encrypted+json\r\nContent-Length: 8\r\n\r\nx"
                 )
+        assert accepted.wait(timeout=2), "server must own the incomplete TLS request"
         before = time.monotonic()
         fixture.close()
         assert time.monotonic() - before < 2
