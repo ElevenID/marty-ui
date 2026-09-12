@@ -45,8 +45,14 @@ controlled lifecycle with independent native/public response checks; this is
 not additional real-main publication evidence. Retained direct/input corpora,
 strict Clippy and owned-container cleanup passed.
 
-Current remaining Canvas work is three full lifecycle
-cases, production adoption/transport qualification of the 51-observation signing
+All seventeen lifecycle cases now have local evidence: fifteen real-HTTP cases
+(direct actual-main and gateway), plus two task-owned cancellations matching the
+Python inline-ASGI oracle. Full named concurrency is integrated as `857754367`;
+no network-disconnect cancellation guarantee is claimed. Runtime source and
+frozen expectations are unchanged; the real-HTTP bridge projection is explicit.
+
+Current remaining Canvas work is final operations source activation/adoption,
+production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
 in source; source selection is not deployment acceptance. All eight Canvas

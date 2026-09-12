@@ -19,17 +19,27 @@ qualify the newer local integration's exact head or establish deployment.
   Five combined targets passed (23.84s), including retained direct 46-case and
   45-input corpora; strict Clippy (7.06s), formatting and all sixteen owned
   container-absence checks passed. No runtime, oracle or route change occurred.
-- Full lifecycle corpus: 17 cases, fourteen selected by the actual HTTP publisher
+- Full lifecycle corpus: all 17 have local evidence, with fifteen selected by the actual HTTP publisher
   fixture (`suspend_delivered`, `revoke_delivered`, `mirror_failure`,
   `publication_failure`, `no_delivery`, `pending_delivery`, `failed_delivery`,
   `wallet_delivery`, `mirror_gate_disabled`, `binding_missing`,
-  `binding_disabled`, `platform_disabled`, `suspend_revoked`, `revoke_revoked`).
-  Three remain: `cancel_at_publication`, `cancel_at_mirror`, `concurrent_at_publication`.
-  A held competing 409 is not the complete frozen concurrent case. Supplementary
+  `binding_disabled`, `platform_disabled`, `suspend_revoked`, `revoke_revoked`,
+  `concurrent_at_publication`). Reviewed `b8fda3352`, integrated as `857754367`,
+  qualifies the full named concurrency case with original inputs and counters.
+  Gateway fifteen (5.75s), actual-main fifteen (5.36s), controlled three (4.29s),
+  full direct seventeen, pure guards and strict Clippy (28.03s) passed. The real
+  HTTP bridge has a closed expected metadata projection, including its synthetic
+  configured secret reference; the original frozen oracle is unchanged.
+  `cancel_at_publication` and `cancel_at_mirror` are qualified by the existing
+  direct handler-task abort/join gate, matching Python's inline ASGI task cancel.
+  This does not claim network-disconnect cancellation. Ten retained owned IDs
+  were independently absent; four intermediate IDs were truncated, and an
+  additional label query found no published-schema fixtures remaining.
+  Supplementary
   75 operations-input, 45 review-input and 28 enqueue-input observations are
   direct corpora, not automatically gateway-qualified.
 - All eight Canvas operations still remain outside the native HTTP allow-list.
-  Preserve their legacy ownership until remaining lifecycle and adoption gates pass.
+  Their final source-activation/adoption review is separate from these passed gates.
 - Signing diagnostics remain a real adoption gap: `signing_error_detail.rs` is
   imported by its test target, not the production library/adapters. Its 45 helper
   plus six remote-operation observations need scoped production adoption and
