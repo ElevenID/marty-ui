@@ -56,13 +56,21 @@ production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
 in source; source selection is not deployment acceptance. All eight Canvas
-operations still retain legacy gateway ownership. The
+operations still retain legacy gateway ownership. Activation is now in progress
+with the audited missing beta status-sync URL forwarding repair; signing
+diagnostics are a separate consumer boundary, not an operations prerequisite.
+Reviewed reference capture `cad8684ab` adds 35 inputs, 105 remote-operation and
+102 caller observations, independently reproduced with eight guards. Decoder,
+surrogate-rendering and redirect behavior constrain the remaining Rust adapter;
+these controlled Python observations are not native or deployed acceptance. The
 [current Canvas audit](rust-migrations/canvas-worker-cutover-readiness.md#current-remaining-work-audit)
 supersedes historical pending-failure and unimplemented-launch statements.
 
-Reviewed Canvas source `bd8882c5d` locally qualifies fourteen of seventeen
+### Earlier checkpoints (superseded by the current counts above)
+
+Reviewed Canvas source `bd8882c5d` locally qualified fourteen of seventeen
 lifecycle cases through both gateway and actual-main HTTP, with all frozen
-expectations retained. The remaining lifecycle cases are cancellation at
+expectations retained. The then-remaining lifecycle cases were cancellation at
 publication, cancellation at mirror, and concurrency at publication. This local
 follow-up is not included in hosted `84665d26d`; CI `34708271140` is running on
 that reviewed health/RPC batch without interruption.

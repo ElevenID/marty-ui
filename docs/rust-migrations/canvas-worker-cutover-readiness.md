@@ -39,7 +39,12 @@ qualify the newer local integration's exact head or establish deployment.
   75 operations-input, 45 review-input and 28 enqueue-input observations are
   direct corpora, not automatically gateway-qualified.
 - All eight Canvas operations still remain outside the native HTTP allow-list.
-  Their final source-activation/adoption review is separate from these passed gates.
+  Their activation audit found one configuration dependency: beta must forward
+  the existing `CANVAS_CREDENTIALS_STATUS_SYNC_URL` expression to issuance-native
+  to preserve configured suspend/revoke mirroring. The bounded eight-route
+  activation and unset/empty/custom configuration controls are in progress.
+  Signing diagnostics are not on this operations callgraph and do not block
+  that separate activation slice.
 - Signing diagnostics remain a real adoption gap: `signing_error_detail.rs` is
   imported by its test target, not the production library/adapters. Its 45 helper
   plus six remote-operation observations need scoped production adoption and
@@ -49,9 +54,17 @@ qualify the newer local integration's exact head or establish deployment.
 The signing reachability follow-up resolves the apparent Context endpoint gap:
 `HttpProofPolicyResolver` in `signing_policy.rs` already selects `issuer-context`
 for DID-less requests and `resolve-issuer-did` otherwise. `main.rs` wires it into
-tenant discovery. Frozen Python organization proof-policy lookup and native
-metadata HTTP both intentionally mask failures with the same fixed public 503;
+tenant discovery. Frozen Python organization proof-policy lookup masks
+`RuntimeError` failures with the same fixed public 503 as native metadata HTTP;
 do not expose internal signing details or count that masking as feature loss.
+The reviewed [additional response capture](signing-response-reference.md),
+integrated as `cad8684ab`, establishes an important exception: Python decoder
+`UnicodeError` and malformed redirect `JSONDecodeError` escape that mask.
+Selected raw surrogates also fail the controlled LTI JSON renderer. These are
+not successful 503 responses and must not be silently normalized during adoption.
+Root reproduced all 35 inputs, 105 remote-operation and 102 caller observations,
+plus eight guards. The pinned-source/local-dependency and controlled-ASGI limits
+are recorded explicitly; this is not native adapter or deployed-image proof.
 Production adoption must cover this third owner as well as `HttpDidSigner` and
 `HttpIssuerContextResolver`, using one internal response adapter and the existing
 JSON/text decoding owners. Qualify the six frozen Context/Resolve/Sign 401/503
