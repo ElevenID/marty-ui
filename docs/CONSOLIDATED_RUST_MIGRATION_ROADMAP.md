@@ -47,7 +47,9 @@ The separate frozen path
 reference covers 17 Windows and nine POSIX cases; Windows replay passed, while
 Linux account lookup, permission and atomic-publication tests still require hosted
 qualification. See [packager evidence](rust-migrations/selfhost-bundle-packager.md).
-Isolated full gateway executable acceptance remains in progress.
+Rendered-runtime acceptance source is integrated at `ee4587f56`; its full combined
+Python regression passed **3,478 tests, three skipped** in 212.63 seconds.
+Isolated full Linux gateway executable acceptance remains in progress.
 Hosted CI `34718953669` is still testing pushed `98e78b8d0`; the self-host commit
 and packager commits have not been pushed over that live run. Production remains unchanged.
 
@@ -79,6 +81,14 @@ still selects `issuance:9005` with `http://issuance:8005`; remaining deployment
 bindings and effective consumer acceptance must be completed without repeating
 the beta source cutover or moving unrelated HTTP operations. The native and
 legacy RPC owners use distinct service names, not distinct port numbers.
+
+The reviewed Flow composed-library gate (`b0584ea33`) now passes against the real
+native gRPC adapter and both PostgreSQL repositories: instance/application keys,
+recovery, collision rollback, concurrent retry artifacts, failure mapping, and
+seven legacy physical-document HTTP operations. The new gate passed in 6.11
+seconds and the existing adapter/event regression in 3.87 seconds, with strict
+Clippy; all four exact fixture containers were independently absent. This does
+not yet qualify rendered provider selection or packaged/public Flow startup.
 
 Credentials [PR #275](https://github.com/ElevenID/marty-credentials/pull/275)
 merged through the protected queue at `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
