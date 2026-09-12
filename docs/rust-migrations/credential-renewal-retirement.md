@@ -180,6 +180,22 @@ Qualification completed for the candidate admission and repository scope:
 
 ## Remaining activation work
 
+Activation review found an additional application-binding gate. A real Canvas
+application remains bound to its source issuance transaction, while trusted early
+renewal linkage makes the existing pre-signing guard inspect it against the new
+transaction. The guard requires an approved application and an exact transaction
+binding (`canvas_issuance_guard.rs`, `binding_transaction_matches`). The current
+composed fixture carries an application ID but has no corresponding application
+row, so its passing result does not qualify this path.
+
+Do not bypass the guard or clear the application ID. Qualify a conditional,
+atomic source-to-successor application rebind that preserves approval state and
+source history, permits exact successor recovery, and rejects cross-tenant,
+stale-binding and competing-successor changes without partial association writes.
+Record its governed behavior separately from the immutable Python oracle and
+exercise real application, template, platform, binding and evidence rows before
+activation. Existing evidence-freshness and signing-readiness checks must remain.
+
 Wire the same candidate owner into the complete native HTTP service and qualify
 the exact gateway operation. Select
 only renewal after review; do not substitute another delivery graph or switch
