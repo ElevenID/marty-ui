@@ -36,6 +36,8 @@ use super::{
 pub(super) enum Scenario {
     ExplicitHolder,
     MixedWallet,
+    /// Renewal-only fixture: ordinary offer first, then explicit direct delivery.
+    OrdinaryWallet,
     SubjectOnly,
     MissingHolder,
     WalletRefused,
@@ -47,6 +49,9 @@ impl Scenario {
         match self {
             Self::ExplicitHolder => "success_holder",
             Self::MixedWallet => "multiple_wallets",
+            Self::OrdinaryWallet => {
+                panic!("renewal-only template fixture has no fresh DIDComm oracle")
+            }
             Self::SubjectOnly => "subject_fallback",
             Self::MissingHolder => "missing_holder",
             // The frozen projector corpus uses a controlled delivery exception;
@@ -99,7 +104,13 @@ impl InitiationTemplateResolver for Admission {
         );
         assert_eq!(id, "didcomm-template");
         let mut wallets = transaction(&self.id).wallet_configs;
-        if self.scenario == Scenario::MixedWallet {
+        if self.scenario == Scenario::OrdinaryWallet {
+            wallets.clear();
+        }
+        if matches!(
+            self.scenario,
+            Scenario::MixedWallet | Scenario::OrdinaryWallet
+        ) {
             wallets.push(json!({"wallet_id":"ordinary","format_variant":"default","display_name":"Ordinary Wallet","deep_link_scheme":"synthetic-wallet://open?source=fixture"}));
         }
         Ok(InitiationTemplate {

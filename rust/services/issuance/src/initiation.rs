@@ -120,6 +120,14 @@ pub struct InitiationReservation {
     pub created: bool,
 }
 
+/// Trusted renewal metadata is not part of the public semantic request or its
+/// idempotency hash. It must exist before a reservation can be delivered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InitiationRenewalContext {
+    pub source_credential_id: String,
+    pub application_id: Option<String>,
+}
+
 #[async_trait]
 pub trait InitiationRepository: Send + Sync {
     async fn recover_idempotently(
@@ -356,6 +364,16 @@ impl InitiationService {
         request: &InitiationRequest,
         raw_idempotency_key: Option<&str>,
     ) -> Result<InitiationReservation, InitiationServiceError> {
+        self.initiate_with_renewal(request, raw_idempotency_key, None)
+            .await
+    }
+
+    pub(crate) async fn initiate_with_renewal(
+        &self,
+        request: &InitiationRequest,
+        raw_idempotency_key: Option<&str>,
+        renewal: Option<&InitiationRenewalContext>,
+    ) -> Result<InitiationReservation, InitiationServiceError> {
         request.validate()?;
         let binding = idempotency_binding(raw_idempotency_key, request)?;
         match self
@@ -415,9 +433,12 @@ impl InitiationService {
                 .clone()
                 .unwrap_or_else(|| "default".to_owned()),
             revocation_profile_id: template.revocation_profile_id,
-            renewal_of_credential_id: None,
+            renewal_of_credential_id: renewal.map(|value| value.source_credential_id.clone()),
             applicant_id: request.applicant_id.clone(),
-            application_id: request.application_id.clone(),
+            application_id: renewal.map_or_else(
+                || request.application_id.clone(),
+                |value| value.application_id.clone(),
+            ),
             subject_did: request.subject_did.clone(),
             idempotency_key_hash: binding.as_ref().map(|value| value.key_hash.clone()),
             idempotency_request_hash: binding.as_ref().map(|value| value.request_hash.clone()),
@@ -1035,6 +1056,29 @@ mod tests {
         )
         .unwrap();
         (service, repository, calls)
+    }
+
+    #[tokio::test]
+    async fn trusted_renewal_context_preserves_semantic_hash_and_claim_resolution() {
+        let (plain, _, plain_calls) = service_harness();
+        let (renewal, _, renewal_calls) = service_harness();
+        let mut input = request();
+        input.application_id = None;
+        let ordinary = plain.initiate(&input, Some("renewal-key")).await.unwrap();
+        let context = InitiationRenewalContext {
+            source_credential_id: "source-credential".into(),
+            application_id: Some("trusted-source-application".into()),
+        };
+        let renewed = renewal
+            .initiate_with_renewal(&input, Some("renewal-key"), Some(&context))
+            .await
+            .unwrap();
+        let mut expected = ordinary.transaction;
+        expected.renewal_of_credential_id = Some(context.source_credential_id);
+        expected.application_id = context.application_id;
+        assert_eq!(renewed.transaction, expected);
+        assert_eq!(plain_calls.take(), renewal_calls.take());
+        assert!(input.application_id.is_none());
     }
 
     #[tokio::test]

@@ -2,6 +2,35 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/renewal_binding_postgres.rs"]
+mod renewal_binding_postgres;
+
+#[tokio::test]
+async fn renewal_postgres_binding_and_same_successor_recovery_are_fenced() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renewal binding/recovery requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    renewal_binding_postgres::run(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
+async fn didcomm_renewal_http_composes_real_delivery_and_renewal_links() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renewal delivery requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_renewal_http(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
 #[path = "support/didcomm_native_grpc_fixture.rs"]
 mod didcomm_native_grpc_fixture;
 

@@ -216,6 +216,10 @@ name = "initiation_http_behavior"
 path = "tests/initiation_http_behavior.rs"
 
 [[test]]
+name = "credential_renewal_behavior"
+path = "tests/credential_renewal_behavior.rs"
+
+[[test]]
 name = "issuance_transaction_postgres_contract"
 path = "tests/issuance_transaction_postgres_contract.rs"
 

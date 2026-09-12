@@ -118,6 +118,8 @@ fi
 "${executables[0]}" --list | grep -Fx 'status_runtime_composes_review_resolution_with_configured_http: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_native_composes_crypto_https_and_published_durability: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'
+"${executables[0]}" --list | grep -Fx 'renewal_postgres_binding_and_same_successor_recovery_are_fenced: test'
+"${executables[0]}" --list | grep -Fx 'didcomm_renewal_http_composes_real_delivery_and_renewal_links: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_flow_grpc_provider_preserves_keyed_admission: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'

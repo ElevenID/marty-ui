@@ -17,6 +17,7 @@ use crate::{
         ExistingCredential, IssuedCredential,
     },
     credential_lifecycle::delivery_record_id,
+    credential_renewal::{RenewalRepository, RenewalRepositoryError, RenewalSource},
     initiation::{
         IdempotencyBinding, InitiationRepository, InitiationRepositoryError, InitiationReservation,
     },
@@ -53,6 +54,25 @@ macro_rules! transaction_query {
         )
     };
 }
+
+const BIND_RENEWAL_RESERVATION: &str = concat!(
+    "UPDATE issuance_service.issuance_transactions AS candidate
+     SET renewal_of_credential_id = $3, application_id = $4
+     WHERE id = $1 AND organization_id = $2
+       AND ((renewal_of_credential_id = $3 AND application_id IS NOT DISTINCT FROM $4)
+            OR (renewal_of_credential_id IS NULL AND application_id IS NULL
+                AND status = 'pending' AND reserved_credential_id IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM issuance_service.issued_credentials issued
+                    WHERE issued.transaction_id = candidate.id)
+                AND NOT EXISTS (
+                    SELECT 1 FROM issuance_service.credential_delivery_records delivery
+                    WHERE delivery.transaction_id = candidate.id)))
+       AND idempotency_key_hash IS NOT DISTINCT FROM $5
+       AND idempotency_request_hash IS NOT DISTINCT FROM $6
+     RETURNING ",
+    transaction_columns!()
+);
 
 const TRANSACTION_BY_ACCESS_TOKEN: &str = transaction_query!("access_token = $1");
 const TRANSACTION_BY_PRE_AUTH_CODE: &str = transaction_query!("pre_auth_code = $1");
@@ -908,6 +928,92 @@ pub(crate) fn transaction_row(
         created_at: get(&row, "created_at")?,
         expires_at: get(&row, "expires_at")?,
     })
+}
+
+#[async_trait]
+impl RenewalRepository for PostgresCredentialRepository {
+    async fn source(&self, id: &str) -> Result<Option<RenewalSource>, RenewalRepositoryError> {
+        let row = sqlx::query(
+            "SELECT id, organization_id, transaction_id, credential_template_id,
+                    applicant_id, subject_did, status, renewed_to_credential_id, expires_at
+             FROM issuance_service.issued_credentials WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        row.map(|row| {
+            Ok(RenewalSource {
+                id: row.try_get("id")?,
+                organization_id: row.try_get("organization_id")?,
+                transaction_id: row.try_get("transaction_id")?,
+                credential_template_id: row.try_get("credential_template_id")?,
+                applicant_id: row.try_get("applicant_id")?,
+                subject_did: row.try_get("subject_did")?,
+                status: row.try_get("status")?,
+                renewed_to_credential_id: row.try_get("renewed_to_credential_id")?,
+                expires_at: row.try_get("expires_at")?,
+            })
+        })
+        .transpose()
+        .map_err(|_: sqlx::Error| RenewalRepositoryError::Unavailable)
+    }
+
+    async fn source_transaction(
+        &self,
+        source: &RenewalSource,
+    ) -> Result<Option<CredentialTransaction>, RenewalRepositoryError> {
+        sqlx::query(TRANSACTION_BY_ID_AND_ORGANIZATION)
+            .bind(&source.transaction_id)
+            .bind(&source.organization_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| RenewalRepositoryError::Unavailable)?
+            .map(transaction_row)
+            .transpose()
+            .map_err(|_| RenewalRepositoryError::Unavailable)
+    }
+
+    async fn bind_reservation(
+        &self,
+        transaction: &CredentialTransaction,
+        source: &RenewalSource,
+        application_id: Option<&str>,
+    ) -> Result<CredentialTransaction, RenewalRepositoryError> {
+        if transaction.organization_id != source.organization_id {
+            return Err(RenewalRepositoryError::BindingConflict);
+        }
+        let bound = sqlx::query(BIND_RENEWAL_RESERVATION)
+            .bind(&transaction.id)
+            .bind(&source.organization_id)
+            .bind(&source.id)
+            .bind(application_id)
+            .bind(&transaction.idempotency_key_hash)
+            .bind(&transaction.idempotency_request_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| RenewalRepositoryError::Unavailable)?
+            .map(transaction_row)
+            .transpose()
+            .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        if let Some(bound) = bound {
+            return Ok(bound);
+        }
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM issuance_service.issuance_transactions
+             WHERE id = $1 AND organization_id = $2)",
+        )
+        .bind(&transaction.id)
+        .bind(&source.organization_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| RenewalRepositoryError::Unavailable)?;
+        Err(if exists {
+            RenewalRepositoryError::BindingConflict
+        } else {
+            RenewalRepositoryError::ReservationMissing
+        })
+    }
 }
 
 #[async_trait]

@@ -67,6 +67,8 @@ const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 
 #[path = "didcomm_fresh_initiation.rs"]
 mod fresh_initiation;
+#[path = "didcomm_renewal_composed.rs"]
+mod renewal;
 #[path = "didcomm_unkeyed_grpc_initiation.rs"]
 mod unkeyed_grpc;
 use fresh_initiation::Scenario as FreshScenario;
@@ -157,6 +159,9 @@ struct Peers {
     resolutions: Arc<AtomicUsize>,
     allocations: Arc<AtomicUsize>,
     allocation_requests: Arc<Mutex<Vec<Value>>>,
+    publications: Arc<Mutex<Vec<Value>>>,
+    unexpected: Arc<AtomicUsize>,
+    publication_attempts: Arc<AtomicUsize>,
 }
 
 async fn sender(State(state): State<Peers>) -> Json<DidDocument> {
@@ -187,14 +192,53 @@ async fn allocate(
     )
 }
 
+async fn publish_renewal(
+    State(state): State<Peers>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    assert_eq!(headers["x-service-token"], SERVICE_TOKEN);
+    assert_eq!(body["organization_id"], ORGANIZATION);
+    assert_eq!(body["index"], 7);
+    assert_eq!(body["status"], "revoked");
+    assert_eq!(body["reason"], "Superseded by renewed credential");
+    state.publications.lock().unwrap().push(body);
+    Json(
+        json!({"success":true,"organization_id":ORGANIZATION,"index":7,"status_list_url":"https://status.example/synthetic"}),
+    )
+}
+
+async fn unexpected_peer(State(state): State<Peers>) -> StatusCode {
+    state.unexpected.fetch_add(1, Ordering::SeqCst);
+    StatusCode::NOT_FOUND
+}
+
+async fn observe_peer(
+    State(state): State<Peers>,
+    request: Request<Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Count before method/header/JSON validation, including a rejected 405.
+    if request.uri().path() == "/internal/revocation-profiles/didcomm-status/process-revocation" {
+        state.publication_attempts.fetch_add(1, Ordering::SeqCst);
+    }
+    next.run(request).await
+}
+
 struct OwnedPeers {
     origin: String,
     task: JoinHandle<()>,
     shutdown: Option<oneshot::Sender<()>>,
+    unexpected: Arc<AtomicUsize>,
+    publication_attempts: Arc<AtomicUsize>,
+    publications: Arc<Mutex<Vec<Value>>>,
 }
 
 impl OwnedPeers {
     async fn start(state: Peers) -> Self {
+        let unexpected = state.unexpected.clone();
+        let publication_attempts = state.publication_attempts.clone();
+        let publications = state.publications.clone();
         let app = Router::new()
             .route("/issuer/did.json", get(sender))
             .route("/holder/did.json", get(recipient))
@@ -202,6 +246,15 @@ impl OwnedPeers {
                 "/internal/revocation-profiles/didcomm-status/reserve-index",
                 post(allocate),
             )
+            .route(
+                "/internal/revocation-profiles/didcomm-status/process-revocation",
+                post(publish_renewal),
+            )
+            .fallback(unexpected_peer)
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                observe_peer,
+            ))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -218,6 +271,9 @@ impl OwnedPeers {
             origin,
             task,
             shutdown: Some(shutdown),
+            unexpected,
+            publication_attempts,
+            publications,
         }
     }
 
@@ -227,6 +283,16 @@ impl OwnedPeers {
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(
+            self.unexpected.load(Ordering::SeqCst),
+            0,
+            "no unexpected controlled peer request"
+        );
+        assert_eq!(
+            self.publication_attempts.load(Ordering::SeqCst),
+            self.publications.lock().unwrap().len(),
+            "no rejected or unrecorded publication attempt"
+        );
     }
 }
 
@@ -418,16 +484,7 @@ fn assert_offer_result(
     delivery_uri: &str,
 ) {
     let offer_uri = response["credential_offer_uri"].as_str().unwrap();
-    let parsed = url::Url::parse(offer_uri).unwrap();
-    assert_eq!(parsed.scheme(), "openid-credential-offer");
-    let query: Vec<_> = parsed.query_pairs().collect();
-    assert_eq!(query.len(), 1);
-    assert_eq!(query[0].0, "credential_offer");
-    let offer: Value = serde_json::from_str(&query[0].1).unwrap();
-    assert_eq!(
-        offer,
-        json!({"credential_issuer":format!("https://issuer.example/org/{ORGANIZATION}"),"credential_configuration_ids":["EmployeeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":reservation.transaction.pre_authorized_code}}})
-    );
+    assert_canonical_offer_uri(offer_uri, &reservation.transaction.pre_authorized_code);
     let mut expected = json!({
         "id":reservation.transaction.id,"organization_id":ORGANIZATION,"credential_template_id":"didcomm-template","status":status,
         "credential_offer_uri":offer_uri,"credential_offer_uris":{"didcomm":delivery_uri},"credential_offer_labels":{"didcomm":"Synthetic Wallet"},
@@ -448,6 +505,19 @@ fn assert_offer_result(
         expected["credential_offer_labels"]["ordinary"] = json!("Ordinary Wallet");
     }
     assert_eq!(response, &expected);
+}
+
+fn assert_canonical_offer_uri(offer_uri: &str, pre_authorized_code: &str) {
+    let parsed = url::Url::parse(offer_uri).unwrap();
+    assert_eq!(parsed.scheme(), "openid-credential-offer");
+    let query: Vec<_> = parsed.query_pairs().collect();
+    assert_eq!(query.len(), 1);
+    assert_eq!(query[0].0, "credential_offer");
+    let offer: Value = serde_json::from_str(&query[0].1).unwrap();
+    assert_eq!(
+        offer,
+        json!({"credential_issuer":format!("https://issuer.example/org/{ORGANIZATION}"),"credential_configuration_ids":["EmployeeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":pre_authorized_code}}})
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -555,6 +625,157 @@ fn decrypt_capture(
     message
 }
 
+/// One actual delivery graph shared by initiation, direct delivery and renewal gates.
+/// Only issuer/signing and loopback control-plane peers are controlled.
+struct DeliveryGraph {
+    wallet: WalletFixture,
+    endpoint: String,
+    sender_document: DidDocument,
+    recipient_document: DidDocument,
+    recipient_secret: [u8; 32],
+    resolutions: Arc<AtomicUsize>,
+    allocations: Arc<AtomicUsize>,
+    allocation_requests: Arc<Mutex<Vec<Value>>>,
+    publications: Arc<Mutex<Vec<Value>>>,
+    peers: OwnedPeers,
+    reload_ca: std::path::PathBuf,
+    repository: Arc<PostgresCredentialRepository>,
+    gate: Option<Arc<BuildGate>>,
+    builder: Arc<ControlledBuilder>,
+    issuer: Arc<ControlledIssuer>,
+    delivery: Arc<NativeInitiationDidcommDelivery>,
+}
+impl DeliveryGraph {
+    async fn start(
+        pool: &PgPool,
+        authenticated: bool,
+        fault: Option<Fault>,
+        recovery: Option<Recovery>,
+        hold_signing: bool,
+    ) -> Self {
+        let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
+            503
+        } else {
+            200
+        });
+        let endpoint = format!("{}/inbox", wallet.origin);
+        let (sender_document, sender_secret, mut recipient_document, recipient_secret) =
+            authcrypt_parties_with_ids(ISSUER, HOLDER);
+        recipient_document.service.push(
+            serde_json::from_value::<ServiceEntry>(
+                json!({"id":"#didcomm","type":"DIDCommMessaging","serviceEndpoint":endpoint}),
+            )
+            .unwrap(),
+        );
+        let resolutions = Arc::new(AtomicUsize::new(0));
+        let allocations = Arc::new(AtomicUsize::new(0));
+        let allocation_requests = Arc::new(Mutex::new(Vec::new()));
+        let publications = Arc::new(Mutex::new(Vec::new()));
+        let peers = OwnedPeers::start(Peers {
+            sender: sender_document.clone(),
+            recipient: recipient_document.clone(),
+            resolutions: resolutions.clone(),
+            allocations: allocations.clone(),
+            allocation_requests: allocation_requests.clone(),
+            publications: publications.clone(),
+            unexpected: Arc::new(AtomicUsize::new(0)),
+            publication_attempts: Arc::new(AtomicUsize::new(0)),
+        })
+        .await;
+        // The wallet owns this exact temporary directory and removes the synthetic policy too.
+        let policy = wallet.ca_file.parent().unwrap().join("didcomm-policy.json");
+        let reload_ca = wallet
+            .ca_file
+            .parent()
+            .unwrap()
+            .join("operator-reload-ca.pem");
+        let mode = if authenticated {
+            json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(if fault == Some(Fault::WrongSenderKey) { [8_u8;32] } else { sender_secret })})
+        } else {
+            json!({"mode":"anoncrypt"})
+        };
+        std::fs::write(
+            &policy,
+            json!({"version":1,"issuers":{(ISSUER):mode}}).to_string(),
+        )
+        .unwrap();
+        let repository = Arc::new(PostgresCredentialRepository::new(
+            pool.clone(),
+            b"synthetic-composed-hmac-key",
+        ));
+        let gate = (hold_signing || recovery == Some(Recovery::ConcurrentClaim))
+            .then(|| Arc::new(BuildGate::new()));
+        let builder = Arc::new(ControlledBuilder {
+            calls: AtomicUsize::new(0),
+            allocations: allocation_requests.clone(),
+            gate: gate.clone(),
+        });
+        let lifecycle = PostgresCredentialLifecycle::new(
+            pool.clone(),
+            url::Url::parse(&peers.origin).unwrap(),
+            Some(SERVICE_TOKEN),
+            Duration::from_secs(5),
+            CanvasGuardConfig {
+                enabled: false,
+                pilot_organizations: BTreeSet::new(),
+                evidence_max_age: Duration::from_secs(900),
+                readiness_max_age: Duration::from_secs(900),
+            },
+        )
+        .unwrap();
+        let issuer = Arc::new(ControlledIssuer);
+        let delivery = Arc::new(
+            NativeInitiationDidcommDelivery::new(
+                NativeInitiationDidcommPorts {
+                    repository: repository.clone(),
+                    issuer_resolver: issuer.clone(),
+                    builder: builder.clone(),
+                    lifecycle: Arc::new(lifecycle),
+                    envelope: Arc::new(NativeDidcommEnvelope::new(
+                        None,
+                        Some(&peers.origin),
+                        policy.to_str(),
+                    )),
+                    endpoints: Arc::new(DidcommEndpointValidator::new(true)),
+                    transport: Arc::new(
+                        DidcommTransport::with_timeout(
+                            if fault == Some(Fault::UntrustedTls) {
+                                None
+                            } else if recovery == Some(Recovery::TlsTrust) {
+                                reload_ca.to_str()
+                            } else {
+                                wallet.ca_file.to_str()
+                            },
+                            Duration::from_secs(5),
+                        )
+                        .unwrap(),
+                    ),
+                },
+                "https://issuer.example",
+            )
+            .unwrap(),
+        );
+        Self {
+            wallet,
+            endpoint,
+            sender_document,
+            recipient_document,
+            recipient_secret,
+            resolutions,
+            allocations,
+            allocation_requests,
+            publications,
+            peers,
+            reload_ca,
+            repository,
+            gate,
+            builder,
+            issuer,
+            delivery,
+        }
+    }
+}
+
 async fn run_case(
     pool: &PgPool,
     authenticated: bool,
@@ -586,54 +807,36 @@ async fn run_case(
     if let Some(scenario) = fresh {
         id.push_str(&format!("-fresh-{scenario:?}"));
     }
-    let wallet = WalletFixture::start(
-        if fault == Some(Fault::HttpRefused) || fresh == Some(FreshScenario::WalletRefused) {
-            503
+    let DeliveryGraph {
+        wallet,
+        endpoint,
+        sender_document,
+        recipient_document,
+        recipient_secret,
+        resolutions,
+        allocations,
+        allocation_requests,
+        publications,
+        peers,
+        reload_ca,
+        repository,
+        gate,
+        builder,
+        issuer,
+        delivery,
+        ..
+    } = DeliveryGraph::start(
+        pool,
+        authenticated,
+        if fresh == Some(FreshScenario::WalletRefused) {
+            Some(Fault::HttpRefused)
         } else {
-            200
+            fault
         },
-    );
-    let endpoint = format!("{}/inbox", wallet.origin);
-    let (sender_document, sender_secret, mut recipient_document, recipient_secret) =
-        authcrypt_parties_with_ids(ISSUER, HOLDER);
-    recipient_document.service.push(
-        serde_json::from_value::<ServiceEntry>(
-            json!({"id":"#didcomm","type":"DIDCommMessaging","serviceEndpoint":endpoint}),
-        )
-        .unwrap(),
-    );
-    let resolutions = Arc::new(AtomicUsize::new(0));
-    let allocations = Arc::new(AtomicUsize::new(0));
-    let allocation_requests = Arc::new(Mutex::new(Vec::new()));
-    let peers = OwnedPeers::start(Peers {
-        sender: sender_document.clone(),
-        recipient: recipient_document.clone(),
-        resolutions: resolutions.clone(),
-        allocations: allocations.clone(),
-        allocation_requests: allocation_requests.clone(),
-    })
-    .await;
-    // The wallet owns this exact temporary directory and removes the synthetic policy too.
-    let policy = wallet.ca_file.parent().unwrap().join("didcomm-policy.json");
-    let reload_ca = wallet
-        .ca_file
-        .parent()
-        .unwrap()
-        .join("operator-reload-ca.pem");
-    let mode = if authenticated {
-        json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(if fault == Some(Fault::WrongSenderKey) { [8_u8;32] } else { sender_secret })})
-    } else {
-        json!({"mode":"anoncrypt"})
-    };
-    std::fs::write(
-        &policy,
-        json!({"version":1,"issuers":{(ISSUER):mode}}).to_string(),
+        recovery,
+        false,
     )
-    .unwrap();
-    let repository = Arc::new(PostgresCredentialRepository::new(
-        pool.clone(),
-        b"synthetic-composed-hmac-key",
-    ));
+    .await;
     let historical = fresh.and_then(FreshScenario::historical_status);
     let historical_key = format!(
         "historical-{}-{}",
@@ -661,57 +864,6 @@ async fn run_case(
         None
     };
     let before = snapshot(pool, &id).await;
-    let gate = (recovery == Some(Recovery::ConcurrentClaim)).then(|| Arc::new(BuildGate::new()));
-    let builder = Arc::new(ControlledBuilder {
-        calls: AtomicUsize::new(0),
-        allocations: allocation_requests.clone(),
-        gate: gate.clone(),
-    });
-    let lifecycle = PostgresCredentialLifecycle::new(
-        pool.clone(),
-        url::Url::parse(&peers.origin).unwrap(),
-        Some(SERVICE_TOKEN),
-        Duration::from_secs(5),
-        CanvasGuardConfig {
-            enabled: false,
-            pilot_organizations: BTreeSet::new(),
-            evidence_max_age: Duration::from_secs(900),
-            readiness_max_age: Duration::from_secs(900),
-        },
-    )
-    .unwrap();
-    let issuer = Arc::new(ControlledIssuer);
-    let delivery = Arc::new(
-        NativeInitiationDidcommDelivery::new(
-            NativeInitiationDidcommPorts {
-                repository: repository.clone(),
-                issuer_resolver: issuer.clone(),
-                builder: builder.clone(),
-                lifecycle: Arc::new(lifecycle),
-                envelope: Arc::new(NativeDidcommEnvelope::new(
-                    None,
-                    Some(&peers.origin),
-                    policy.to_str(),
-                )),
-                endpoints: Arc::new(DidcommEndpointValidator::new(true)),
-                transport: Arc::new(
-                    DidcommTransport::with_timeout(
-                        if fault == Some(Fault::UntrustedTls) {
-                            None
-                        } else if recovery == Some(Recovery::TlsTrust) {
-                            reload_ca.to_str()
-                        } else {
-                            wallet.ca_file.to_str()
-                        },
-                        Duration::from_secs(5),
-                    )
-                    .unwrap(),
-                ),
-            },
-            "https://issuer.example",
-        )
-        .unwrap(),
-    );
     let native_router = direct_router(delivery.clone());
     let gateway_body =
         json!({"organization_id":ORGANIZATION,"transaction_id":id,"holder_did":HOLDER});
@@ -986,6 +1138,10 @@ async fn run_case(
             );
             assert_eq!(captured, json!({"messages":[],"failures":0}));
             assert_eq!((resolution_count, allocation_count, build_count), (0, 0, 0));
+            assert!(
+                publications.lock().unwrap().is_empty(),
+                "non-renewal cases publish no source revocation"
+            );
             peers.close().await;
             wallet.close_verified();
             return;
@@ -1125,6 +1281,10 @@ async fn run_case(
                 .await;
             fixture.close().await;
         }
+        assert!(
+            publications.lock().unwrap().is_empty(),
+            "non-renewal cases publish no source revocation"
+        );
         peers.close().await;
         wallet.close_verified();
         return;
@@ -1237,6 +1397,10 @@ async fn run_case(
                 .await;
             fixture.close().await;
         }
+        assert!(
+            publications.lock().unwrap().is_empty(),
+            "non-renewal cases publish no source revocation"
+        );
         peers.close().await;
         wallet.close_verified();
         return;
@@ -1542,6 +1706,10 @@ async fn run_case(
             .await;
         fixture.close().await;
     }
+    assert!(
+        publications.lock().unwrap().is_empty(),
+        "non-renewal cases publish no source revocation"
+    );
     peers.close().await;
     wallet.close_verified();
 }
@@ -1566,6 +1734,10 @@ pub(super) async fn run_fresh_gateway(database_url: &str) {
     run_mode(database_url, Gate::FreshGateway).await;
 }
 
+pub(super) async fn run_renewal_http(database_url: &str) {
+    run_mode(database_url, Gate::Renewal).await;
+}
+
 pub(super) async fn run_historical_http(database_url: &str) {
     run_mode(database_url, Gate::Historical).await;
 }
@@ -1578,6 +1750,7 @@ enum Gate {
     FreshGateway,
     FreshGrpc,
     Historical,
+    Renewal,
 }
 
 async fn run_mode(database_url: &str, gate: Gate) {
@@ -1598,6 +1771,10 @@ async fn run_mode(database_url: &str, gate: Gate) {
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(120), async {
+        if gate == Gate::Renewal {
+            renewal::run(&pool).await;
+            return;
+        }
         if gate == Gate::Historical {
             for authenticated in [false, true] {
                 for status in [

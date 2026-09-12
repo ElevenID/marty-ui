@@ -105,16 +105,84 @@ legacy behavior. Matching counts alone were not accepted as reproducibility.
   before it, and already-expired source credentials. Direct signing selector
   and malformed idempotency header rejection remain visible.
 
-## Smallest next native slice
+## Native candidate implementation (not activated)
 
-Add a typed renewal eligibility/source snapshot and renewal admission owner;
-reuse the existing `InitiationHttpService::initiate_authorized`, shared
-initiation/projector, Postgres repository, and lifecycle finalizer rather than
-creating another delivery graph. Existing `credential_lifecycle.rs` renewal
-finalization and repository tests qualify post-issuance linking only, not this
-HTTP admission flow. Adjudicate RENEWAL-001/002 explicitly before binding the
-new owner to the frozen route. Qualify real persistence, headers/tenant/error
-projection, both encryption modes, and link/revocation ordering, then select
-only the renewal operation. Delete remaining Python owners only after the
+`credential_renewal.rs` now implements typed source eligibility and the candidate
+HTTP owner. It reuses management authentication/tenant response projection and
+the existing initiation reservation/projector split. The internal trusted
+renewal context is not deserializable public input: it changes only persisted
+source/application links, not canonical request hashing or application-claim
+resolution. `PostgresCredentialRepository` supplies the source snapshot and
+atomic link binding. Neither gateway selection nor production startup/routing
+is changed by this candidate implementation.
+
+The governed Rust target intentionally corrects both findings above. Links exist
+before delivery (RENEWAL-001); refused/uncertain delivery uses the existing
+shared native pending URI (RENEWAL-002). The immutable Python reference still
+records the old outcomes. Both encryption modes and pure/mixed keyed rejection
+are retained; there is no alternate crypto owner or KMS redesign.
+
+Binding an old unlinked reservation is restricted to pending, unclaimed work
+with no issued credential or delivery record and no prior application link.
+An exact existing source/application binding can replay; a different source,
+application, or idempotency hash cannot overwrite it. A disappeared reservation
+retains the legacy named 503 response instead of being mislabeled a 409 conflict.
+This deliberately prevents relabeling an already-completed ordinary issuance
+whose request hash happens to match a renewal request.
+
+The shared finalizer validates the persisted successor transaction, tenant,
+source, and nonconflicting reverse link before external status publication.
+Local source/reverse-link updates are checked and committed together. Recovery
+accepts an inactive source only when it is revoked and already points to this
+exact successor, whose tenant, transaction, and reverse link also match. It does
+not allow unrelated revoked credentials, suspended sources, or partial links.
+An empty source successor string retains Python's absent-link semantics.
+
+Qualification completed for the candidate admission and repository scope:
+
+- `credential_renewal_behavior`: 29 frozen HTTP scenarios through actual native
+  admission/projector with controlled repository/delivery ports; complete DTOs,
+  ordered guard reads, complete typed admission transactions, exact ordinary
+  idempotency hashes, and declared early-link/pending-URI corrections. Two
+  ordinary-then-direct scenarios belong to the separate real delivery gate.
+- `renewal_postgres_binding_and_same_successor_recovery_are_fenced`: actual
+  published-schema repository/finalizer with explicitly seeded historical rows
+  and a controlled authenticated HTTP status publisher. Negative cases preserve
+  scoped organization transaction, credential, delivery, and event table
+  snapshots; exact same-successor recovery completes pending
+  event/delivery projection without republishing revocation. A barrier forces
+  two concurrent distinct successors through publication; two external attempts
+  are observed but only one atomic database successor wins. This is **not** an
+  at-most-once external publication guarantee or an actual wallet-send test.
+  This gate has no Canvas application fixture and does not qualify application
+  or evidence drift effects. The credential-and-delivery rejection case does
+  not independently isolate delivery-only exclusion: the published delivery
+  schema requires a credential foreign key.
+- `didcomm_renewal_http_composes_real_delivery_and_renewal_links`: eight cases
+  cover automatic success, refused delivery, missing holder, and ordinary then
+  direct delivery in both encryption modes. These execute the candidate service
+  router, fresh admission/reservation, PostgreSQL claim/finalizer, HTTPS wallet,
+  and Core encryption/decryption. Historical source rows, control-plane and
+  signing peers, status publisher, clock, and seed remain controlled. Actual
+  persisted renewal links are checked while the signer is held, before transport;
+  this is not a database observation at wallet capture time. Refused delivery
+  retains the prepared successor's reverse prelink while leaving the source
+  unchanged, without publication, issuance event, or resend. This is not a
+  packaged-main or gateway routing qualification.
+- Combined qualification passes all 17 DIDComm tests, all 400 issuance library
+  tests (including the trusted-context/hash/claim-order guard), three renewal
+  HTTP tests, and three initiation HTTP tests. The final configured renewal
+  run passes the repository gate, eight-case real delivery gate, and rejected
+  publisher-request counter guard together. Strict library/test Clippy, all 19
+  workspace package formatting checks, and 155 repository-local reference/CI
+  guards pass. These results do not authorize Python deletion or establish
+  packaged-main/gateway renewal routing.
+
+## Remaining activation work
+
+Wire the same candidate owner into the complete native HTTP service and qualify
+the exact gateway operation. Select
+only renewal after review; do not substitute another delivery graph or switch
+sibling operations. Delete remaining Python owners only after the
 supported consumer/profile audit is closed. No Core or KMS redesign is part of
-this reference capture.
+this migration slice.

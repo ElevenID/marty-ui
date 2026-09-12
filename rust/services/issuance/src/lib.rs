@@ -85,6 +85,7 @@ pub mod credential_management_grpc;
 pub mod credential_management_http;
 pub mod credential_management_postgres;
 pub mod credential_postgres;
+pub mod credential_renewal;
 pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod http;

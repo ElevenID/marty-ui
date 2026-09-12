@@ -42,6 +42,68 @@ def required_registrations():
     return [name for index, name in enumerate(names) if name not in names[index + 1 :]]
 
 
+RENEWAL_GATES = [
+    (
+        "renewal_postgres_binding_and_same_successor_recovery_are_fenced",
+        "renewal_binding_postgres::run",
+    ),
+    (
+        "didcomm_renewal_http_composes_real_delivery_and_renewal_links",
+        "didcomm_composed_delivery::run_renewal_http",
+    ),
+]
+
+
+def assert_renewal_registration(script, source, name, owner):
+    check = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    assert script.splitlines().count(check) == 1
+    function = re.search(
+        rf"#\[tokio::test\]\s*async fn {name}\(\) \{{(.*?)^\}}",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert function is not None
+    body = function.group(1)
+    assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in body
+    assert "canvas_published_database::PublishedDatabase::start()" in body
+    assert f"{owner}(&owned.url).await;" in body
+    assert "owned.close_verified().unwrap();" in body
+
+
+@pytest.mark.parametrize("name,owner", RENEWAL_GATES)
+def test_renewal_gates_require_real_owned_database_and_cleanup(name, owner):
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    assert_renewal_registration(SCRIPT.read_text(encoding="utf-8"), source, name, owner)
+
+
+@pytest.mark.parametrize("name,owner", RENEWAL_GATES)
+@pytest.mark.parametrize(
+    "mutation", ["missing", "duplicate", "ignored", "owner", "cleanup"]
+)
+def test_renewal_gate_registration_rejects_weakened_qualification(
+    name, owner, mutation
+):
+    script = SCRIPT.read_text(encoding="utf-8")
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    line = next(line for line in script.splitlines() if f"'{name}: test'" in line)
+    if mutation == "missing":
+        script = script.replace(line, "")
+    elif mutation == "duplicate":
+        script += "\n" + line + "\n"
+    elif mutation == "ignored":
+        source = source.replace(f"async fn {name}()", f"#[ignore]\nasync fn {name}()")
+    elif mutation == "owner":
+        source = source.replace(f"{owner}(&owned.url).await;", "")
+    else:
+        source = source.replace("owned.close_verified().unwrap();", "")
+    with pytest.raises(AssertionError):
+        assert_renewal_registration(script, source, name, owner)
+
+
 @pytest.fixture
 def shell_case(tmp_path):
     if os.name == "nt":

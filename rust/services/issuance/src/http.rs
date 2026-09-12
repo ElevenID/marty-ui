@@ -3692,7 +3692,7 @@ impl IntoResponse for CanvasLegacyIngestHttpError {
     }
 }
 
-struct TransactionReadHttpError(TransactionReadError);
+pub(crate) struct TransactionReadHttpError(TransactionReadError);
 
 impl From<TransactionReadError> for TransactionReadHttpError {
     fn from(value: TransactionReadError) -> Self {
