@@ -124,11 +124,6 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: CORS_ORIGINS
-            - name: SIGNING_KEYS_INTERNAL_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: SIGNING_KEYS_INTERNAL_API_KEY
           resources:
             requests:
               memory: "256Mi"
@@ -1689,6 +1684,8 @@ spec:
                   key: FLOW_APPLICATION_EVENT_HMAC_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
+            - name: ISSUANCE_GRPC_TARGET
+              value: "issuance:9005"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
