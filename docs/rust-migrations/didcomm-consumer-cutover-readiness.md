@@ -72,6 +72,39 @@ unqualified, distinct from the tested peer2 full service representation.
 
 ## Gates before Python retirement
 
+### Operator TLS trust parity
+
+The source-hashed executable capture in `scripts/capture_didcomm_tls_reference.py`
+and `contracts/didcomm-tls-python-reference.json` records Python's per-delivery
+trust loading. Missing/malformed CA files fail with the exact public 503 detail
+after controlled signing/encryption, before any HTTP client is created. Python
+has already saved issuer context once but has not finalized the credential.
+Real SSL contexts accept multiple PEM certificates and observe same-path file
+replacement while retaining certificate and hostname verification.
+
+Native transport now retains the configured path, not cached certificate bytes.
+Each actual attempt reloads the bundle; missing/malformed trust cannot abort
+unrelated service startup or silently use default roots alone. The native
+durable state intentionally differs from Python: a credential/envelope is staged
+before transport, and a failed trust load must persist `transport_retryable`
+before returning the captured 503. Recovery reuses that exact staged envelope
+without reallocating or signing; a failed marker write retains the claim fence.
+Delivered receipt replay does not reopen trust material or send again.
+
+Operator CA input is restricted to regular files and at most 1 MiB. Metadata is
+checked before and after opening; this rejects existing special files such as
+FIFOs, but the byte bound is not a filesystem I/O deadline or a defense against
+a malicious operator concurrently replacing deployment-controlled paths. The
+configured path itself follows normal startup configuration precedence; file
+contents are reloaded per attempt. No public request selects CA files.
+
+Qualification includes isolated executable health with missing/malformed CA and
+zero database connection, native/gateway two-mode missing-to-valid recovery,
+and a separate real TLS transport test that replaces valid root A with B,
+rejects A, accepts B, and then accepts both roots from a bundle. Directory,
+empty, oversized and mixed malformed PEM inputs fail before connection. These
+are controlled loopback peers, not independent wallets or KMS custody evidence.
+
 Composition now has a configured local gate, not a new cryptographic kernel. Existing
 `credential_postgres_contract.rs` exercises real repository/lifecycle durability
 with literal credential/JWE strings. The test named `didcomm_delivery_atomicity`

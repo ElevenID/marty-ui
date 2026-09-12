@@ -260,13 +260,29 @@ async fn direct_didcomm_prerequisite_errors_match_captured_python_without_privat
         );
         assert_eq!(body(response).await, case["body"]);
     }
-    // No arbitrary resolver/packing/TLS/transport diagnostic is public. These
+    let tls: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/didcomm-tls-python-reference.json"
+    ))
+    .unwrap();
+    for case in tls["cases"].as_array().unwrap().iter().take(2) {
+        let response = error_app(NativeInitiationDidcommDeliveryError::Prerequisite(
+            NativeDidcommError::TlsUnavailable,
+        ))
+        .oneshot(request(input.clone(), Some("test-api-key")))
+        .await
+        .unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            case["status"].as_u64().unwrap()
+        );
+        assert_eq!(body(response).await, case["body"]);
+    }
+    // No arbitrary resolver/packing/transport diagnostic is public. These
     // reasons were not captured as equivalent Python preflight responses.
     for reason in [
         NativeDidcommError::ResolutionUnavailable,
         NativeDidcommError::MismatchedDocument,
         NativeDidcommError::PackUnavailable,
-        NativeDidcommError::TlsUnavailable,
         NativeDidcommError::TransportUnavailable,
     ] {
         let response = error_app(NativeInitiationDidcommDeliveryError::Prerequisite(reason))

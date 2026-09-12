@@ -39,6 +39,7 @@ use crate::{
 const MAX_ENDPOINT_LENGTH: usize = 2_048;
 const MAX_POLICY_BYTES: u64 = 64 * 1_024;
 const MAX_POLICY_ISSUERS: usize = 1_000;
+const MAX_TLS_CA_BYTES: u64 = 1024 * 1024;
 const DEFAULT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const DIDCOMM_CONTENT_TYPE: &str = "application/didcomm-encrypted+json";
 pub const DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS: i32 = 60;
@@ -730,7 +731,7 @@ impl fmt::Debug for ValidatedDidcommEndpoint {
 
 #[derive(Clone)]
 pub struct DidcommTransport {
-    tls_ca: Option<Certificate>,
+    tls_ca_file: Option<PathBuf>,
     timeout: Duration,
 }
 
@@ -738,7 +739,7 @@ impl fmt::Debug for DidcommTransport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DidcommTransport")
-            .field("operator_ca_configured", &self.tls_ca.is_some())
+            .field("operator_ca_configured", &self.tls_ca_file.is_some())
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
     }
@@ -756,13 +757,50 @@ impl DidcommTransport {
         if timeout.is_zero() {
             return Err(NativeDidcommError::TransportUnavailable);
         }
-        let tls_ca = tls_ca_file
-            .map(|path| {
-                let pem = std::fs::read(path).map_err(|_| NativeDidcommError::TlsUnavailable)?;
-                Certificate::from_pem(&pem).map_err(|_| NativeDidcommError::TlsUnavailable)
-            })
-            .transpose()?;
-        Ok(Self { tls_ca, timeout })
+        // Trust material is delivery configuration, not a prerequisite for
+        // unrelated service startup. Reload the operator's file on each attempt
+        // so mounted certificate rotation/recovery needs no process restart.
+        let tls_ca_file = tls_ca_file
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        Ok(Self {
+            tls_ca_file,
+            timeout,
+        })
+    }
+
+    fn operator_certificates(&self) -> Result<Vec<Certificate>, NativeDidcommError> {
+        let Some(path) = &self.tls_ca_file else {
+            return Ok(Vec::new());
+        };
+        let load = || {
+            // This path is operator-controlled deployment configuration, never
+            // a caller selector. Reject special files before open (notably an
+            // existing FIFO), and verify the opened handle too. The byte cap
+            // below is not an I/O deadline or protection against a malicious
+            // operator replacing the path concurrently.
+            if !std::fs::metadata(path)?.is_file() {
+                return Err(std::io::Error::other("operator CA is not a regular file"));
+            }
+            let file = File::open(path)?;
+            if !file.metadata()?.is_file() {
+                return Err(std::io::Error::other("operator CA is not a regular file"));
+            }
+            let mut pem = Vec::new();
+            file.take(MAX_TLS_CA_BYTES + 1).read_to_end(&mut pem)?;
+            Ok::<_, std::io::Error>(pem)
+        };
+        let pem = load().map_err(|_| NativeDidcommError::TlsUnavailable)?;
+        if pem.len() as u64 > MAX_TLS_CA_BYTES {
+            return Err(NativeDidcommError::TlsUnavailable);
+        }
+        let certificates =
+            Certificate::from_pem_bundle(&pem).map_err(|_| NativeDidcommError::TlsUnavailable)?;
+        if certificates.is_empty() {
+            return Err(NativeDidcommError::TlsUnavailable);
+        }
+        Ok(certificates)
     }
 
     pub async fn deliver(
@@ -770,15 +808,22 @@ impl DidcommTransport {
         endpoint: &ValidatedDidcommEndpoint,
         encrypted_message: String,
     ) -> DidcommTransportOutcome {
+        let Ok(certificates) = self.operator_certificates() else {
+            return DidcommTransportOutcome::TlsUnavailable;
+        };
         let mut builder = Client::builder()
             .timeout(self.timeout)
             .redirect(Policy::none())
             .resolve_to_addrs(&endpoint.hostname, &endpoint.addresses);
-        if let Some(certificate) = self.tls_ca.clone() {
+        for certificate in certificates {
             builder = builder.add_root_certificate(certificate);
         }
         let Ok(client) = builder.build() else {
-            return DidcommTransportOutcome::Failed;
+            return if self.tls_ca_file.is_some() {
+                DidcommTransportOutcome::TlsUnavailable
+            } else {
+                DidcommTransportOutcome::Failed
+            };
         };
         match client
             .post(endpoint.url.clone())
@@ -809,6 +854,8 @@ pub enum DidcommTransportOutcome {
     Delivered,
     /// The request was definitely not sent and may be retried.
     Failed,
+    /// Operator trust could not be loaded. No HTTP request was attempted.
+    TlsUnavailable,
     /// The request may have reached the recipient; automatic retry is unsafe.
     OutcomeUnknown,
 }
@@ -1193,13 +1240,20 @@ impl NativeInitiationDidcommDelivery {
                 }
                 self.project_transported(claim.into_pending()).await
             }
-            DidcommTransportOutcome::Failed => {
+            outcome @ (DidcommTransportOutcome::Failed
+            | DidcommTransportOutcome::TlsUnavailable) => {
                 self.ports
                     .repository
                     .mark_transport_unattempted(&claim)
                     .await
                     .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
-                Ok(Self::failed_receipt(claim.into_pending()))
+                if outcome == DidcommTransportOutcome::TlsUnavailable {
+                    Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                        NativeDidcommError::TlsUnavailable,
+                    ))
+                } else {
+                    Ok(Self::failed_receipt(claim.into_pending()))
+                }
             }
             DidcommTransportOutcome::OutcomeUnknown => {
                 let _ = self
@@ -3255,6 +3309,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tls_configuration_failure_requires_a_durable_unattempted_marker() {
+        for marker_failure in [false, true] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::TlsUnavailable,
+                post_issuance_fail: false,
+            });
+            repository
+                .fail_transport_unattempted
+                .store(marker_failure, Ordering::SeqCst);
+            let tls_error = NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::TlsUnavailable,
+            );
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(if marker_failure {
+                    NativeInitiationDidcommDeliveryError::RetryStateUnavailable
+                } else {
+                    tls_error
+                }),
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            order.lock().unwrap().clear();
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(if marker_failure {
+                    NativeInitiationDidcommDeliveryError::ConcurrentDelivery
+                } else {
+                    tls_error
+                }),
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                order
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|stage| **stage == "transport")
+                    .count(),
+                usize::from(!marker_failure)
+            );
+            assert!(!order.lock().unwrap().contains(&"build"));
+        }
+    }
+
+    #[tokio::test]
     async fn transport_failure_preserves_staged_delivery_and_returns_a_sanitized_receipt() {
         let (delivery, repository, order) = delivery_harness(HarnessOptions {
             endpoint_fail: false,
@@ -3862,10 +3968,17 @@ mod tests {
     }
 
     #[test]
-    fn transport_uses_system_roots_unless_an_operator_ca_is_valid() {
+    fn transport_defers_operator_trust_loading_without_exposing_its_path() {
         assert!(DidcommTransport::new(None).is_ok());
+        assert!(DidcommTransport::new(Some("  "))
+            .unwrap()
+            .tls_ca_file
+            .is_none());
+        let transport =
+            DidcommTransport::new(Some("missing-didcomm-ca-private-sentinel.pem")).unwrap();
+        assert!(!format!("{transport:?}").contains("private-sentinel"));
         assert_eq!(
-            DidcommTransport::new(Some("missing-didcomm-ca.pem")).err(),
+            transport.operator_certificates().err(),
             Some(NativeDidcommError::TlsUnavailable)
         );
     }

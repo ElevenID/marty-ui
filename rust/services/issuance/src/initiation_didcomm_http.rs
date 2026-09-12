@@ -239,6 +239,10 @@ impl InitiationDidcommHttpError {
                         StatusCode::SERVICE_UNAVAILABLE,
                         "DIDComm sender-authentication configuration is unavailable",
                     ),
+                    NativeDidcommError::TlsUnavailable => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "DIDComm TLS trust configuration is unavailable",
+                    ),
                     _ => (
                         StatusCode::SERVICE_UNAVAILABLE,
                         "DIDComm delivery is unavailable",

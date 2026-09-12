@@ -440,6 +440,7 @@ enum Fault {
 enum Recovery {
     ConcurrentClaim,
     EventProjection,
+    TlsTrust,
 }
 
 /// Scoped to one synthetic transaction in the caller's exact-owned disposable
@@ -550,6 +551,7 @@ async fn run_case(
             None => "ordinary",
             Some(Recovery::ConcurrentClaim) => "concurrent",
             Some(Recovery::EventProjection) => "projection",
+            Some(Recovery::TlsTrust) => "tls-trust",
         },
     );
     let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
@@ -579,6 +581,11 @@ async fn run_case(
     .await;
     // The wallet owns this exact temporary directory and removes the synthetic policy too.
     let policy = wallet.ca_file.parent().unwrap().join("didcomm-policy.json");
+    let reload_ca = wallet
+        .ca_file
+        .parent()
+        .unwrap()
+        .join("operator-reload-ca.pem");
     let mode = if authenticated {
         json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(if fault == Some(Fault::WrongSenderKey) { [8_u8;32] } else { sender_secret })})
     } else {
@@ -635,6 +642,8 @@ async fn run_case(
                     DidcommTransport::with_timeout(
                         if fault == Some(Fault::UntrustedTls) {
                             None
+                        } else if recovery == Some(Recovery::TlsTrust) {
+                            reload_ca.to_str()
                         } else {
                             wallet.ca_file.to_str()
                         },
@@ -796,7 +805,69 @@ async fn run_case(
         wallet.close_verified();
         return;
     }
-    let first = if let Some(gate) = gate {
+    let first = if recovery == Some(Recovery::TlsTrust) {
+        assert!(!automatic);
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/didcomm-tls-python-reference.json"
+        ))
+        .unwrap();
+        let mut staged: Option<Value> = None;
+        for case in frozen["cases"].as_array().unwrap().iter().take(2) {
+            if case["case"] == "malformed_ca" {
+                std::fs::write(&reload_ca, b"synthetic-invalid-ca").unwrap();
+            }
+            assert_eq!(
+                direct_response(&app, &id).await,
+                (
+                    StatusCode::from_u16(case["status"].as_u64().unwrap().try_into().unwrap())
+                        .unwrap(),
+                    case["body"].clone()
+                )
+            );
+            let current = snapshot(pool, &id).await;
+            assert_eq!(current["transaction"]["status"], "issued");
+            assert_eq!(current["credentials"].as_array().unwrap().len(), 1);
+            assert_eq!(current["deliveries"].as_array().unwrap().len(), 1);
+            assert_eq!(current["deliveries"][0]["status"], "transport_retryable");
+            assert_eq!(current["events"], json!([]));
+            assert_materialized_binding(&current, &id, &endpoint);
+            assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
+            assert_eq!(allocations.load(Ordering::SeqCst), 1);
+            assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+            if let Some(previous) = &staged {
+                assert_eq!(current["transaction"], previous["transaction"]);
+                assert_eq!(current["credentials"], previous["credentials"]);
+                assert_eq!(
+                    current["deliveries"][0]["metadata"]["encrypted_message"],
+                    previous["deliveries"][0]["metadata"]["encrypted_message"]
+                );
+            }
+            staged = Some(current);
+        }
+        // First certificate belongs to a different owned wallet. Success requires
+        // honoring the second certificate too, not silently parsing only one PEM.
+        let unrelated = WalletFixture::start(200);
+        let mut bundle = std::fs::read(&unrelated.ca_file).unwrap();
+        bundle.extend_from_slice(&std::fs::read(&wallet.ca_file).unwrap());
+        std::fs::write(&reload_ca, bundle).unwrap();
+        let response = direct(&app, &id).await;
+        assert_eq!(
+            unrelated.captures().await,
+            json!({"messages":[],"failures":0})
+        );
+        unrelated.close_verified();
+        let recovered = snapshot(pool, &id).await;
+        let staged = staged.unwrap();
+        assert_eq!(recovered["transaction"], staged["transaction"]);
+        assert_eq!(recovered["credentials"], staged["credentials"]);
+        assert_eq!(
+            wallet.captures().await["messages"][0],
+            staged["deliveries"][0]["metadata"]["encrypted_message"]
+        );
+        // Delivered receipt replay must not reopen trust material or resend.
+        std::fs::write(&reload_ca, b"synthetic-invalid-after-delivery").unwrap();
+        response
+    } else if let Some(gate) = gate {
         assert!(!automatic);
         // Keep the actual request future locally owned: timeout/panic drops it,
         // rather than leaving a detached request racing database teardown.
@@ -1068,6 +1139,15 @@ async fn run_mode(database_url: &str, gateway: bool) {
                 false,
                 None,
                 Some(Recovery::ConcurrentClaim),
+                gateway,
+            )
+            .await;
+            run_case(
+                &pool,
+                authenticated,
+                false,
+                None,
+                Some(Recovery::TlsTrust),
                 gateway,
             )
             .await;

@@ -14,6 +14,18 @@ mod didcomm_composed_delivery;
 #[path = "support/didcomm_gateway_replay.rs"]
 mod didcomm_gateway_replay;
 
+#[path = "support/didcomm_tls_transport_contract.rs"]
+mod didcomm_tls_transport_contract;
+
+#[tokio::test]
+async fn didcomm_transport_reloads_valid_ca_bundles_without_disabling_tls() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("DIDComm trust rotation requires the explicit owned fixture gate");
+        return;
+    }
+    didcomm_tls_transport_contract::run().await;
+}
+
 #[tokio::test]
 async fn didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {

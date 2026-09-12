@@ -26,6 +26,62 @@ async fn wait_for_health(port: u16) -> Option<Value> {
 }
 
 #[tokio::test]
+async fn executable_serves_unrelated_health_with_missing_or_malformed_didcomm_ca() {
+    use std::io::Write;
+    struct OwnedFile(std::path::PathBuf);
+    impl Drop for OwnedFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let path = std::env::temp_dir().join(format!(
+        "marty-didcomm-ca-smoke-{}.pem",
+        uuid::Uuid::new_v4()
+    ));
+    assert!(!path.exists());
+    let mut file_guard = None;
+    for malformed in [false, true] {
+        if malformed {
+            let mut file = std::fs::File::create_new(&path).unwrap();
+            file_guard = Some(OwnedFile(path.clone()));
+            file.write_all(b"synthetic-invalid-ca").unwrap();
+        }
+        let (http_reservation, port) = reserve_port();
+        let (_grpc_reservation, grpc_port) = reserve_port();
+        let (database_denied, database_port) = reserve_port();
+        database_denied.set_nonblocking(true).unwrap();
+        let mut command = isolated_smoke_command(port, grpc_port);
+        command.env("DIDCOMM_TLS_CA_FILE", &path).env(
+            "DATABASE_URL",
+            format!("postgres://synthetic@127.0.0.1:{database_port}/didcomm_ca_smoke"),
+        );
+        drop(http_reservation);
+        let child = ChildGuard(
+            command
+                .spawn()
+                .expect("start isolated issuance with deferred CA"),
+        );
+        let client = bounded_http_client(Duration::from_secs(2));
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                wait_for_health_with_client(port, &client)
+            )
+            .await
+            .expect("bounded unrelated health readiness"),
+            Some(json!({"status":"healthy", "service":"issuance-service"})),
+        );
+        drop(child);
+        assert_eq!(
+            database_denied.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    drop(file_guard);
+    assert!(!path.exists(), "owned malformed CA cleanup");
+}
+
+#[tokio::test]
 async fn executable_serves_health_readiness_and_version() {
     let (listener, port) = reserve_port();
     drop(listener);
