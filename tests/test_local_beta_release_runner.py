@@ -1,6 +1,9 @@
 import re
 from pathlib import Path
 
+import pytest
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -515,7 +518,10 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in beta
     assert "GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production" in base
     assert "PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta" in beta
-    assert beta.count("<<: *beta-grpc-service-auth") == 18
+    assert_beta_service_authentication(
+        yaml.safe_load(beta),
+        yaml.safe_load(text("docker-compose.service.issuance-native.yml")),
+    )
     assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.5.0"' in deploy
     assert 'mip_version = "0.5.0"' in deploy
@@ -535,6 +541,62 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert set(re.findall(r'"([a-z0-9-]+)"', restored)) == set(
         re.findall(r'"([a-z0-9-]+)"', deployed)
     )
+
+
+def assert_beta_service_authentication(beta, shared):
+    expected = {
+        "gateway",
+        "auth",
+        "organization",
+        "credential-template",
+        "trust-profile",
+        "applicant",
+        "notification",
+        "compliance-profile",
+        "presentation-policy",
+        "deployment-profile",
+        "flow",
+        "revocation-profile",
+        "device-registration",
+        "event-stream",
+        "issuance",
+        "canvas-sync-worker",
+        "verification",
+        "issuance-native",
+    }
+    token = (
+        "${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}"
+    )
+    assert beta["services"]["issuance-native"]["extends"] == {
+        "file": "docker-compose.service.issuance-native.yml",
+        "service": "issuance-native",
+    }
+    owners = {
+        name: service.get("environment", {})["GRPC_SERVICE_TOKEN"]
+        for name, service in beta["services"].items()
+        if "GRPC_SERVICE_TOKEN" in service.get("environment", {})
+    }
+    assert "issuance-native" not in owners
+    owners["issuance-native"] = shared["services"]["issuance-native"][
+        "environment"
+    ].get("GRPC_SERVICE_TOKEN")
+    assert set(owners) == expected
+    assert all(value == token for value in owners.values())
+
+
+@pytest.mark.parametrize("mutation", ["missing", "default", "disconnected"])
+def test_beta_native_authentication_rejects_weakened_shared_owner(mutation):
+    beta = yaml.safe_load(text("docker-compose.beta.yml"))
+    shared = yaml.safe_load(text("docker-compose.service.issuance-native.yml"))
+    environment = shared["services"]["issuance-native"]["environment"]
+    if mutation == "missing":
+        environment.pop("GRPC_SERVICE_TOKEN")
+    elif mutation == "default":
+        environment["GRPC_SERVICE_TOKEN"] = "${GRPC_SERVICE_TOKEN:-dev-token}"
+    else:
+        beta["services"]["issuance-native"]["extends"]["service"] = "issuance"
+    with pytest.raises(AssertionError):
+        assert_beta_service_authentication(beta, shared)
 
 
 def test_beta_rust_cutover_requires_a_persistent_shared_service_token() -> None:
