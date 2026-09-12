@@ -41,7 +41,7 @@ It does not remove active authcrypt requirements, fix KMS, qualify release
 artifacts or deploy anything. Post-merge CI `34711362030` subsequently passed on
 that exact main commit; organization, license, CodeQL and policy checks also passed.
 
-Latest local selection is `300b92e9d`, integrating reviewed `b15560e28`: all eight
+The eight-operation selection checkpoint is `300b92e9d`, integrating reviewed `b15560e28`: all eight
 Canvas operations now use the unchanged embedded native gateway route table.
 Coverage is **73 native / 58 remaining / 131 total**. Beta forwards the existing
 status-sync URL expression to preserve configured review mirroring; unset,
@@ -58,8 +58,9 @@ suite: **3,044 passed, three skipped in 203.89s**, using Python 3.12 and an isol
 temporary directory. This does not relabel the separate service or hosted suites.
 Retirement audit also found a remaining beta DIDComm caller: the legacy credential
 renewal route invokes initiation internally. Native renewal admission and shared
-delivery are now implemented and qualified as a candidate, but packaged-service
-and gateway activation remain pending. Its frozen
+delivery are now implemented and qualified as a candidate. Packaged-service
+and gateway activation have passing focused tests in the separate author worktree,
+but final regression qualification and integration remain pending. Its frozen
 reference is now integrated at `63ab016e0`: 31 cases and 22 complete interned
 states, with an independently reproduced exact live replay and 53 combined
 reference guards passing. The documented late-linkage and refused-delivery
@@ -86,6 +87,27 @@ These local results do not replace exact-head hosted CI or beta acceptance.
 The [DIDComm consumer retirement checklist](rust-migrations/didcomm-consumer-retirement.md)
 records remaining profile, direct-ingress, Flow, Envoy and conformance gates.
 Renewal cutover alone will not authorize deletion of every Python DIDComm owner.
+
+Reviewed explicit conformance selection is now integrated locally as `f78aceff4`
+from author `4f435d4c6`. Legacy remains the default; native selection pairs its
+service authentication, CA and optional authcrypt policy, checks the authenticated
+release's exact capability floor, and performs an isolated executable/linker
+preflight. The complete beta model is preserved through a shared service-only
+Compose definition. Independent actual Compose rendering passed all four native
+profiles and beta default/empty/custom/required-input comparisons; 161 integrated
+Python regression tests passed. These are configuration and launcher checks, not
+actual deployed conformance acceptance. No new native stack was started.
+
+Renewal activation's separate author worktree now passes fresh packaged-main
+delivery in both encryption modes, historical keyed recovery, embedded gateway
+selection and real Canvas association tests. The strengthened Canvas test covers
+12 both-mode cases. Four new executable test registrations are mandatory in CI;
+the full shell-preflight suite passed 123 tests. Final combined Rust/PostgreSQL
+regressions and strict Clippy remain underway. Review identified an uncovered
+historical blank-versus-absent lineage compatibility case in finalization; its
+correction and regression tests are required before activation can be committed.
+The integrated coverage count remains 73/58/131 until that reviewed activation
+lands; no active Python renewal or encryption feature has been removed.
 
 The integrated `424e25ba5` tree passed the full repository `tests/` suite:
 **3,080 passed, three skipped in 200.78s**. This includes the fixed synthetic
