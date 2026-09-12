@@ -1,5 +1,6 @@
-//! Candidate-only single-route selection. Gateway middleware/proxy and upstream
-//! HTTP are real; identity lookup is controlled. Production coverage is unchanged.
+//! Selected native direct-route qualification. Gateway middleware/proxy and upstream
+//! HTTP are real; identity lookup is controlled. The legacy control changes only
+//! that single owner. The native case uses the embedded contract without rewrites.
 use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
@@ -63,12 +64,12 @@ fn select_direct(original: RouteTable, candidate: bool) -> RouteTable {
             found += 1;
             assert_eq!(before.methods.len(), 1);
             assert_eq!(
-                before.upstream_service, "issuance",
-                "published direct ownership changed"
+                before.upstream_service, "issuance-native",
+                "the embedded contract must select native direct delivery"
             );
             assert!(before.auth_required);
-            if candidate {
-                after.upstream_service = "issuance-native".into();
+            if !candidate {
+                after.upstream_service = "issuance".into();
             }
         }
         let mut restored = after.clone();
@@ -90,7 +91,8 @@ fn select_direct(original: RouteTable, candidate: bool) -> RouteTable {
             .zip(selected.routes())
             .filter(|(a, b)| a != b)
             .count(),
-        usize::from(candidate)
+        usize::from(!candidate),
+        "native selection is untouched; only the legacy control changes one owner"
     );
     selected
 }
@@ -235,7 +237,7 @@ impl Drop for OwnedHttp {
 
 pub(super) struct GatewayFixture {
     pub(super) router: Router,
-    published: Router,
+    legacy_control: Router,
     native: Option<OwnedHttp>,
     legacy: OwnedHttp,
     counted: Arc<CountedHttp>,
@@ -325,7 +327,7 @@ impl GatewayFixture {
         };
         Self {
             router: build(true),
-            published: build(false),
+            legacy_control: build(false),
             native: Some(native),
             legacy,
             counted,
@@ -341,7 +343,8 @@ impl GatewayFixture {
     }
 
     pub(super) async fn assert_selection_and_denials(&self, body: &Value) {
-        let (status, legacy_body) = request(&self.published, body.clone(), Some(CLIENT_KEY)).await;
+        let (status, legacy_body) =
+            request(&self.legacy_control, body.clone(), Some(CLIENT_KEY)).await;
         assert_eq!(status, StatusCode::IM_A_TEAPOT);
         assert_eq!(
             legacy_body,
@@ -452,8 +455,10 @@ async fn request(router: &Router, body: Value, key: Option<&str>) -> (StatusCode
 }
 
 #[test]
-fn candidate_changes_only_direct_didcomm_selection_in_both_tables() {
+fn native_selection_is_unchanged_and_legacy_control_changes_only_direct_owner() {
     let contract = GatewayContract::load().unwrap();
-    select_direct(contract.runtime_route_table().unwrap(), true);
-    select_direct(contract.proxy_route_table().unwrap(), true);
+    for candidate in [true, false] {
+        select_direct(contract.runtime_route_table().unwrap(), candidate);
+        select_direct(contract.proxy_route_table().unwrap(), candidate);
+    }
 }

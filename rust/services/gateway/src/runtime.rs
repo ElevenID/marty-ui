@@ -4648,7 +4648,7 @@ mod tests {
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }
             if request.path == "/v1/issuance/didcomm/deliver" {
-                assert_eq!(instance.service_name, "issuance");
+                assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                 let body: Value =
                     serde_json::from_slice(request.body.as_deref().expect("DIDComm delivery body"))

@@ -80,6 +80,12 @@
   },
   "native_http": [
     {
+      "method": "POST",
+      "path": "/v1/issuance/didcomm/deliver",
+      "operation": "didcomm_deliver",
+      "didcomm_behavior_contract": true
+    },
+    {
       "method": "GET",
       "path": "/health",
       "operation": "health_check",
@@ -480,7 +486,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 68,
+    "http": 67,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,

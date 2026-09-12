@@ -79,6 +79,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_didcomm_is_native_without_selecting_initiation_or_sibling_paths() {
+        assert_eq!(
+            upstream_service(HttpMethod::Post, "/v1/issuance/didcomm/deliver"),
+            NATIVE_SERVICE
+        );
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/issuance/didcomm/deliver"),
+            (HttpMethod::Post, "/v1/issuance/didcomm/deliver/extra"),
+            (HttpMethod::Post, "/v1/issuance/didcomm"),
+            (HttpMethod::Post, "/v1/issuance/initiate"),
+            (HttpMethod::Post, "/v1/issuance"),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
     fn every_canvas_operation_candidate_retains_legacy_routing_until_cutover() {
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-canvas-operations.json"

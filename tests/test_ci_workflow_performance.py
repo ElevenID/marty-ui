@@ -590,6 +590,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'didcomm_transport_reloads_valid_ca_bundles_without_disabling_tls: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'status_main_process_resolves_reviews_with_real_http_publication_and_mirror: test'"
         in published
     )

@@ -312,6 +312,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         | set(transaction_cases)
         | canvas_management_operations
         | {
+            "didcomm_deliver",
             "exchange_token",
             "nonce_endpoint",
             "issue_credential",
@@ -332,6 +333,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         }
     )
     for operation, coverage_entry in native.items():
+        if operation == "didcomm_deliver":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": "/v1/issuance/didcomm/deliver",
+                "operation": "didcomm_deliver",
+                "didcomm_behavior_contract": True,
+            }
+            continue
         if operation == "exchange_token":
             assert coverage_entry == {
                 "method": "POST",
@@ -484,7 +493,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 68,
+        "http": 67,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,
