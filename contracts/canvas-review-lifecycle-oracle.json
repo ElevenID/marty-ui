@@ -1,0 +1,1383 @@
+{
+  "boundary": "actual ASGI/auth/review/lifecycle/PostgreSQL; controlled external status publication and Canvas mirror ports",
+  "claim_constraint": "CHECK ((((resolution_claim_token IS NULL) AND (resolution_claim_action IS NULL) AND (resolution_claimed_at IS NULL)) OR (((status)::text = 'open'::text) AND (resolution_claim_token IS NOT NULL) AND ((resolution_claim_action)::text = ANY ((ARRAY['dismiss'::character varying, 'suspend'::character varying, 'revoke'::character varying, 'evidence_recovered'::character varying])::text[])) AND (resolution_claimed_at IS NOT NULL))))",
+  "lifecycle_routes_sha256": "2b6d2eb7cec34bb4596ef9b758d8af02a3172337e89bad3b5d26b558d0dd00b7",
+  "normalization": "generated UUID identity aliases; validated ISO timestamp presence, not exact wall-clock values",
+  "observations": [
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        },
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "suspended",
+          "delivery_id": "delivery-review",
+          "port": "mirror",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "suspend_delivered",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": "account",
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_platform_id": "platform-review",
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "suspend",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": null,
+              "last_synced_credential_status": "suspended",
+              "preserved": "synthetic-marker",
+              "provider_status": "suspended",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 1,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "revoke",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "revoked",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "revoke",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        },
+        {
+          "action": "revoke",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "revoked",
+          "delivery_id": "delivery-review",
+          "port": "mirror",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "revoke_delivered",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": "  synthetic reason  ",
+          "revoked": true,
+          "revoked_at": "$timestamp",
+          "status": "revoked",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": "account",
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_platform_id": "platform-review",
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "revoke",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": null,
+              "last_synced_credential_status": "revoked",
+              "preserved": "synthetic-marker",
+              "provider_status": "revoked",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 2,
+        "review": {
+          "action": "revoke",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "revoked"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "no_delivery",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": null,
+        "resolved_events": 3,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "pending_delivery",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "pending",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 4,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "failed_delivery",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "failed",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 5,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "wallet_delivery",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "wallet",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 6,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "mirror_gate_disabled",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": "Canvas mirror operations are disabled by deployment profile",
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": false
+              },
+              "canvas_feature_gate": "enable_canvas_mirror_ops",
+              "canvas_feature_gate_blocked": true,
+              "canvas_feature_gate_blocked_at": "$timestamp",
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_error": "Canvas mirror operations are disabled by deployment profile",
+              "last_status_sync_error_at": "$timestamp",
+              "preserved": "synthetic-marker",
+              "retryable": false,
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 7,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "binding_missing",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": "Canvas lifecycle sync skipped: Canvas program binding missing was not found",
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "missing",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "suspend",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": "Canvas lifecycle sync skipped: Canvas program binding missing was not found",
+              "last_status_sync_error_at": "$timestamp",
+              "last_synced_credential_status": "suspended",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 8,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "binding_disabled",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": "Canvas lifecycle sync skipped: Canvas program binding binding-review is disabled",
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "suspend",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": "Canvas lifecycle sync skipped: Canvas program binding binding-review is disabled",
+              "last_status_sync_error_at": "$timestamp",
+              "last_synced_credential_status": "suspended",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 9,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "platform_disabled",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": "Canvas lifecycle sync skipped: Canvas platform platform-review is disabled",
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "suspend",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": "Canvas lifecycle sync skipped: Canvas platform platform-review is disabled",
+              "last_status_sync_error_at": "$timestamp",
+              "last_synced_credential_status": "suspended",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 10,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        },
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "suspended",
+          "delivery_id": "delivery-review",
+          "port": "mirror",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "mirror_failure",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": "account",
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": "Synthetic Canvas status provider unavailable",
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_platform_id": "platform-review",
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "suspend",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": "Synthetic Canvas status provider unavailable",
+              "last_status_sync_error_at": "$timestamp",
+              "last_synced_credential_status": "suspended",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 11,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Revocation service unavailable"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "publication_failure",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 11,
+        "review": {
+          "action": null,
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": null,
+          "recovery_pending": false,
+          "status": "open"
+        }
+      },
+      "status": 503
+    },
+    {
+      "body": {
+        "detail": "Cannot suspend revoked credential"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "suspend_revoked",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": true,
+          "revoked_at": null,
+          "status": "revoked",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 11,
+        "review": {
+          "action": null,
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": null,
+          "recovery_pending": false,
+          "status": "open"
+        }
+      },
+      "status": 400
+    },
+    {
+      "body": {
+        "detail": "Credential already revoked"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "revoke_revoked",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": true,
+          "revoked_at": null,
+          "status": "revoked",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 11,
+        "review": {
+          "action": null,
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": null,
+          "recovery_pending": false,
+          "status": "open"
+        }
+      },
+      "status": 400
+    },
+    {
+      "cancelled": true,
+      "competing_response": {
+        "body": {
+          "detail": {
+            "code": "canvas_review_already_resolved",
+            "message": "Canvas evidence correction review is already claimed or resolved"
+          }
+        },
+        "content_type": "application/json",
+        "status": 409
+      },
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "cancel_at_publication",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 11,
+        "review": {
+          "action": null,
+          "actor": null,
+          "claim_action": "suspend",
+          "claim_active": true,
+          "notes": null,
+          "recovery_pending": false,
+          "status": "open"
+        }
+      }
+    },
+    {
+      "cancelled": true,
+      "competing_response": {
+        "body": {
+          "detail": {
+            "code": "canvas_review_already_resolved",
+            "message": "Canvas evidence correction review is already claimed or resolved"
+          }
+        },
+        "content_type": "application/json",
+        "status": 409
+      },
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        },
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "suspended",
+          "delivery_id": "delivery-review",
+          "port": "mirror",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "cancel_at_mirror",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": null,
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "preserved": "synthetic-marker",
+              "status_sync_attempts": 2
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 11,
+        "review": {
+          "action": null,
+          "actor": null,
+          "claim_action": "suspend",
+          "claim_active": true,
+          "notes": null,
+          "recovery_pending": false,
+          "status": "open"
+        }
+      }
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-lifecycle",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "suspend",
+        "resolution_notes": "synthetic reason",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "suspended",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "competing_response": {
+        "body": {
+          "detail": {
+            "code": "canvas_review_already_resolved",
+            "message": "Canvas evidence correction review is already claimed or resolved"
+          }
+        },
+        "content_type": "application/json",
+        "status": 409
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "active",
+          "delivery_id": null,
+          "port": "publication",
+          "reason": "  synthetic reason  "
+        },
+        {
+          "action": "suspend",
+          "claim_active": true,
+          "credential_id": "credential-review",
+          "credential_status": "suspended",
+          "delivery_id": "delivery-review",
+          "port": "mirror",
+          "reason": "  synthetic reason  "
+        }
+      ],
+      "name": "concurrent_at_publication",
+      "snapshot": {
+        "credential": {
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "suspended",
+          "status_updated_at": "$timestamp"
+        },
+        "deliveries": [
+          {
+            "canvas_account_id": "account",
+            "created_at": "$timestamp",
+            "credential_id": "credential-review",
+            "delivery_mode": "mirror",
+            "delivery_target": "canvas_credentials",
+            "external_credential_id": null,
+            "external_issuer_id": null,
+            "id": "delivery-review",
+            "last_error": null,
+            "metadata": {
+              "canvas_feature_flags": {
+                "enable_canvas_mirror_ops": true
+              },
+              "canvas_platform_id": "platform-review",
+              "canvas_program_binding_id": "binding-review",
+              "deployment_profile_id": "synthetic-profile",
+              "last_status_sync_action": "suspend",
+              "last_status_sync_attempted_at": "$timestamp",
+              "last_status_sync_error": null,
+              "last_synced_credential_status": "suspended",
+              "preserved": "synthetic-marker",
+              "provider_status": "suspended",
+              "status_sync_attempts": 3
+            },
+            "organization_id": "org-review",
+            "status": "delivered",
+            "transaction_id": "transaction-review",
+            "updated_at": "$timestamp"
+          }
+        ],
+        "resolved_events": 12,
+        "review": {
+          "action": "suspend",
+          "actor": null,
+          "claim_action": null,
+          "claim_active": false,
+          "notes": "synthetic reason",
+          "recovery_pending": false,
+          "status": "suspended"
+        }
+      },
+      "status": 200
+    }
+  ],
+  "operations_sha256": "49ed07755bc9a2c4daee61242c8d14334dfe343eebd8b99ef30f88ae5f7e0d83",
+  "repository_sha256": "34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb",
+  "sync_jobs_sha256": "e3cc45ef4b40cf9f80ad46699768e7d584bde53e75d29f36ab783780fa03e5f9",
+  "sync_service_sha256": "4d5a5eb9a9ffed3d87d857f3e3fcc61740616c8f492fa75818871d0bd738c592"
+}

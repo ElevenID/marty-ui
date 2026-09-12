@@ -22,6 +22,15 @@ def yaml_document(path: str) -> dict:
 
 def test_contract_freezes_every_whole_worker_capability() -> None:
     frozen = contract()
+    generation_fence = frozen["persistence"]["jobs"]["native_internal_generation_fence"]
+    assert generation_fence["field"] == "result.target_config_version"
+    assert (
+        generation_fence["visibility"] == "excluded by the public job result allowlist"
+    )
+    assert (
+        "no other result or state differences are ignored"
+        in generation_fence["comparison"]
+    )
 
     assert frozen["schema"] == "marty.issuance-canvas-sync-worker/v1"
     assert frozen["provenance"]["repository"] == "ElevenID/marty-credentials"
@@ -49,9 +58,8 @@ def test_contract_freezes_every_whole_worker_capability() -> None:
         "services/issuance/infrastructure/security/encryption.py",
     }
     assert len(frozen["provenance"]["oracle_tests"]) == 8
-    for object_id in (
-        list(frozen["provenance"]["sources"].values())
-        + list(frozen["provenance"]["oracle_tests"].values())
+    for object_id in list(frozen["provenance"]["sources"].values()) + list(
+        frozen["provenance"]["oracle_tests"].values()
     ):
         assert len(object_id) == 40
         int(object_id, 16)
@@ -116,9 +124,10 @@ def test_deployment_wiring_matches_the_frozen_process_and_defaults() -> None:
     expected_processor = legacy["processor_import"]
 
     assert legacy["normative_for_replacement"] is False
-    assert "any internal module or command layout" in frozen["semantic_boundary"][
-        "replacement_rule"
-    ]
+    assert (
+        "any internal module or command layout"
+        in frozen["semantic_boundary"]["replacement_rule"]
+    )
     assert "loader_syntax" not in frozen["processor_dispatch"]
     assert legacy["processor_loader"]["replacement_rule"].startswith(
         "The Rust worker links its processor directly"
@@ -150,11 +159,15 @@ def test_deployment_wiring_matches_the_frozen_process_and_defaults() -> None:
         services = yaml_document(path)["services"]
         worker = services["canvas-sync-worker"]
         issuance = services["issuance"]
-        assert "issuance.canvas_worker" in str(worker["command"])
+        # Intentional consumer selection delta; historical Python contract
+        # remains unchanged and continues to govern the behavior comparisons.
+        assert "/usr/local/bin/marty-canvas-sync-worker" in str(worker["command"])
         assert "canvas_worker" not in str(issuance.get("command", ""))
         assert worker["healthcheck"] == {"disable": True}
         assert "ports" not in worker
-        assert worker["image"] == issuance["image"]
+        assert "image" not in worker
+        assert worker["build"]["dockerfile"] == "services/Dockerfile"
+        assert worker["build"]["args"]["SERVICE_NAME"] == "canvas-sync-worker"
         assert set(compose_contract["startup_dependencies"]) == set(
             worker["depends_on"]
         )
@@ -163,7 +176,8 @@ def test_deployment_wiring_matches_the_frozen_process_and_defaults() -> None:
             for dependency in worker["depends_on"].values()
         )
         environment = worker["environment"]
-        assert expected_processor in environment["CANVAS_SYNC_PROCESSOR"]
+        assert "CANVAS_SYNC_PROCESSOR" not in environment
+        assert environment["SERVICE_NAME"] == "canvas_sync_worker"
         for name, spec in worker_defaults.items():
             if name == "CANVAS_SYNC_WORKER_ID":
                 continue
@@ -200,12 +214,14 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         for item in documents
         if item
         and item.get("kind") == "Deployment"
-        and item.get("metadata", {}).get("name")
-        == kubernetes_contract["deployment"]
+        and item.get("metadata", {}).get("name") == kubernetes_contract["deployment"]
     )
     container = deployment["spec"]["template"]["spec"]["containers"][0]
-    assert container["command"] == kubernetes_contract["legacy_command"]
-    assert container["args"] == kubernetes_contract["legacy_args"]
+    # Explicit native launch delta, not a rewrite of the historical argv.
+    assert kubernetes_contract["legacy_command"] == ["python"]
+    assert kubernetes_contract["legacy_args"] == ["-m", "issuance.canvas_worker"]
+    assert container["command"] == ["/usr/local/bin/marty-canvas-sync-worker"]
+    assert not container.get("args")
     assert "ports" not in container
     assert container["envFrom"] == [
         {"configMapRef": {"name": kubernetes_contract["config_source"]}}
@@ -215,19 +231,28 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         for item in container["env"]
         if "valueFrom" in item
     }
-    assert secret_environment == kubernetes_contract["secret_environment"]
-    literal_environment = {
-        item["name"]: item["value"]
-        for item in container["env"]
-        if "value" in item
+    # Retain the historical three-key artifact. The confirmed shared-key wiring
+    # repair is additive deployment coverage, not a rewritten behavior oracle.
+    assert secret_environment == {
+        **kubernetes_contract["secret_environment"],
+        "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
-    assert literal_environment == kubernetes_contract["literal_environment"]
+    literal_environment = {
+        item["name"]: item["value"] for item in container["env"] if "value" in item
+    }
+    assert literal_environment == {
+        **kubernetes_contract["literal_environment"],
+        "SERVICE_NAME": "canvas_sync_worker",
+        "CANVAS_SYNC_PROCESSOR": "",
+    }
 
     migration = yaml_document("k8s/oracle/06a-issuance-migrations.yaml")
     assert migration["kind"] == "Job"
     assert migration["metadata"]["name"] == "issuance-migrations"
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    apply_migration = deploy.index('apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"')
+    apply_migration = deploy.index(
+        'apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"'
+    )
     wait_migration = deploy.index("condition=complete job/issuance-migrations")
     apply_services = deploy.index('apply_manifest "${K8S_DIR}/07-microservices.yaml"')
     assert apply_migration < wait_migration < apply_services
@@ -302,7 +327,13 @@ def test_complete_processor_outcome_set_is_closed() -> None:
         "canvas_sync_target_type_unsupported": False,
         "canvas_authoritative_reads_failed": True,
     }
-    required_sources = {"dispatch", "application", "roster", "processor", "roster-provider"}
+    required_sources = {
+        "dispatch",
+        "application",
+        "roster",
+        "processor",
+        "roster-provider",
+    }
     assert required_sources.issubset({item["source"] for item in outcomes})
 
 
@@ -323,8 +354,9 @@ def test_atomic_evidence_and_correction_review_lifecycle_is_complete() -> None:
     assert lifecycle["one_open_review"]["database_rule"].startswith(
         "unique partial index"
     )
-    assert lifecycle["review_creation"]["event"] == (
-        lifecycle["audit_events"]["review_created"]
+    assert (
+        lifecycle["review_creation"]["event"]
+        == (lifecycle["audit_events"]["review_created"])
     )
     assert lifecycle["automatic_recovery"]["action"] == "evidence_recovered"
     assert lifecycle["automatic_recovery"]["credential_lifecycle_change"] == "none"
@@ -334,9 +366,9 @@ def test_atomic_evidence_and_correction_review_lifecycle_is_complete() -> None:
         "revoke",
     ]
     assert lifecycle["manual_resolution"]["lifecycle_before_finalize"] is True
-    assert lifecycle["recovery_during_manual_claim"]["failed_manual_handler"].startswith(
-        "release claim"
-    )
+    assert lifecycle["recovery_during_manual_claim"][
+        "failed_manual_handler"
+    ].startswith("release claim")
     assert lifecycle["rollback"].startswith("any persistence")
 
 
@@ -493,7 +525,9 @@ def test_shutdown_retry_after_and_log_redaction_fixtures_are_closed() -> None:
             }
         )
         assert case["input_secret"] not in projected
-        assert all(fragment not in projected for fragment in case["forbidden_substrings"])
+        assert all(
+            fragment not in projected for fragment in case["forbidden_substrings"]
+        )
 
 
 def test_network_signing_secret_and_existing_rust_contracts_are_explicit() -> None:
@@ -509,17 +543,19 @@ def test_network_signing_secret_and_existing_rust_contracts_are_explicit() -> No
     assert network["self_managed_origin_allowlist"]["environment"] == (
         "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST"
     )
-    assert network["self_managed_origin_allowlist"][
-        "independent_from_private_allowlist"
-    ] is True
+    assert (
+        network["self_managed_origin_allowlist"]["independent_from_private_allowlist"]
+        is True
+    )
     assert network["production_dns_failure"] == "fail closed before request"
     assert "Host and TLS SNI" in network["dns_rebinding_control"]
 
     assert signing["selection"] == "organization-scoped issuer DID only"
     assert "SIGNING_KEYS_INTERNAL_URL" in signing["required_environment"]
-    assert "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY" in signing[
-        "required_environment"
-    ]
+    assert (
+        "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY"
+        in signing["required_environment"]
+    )
     assert signing["resolution"]["algorithm"] == "RS256"
     assert signing["sign_request"].startswith("DID-mediated")
     assert signing["readiness"].startswith("sign and locally verify")
@@ -559,9 +595,7 @@ def test_network_signing_secret_and_existing_rust_contracts_are_explicit() -> No
         "current_rust_postgres_cleanup",
         "required_resolution",
     }
-    assert "stronger atomic tenant-scoped cleanup" in differences[
-        "required_resolution"
-    ]
+    assert "stronger atomic tenant-scoped cleanup" in differences["required_resolution"]
 
 
 def test_durable_result_fixture_enforces_privacy_projection() -> None:
@@ -589,12 +623,14 @@ def test_migration_gate_forbids_an_early_python_deletion() -> None:
     gates = frozen["migration_gates"]
 
     assert len(gates["legacy_oracle_gaps"]) >= 10
-    assert "whole-worker differential parity including mutation and failure cases" in gates[
-        "python_deletion_requires"
-    ]
-    assert "all Compose, self-host, and Kubernetes consumers routed to Rust" in gates[
-        "python_deletion_requires"
-    ]
+    assert (
+        "whole-worker differential parity including mutation and failure cases"
+        in gates["python_deletion_requires"]
+    )
+    assert (
+        "all Compose, self-host, and Kubernetes consumers routed to Rust"
+        in gates["python_deletion_requires"]
+    )
     assert "beta-only acceptance and soak" in gates["python_deletion_requires"]
     assert any(
         "bound JSON string/object signing-service error detail" in gap

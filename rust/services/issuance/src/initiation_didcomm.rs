@@ -39,6 +39,7 @@ use crate::{
 const MAX_ENDPOINT_LENGTH: usize = 2_048;
 const MAX_POLICY_BYTES: u64 = 64 * 1_024;
 const MAX_POLICY_ISSUERS: usize = 1_000;
+const MAX_TLS_CA_BYTES: u64 = 1024 * 1024;
 const DEFAULT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const DIDCOMM_CONTENT_TYPE: &str = "application/didcomm-encrypted+json";
 pub const DIDCOMM_TRANSPORT_CLAIM_LEASE_SECONDS: i32 = 60;
@@ -730,7 +731,7 @@ impl fmt::Debug for ValidatedDidcommEndpoint {
 
 #[derive(Clone)]
 pub struct DidcommTransport {
-    tls_ca: Option<Certificate>,
+    tls_ca_file: Option<PathBuf>,
     timeout: Duration,
 }
 
@@ -738,7 +739,7 @@ impl fmt::Debug for DidcommTransport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DidcommTransport")
-            .field("operator_ca_configured", &self.tls_ca.is_some())
+            .field("operator_ca_configured", &self.tls_ca_file.is_some())
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
     }
@@ -756,13 +757,50 @@ impl DidcommTransport {
         if timeout.is_zero() {
             return Err(NativeDidcommError::TransportUnavailable);
         }
-        let tls_ca = tls_ca_file
-            .map(|path| {
-                let pem = std::fs::read(path).map_err(|_| NativeDidcommError::TlsUnavailable)?;
-                Certificate::from_pem(&pem).map_err(|_| NativeDidcommError::TlsUnavailable)
-            })
-            .transpose()?;
-        Ok(Self { tls_ca, timeout })
+        // Trust material is delivery configuration, not a prerequisite for
+        // unrelated service startup. Reload the operator's file on each attempt
+        // so mounted certificate rotation/recovery needs no process restart.
+        let tls_ca_file = tls_ca_file
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from);
+        Ok(Self {
+            tls_ca_file,
+            timeout,
+        })
+    }
+
+    fn operator_certificates(&self) -> Result<Vec<Certificate>, NativeDidcommError> {
+        let Some(path) = &self.tls_ca_file else {
+            return Ok(Vec::new());
+        };
+        let load = || {
+            // This path is operator-controlled deployment configuration, never
+            // a caller selector. Reject special files before open (notably an
+            // existing FIFO), and verify the opened handle too. The byte cap
+            // below is not an I/O deadline or protection against a malicious
+            // operator replacing the path concurrently.
+            if !std::fs::metadata(path)?.is_file() {
+                return Err(std::io::Error::other("operator CA is not a regular file"));
+            }
+            let file = File::open(path)?;
+            if !file.metadata()?.is_file() {
+                return Err(std::io::Error::other("operator CA is not a regular file"));
+            }
+            let mut pem = Vec::new();
+            file.take(MAX_TLS_CA_BYTES + 1).read_to_end(&mut pem)?;
+            Ok::<_, std::io::Error>(pem)
+        };
+        let pem = load().map_err(|_| NativeDidcommError::TlsUnavailable)?;
+        if pem.len() as u64 > MAX_TLS_CA_BYTES {
+            return Err(NativeDidcommError::TlsUnavailable);
+        }
+        let certificates =
+            Certificate::from_pem_bundle(&pem).map_err(|_| NativeDidcommError::TlsUnavailable)?;
+        if certificates.is_empty() {
+            return Err(NativeDidcommError::TlsUnavailable);
+        }
+        Ok(certificates)
     }
 
     pub async fn deliver(
@@ -770,15 +808,22 @@ impl DidcommTransport {
         endpoint: &ValidatedDidcommEndpoint,
         encrypted_message: String,
     ) -> DidcommTransportOutcome {
+        let Ok(certificates) = self.operator_certificates() else {
+            return DidcommTransportOutcome::TlsUnavailable;
+        };
         let mut builder = Client::builder()
             .timeout(self.timeout)
             .redirect(Policy::none())
             .resolve_to_addrs(&endpoint.hostname, &endpoint.addresses);
-        if let Some(certificate) = self.tls_ca.clone() {
+        for certificate in certificates {
             builder = builder.add_root_certificate(certificate);
         }
         let Ok(client) = builder.build() else {
-            return DidcommTransportOutcome::Failed;
+            return if self.tls_ca_file.is_some() {
+                DidcommTransportOutcome::TlsUnavailable
+            } else {
+                DidcommTransportOutcome::Failed
+            };
         };
         match client
             .post(endpoint.url.clone())
@@ -809,6 +854,8 @@ pub enum DidcommTransportOutcome {
     Delivered,
     /// The request was definitely not sent and may be retried.
     Failed,
+    /// Operator trust could not be loaded. No HTTP request was attempted.
+    TlsUnavailable,
     /// The request may have reached the recipient; automatic retry is unsafe.
     OutcomeUnknown,
 }
@@ -822,9 +869,12 @@ pub enum NativeInitiationDidcommDeliveryError {
     #[error("issuance transaction was not found")]
     TransactionNotFound,
     #[error("issuance transaction is not retryable for DIDComm delivery")]
-    InvalidTransactionState,
+    InvalidTransactionState(CredentialTransactionStatus),
     #[error("DIDComm delivery prerequisites are unavailable")]
     DidcommUnavailable,
+    /// Closed prerequisite reason; never carries remote bodies or exception text.
+    #[error("DIDComm delivery prerequisite failed: {0}")]
+    Prerequisite(NativeDidcommError),
     #[error("credential materialization is unavailable")]
     CredentialUnavailable,
     #[error("another delivery attempt owns the issuance transaction")]
@@ -953,7 +1003,7 @@ impl NativeInitiationDidcommDelivery {
                     .await
                 {
                     Ok(endpoint) => endpoint,
-                    Err(_) => {
+                    Err(reason) => {
                         self.ports
                             .repository
                             .mark_transport_unattempted(&claim)
@@ -961,7 +1011,7 @@ impl NativeInitiationDidcommDelivery {
                             .map_err(|_| {
                                 NativeInitiationDidcommDeliveryError::RetryStateUnavailable
                             })?;
-                        return Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable);
+                        return Err(NativeInitiationDidcommDeliveryError::Prerequisite(reason));
                     }
                 };
                 return self.deliver_claimed(claim, endpoint).await;
@@ -989,7 +1039,9 @@ impl NativeInitiationDidcommDelivery {
             transaction.status,
             CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
         ) {
-            return Err(NativeInitiationDidcommDeliveryError::InvalidTransactionState);
+            return Err(
+                NativeInitiationDidcommDeliveryError::InvalidTransactionState(transaction.status),
+            );
         }
         let policy = didcomm_format_policy(transaction)
             .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
@@ -998,13 +1050,13 @@ impl NativeInitiationDidcommDelivery {
             .envelope
             .resolve_recipient(holder_did)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            .map_err(NativeInitiationDidcommDeliveryError::Prerequisite)?;
         let endpoint = self
             .ports
             .endpoints
             .validate(&recipient.endpoint)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            .map_err(NativeInitiationDidcommDeliveryError::Prerequisite)?;
 
         let mut prepared_transaction = transaction.clone();
         let initial_issuer = self
@@ -1031,7 +1083,7 @@ impl NativeInitiationDidcommDelivery {
             .envelope
             .prepare_encryption(&issuer.issuer_did, recipient.document)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::DidcommUnavailable)?;
+            .map_err(NativeInitiationDidcommDeliveryError::Prerequisite)?;
 
         let credential_id = reserved_credential_id(&prepared_transaction);
         let claim = self
@@ -1188,13 +1240,20 @@ impl NativeInitiationDidcommDelivery {
                 }
                 self.project_transported(claim.into_pending()).await
             }
-            DidcommTransportOutcome::Failed => {
+            outcome @ (DidcommTransportOutcome::Failed
+            | DidcommTransportOutcome::TlsUnavailable) => {
                 self.ports
                     .repository
                     .mark_transport_unattempted(&claim)
                     .await
                     .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
-                Ok(Self::failed_receipt(claim.into_pending()))
+                if outcome == DidcommTransportOutcome::TlsUnavailable {
+                    Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                        NativeDidcommError::TlsUnavailable,
+                    ))
+                } else {
+                    Ok(Self::failed_receipt(claim.into_pending()))
+                }
             }
             DidcommTransportOutcome::OutcomeUnknown => {
                 let _ = self
@@ -1492,7 +1551,7 @@ fn load_active_policy(
         .issuers
         .0
         .keys()
-        .any(|did| !did.starts_with("did:") || did.len() > MAX_ENDPOINT_LENGTH)
+        .any(|did| !did.starts_with("did:") || did.chars().count() > MAX_ENDPOINT_LENGTH)
     {
         return Err(NativeDidcommError::EncryptionPolicyUnavailable);
     }
@@ -1554,6 +1613,12 @@ fn preflight_plaintext(
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod shared_fixtures {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/didcomm_test_fixtures.rs"
+        ));
+    }
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
@@ -1564,43 +1629,12 @@ mod tests {
         CredentialLifecycle, IssuerContext,
     };
     use chrono::{TimeZone, Utc};
-    use marty_didcomm::types::{Jwk, VerificationMethod};
-    use serde_json::Map;
+    use serde_json::{Map, Value};
+    use shared_fixtures::{authcrypt_parties, recipient_document, SYNTHETIC_RECIPIENT_MULTIBASE};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         sync::Notify,
     };
-
-    fn recipient_document() -> DidDocument {
-        let did = "did:example:holder";
-        let key_id = format!("{did}#key-1");
-        DidDocument {
-            id: did.to_owned(),
-            context: serde_json::Value::Null,
-            authentication: Vec::new(),
-            assertion_method: Vec::new(),
-            key_agreement: vec![json!(key_id)],
-            verification_method: vec![VerificationMethod {
-                id: key_id,
-                r#type: "JsonWebKey2020".to_owned(),
-                controller: did.to_owned(),
-                public_key_jwk: Some(Jwk {
-                    kty: "OKP".to_owned(),
-                    crv: Some("X25519".to_owned()),
-                    x: Some(URL_SAFE_NO_PAD.encode([7_u8; 32])),
-                    y: None,
-                    d: None,
-                    kid: None,
-                    additional_properties: serde_json::Map::new(),
-                }),
-                public_key_multibase: None,
-                public_key_base58: None,
-                additional_properties: serde_json::Map::new(),
-            }],
-            service: Vec::new(),
-            additional_properties: serde_json::Map::new(),
-        }
-    }
 
     fn policy_file(contents: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -1609,6 +1643,60 @@ mod tests {
         ));
         std::fs::write(&path, contents).unwrap();
         path
+    }
+
+    fn assert_embedded_key_binding(document: &DidDocument, did: &str, expected_key: [u8; 32]) {
+        assert_eq!(document.id, did);
+        let methods = document.x25519_key_agreement_methods();
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].1, expected_key);
+        assert!(methods[0].0.starts_with(&format!("{did}#")));
+        assert!(document
+            .verification_method
+            .iter()
+            .all(|method| method.controller == did));
+    }
+
+    fn authcrypt_policy_file(issuer_did: &str, secret: &[u8; 32]) -> PathBuf {
+        policy_file(
+            &json!({
+                "version": 1,
+                "issuers": {(issuer_did): {
+                    "mode": "authcrypt",
+                    "sender_x25519_private_key": URL_SAFE_NO_PAD.encode(secret),
+                }},
+            })
+            .to_string(),
+        )
+    }
+
+    async fn serve_sender_document_once(
+        document: &DidDocument,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        // Same managed did:web path exercised by Core's resolver tests. The
+        // listener is dropped after exactly one request, before final encryption.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = serde_json::to_string(document).unwrap();
+        let server = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(5), async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    assert!(request.len() < 8_192, "bounded synthetic resolver request");
+                    request.push(stream.read_u8().await.unwrap());
+                }
+                assert!(request.starts_with(b"GET /.well-known/did.json "));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/did+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            })
+            .await
+            .expect("synthetic resolver must complete within five seconds");
+        });
+        (format!("http://{address}"), server)
     }
 
     type Order = Arc<Mutex<Vec<&'static str>>>;
@@ -1715,6 +1803,8 @@ mod tests {
         delivery: Arc<Mutex<Option<InitiationDidcommDeliveryState>>>,
         transport_claim: Mutex<HarnessTransportClaimState>,
         fail_transport_success_once: AtomicBool,
+        fail_transport_unattempted: AtomicBool,
+        fail_staging: AtomicBool,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1747,6 +1837,8 @@ mod tests {
                 delivery: Arc::new(Mutex::new(None)),
                 transport_claim: Mutex::new(HarnessTransportClaimState::Idle),
                 fail_transport_success_once: AtomicBool::new(false),
+                fail_transport_unattempted: AtomicBool::new(false),
+                fail_staging: AtomicBool::new(false),
             }
         }
     }
@@ -1899,6 +1991,9 @@ mod tests {
             credential: &IssuedCredential,
             delivery: &StagedInitiationDidcommDelivery,
         ) -> Result<(), CredentialIssuanceError> {
+            if self.fail_staging.load(Ordering::SeqCst) {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             self.finalize_delivered(transaction, credential).await?;
             let mut finalized = transaction.clone();
             finalized.status = CredentialTransactionStatus::Issued;
@@ -1950,6 +2045,9 @@ mod tests {
             &self,
             claim: &InitiationDidcommTransportClaim,
         ) -> Result<(), CredentialIssuanceError> {
+            if self.fail_transport_unattempted.load(Ordering::SeqCst) {
+                return Err(CredentialIssuanceError::RepositoryUnavailable);
+            }
             {
                 let mut state = self.transport_claim.lock().unwrap();
                 if *state != harness_claim_state(claim) {
@@ -2094,6 +2192,10 @@ mod tests {
 
     struct HarnessEnvelope {
         order: Order,
+        resolve_error: Option<NativeDidcommError>,
+        prepare_error: Option<NativeDidcommError>,
+        pack_error: Option<NativeDidcommError>,
+        encrypt_error: Option<NativeDidcommError>,
     }
 
     #[async_trait]
@@ -2103,6 +2205,9 @@ mod tests {
             _holder_did: &str,
         ) -> Result<ResolvedDidcommRecipient, NativeDidcommError> {
             record(&self.order, "resolve-recipient");
+            if let Some(error) = self.resolve_error {
+                return Err(error);
+            }
             Ok(ResolvedDidcommRecipient {
                 document: recipient_document(),
                 endpoint: "https://wallet.example/inbox".to_owned(),
@@ -2115,6 +2220,9 @@ mod tests {
             recipient_document: DidDocument,
         ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
             record(&self.order, "prepare-encryption");
+            if let Some(error) = self.prepare_error {
+                return Err(error);
+            }
             Ok(PreparedDidcommEncryption {
                 issuer_did: "did:example:issuer".to_owned(),
                 recipient_document,
@@ -2132,6 +2240,9 @@ mod tests {
             _credential_id: &str,
         ) -> Result<PackedDidcommCredential, NativeDidcommError> {
             record(&self.order, "pack");
+            if let Some(error) = self.pack_error {
+                return Err(error);
+            }
             assert_eq!(credential, "signed-credential");
             Ok(PackedDidcommCredential {
                 plaintext: "packed-credential".to_owned(),
@@ -2145,6 +2256,9 @@ mod tests {
             _prepared: &PreparedDidcommEncryption,
         ) -> Result<String, NativeDidcommError> {
             record(&self.order, "encrypt");
+            if let Some(error) = self.encrypt_error {
+                return Err(error);
+            }
             assert_eq!(plaintext, "packed-credential");
             Ok("encrypted-credential".to_owned())
         }
@@ -2241,6 +2355,10 @@ mod tests {
                 }),
                 envelope: Arc::new(HarnessEnvelope {
                     order: order.clone(),
+                    resolve_error: None,
+                    prepare_error: None,
+                    pack_error: None,
+                    encrypt_error: None,
                 }),
                 endpoints: Arc::new(HarnessEndpoint {
                     order: order.clone(),
@@ -2256,6 +2374,448 @@ mod tests {
         )
         .unwrap();
         (delivery, repository, order)
+    }
+
+    fn automatic_reference() -> Value {
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/didcomm-automatic-response-python-reference.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            reference["schema"],
+            "marty.didcomm-automatic-response-python-reference/v1"
+        );
+        assert_eq!(
+            reference["reference"]["source_commit"],
+            "9bd2747f040f203188529758ec38f0a5dce5ac5f"
+        );
+        assert_eq!(
+            reference["reference"]["source_blob"],
+            "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a"
+        );
+        assert_eq!(
+            reference["reference"]["setup_blob"],
+            "f373c4d1762f916b616e4b83a38101112ec78e85"
+        );
+        assert_eq!(
+            reference["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| case["case"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "success_holder",
+                "missing_holder",
+                "preflight_failure",
+                "failed_receipt",
+                "subject_fallback",
+                "holder_precedes_subject",
+                "multiple_wallets"
+            ]
+        );
+        reference
+    }
+
+    fn automatic_input(
+        case: &Value,
+    ) -> (
+        crate::initiation::InitiationReservation,
+        crate::initiation::InitiationRequest,
+    ) {
+        let mut transaction = transaction();
+        transaction.id = case["response"]["id"].as_str().unwrap().into();
+        transaction.organization_id = case["response"]["organization_id"].as_str().unwrap().into();
+        transaction.credential_template_id = case["response"]["credential_template_id"]
+            .as_str()
+            .unwrap()
+            .into();
+        transaction.pre_authorized_code =
+            case["response"]["pre_auth_code"].as_str().unwrap().into();
+        transaction.expires_at =
+            chrono::DateTime::parse_from_rfc3339(case["response"]["expires_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&Utc);
+        transaction.wallet_configs = case["wallet_configs"].as_array().unwrap().clone();
+        let request = serde_json::from_value(json!({
+            "organization_id":transaction.organization_id,
+            "credential_template_id":transaction.credential_template_id,
+            "issuer_did":"did:web:issuer.example",
+            "holder_did":case["request"]["holder_did"],
+            "subject_did":case["request"]["subject_did"],
+        }))
+        .unwrap();
+        (
+            crate::initiation::InitiationReservation {
+                transaction,
+                created: true,
+            },
+            request,
+        )
+    }
+
+    #[tokio::test]
+    async fn automatic_success_projects_real_delivery_completion_without_repeated_send() {
+        use crate::initiation_response::InitiationOfferProjector;
+        let reference = automatic_reference();
+        let success_cases: Vec<_> = reference["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["response"]["status"] == "issued")
+            .collect();
+        assert_eq!(
+            success_cases
+                .iter()
+                .map(|case| case["case"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "success_holder",
+                "subject_fallback",
+                "holder_precedes_subject",
+                "multiple_wallets"
+            ]
+        );
+        for case in success_cases {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let projector =
+                InitiationOfferProjector::new("https://issuer.example", Arc::new(delivery))
+                    .unwrap();
+            let (reservation, request) = automatic_input(case);
+            let original = reservation.transaction.clone();
+            // The captured offer generator was a controlled port, so compare
+            // native real offer bytes to its own unchanged no-wallet projection.
+            let mut without_wallets = reservation.clone();
+            without_wallets.transaction.wallet_configs.clear();
+            let untouched = projector.project(without_wallets, &request).await.unwrap();
+            assert!(order.lock().unwrap().is_empty());
+            let response = projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap();
+            let serialized = serde_json::to_value(&response).unwrap();
+            for field in [
+                "id",
+                "organization_id",
+                "credential_template_id",
+                "status",
+                "credential_offer_uris",
+                "credential_offer_labels",
+                "pre_auth_code",
+                "expires_at",
+            ] {
+                assert_eq!(serialized[field], case["response"][field], "{field}");
+            }
+            assert_eq!(
+                response.credential_offer_uri,
+                untouched.credential_offer_uri
+            );
+            assert_eq!(reservation.transaction, original);
+            assert_eq!(original.status, CredentialTransactionStatus::Pending);
+            let stored = repository.delivery.lock().unwrap().clone().unwrap();
+            let InitiationDidcommDeliveryState::Delivered(delivered) = &stored else {
+                panic!("successful automatic offer requires delivered repository state")
+            };
+            assert_eq!(delivered.transaction_id, original.id);
+            assert_eq!(delivered.organization_id, original.organization_id);
+            assert_eq!(delivered.credential_id, reserved_credential_id(&original));
+            assert_eq!(
+                delivered.holder_did,
+                case["calls"]["holders"][0].as_str().unwrap()
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            let first_order = order.lock().unwrap().clone();
+            for stage in ["build", "allocate-status", "transport", "after-didcomm"] {
+                assert_eq!(
+                    first_order.iter().filter(|value| **value == stage).count(),
+                    1
+                );
+            }
+            // Python captured two sends for two wallets. This is deliberately
+            // NOT a parity assertion: retain native delivered replay/no-resend.
+            if case["case"] == "multiple_wallets" {
+                assert_eq!(case["calls"]["transport"], 2);
+            }
+            order.lock().unwrap().clear();
+            assert_eq!(
+                projector
+                    .project(reservation.clone(), &request)
+                    .await
+                    .unwrap(),
+                response
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(*repository.delivery.lock().unwrap(), Some(stored));
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            // A delivered receipt does not authorize rewriting an already
+            // noneligible reservation's status. Preserve pre-existing projection
+            // behavior while still exercising the real delivered replay branch.
+            for (status, expected_status) in [
+                (CredentialTransactionStatus::Issued, "issued"),
+                (CredentialTransactionStatus::Revoked, "revoked"),
+                (CredentialTransactionStatus::Expired, "expired"),
+                (CredentialTransactionStatus::Failed, "failed"),
+                (CredentialTransactionStatus::Signing, "signing"),
+            ] {
+                let mut recovered = reservation.clone();
+                recovered.transaction.status = status;
+                recovered.created = false;
+                let mut expected = response.clone();
+                expected.status = expected_status.into();
+                assert_eq!(
+                    projector.project(recovered, &request).await.unwrap(),
+                    expected
+                );
+                assert!(order.lock().unwrap().is_empty());
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+                assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_failure_never_promotes_even_when_materialization_is_durable() {
+        use crate::initiation_response::InitiationOfferProjector;
+        let reference = automatic_reference();
+        let success = &reference["cases"][0];
+        for failure in [
+            "preflight",
+            "staging",
+            "unattempted",
+            "unknown",
+            "projection",
+        ] {
+            let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: match failure {
+                    "unattempted" => DidcommTransportOutcome::Failed,
+                    "unknown" => DidcommTransportOutcome::OutcomeUnknown,
+                    _ => DidcommTransportOutcome::Delivered,
+                },
+                post_issuance_fail: failure == "projection",
+            });
+            if failure == "preflight" {
+                delivery.ports.envelope = Arc::new(HarnessEnvelope {
+                    order: order.clone(),
+                    resolve_error: None,
+                    prepare_error: Some(NativeDidcommError::IncompatibleKeyAgreement),
+                    pack_error: None,
+                    encrypt_error: None,
+                });
+            }
+            repository
+                .fail_staging
+                .store(failure == "staging", Ordering::SeqCst);
+            let projector =
+                InitiationOfferProjector::new("https://issuer.example", Arc::new(delivery))
+                    .unwrap();
+            let (reservation, request) = automatic_input(success);
+            let response = projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap();
+            assert_eq!(response.status, "pending");
+            assert_eq!(
+                response.credential_offer_uris["wallet-a"],
+                format!(
+                    "didcomm://pending?transaction_id={}",
+                    reservation.transaction.id
+                )
+            );
+            if failure == "preflight" {
+                assert_eq!(response.status, reference["cases"][2]["response"]["status"]);
+                assert_eq!(
+                    serde_json::to_value(&response.credential_offer_uris).unwrap(),
+                    reference["cases"][2]["response"]["credential_offer_uris"]
+                );
+            }
+            if failure == "unattempted" {
+                // The Python HTTP502 receipt produced an endpoint URI. Native
+                // definitely-unattempted failure is NOT the same transport case;
+                // retain the existing pending URI, without claiming parity.
+                assert_ne!(
+                    serde_json::to_value(&response.credential_offer_uris).unwrap(),
+                    reference["cases"][3]["response"]["credential_offer_uris"]
+                );
+            }
+            let first_order = order.lock().unwrap().clone();
+            if matches!(failure, "preflight" | "staging") {
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+                assert!(repository.delivery.lock().unwrap().is_none());
+                assert!(!first_order.contains(&"transport"));
+                assert_eq!(
+                    repository.releases.load(Ordering::SeqCst),
+                    usize::from(failure == "staging")
+                );
+            } else {
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+                assert!(matches!(
+                    *repository.delivery.lock().unwrap(),
+                    Some(InitiationDidcommDeliveryState::Pending(_))
+                ));
+            }
+            if matches!(failure, "unknown" | "projection") {
+                order.lock().unwrap().clear();
+                assert_eq!(
+                    projector.project(reservation, &request).await.unwrap(),
+                    response
+                );
+                let retry_order = order.lock().unwrap();
+                assert!(!retry_order.contains(&"transport"));
+                assert!(!retry_order.contains(&"build"));
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ineligible_states_match_captured_python_without_downstream_effects() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/didcomm-direct-state-python-reference.json"
+        ))
+        .unwrap();
+        let cases = frozen["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 5);
+        for case in cases {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut tx = transaction();
+            tx.status =
+                CredentialTransactionStatus::try_from(case["state"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                delivery.deliver_native(&tx, "did:example:holder").await,
+                Err(NativeInitiationDidcommDeliveryError::InvalidTransactionState(tx.status))
+            );
+            assert_eq!(case["delivery_calls"], 0);
+            // The existing transport dispatch is read-only when no delivery exists.
+            assert_eq!(repository.lookups.load(Ordering::SeqCst), 1);
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert!(repository.delivery.lock().unwrap().is_none());
+            assert_eq!(
+                *repository.transport_claim.lock().unwrap(),
+                HarnessTransportClaimState::Idle
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn eligible_states_continue_through_delivery_after_state_parity() {
+        for state in [
+            CredentialTransactionStatus::Pending,
+            CredentialTransactionStatus::Authorized,
+        ] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut tx = transaction();
+            tx.status = state;
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:holder")
+                    .await
+                    .unwrap()
+                    .status,
+                NativeDidcommDeliveryStatus::Delivered
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                order
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|stage| **stage == "transport")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn durable_delivery_dispatch_precedes_ineligible_transaction_state() {
+        for state in [
+            CredentialTransactionStatus::Issued,
+            CredentialTransactionStatus::Signing,
+            CredentialTransactionStatus::Failed,
+            CredentialTransactionStatus::Expired,
+            CredentialTransactionStatus::Revoked,
+        ] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut tx = transaction();
+            tx.status = state;
+            *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+                Box::new(staged_pending_delivery()),
+            ));
+            for (claim_state, expected) in [
+                (
+                    HarnessTransportClaimState::Claimed {
+                        delivery_id: HARNESS_DELIVERY_ID.to_owned(),
+                        attempt_id: "existing-attempt".to_owned(),
+                    },
+                    NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
+                ),
+                (
+                    HarnessTransportClaimState::OutcomeUnknown,
+                    NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown,
+                ),
+            ] {
+                *repository.transport_claim.lock().unwrap() = claim_state;
+                assert_eq!(
+                    delivery.deliver_native(&tx, "did:example:holder").await,
+                    Err(expected)
+                );
+                assert!(order.lock().unwrap().is_empty());
+            }
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:another-holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::InvalidRequest)
+            );
+            assert!(order.lock().unwrap().is_empty());
+
+            let mut pending = staged_pending_delivery();
+            pending.transported = true;
+            *repository.delivery.lock().unwrap() =
+                Some(InitiationDidcommDeliveryState::Pending(Box::new(pending)));
+            let recovered = delivery
+                .deliver_native(&tx, "did:example:holder")
+                .await
+                .unwrap();
+            assert_eq!(recovered.status, NativeDidcommDeliveryStatus::Delivered);
+            assert_eq!(*order.lock().unwrap(), ["after-didcomm"]);
+            order.lock().unwrap().clear();
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:holder")
+                    .await
+                    .unwrap(),
+                recovered
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]
@@ -2577,7 +3137,9 @@ mod tests {
             delivery
                 .deliver_native(&transaction(), "did:example:holder")
                 .await,
-            Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable)
+            Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::EndpointNotPublic
+            ))
         );
         assert_eq!(
             *order.lock().unwrap(),
@@ -2585,6 +3147,144 @@ mod tests {
         );
         assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn prerequisite_reasons_survive_before_claim_allocation_signing_or_transport() {
+        for (reason, resolving) in [
+            (NativeDidcommError::MissingEndpoint, true),
+            (NativeDidcommError::ResolutionUnavailable, true),
+            (NativeDidcommError::MismatchedDocument, true),
+            (NativeDidcommError::IncompatibleKeyAgreement, false),
+            (NativeDidcommError::EncryptionPolicyUnavailable, false),
+            (NativeDidcommError::SenderAuthenticationUnavailable, false),
+        ] {
+            let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            delivery.ports.envelope = Arc::new(HarnessEnvelope {
+                order: order.clone(),
+                resolve_error: resolving.then_some(reason),
+                prepare_error: (!resolving).then_some(reason),
+                pack_error: None,
+                encrypt_error: None,
+            });
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::Prerequisite(reason))
+            );
+            let expected: &[&str] = if resolving {
+                &["resolve-recipient"]
+            } else {
+                &[
+                    "resolve-recipient",
+                    "validate-endpoint",
+                    "resolve-issuer",
+                    "resolve-issuer",
+                    "ensure-ready",
+                    "prepare-encryption",
+                ]
+            };
+            assert_eq!(order.lock().unwrap().as_slice(), expected);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert!(repository.delivery.lock().unwrap().is_none());
+            assert_eq!(
+                *repository.transport_claim.lock().unwrap(),
+                HarnessTransportClaimState::Idle
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn post_preflight_crypto_failures_stay_generic_and_release_before_retry() {
+        for packing in [false, true] {
+            let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            delivery.ports.envelope = Arc::new(HarnessEnvelope {
+                order: order.clone(),
+                resolve_error: None,
+                prepare_error: None,
+                pack_error: packing.then_some(NativeDidcommError::PackUnavailable),
+                encrypt_error: (!packing)
+                    .then_some(NativeDidcommError::SenderAuthenticationUnavailable),
+            });
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::DidcommUnavailable)
+            );
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert!(repository.delivery.lock().unwrap().is_none());
+            let observed = order.lock().unwrap();
+            assert_eq!(observed.last(), Some(&"release"));
+            assert!(observed.contains(&"claim"));
+            assert!(observed.contains(&"build"));
+            assert!(!observed.contains(&"transport"));
+            assert_eq!(observed.contains(&"encrypt"), !packing);
+        }
+    }
+
+    #[tokio::test]
+    async fn claimed_endpoint_failure_preserves_staging_and_releases_only_when_recorded() {
+        for release_fails in [false, true] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: true,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let staged =
+                InitiationDidcommDeliveryState::Pending(Box::new(staged_pending_delivery()));
+            *repository.delivery.lock().unwrap() = Some(staged.clone());
+            repository
+                .fail_transport_unattempted
+                .store(release_fails, Ordering::SeqCst);
+            let expected_error = if release_fails {
+                NativeInitiationDidcommDeliveryError::RetryStateUnavailable
+            } else {
+                NativeInitiationDidcommDeliveryError::Prerequisite(
+                    NativeDidcommError::EndpointNotPublic,
+                )
+            };
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(expected_error)
+            );
+            let expected: &[&str] = if release_fails {
+                &["validate-endpoint"]
+            } else {
+                &["validate-endpoint", "mark-transport-failed"]
+            };
+            assert_eq!(order.lock().unwrap().as_slice(), expected);
+            assert_eq!(*repository.delivery.lock().unwrap(), Some(staged));
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            let next = repository
+                .claim_transport("org-a", "transaction-1", "did:example:holder")
+                .await
+                .unwrap();
+            if release_fails {
+                assert!(matches!(next, InitiationDidcommTransportClaimOutcome::Busy));
+            } else {
+                assert!(matches!(
+                    next,
+                    InitiationDidcommTransportClaimOutcome::Claimed(_)
+                ));
+            }
+        }
     }
 
     #[tokio::test]
@@ -2606,6 +3306,58 @@ mod tests {
         let order = order.lock().unwrap();
         assert!(order.contains(&"build"));
         assert_eq!(order.last(), Some(&"release"));
+    }
+
+    #[tokio::test]
+    async fn tls_configuration_failure_requires_a_durable_unattempted_marker() {
+        for marker_failure in [false, true] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::TlsUnavailable,
+                post_issuance_fail: false,
+            });
+            repository
+                .fail_transport_unattempted
+                .store(marker_failure, Ordering::SeqCst);
+            let tls_error = NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::TlsUnavailable,
+            );
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(if marker_failure {
+                    NativeInitiationDidcommDeliveryError::RetryStateUnavailable
+                } else {
+                    tls_error
+                }),
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            order.lock().unwrap().clear();
+            assert_eq!(
+                delivery
+                    .deliver_native(&transaction(), "did:example:holder")
+                    .await,
+                Err(if marker_failure {
+                    NativeInitiationDidcommDeliveryError::ConcurrentDelivery
+                } else {
+                    tls_error
+                }),
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                order
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|stage| **stage == "transport")
+                    .count(),
+                usize::from(!marker_failure)
+            );
+            assert!(!order.lock().unwrap().contains(&"build"));
+        }
     }
 
     #[tokio::test]
@@ -2947,32 +3699,233 @@ mod tests {
         assert!(!format!("{packed:?}").contains("signed-credential"));
     }
 
+    #[tokio::test]
+    async fn embedded_key_and_jwk_resolve_without_network_but_require_delivery_endpoints() {
+        let (_, _, recipient, _) = authcrypt_parties();
+        let expected_key = recipient.x25519_key_agreement_methods()[0].1;
+        let public_jwk = json!({
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": URL_SAFE_NO_PAD.encode(expected_key),
+        });
+        let envelope = NativeDidcommEnvelope::new(None, None, None);
+        for (did, source) in [
+            (
+                format!("did:key:{SYNTHETIC_RECIPIENT_MULTIBASE}"),
+                "embedded:did:key",
+            ),
+            (
+                format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(public_jwk.to_string())),
+                "embedded:did:jwk",
+            ),
+        ] {
+            let resolved = envelope.resolver.resolve_with_metadata(&did).await.unwrap();
+            assert_eq!(resolved.source, source);
+            assert_embedded_key_binding(&resolved.document, &did, expected_key);
+            assert_eq!(
+                envelope.resolve_recipient(&did).await.err(),
+                Some(NativeDidcommError::MissingEndpoint),
+                "an embedded method without a service must resolve, then fail endpoint selection"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_peer2_resolves_inline_service_and_encrypts_without_network() {
+        let (sender, _, recipient, recipient_secret) = authcrypt_parties();
+        let expected_key = recipient.x25519_key_agreement_methods()[0].1;
+        let endpoint = "https://wallet.example/inbox";
+        // Core's existing full ServiceEntry representation, not a claim that
+        // abbreviated peer-DID service encodings or method 0 are qualified.
+        let service = json!({
+            "id": "#didcomm-1",
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": endpoint,
+        });
+        let holder_did = format!(
+            "did:peer:2.E{SYNTHETIC_RECIPIENT_MULTIBASE}.S{}",
+            URL_SAFE_NO_PAD.encode(service.to_string())
+        );
+        let envelope = NativeDidcommEnvelope::new(None, None, None);
+        let metadata = envelope
+            .resolver
+            .resolve_with_metadata(&holder_did)
+            .await
+            .unwrap();
+        assert_eq!(metadata.source, "embedded:did:peer");
+        assert_eq!(metadata.document.id, holder_did);
+        let resolved = envelope.resolve_recipient(&holder_did).await.unwrap();
+        assert_eq!(resolved.endpoint, endpoint);
+        assert_embedded_key_binding(&resolved.document, &holder_did, expected_key);
+        let prepared = envelope
+            .prepare_encryption(&sender.id, resolved.document)
+            .await
+            .unwrap();
+        let packed = envelope
+            .pack_credential(
+                "synthetic-peer-credential",
+                "w3c_vcdm_v2_sd_jwt",
+                &sender.id,
+                &holder_did,
+                "transaction-peer-1",
+                "credential-peer-1",
+            )
+            .unwrap();
+        let encrypted = envelope
+            .encrypt_prepared(&packed.plaintext, &prepared)
+            .unwrap();
+        let plaintext = marty_didcomm::decrypt_jwe(&encrypted, &recipient_secret).unwrap();
+        assert_eq!(plaintext, packed.plaintext);
+        let message: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
+        assert_eq!(message["from"], sender.id);
+        assert_eq!(message["to"], json!([holder_did]));
+        assert_eq!(message["id"], packed.message_id);
+    }
+
+    #[tokio::test]
+    async fn authcrypt_preflight_freezes_real_crypto_context_after_policy_and_resolver_change() {
+        let (sender, sender_secret, recipient, recipient_secret) = authcrypt_parties();
+        let (resolver_url, server) = serve_sender_document_once(&sender).await;
+        let policy = authcrypt_policy_file(&sender.id, &sender_secret);
+        let envelope =
+            NativeDidcommEnvelope::new(None, Some(&resolver_url), Some(policy.to_str().unwrap()));
+        let prepared = envelope
+            .prepare_encryption(&sender.id, recipient.clone())
+            .await;
+        server.await.unwrap(); // The managed resolver no longer accepts requests.
+        let prepared = prepared.unwrap();
+        std::fs::write(
+            &policy,
+            json!({"version": 1, "issuers": {(sender.id.clone()): {"mode": "anoncrypt"}}})
+                .to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            load_active_policy(Some(&policy), &sender.id).unwrap(),
+            ActiveEncryptionPolicy::Anoncrypt
+        ));
+
+        let packed = envelope
+            .pack_credential(
+                "synthetic-signed-credential",
+                "w3c_vcdm_v2_sd_jwt",
+                &sender.id,
+                &recipient.id,
+                "transaction-1",
+                "credential-1",
+            )
+            .unwrap();
+        let encrypted = envelope.encrypt_prepared(&packed.plaintext, &prepared);
+        std::fs::remove_file(policy).unwrap();
+        let encrypted = encrypted.unwrap();
+        let decrypted = marty_didcomm::decrypt_authenticated_jwe(
+            &encrypted,
+            &recipient_secret,
+            &recipient,
+            &sender,
+        )
+        .unwrap();
+        assert_eq!(decrypted.plaintext, packed.plaintext);
+        assert_eq!(decrypted.sender_kid, format!("{}#key-1", sender.id));
+        assert_eq!(decrypted.recipient_kid, format!("{}#key-1", recipient.id));
+        let message: serde_json::Value = serde_json::from_str(&decrypted.plaintext).unwrap();
+        assert_eq!(message["from"], sender.id);
+        assert_eq!(message["to"], json!([recipient.id]));
+        assert_eq!(message["id"], packed.message_id);
+        assert_eq!(
+            format!("{prepared:?}"),
+            "PreparedDidcommEncryption { issuer_configured: true, mode: \"authcrypt\", .. }"
+        );
+        assert_eq!(
+            format!("{packed:?}"),
+            "PackedDidcommCredential { message_id_configured: true, .. }"
+        );
+    }
+
+    #[tokio::test]
+    async fn authcrypt_preflight_rejects_wrong_sender_key_without_anoncrypt_fallback() {
+        let (sender, _, recipient, wrong_sender_secret) = authcrypt_parties();
+        let anoncrypt = NativeDidcommEnvelope::new(None, None, None);
+        assert!(anoncrypt
+            .prepare_encryption(&sender.id, recipient.clone())
+            .await
+            .is_ok());
+        let (resolver_url, server) = serve_sender_document_once(&sender).await;
+        let policy = authcrypt_policy_file(&sender.id, &wrong_sender_secret);
+        let envelope =
+            NativeDidcommEnvelope::new(None, Some(&resolver_url), Some(policy.to_str().unwrap()));
+        let result = envelope.prepare_encryption(&sender.id, recipient).await;
+        server.await.unwrap();
+        std::fs::remove_file(policy).unwrap();
+        assert_eq!(
+            result.err(),
+            Some(NativeDidcommError::SenderAuthenticationUnavailable),
+            "a recipient that supports anoncrypt must not permit sender-key failure to downgrade"
+        );
+    }
+
     #[test]
     fn policy_requires_exact_canonical_entries_without_key_reuse() {
-        let key = URL_SAFE_NO_PAD.encode([9_u8; 32]);
-        let valid = policy_file(&format!(
-            r#"{{"version":1,"issuers":{{"did:example:issuer":{{"mode":"authcrypt","sender_x25519_private_key":"{key}"}}}}}}"#
-        ));
-        assert!(matches!(
-            load_active_policy(Some(&valid), "did:example:issuer").unwrap(),
-            ActiveEncryptionPolicy::Authcrypt(_)
-        ));
-        std::fs::remove_file(valid).unwrap();
-
-        for invalid in [
-            r#"{"version":1,"issuers":{"did:example:issuer":{"mode":"anoncrypt","mode":"authcrypt"}}}"#.to_owned(),
-            r#"{"version":true,"issuers":{"did:example:issuer":{"mode":"anoncrypt"}}}"#.to_owned(),
-            r#"{"version":1,"issuers":{"did:example:issuer":{"mode":"authcrypt","sender_x25519_private_key":"AA=="}}}"#.to_owned(),
-            r#"{"version":1,"issuers":{"did:example:issuer":{"mode":"anoncrypt","unexpected":true}}}"#.to_owned(),
-            format!(r#"{{"version":1,"issuers":{{"did:example:a":{{"mode":"authcrypt","sender_x25519_private_key":"{key}"}},"did:example:b":{{"mode":"authcrypt","sender_x25519_private_key":"{key}"}}}}}}"#),
-        ] {
-            let path = policy_file(&invalid);
-            assert_eq!(
-                load_active_policy(Some(&path), "did:example:issuer").err(),
-                Some(NativeDidcommError::EncryptionPolicyUnavailable)
-            );
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/didcomm-policy-python-reference.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture["schema"],
+            "marty.didcomm-policy-python-reference/v1"
+        );
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 10);
+        let mut names = BTreeSet::new();
+        let mut failures = Vec::new();
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            assert!(names.insert(name), "duplicate reference case: {name}");
+            let input = &case["input"];
+            let (issuer, encoded) = match input["kind"].as_str().unwrap() {
+                "literal" => (
+                    input["active_issuer"].as_str().unwrap().to_owned(),
+                    input["json"].as_str().unwrap().to_owned(),
+                ),
+                "repeated-issuer" => {
+                    let scalar = input["scalar"].as_str().unwrap();
+                    assert_eq!(scalar.chars().count(), 1);
+                    let repeat = usize::try_from(input["repeat"].as_u64().unwrap()).unwrap();
+                    let issuer = format!(
+                        "{}{}",
+                        input["prefix"].as_str().unwrap(),
+                        scalar.repeat(repeat)
+                    );
+                    let encoded = json!({
+                        "version": 1,
+                        "issuers": {(issuer.clone()): {"mode": "anoncrypt"}},
+                    })
+                    .to_string();
+                    (issuer, encoded)
+                }
+                other => panic!("unsupported reference input: {other}"),
+            };
+            let path = policy_file(&encoded);
+            let actual = load_active_policy(Some(&path), &issuer);
             std::fs::remove_file(path).unwrap();
+            let actual = match actual {
+                Ok(ActiveEncryptionPolicy::Anoncrypt) => {
+                    json!({"accepted": true, "mode": "anoncrypt"})
+                }
+                Ok(ActiveEncryptionPolicy::Authcrypt(_)) => {
+                    json!({"accepted": true, "mode": "authcrypt"})
+                }
+                Err(error) => json!({"accepted": false, "native_error": format!("{error:?}")}),
+            };
+            let mut expected = case["expected"].clone();
+            // Python diagnostics remain in the independent fixture; native errors
+            // use the existing sanitized adapter classification, not those strings.
+            expected.as_object_mut().unwrap().remove("python_error");
+            if actual != expected {
+                failures.push(format!("{name}: expected {expected}, got {actual}"));
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
@@ -3015,10 +3968,17 @@ mod tests {
     }
 
     #[test]
-    fn transport_uses_system_roots_unless_an_operator_ca_is_valid() {
+    fn transport_defers_operator_trust_loading_without_exposing_its_path() {
         assert!(DidcommTransport::new(None).is_ok());
+        assert!(DidcommTransport::new(Some("  "))
+            .unwrap()
+            .tls_ca_file
+            .is_none());
+        let transport =
+            DidcommTransport::new(Some("missing-didcomm-ca-private-sentinel.pem")).unwrap();
+        assert!(!format!("{transport:?}").contains("private-sentinel"));
         assert_eq!(
-            DidcommTransport::new(Some("missing-didcomm-ca.pem")).err(),
+            transport.operator_certificates().err(),
             Some(NativeDidcommError::TlsUnavailable)
         );
     }

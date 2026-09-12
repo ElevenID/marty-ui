@@ -136,6 +136,7 @@ impl InitiationHttpError {
 
 fn service_failure(error: &InitiationServiceError) -> InitiationHttpFailure {
     match error {
+        InitiationServiceError::OfferExpiryOutOfRange => failure(500, error.to_string()),
         InitiationServiceError::Request(error) => failure(422, error.to_string()),
         InitiationServiceError::Repository(InitiationRepositoryError::IdempotencyConflict) => {
             failure(409, error.to_string())

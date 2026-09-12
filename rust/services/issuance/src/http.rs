@@ -63,6 +63,7 @@ use crate::{
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
     },
+    canvas_operations::CanvasOperationsService,
     credential::{CredentialIssuanceError, CredentialIssuanceService, CredentialRequest},
     credential_management::{
         CredentialLifecycleAction, CredentialManagementError, CredentialStatusView,
@@ -162,6 +163,7 @@ pub struct CanvasServices {
     management: CanvasPlatformManagementHttpService,
     legacy_ingest: CanvasLegacyIngestService,
     lti: CanvasLtiServices,
+    operations: Option<CanvasOperationsService>,
 }
 
 impl CanvasServices {
@@ -177,7 +179,15 @@ impl CanvasServices {
             management,
             legacy_ingest,
             lti,
+            operations: None,
         }
+    }
+
+    /// Opt in to native operations composition without changing gateway routing.
+    #[must_use]
+    pub fn with_operations(mut self, operations: CanvasOperationsService) -> Self {
+        self.operations = Some(operations);
+        self
     }
 }
 
@@ -294,6 +304,7 @@ struct OptionalServices {
     canvas_oauth: Option<CanvasOAuthService>,
     canvas_management: Option<CanvasPlatformManagementHttpService>,
     canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
+    canvas_operations: Option<CanvasOperationsService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -367,6 +378,7 @@ pub fn router_with_all_services(
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
+            canvas_operations: services.canvas.operations,
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
             canvas_lti_experience: Some(services.canvas.lti.experience),
@@ -552,6 +564,25 @@ pub fn router_with_canvas_management(
         transport,
         OptionalServices {
             canvas_management: Some(canvas_management),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+/// Exercise the same operations composition and transport layer as the full
+/// service. Existing minimal routers remain unchanged unless explicitly opted in.
+pub fn router_with_canvas_operations(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    operations: CanvasOperationsService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_operations: Some(operations),
             ..OptionalServices::default()
         },
     )
@@ -1039,6 +1070,11 @@ fn router_with_optional_services(
         canvas_lti_evidence_sync: services.canvas_lti_evidence_sync,
         canvas_lti_tool_signer: services.canvas_lti_tool_signer,
     });
+    let api = if let Some(operations) = services.canvas_operations {
+        api.merge(crate::canvas_operations::candidate_router(operations))
+    } else {
+        api
+    };
     system
         .merge(api)
         .layer(middleware::from_fn_with_state(transport, legacy_transport))
@@ -1435,16 +1471,18 @@ async fn validate_canvas_credentials_provider(
     State(state): State<IssuanceState>,
     headers: HeaderMap,
     request: Request,
-) -> Result<
-    Json<crate::canvas_credentials_validation::CanvasCredentialsValidationResult>,
-    CanvasManagementHttpError,
-> {
+) -> Result<Response, CanvasManagementHttpError> {
     let request: CanvasCredentialsValidationRequest =
         parse_canvas_credentials_validation_request(request).await?;
-    canvas_management(&state)?
+    let result = canvas_management(&state)?
         .validate_canvas_credentials_provider(&headers, request)
-        .await
-        .map(Json)
+        .await?;
+    // Rendering belongs after the provider has returned its lossless result.
+    // Match the published app's plain 500 without exposing serializer internals.
+    Ok(match serde_json::to_vec(&result) {
+        Ok(body) => ([("content-type", "application/json")], body).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+    })
 }
 
 async fn list_canvas_integration_secrets(
@@ -2311,11 +2349,12 @@ async fn deliver_didcomm_credential(
     if let Err(error) = service.authorize(request.headers()) {
         return error.into_response();
     }
+    let headers = request.headers().clone();
     let Json(input) = match Json::<DidcommDeliverRequest>::from_request(request, &state).await {
         Ok(input) => input,
         Err(rejection) => return rejection.into_response(),
     };
-    match service.deliver_authorized(&input).await {
+    match service.deliver_authorized(&headers, &input).await {
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }
@@ -3464,6 +3503,10 @@ impl IntoResponse for CredentialManagementHttpError {
                     StatusCode::SERVICE_UNAVAILABLE,
                     "Canvas lifecycle retry could not be recorded",
                 ),
+                CredentialManagementError::CanvasTextEncoding => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                        .into_response()
+                }
             },
         };
         (status, Json(json!({"detail": detail}))).into_response()

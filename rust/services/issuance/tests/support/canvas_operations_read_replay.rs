@@ -2,10 +2,28 @@ use axum::{
     body::{to_bytes, Body},
     http::Request,
 };
-use marty_issuance_service::canvas_operations::{candidate_router, CanvasOperationsService};
+use marty_issuance_service::{
+    canvas_operations::CanvasOperationsService, http::router_with_canvas_operations,
+    transport::TransportPolicy, IssuanceRuntime, IssuanceServiceConfig,
+};
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
+
+/// Exercise the unchanged handlers through the same state/transport composition
+/// used by the native process. Gateway ownership is deliberately unchanged.
+pub(super) fn runtime_router(service: CanvasOperationsService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("synthetic operations configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("synthetic operations runtime");
+    router_with_canvas_operations(
+        runtime.state(),
+        StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+        TransportPolicy::new(["https://console.example.invalid".to_owned()]),
+        service,
+    )
+}
 
 pub(super) fn timestamps(value: &mut Value) {
     match value {
@@ -28,6 +46,18 @@ pub(super) fn timestamps(value: &mut Value) {
     }
 }
 
+/// Shared body recipe; raw bytes retain precedence over generated JSON.
+pub(super) fn request_body(case: &Value) -> String {
+    let mut payload = case.get("body").cloned().unwrap_or_else(|| json!({}));
+    if let Some(length) = case["note_length"].as_u64() {
+        payload["note"] = json!("n".repeat(usize::try_from(length).unwrap()));
+    }
+    case["raw_body"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| payload.to_string())
+}
+
 pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, String, Value) {
     let mut headers = std::collections::BTreeMap::from([
         (
@@ -47,18 +77,21 @@ pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, S
     let mut request = Request::builder()
         .method(case["method"].as_str().unwrap_or("GET"))
         .uri(case["path"].as_str().unwrap());
+    let body = request_body(case);
+    if case["method"] == "POST" {
+        let content_type = case
+            .get("content_type")
+            .map_or(Some("application/json"), Value::as_str);
+        if let Some(value) = content_type {
+            request = request.header("content-type", value);
+        }
+    }
     for (key, value) in headers {
         request = request.header(key, value);
     }
     let response = router
         .clone()
-        .oneshot(
-            request
-                .body(Body::from(
-                    case["raw_body"].as_str().unwrap_or("").to_owned(),
-                ))
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::from(body)).unwrap())
         .await
         .unwrap();
     let status = response.status().as_u16();
@@ -128,7 +161,7 @@ pub async fn replay_inputs(pool: &PgPool) {
         frozen["observations"].as_array().unwrap().len(),
         cases.len()
     );
-    let router = candidate_router(CanvasOperationsService::new(
+    let router = runtime_router(CanvasOperationsService::new(
         pool.clone(),
         Some("synthetic-operations-key"),
     ));
@@ -176,10 +209,14 @@ pub(super) async fn seed(pool: &PgPool) {
             .await
             .unwrap();
     }
+    insert_review(pool, "review-dismiss").await;
+}
+
+pub(super) async fn insert_review(pool: &PgPool, id: &str) {
     sqlx::query("INSERT INTO issuance_service.evidence_policy_reviews \
         (id,organization_id,application_id,credential_id,binding_id,status,prior_decision,current_decision,resolution_recovery_pending,created_at,updated_at) \
-        VALUES ('review-dismiss','org-review','application-review','credential-review','binding-review','open','{\"allowed\":true}','{\"allowed\":false}',false,now(),now())")
-        .execute(pool).await.unwrap();
+        VALUES ($1,'org-review','application-review','credential-review','binding-review','open','{\"allowed\":true}','{\"allowed\":false}',false,now(),now())")
+        .bind(id).execute(pool).await.unwrap();
 }
 
 pub async fn replay(pool: &PgPool) {
@@ -189,7 +226,7 @@ pub async fn replay(pool: &PgPool) {
         .fetch_one(pool)
         .await
         .unwrap();
-    let router = candidate_router(CanvasOperationsService::new(
+    let router = runtime_router(CanvasOperationsService::new(
         pool.clone(),
         Some("synthetic-operations-key"),
     ));
@@ -244,7 +281,10 @@ pub async fn replay(pool: &PgPool) {
     assert_eq!(body, json!("Internal Server Error"));
 }
 
-fn generated_ids(value: &mut Value, aliases: &mut std::collections::BTreeMap<String, String>) {
+pub(super) fn generated_ids(
+    value: &mut Value,
+    aliases: &mut std::collections::BTreeMap<String, String>,
+) {
     match value {
         Value::Object(object) => {
             for (key, value) in object {
@@ -272,7 +312,7 @@ fn generated_ids(value: &mut Value, aliases: &mut std::collections::BTreeMap<Str
 }
 
 pub(super) fn job_router(pool: &PgPool, enabled: bool) -> axum::Router {
-    candidate_router(
+    runtime_router(
         CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"))
             .with_job_operations(enabled, ["org-review".to_owned()].into()),
     )

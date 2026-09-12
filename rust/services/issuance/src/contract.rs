@@ -28,6 +28,8 @@ const CANVAS_MANAGEMENT: &[u8] =
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
+const DIDCOMM: &[u8] =
+    include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -87,6 +89,8 @@ struct HttpOperation {
     proof_nonce_behavior_case: Option<String>,
     #[serde(default)]
     credential_behavior_contract: bool,
+    #[serde(default)]
+    didcomm_behavior_contract: bool,
     #[serde(default)]
     canvas_lti_behavior_case: Option<String>,
     #[serde(default)]
@@ -233,6 +237,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid issuance surface", error))?;
     let coverage: Coverage = serde_json::from_str(COVERAGE)
         .map_err(|error| contract_error("invalid native coverage", error))?;
+    let didcomm: Value = serde_json::from_slice(DIDCOMM)
+        .map_err(|error| contract_error("invalid DIDComm delivery contract", error))?;
     let discovery: DiscoveryContract = serde_json::from_slice(STATIC_DISCOVERY)
         .map_err(|error| contract_error("invalid static discovery contract", error))?;
     let tenant_discovery: TenantDiscoveryContract = serde_json::from_slice(TENANT_DISCOVERY)
@@ -824,6 +830,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_token_exchange_cases = BTreeSet::new();
     let mut native_proof_nonce_cases = BTreeSet::new();
     let mut native_credential_contract = false;
+    let mut native_didcomm_contract = false;
     let mut native_canvas_lti_cases = BTreeSet::new();
     let mut native_canvas_oauth_cases = BTreeSet::new();
     let mut native_canvas_management_cases = BTreeSet::new();
@@ -847,6 +854,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             + usize::from(operation.token_exchange_behavior_case.is_some())
             + usize::from(operation.proof_nonce_behavior_case.is_some())
             + usize::from(operation.credential_behavior_contract)
+            + usize::from(operation.didcomm_behavior_contract)
             + usize::from(operation.canvas_lti_behavior_case.is_some())
             + usize::from(operation.canvas_oauth_behavior_case.is_some())
             + usize::from(operation.canvas_management_behavior_case.is_some());
@@ -973,6 +981,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
             )?;
+        } else if operation.didcomm_behavior_contract {
+            require(
+                !native_didcomm_contract,
+                "duplicate native DIDComm contract",
+            )?;
+            validate_didcomm_operation(operation, &didcomm)?;
+            native_didcomm_contract = true;
         } else if operation.credential_behavior_contract {
             require(
                 !native_credential_contract
@@ -1170,6 +1185,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_credential_contract,
         "native credential endpoint behavior coverage is incomplete",
     )?;
+    require(
+        native_didcomm_contract,
+        "native DIDComm endpoint behavior coverage is incomplete",
+    )?;
     for operation in &coverage.platform_additive_http {
         require(
             operation.owner == "mmf-runtime",
@@ -1278,6 +1297,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     })
 }
 
+fn validate_didcomm_operation(operation: &HttpOperation, contract: &Value) -> Result<(), MmfError> {
+    require(
+        operation.didcomm_behavior_contract
+            && operation.operation == "didcomm_deliver"
+            && operation.method == "POST"
+            && operation.path == "/v1/issuance/didcomm/deliver"
+            && contract["schema_version"] == 1
+            && contract["expected_response"]["status"] == "delivered"
+            && contract["transport_claim"]["single_active_attempt"] == true
+            && contract["transport_claim"]["automatic_resend_from_delivery_unknown"] == false
+            && contract["transport_claim"]["completion_fenced_by_attempt_id"] == true,
+        "native DIDComm operation diverges from its delivery contract",
+    )
+}
+
 fn canonical_lf(bytes: &[u8]) -> Vec<u8> {
     let mut canonical = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -1309,12 +1343,46 @@ fn contract_error(message: &'static str, error: serde_json::Error) -> MmfError {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, CANVAS_MANAGEMENT,
-        COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, INITIATION,
+        canonical_lf, validate_didcomm_operation, validate_embedded_contract, Coverage, CANVAS_LTI,
+        CANVAS_MANAGEMENT, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION,
     };
+
+    #[test]
+    fn didcomm_coverage_cannot_select_siblings_or_relax_send_fencing() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).unwrap();
+        let mut operation = coverage
+            .native_http
+            .into_iter()
+            .find(|operation| operation.didcomm_behavior_contract)
+            .unwrap();
+        let contract: Value = serde_json::from_slice(DIDCOMM).unwrap();
+        validate_didcomm_operation(&operation, &contract).unwrap();
+        for path in [
+            "/v1/issuance/initiate",
+            "/v1/issuance/didcomm/deliver/extra",
+        ] {
+            operation.path = path.into();
+            assert!(validate_didcomm_operation(&operation, &contract).is_err());
+        }
+        operation.path = "/v1/issuance/didcomm/deliver".into();
+        operation.method = "GET".into();
+        assert!(validate_didcomm_operation(&operation, &contract).is_err());
+        operation.method = "POST".into();
+        for (field, value) in [
+            ("single_active_attempt", false),
+            ("automatic_resend_from_delivery_unknown", true),
+            ("completion_fenced_by_attempt_id", false),
+        ] {
+            let mut changed = contract.clone();
+            changed["transport_claim"][field] = Value::Bool(value);
+            assert!(validate_didcomm_operation(&operation, &changed).is_err());
+        }
+    }
 
     #[test]
     fn provenance_hash_is_independent_of_checkout_line_endings() {
@@ -1350,8 +1418,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 63);
-        assert_eq!(summary.remaining_http, 68);
+        assert_eq!(summary.native_http, 64);
+        assert_eq!(summary.remaining_http, 67);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

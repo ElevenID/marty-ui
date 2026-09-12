@@ -65,6 +65,10 @@ jobs:
             mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" HEAD)
             for path in "${changed_files[@]}"; do
               case "$path" in
+                rust/services/issuance/src/canvas_sync_processor_contract.md)
+                  # include_str! makes this documentation a compiler input.
+                  rust=true
+                  ;;
                 *.md|docs/*|.github/ISSUE_TEMPLATE/*)
                   ;;
                 ui/*|demo-apps/*)
@@ -262,34 +266,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
-    env:
-      DEVICE_CHALLENGE_TEST_REDIS_URL: redis://localhost:6379/14
-      DEVICE_KEY_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/marty_atomic_test
-      VERIFICATION_ATOMIC_TEST_REDIS_URL: redis://localhost:6379/15
-      FLOW_POSTGRES_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/marty_atomic_test
-    services:
-      postgres:
-        image: postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
-        env:
-          POSTGRES_DB: marty_atomic_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d marty_atomic_test"
-          --health-interval 1s
-          --health-timeout 2s
-          --health-retries 30
-      redis:
-        image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 1s
-          --health-timeout 2s
-          --health-retries 30
+    # Retained Python tests use fake storage and their own loopback mTLS fixture.
+    # Real PostgreSQL/Redis integration coverage remains in test-rust-services.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -387,6 +365,37 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Prepare isolated Canvas worker harness dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/canvas-worker-harness"
+          # These import-only harness dependencies are separate from production
+          # services and the immutable published worker's own environment.
+          "$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install \
+            --disable-pip-version-check --only-binary=:all: --no-deps \
+            SQLAlchemy==2.0.52 greenlet==3.4.0 typing_extensions==4.15.0
+          "$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE" <<'PY'
+          from pathlib import Path
+          import sys
+          assert sys.version_info[:2] == (3, 12)
+          root = Path(sys.argv[1])
+          sys.path.insert(0, str(root / "scripts"))
+          import test_canvas_worker_body_timeout_https as controller
+          matrix, reports, responses = controller.load_inputs(root)
+          assert len(matrix["cases"]) == len(reports) == len(responses) == 6
+          import test_canvas_worker_lease_expiry_https as expiry_controller
+          expiry_matrix, expiry_reports, expiry_response = expiry_controller.load_inputs(root)
+          assert len(expiry_matrix["cases"]) == len(expiry_reports) == 2
+          assert expiry_response["status"] == 200
+          print("Native Canvas BODY and lease-expiry harness imports and frozen inputs verified")
+          PY
+          # Rust invokes python3 by name in preflights AND the full suite.
+          # Publish this interpreter only after both installation and smoke pass.
+          printf '%s\n' "$RUNNER_TEMP/canvas-worker-harness/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: 1.95.0
@@ -629,6 +638,22 @@ jobs:
           # The Canvas PostgreSQL contract launches this actual binary and sends
           # POSIX signals. A test-harness executable is not a substitute.
           test -x target/debug/marty-canvas-sync-worker
+      - name: Preflight timeout published worker parity
+        shell: bash
+        working-directory: rust
+        run: bash ../scripts/ci/run-published-canvas-contracts.sh timeout-preflight
+      - name: Preflight lease-expiry published worker parity
+        shell: bash
+        working-directory: rust
+        run: bash ../scripts/ci/run-published-canvas-contracts.sh lease-expiry-preflight
+      - name: Preflight body-timeout published worker parity
+        shell: bash
+        working-directory: rust
+        run: bash ../scripts/ci/run-published-canvas-contracts.sh body-timeout-preflight
+      - name: Preflight mixed-roster published worker parity
+        working-directory: rust
+        shell: bash
+        run: bash ../scripts/ci/run-published-canvas-contracts.sh mixed-roster-preflight
       - name: Create isolated Rust contract databases
         shell: bash
         run: |
@@ -692,6 +717,22 @@ jobs:
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py
+      - name: Test native Canvas operation timeout TLS parity
+        working-directory: rust
+        run: |
+          python3 -m venv "$RUNNER_TEMP/canvas-operation-tls"
+          "$RUNNER_TEMP/canvas-operation-tls/bin/pip" install --disable-pip-version-check httpx==0.26.0 cryptography==44.0.3
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
+          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}"
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
@@ -837,6 +878,30 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Verify merged Canvas worker deployment configuration
+        run: python3 scripts/test_canvas_worker_compose_render.py
+      - name: Verify captured worker rollback launch configuration
+        run: python3 scripts/test_beta_worker_launch_compose.py
+      - name: Verify complete Canvas worker consumer configurations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Standalone config-only renderer; do not replace the Docker plugin or
+          # change the older bundle compatibility and image-build environment.
+          compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"
+          curl --fail --location --retry 3 \
+            --output "$compose_renderer" \
+            https://github.com/docker/compose/releases/download/v5.4.0/docker-compose-linux-x86_64
+          printf '%s  %s\n' \
+            837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be \
+            "$compose_renderer" | sha256sum --check --strict
+          chmod +x "$compose_renderer"
+          python3 scripts/test_canvas_worker_compose_render.py \
+            --suite consumers --compose-command "$compose_renderer"
+      - name: Verify generated beta application image configuration
+        run: python3 scripts/test_beta_application_image_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
+      - name: Verify native DIDComm configuration ownership
+        run: python3 scripts/test_didcomm_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Expose compiler cache credentials to BuildKit secrets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
@@ -1127,6 +1192,12 @@ jobs:
           done
           docker logs "$container"
           exit 1
+      - name: Smoke-test Canvas worker image entrypoint and secret preflight
+        run: python3 scripts/test_canvas_worker_image_entrypoint.py marty-issuance:ci
+      - name: Verify immutable Canvas worker logging configuration reference
+        run: python3 scripts/test_canvas_worker_logging_reference.py
+      - name: Test packaged Canvas worker startup with published schema and secret sources
+        run: python3 scripts/test_canvas_worker_image_startup.py marty-issuance:ci
       - name: Smoke-test organization image with PostgreSQL and Redis
         shell: bash
         run: |
@@ -1340,7 +1411,9 @@ jobs:
           marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
           curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
           echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
-          uv pip install --system pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
+          # Fixture-integrity tests import the unchanged published SQL helpers;
+          # actual database execution remains in the isolated Rust/Docker gate.
+          uv pip install --system pytest pyyaml jsonschema cryptography playwright sqlalchemy "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |

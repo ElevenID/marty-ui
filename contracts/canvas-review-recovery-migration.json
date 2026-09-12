@@ -1,0 +1,10 @@
+{
+  "repository": "ElevenID/marty-credentials",
+  "commit": "51f0a758a076777cb18a30b1db3f89c74ac23e01",
+  "source": "services/issuance/infrastructure/migrations/versions/20260905_1900_allow_canvas_review_recovery_claim.py",
+  "blob": "96cdaabd80fee1a21322e27c767d7bc3bc00d5c6",
+  "sha256": "b2bde4ce51071bcd8c33f044c66c9bf963243c13a5dec6bfcea951086aee5361",
+  "revision": "canvas_review_recovery_claim",
+  "parent": "merge_issuance_heads",
+  "boundary": "exact official forward migration over the pinned published image; test-only read-only source overlay, not a newly published component"
+}

@@ -1,0 +1,12 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-backoff-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-scenarios.json",
+  "scope": "Actual worker retry escalation from historical counts seeded before startup, across exponential and capped backoff boundaries; no running clock or retry state mutation",
+  "cases": [
+    {"name": "second_attempt", "status": 503, "body": {}, "retry_count": 1, "delay_bounds": [60, 75], "seed": ["UPDATE issuance_service.canvas_oauth_connections SET revoke_retry_count=1 WHERE id='worker-rest-connection'"]},
+    {"name": "last_uncapped_base", "status": 503, "body": {}, "retry_count": 9, "delay_bounds": [15360, 19200], "seed": ["UPDATE issuance_service.canvas_oauth_connections SET revoke_retry_count=9 WHERE id='worker-rest-connection'"]},
+    {"name": "first_capped_base", "status": 503, "body": {}, "retry_count": 10, "delay_bounds": [21600, 27000], "seed": ["UPDATE issuance_service.canvas_oauth_connections SET revoke_retry_count=10 WHERE id='worker-rest-connection'"]},
+    {"name": "exponent_cap", "status": 503, "body": {}, "retry_count": 11, "delay_bounds": [21600, 27000], "seed": ["UPDATE issuance_service.canvas_oauth_connections SET revoke_retry_count=11 WHERE id='worker-rest-connection'"]},
+    {"name": "historical_large_count", "status": 503, "body": {}, "retry_count": 999, "delay_bounds": [21600, 27000], "seed": ["UPDATE issuance_service.canvas_oauth_connections SET revoke_retry_count=999 WHERE id='worker-rest-connection'"]}
+  ]
+}

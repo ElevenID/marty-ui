@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: its shared lossless configuration and native PostgreSQL consumer-range replay now pass locally, but whole-worker/all-consumer cutover gates remain open. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. Native Canvas worker launch wiring is implemented in newer local source, but all eight remaining Canvas operations retain legacy gateway ownership. PR #814 remains draft; its older head's Rust Service Tests passed, while newer reviewed source still needs exact-head CI, landing and effective consumer acceptance. Reachable Python features and other-worker crypto work are preserved until retirement gates pass. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-05
+**Last updated:** 2026-09-12
 
 ## Objective
 
@@ -29,9 +29,1673 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-05
+## Current execution snapshot — 2026-09-12
 
-### Current operations baseline and recovery repair
+Current remaining Canvas work is six base gateway cases, nine full lifecycle
+cases, production adoption/transport qualification of the 51-observation signing
+diagnostic helper, compatible artifacts and effective consumer acceptance. Native
+worker launch wiring and Kubernetes HMAC configuration are already implemented
+in source; source selection is not deployment acceptance. All eight Canvas
+operations still retain legacy gateway ownership. The
+[current Canvas audit](rust-migrations/canvas-worker-cutover-readiness.md#current-remaining-work-audit)
+supersedes historical pending-failure and unimplemented-launch statements.
+
+PR #814 remains draft and not deployed. Reviewed batch `f60aefc74` is pushed;
+CI `34706838536` has passed security scanning and release-contract tests, with
+Rust image builds and Rust CodeQL also pass. The runtime job subsequently failed
+because a health test selected the first coverage entry after DIDComm insertion:
+actual status 200 was compared with a missing expected value. A scoped test
+selector repair is integrated as `1d722b432`: all twelve HTTP tests, strict
+issuance Clippy and formatting passed. No runtime health behavior changed.
+The later keyed Flow and four delivery-mode Canvas lifecycle
+cases remain local and do not reset that hosted run. Canvas integration
+`9f6679395` qualifies eight of seventeen lifecycle cases with real gateway and
+main-process publication, preserving lossless delivery snapshots. Unkeyed native
+gRPC delivery qualification is now integrated locally as `8ae16c026`: ten scenarios,
+the retained keyed Flow regression and combined sixteen DIDComm tests passed,
+along with strict Clippy. Consumer activation and new exact-head CI remain open.
+Hosted `184509745` passed Rust
+formatting/packaging, service-image builds, all four runtime preflights and the
+complete Rust Service Tests job in run `34701797735`. Its security scan found stale Bun Vitest
+4.1.10 dependencies. Reviewed local repair `b0fb087c2` aligns the suite and both
+manifest floors to 4.1.11; Bun/npm audits report zero vulnerabilities, 1,092 UI
+tests and 83 focused Python checks passed. The release-contract job also failed
+one wallet-fixture shutdown assertion: TCP connect did not guarantee server
+acceptance before shutdown. Reviewed test-only `c72ad1273` adds that explicit
+checkpoint; all 38 fixture tests and ten repeats of all three shutdown cases
+pass without changing runtime or relaxing assertions. Both repairs are now
+included in `f60aefc74` and their respective hosted jobs pass. Integration `31b07a20a` passed 3,089 combined
+root/service Python tests with three explicit skips before those later additions.
+
+Earlier exact hosted `aa33eff6f` passed its
+configured runtime gate: 189 published-schema tests, zero failures, two explicit
+capture ignores, plus all four preflights. The formerly failing lease-expiry case
+passed in preflight and the full run; that does not establish the old intermittent
+cause is fixed. Runtime, images, browser and other listed jobs passed. The only
+direct CI failure was eleven formatting hunks in one shared helper; reviewed
+format-only repair `c2cc53e15` is included in hosted `184509745`. No merge is claimed.
+
+DIDComm source `40b06fcc8`, integrated as `9b4a8b67a`, preserves five freshly
+captured Python state errors without moving eligibility ahead of durable
+replay/recovery. Its 375 issuance unit tests, six direct HTTP tests, two initiation
+HTTP tests and strict Clippy passed. Shared synthetic DID documents were extracted
+only after executed byte comparison; commit `536a3ee8d` retains immutable hashes.
+
+The separate composed branch has now executed nine real native delivery cases
+against owned published-schema PostgreSQL and loopback HTTPS: four anon/auth ×
+direct/projector successes, two wallet-503 cases, two untrusted-TLS cases and one
+wrong authcrypt sender key. It checks canonical decryption, linkage across status
+allocation/signing/persistence, durable outcomes and no-resend replay. Signing,
+issuer context and DID/status peers remain controlled; automatic cases are
+projector tests, not fresh initiation HTTP/admission. Reviewed recovery source
+`c8af5d9e` (local integration `985c0aa5e`) extends this to thirteen cases with actual
+claim concurrency and injected post-transport event-projection failure/recovery
+for both modes, without duplicate POST, allocation or signing.
+
+A separate candidate-only gateway gate now executes eleven cases over real
+gateway-to-native HTTP, published PostgreSQL and HTTPS delivery. It preserves
+management-key injection, trusted tenant, complete error envelopes and all five
+frozen state failures; a proven legacy trap remains unused by candidate traffic,
+including native unavailability. The configured combined run passed eight test
+functions in 36.35 seconds, strict issuance Clippy, nineteen-package formatting
+and 166 CI/preflight tests. Gateway identities and signing/DID/status peers remain
+controlled; this is not packaged-process or fresh automatic-admission proof.
+
+Configuration source `671cd18ba` adds reviewed native resolver forwarding and
+explicit policy/CA mount ownership, with actual Compose and 257 combined local
+configuration/CI guards passing. Reviewed `417fbd974` now enforces paired beta
+policy selection and validates actual Compose before mutations; 307 integrated
+selector/configuration tests passed. TLS source `d9740b515` now reloads trust per
+delivery and preserves unrelated startup; fifteen native/thirteen gateway cases,
+real trust rotation/bundle controls, six HTTP tests, executable bad-CA startup,
+all 378 issuance library tests and strict Clippy pass.
+
+Source `25f14fb3a` freezes eight full old HTTP/gRPC response pairs and four
+idempotency guards with exact source-checked replay and fifteen repository-only
+tests. The old gRPC offer-only behavior and governed native push target are kept
+explicit; projection snapshots are not full admission qualification. Existing
+canonical peer0/abbreviated-peer2 defects are documented separately from the
+working full-peer2 representation transferred without loss.
+
+Reviewed source `ff7d3462f` (integration `d4a8cae53`) now selects only direct
+`POST /v1/issuance/didcomm/deliver` in source. The embedded selection passed 108
+gateway tests, 379 issuance tests, eight HTTP tests, nine configured target tests
+including fifteen native/thirteen gateway cases and real trust rotation, actual
+bad-CA executable startup, strict Clippy and nineteen-package formatting. The
+missing typed coverage registration found by the initial full run was repaired
+and the final full issuance/composed gates passed. Eighty-two coverage/CI guards
+passed. Native HTTP coverage is now 64 of the frozen 131 operations.
+
+Clean combined integration `3afeb32af` passed 3,135 root/retained-service Python
+tests with three explicit skips in 205.47 seconds, and its read-only Compose
+configuration gate passed independently. Hosted qualification remains separate.
+
+Production and beta deployments are unchanged; this is locally reviewed source,
+not a merge or deployed acceptance claim. Fresh automatic HTTP/Flow admission,
+compatible consumer/image selection and safe Python retirement remain open.
+Configured offer-TTL parity is repaired in Rust (`2579307e2`) and the existing
+operator setting is forwarded to native beta issuance (`ef027ff22`). Eighteen
+unchanged Python observations cover parsing and expiry boundaries; the Compose
+gate checks default/custom/zero/negative bindings without clamping.
+Fresh automatic HTTP composition (`0d50538d2`, reviewed source `f14da5255`)
+now proves actual reservation and delivery for anoncrypt, authcrypt and mixed
+ordinary-wallet offers, plus keyed-push rejection before side effects. The author
+tree passed all ten configured target tests in 47.84 seconds and strict Clippy.
+Controlled clock, seed, signer and control-plane dependencies remain explicit;
+this is not packaged gateway or Flow acceptance. Follow-on reviewed source
+`cc8e0406e` (integration `7e349c652`) qualifies subject fallback, no-holder pending
+responses, refused-wallet/no-resend behavior and mixed keyed rejection through
+the same fresh HTTP graph. Its nine unkeyed cases and two keyed controls passed
+with all existing native/gateway regressions (ten configured target tests,
+47.61 seconds), strict Clippy and verified container cleanup. Genuine
+ordinary-wallet keyed admission recovery now passes in reviewed source `214531581`
+(integration `fb6d266c8`): actual PostgreSQL lookup, exact frozen hashes, complete
+response/row equality and conflict rejection across changed TTLs, with no repeated
+template/clock/seed/issuer work. Its eleven configured tests and strict Clippy pass.
+Historical keyed HTTP recovery is now qualified by reviewed `23d1bc76a`
+(integration `20f9e6988`): five actual PostgreSQL/HTTP scenarios, repeated keyed
+delivery without resend, changed-request conflict, and failed/bare-issued
+no-delivery safeguards. All fourteen configured tests and strict Clippy passed.
+The remaining consumer steps are actual Flow/gRPC qualification, selecting the
+qualified routes/consumers, safe Python retirement and release/beta acceptance.
+The keyed Flow provider boundary has since passed in local `25d2d06f9`
+(reviewed source `71cd472f7`): actual provider/MMF channel/tonic/native platform
+and PostgreSQL, authenticated ordinary creation/recovery/conflict and unchanged
+pure/mixed DIDComm keyed rejection. The combined fifteen-test target and strict
+Clippy passed. Governed unkeyed RPC push remains next; full Flow orchestration,
+durable outbox and deployed selection are not claimed by this provider gate.
+The gateway candidate is now locally qualified in reviewed `2c4d4ff7e`
+(integration `c5a390593`): nine fresh scenarios traverse real gateway/upstream HTTP,
+the same native PostgreSQL/crypto/HTTPS graph, exact public redaction, upstream
+401 and no legacy fallback. Twelve configured target tests passed in 73.99 seconds
+with strict Clippy and verified cleanup. This is not selection or deployment;
+keyed rejection and subsequent replay controls remain native-only in that fixture.
+See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
+KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
+The earlier full-library checkpoint `0d50538d2` passed 383 issuance library tests,
+three initiation and six direct HTTP tests, and ten configured target tests
+(47.55 seconds). Strict package Clippy and formatting across all 19 workspace
+packages passed; all six exact-owned test containers were verified absent.
+Production and beta were not changed by these tests.
+
+### Previous qualification snapshot — 2026-09-08
+
+Latest local integration `4d8b5728b` includes qualified oversized-note gateway
+parity from `574cb4895`: 42 native forwards, zero candidate legacy forwards,
+thirteen pure controls and strict scoped Clippy passed. The configured candidate
+took 7.84 seconds and its shared actual-process lifecycle regression took 5.67
+seconds. The base corpus now has 40 represented names and six remaining; these
+are not 40 exact unadapted replays. Thirteen full lifecycle cases remain. See the
+[coverage inventory](rust-migrations/canvas-gateway-coverage.md).
+The combined DIDComm/diagnostics tree `d27f12147` passed all 2,933 root Python
+tests (three platform skips) in 207.84 seconds and all 116 retained service tests
+in 0.83 seconds. Only documentation changed while those suites ran; the later
+two-helper Rust note expansion has separate qualification above.
+Combined native qualification at `4d8b5728b` then passed 28 DIDComm unit tests,
+five DIDComm HTTP tests, six lease-expiry diagnostic controls and strict scoped
+Clippy. The configured gateway helper inputs exactly match the separately
+qualified note commit. The diagnostic controls are not an actual rerun of the
+failed long-running expiry scenario; new exact-head hosted qualification remains
+required before merge.
+The earlier combined policy/tenant integration `3aba9e122` passed all 2,924
+root tests (three platform skips) in 219.29 seconds and all 116 retained service
+tests in 1.17 seconds. Only documentation changed while these suites ran.
+Earlier `9a292d9cd` passed 2,924 root tests (three platform skips) and all 118
+separately collected service tests. Subsequent webhook-helper retirement
+`d5f16228e` transferred its two Python tests into Rust before deleting the unused
+100-line helper and 61-line test file. Six native auth tests, 13 ownership/
+composition tests, and all 116 retained service tests passed. The combined tree
+preserves the separately qualified gateway and webhook inputs. These are local
+results, not the failed hosted `d498` result below.
+Two unused Python helpers (`common/di.py`, `common/metrics.py`) were deleted
+after caller/packaging review and passing tests; their migration-image copies
+were unused. Exact-path retirement guards preserve retained common adapters.
+The Python test job no longer provisions unused PostgreSQL/Redis containers;
+its complete test command and Rust integration fixtures remain unchanged.
+
+The newer PR #814 head `d498` failed hosted qualification in
+[CI34233064711](https://github.com/ElevenID/marty-ui/actions/runs/34233064711).
+Runtime job `102083828642` ended on 2026-09-08 at 15:15 UTC: all four preflights
+passed, but the full published-schema suite reported 170 passed, one failed
+and two explicit captures ignored in 4544.64 seconds. The parallel Rust/database
+group exited successfully. `worker_lease_expiry_matches_frozen_published_process`
+failed during `late-response-window`: the observed transaction stayed leased
+with no terminal status despite renewal and original expiry; the coordinator
+reported `AwaitLateWindow` then `FailureUnknown`. This does not identify the
+underlying runtime cause. A narrow closed-category diagnostics repair is being
+qualified without changing timing, privacy or parity gates. Image, browser and
+UI jobs completed successfully. The closed diagnostic repair is now locally
+qualified by the combined controls above, but the original runtime mismatch
+is not declared fixed. Service Tests `102083828627` failed a stale assertion that mapped
+the worker to an issuance image, and the Rust 2021 formatting gate also failed.
+The service-image assertion is repaired locally in `121b77737`; Rust 2021
+formatting is repaired in `cca487a73`. Nine focused image-strategy tests and all
+118 service tests passed, and 229 target format checks passed. The earlier
+2,891-test root `tests/` run did not collect
+`services/`; the 118-test service suite is separate evidence, not part of that
+count. Neither local repair is a passing hosted rerun. The verified
+`afc8bd754` baseline below remains attributed to its exact
+head.
+
+Draft PR #814 at `afc8bd754` passed
+[CI34223397680](https://github.com/ElevenID/marty-ui/actions/runs/34223397680).
+Runtime job `102051657514` passed all four preflights and the complete database
+groups. The configured published-schema result was 169 passed, zero failed and
+two explicit capture tests ignored in 4089.75s. The worker/PostgreSQL target
+passed 11 tests with two manual repository diagnostics ignored in 95.92s.
+These terminal results do not qualify subsequent unpushed changes.
+The combined local Python suite passed **2,723 tests with three skips** in
+211.04s. A subsequent reviewed real-PostgreSQL warning regression passed in
+7.06s with Clippy passing, and is retained in unpushed `ccedce2f2`.
+
+The separate `feat/canvas-worker-native-consumer-cutover-v1` branch prepares
+all worker image/launch mappings, native-aware operational validators and full
+configuration preservation tests. The preceding local suite passed 2,821 tests with
+three skips; the 15-consumer, five-generated and 24-rollback model gates passed.
+Independent source/test review passed. The subsequently discovered Kubernetes
+issuance image-binding repair is now implemented locally and independently
+reviewed: full deployment validates one explicit immutable `MARTY_ISSUANCE_IMAGE`
+against the checked-in eligible stack lock before deployment writes, and uses
+that same reference for the API and migrations. Provider-neutral mirrors must
+retain the canonical digest; image-only updates skip the external issuance API.
+The repair passed 281 focused tests in 17.03s; the revised source's independent
+full suite then passed 2,884 tests with three skips in 202.62s. Hosted
+qualification, merge and publication remain pending; no deployment is authorized.
+Local beta builds now include the worker's own artifact
+(18 builds, 19 services); Kubernetes uses the per-service tag its publisher
+actually builds. Python issuance/migrations, both rollback runtimes and every
+non-selection setting remain required. See the
+[staged consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md#staged-native-consumer-selection-2026-09-08).
+No consumer preparation authorizes source deletion, main merge or deployment.
+
+The checked-in issuance pin still selects published credentials `v0.1.72`, which
+predates the merged recovery migration. Binding it correctly does not close that
+release-artifact gap. The version-only preparation passed 68 local release tests;
+[PR #272](https://github.com/ElevenID/marty-credentials/pull/272) merged through
+the protected queue at `9bd2747f040f203188529758ec38f0a5dce5ac5f`. All five
+configured exact-main release gates passed, including CI `34230259298`.
+The initial dispatch was rejected because publication workflows were manually
+disabled. After explicit user approval, the three required workflows were
+re-enabled. [Preparation 34236062000](https://github.com/ElevenID/marty-credentials/actions/runs/34236062000)
+passed and created annotated `v0.1.73` at the exact green main commit.
+[Release 34236090229](https://github.com/ElevenID/marty-credentials/actions/runs/34236090229)
+has a failed pre-release Python test job: 1,689 passed, two skipped, and three
+security assertions failed against pinned Core 0.1.60. Main CI instead builds
+newer Core source `08a0d435`, which contains the already-merged fixes. No published
+Core release contains those fixes. Current Core main is 0.2.0 and intentionally
+omits DIDComm APIs still required by credentials, so changing the dependency pin
+alone is not a safe repair. Preserve all assertions and the immutable v0.1.73 tag;
+qualify compatible consumer capabilities before selecting a new release.
+The release run is now terminal failure: artifact builds passed but
+draft creation was skipped. Image publication, artifact qualification and lock
+advancement remain pending. Credentials ownership is now explicitly clear of
+the crypto worker. The contract-only inventory passed independent review and
+45 tests (37 retained behavioral cases and eight inventory/parser checks).
+[Credentials PR #273](https://github.com/ElevenID/marty-credentials/pull/273)
+merged through the protected queue at `501977d0759ccad42b3e55488e65151c3934ef39`
+on 2026-09-08 after exact-head and queue qualification.
+User decision on 2026-09-08: migrate the remaining DIDComm consumer behavior to
+Rust first, reusing the existing native issuance owner; defer DIDComm KMS-layer
+corrections as outstanding work `DIDCOMM-KMS-001` in Credentials
+`docs/rust-migrations/didcomm-kms-outstanding.md`. Preserve anoncrypt and true
+authcrypt with no downgrade. No new backend is being provisioned, no removed
+Core Python API is restored, and the Rust port alone is not KMS-only acceptance.
+The native DIDComm reconciliation now includes two reviewed repairs in local
+`3aba9e122`: policy issuer length uses Unicode characters like the captured
+Python parser, and direct delivery carries the trusted tenant header into the
+existing shared authorization guard before downstream lookup. Ten policy
+vectors and six tenant observations were frozen from unchanged Python; both
+regressions failed before repair. The combined native tree passed 16 HTTP/
+delivery/atomicity tests and 21 DIDComm unit tests. These are not actual-wallet
+or PostgreSQL cutover acceptance. Public error/state/retry reconciliation,
+resolver capability qualification, full two-mode delivery and consumer routing
+remain before Python retirement. No KMS implementation or dependency pin changed.
+The subsequent tests-only `4fa4c3b5c` adds real canonical-Core authcrypt
+encryption/authenticated-decryption after a policy flip and resolver shutdown,
+plus wrong-sender rejection without anoncrypt fallback. All 23 combined DIDComm
+unit tests passed at that head; the author also passed strict scoped Clippy.
+The first positive test exposed an incomplete synthetic DID document; adding
+its required separate signing relationship fixed the fixture without changing
+production crypto. This roundtrip is not independent-wallet/full-service
+acceptance and does not close the deferred KMS correction.
+Resolver tests-only integration `a6100933b` adds canonical embedded `did:key`
+and `did:jwk` resolution (correct key binding, then missing-endpoint rejection)
+and `did:peer:2` with the existing full service representation, including a real
+anoncrypt/decrypt roundtrip without network resolver configuration. The selected
+author tree passed 23 native DIDComm unit tests and strict library Clippy;
+the new cases also passed in the combined 28-unit run above.
+Peer method 0 and abbreviated peer service representations remain unqualified;
+no unnecessary Cargo features or Core dependency changes were introduced.
+Public prerequisite parity integration `103e6c918` preserves eight captured
+Python status/detail responses through a closed native error enum, without
+including arbitrary exception text. The unchanged Python helper capture checked
+zero status allocation, signing and packing. Native qualification passed 26
+DIDComm unit tests, five HTTP tests and strict scoped Clippy on the isolated
+author tree, after the HTTP regression first failed with 503 instead of 422.
+New controls cover typed preflight failure ordering, exact transport-claim
+release and failed-release fencing, and generic post-preflight packing/encryption
+failure with release before retry. Existing successful replay, unknown-outcome
+and concurrent-claim behavior is retained. Combined-tree qualification passed
+as recorded above; this is not full wallet/PostgreSQL consumer cutover evidence.
+Automatic-response integration `29beef466` fixes successful DIDComm issuance
+reporting the old pending status. Seven unchanged Python observations precede
+the repair; the actual native delivery/projector regression failed pending
+versus issued before correction. Only pending/authorized response statuses are
+promoted after durable success; replay preserves issued/revoked/expired/failed/
+signing statuses. Missing endpoints, failures and native no-resend behavior
+remain unchanged. The isolated author tree passed 47 initiation tests, nine
+gRPC tests, 17 HTTP/delivery integration tests and strict package Clippy;
+combined `29beef466` then passed all 372 issuance unit tests in 16.54 seconds,
+eight DIDComm/initiation HTTP and legacy-fence integration tests, and strict
+package Clippy with all test targets. Only documentation changed during that
+combined run. See the
+[DIDComm consumer cutover gates](rust-migrations/didcomm-consumer-cutover-readiness.md)
+for actual-wallet/PostgreSQL, gateway, deployment-consumer and Python-retirement
+requirements. Existing Python failed-receipt URI and repeated-wallet-send
+observations are explicitly not claimed equivalent to safer native behavior.
+The separate PyPI publication workflow stays disabled.
+No deployment has occurred. The redundant local release branch was removed
+only after its entire source tree was verified identical to merged main; GitHub
+had already removed its remote branch.
+
+Separate local gateway work committed the actor-header sanitizer (`8f4289178`)
+and explicit-client transport seam (`3139e1869`). Red/green tests, 107 gateway
+unit tests, three executable smoke tests and strict gateway Clippy passed; one
+existing Redis integration test remains ignored, not qualified. The first
+configured gateway-to-issuance/PostgreSQL candidate test passed in 7.80s with
+owned-container cleanup verified. It covers all eight route selections, seven
+positive frozen cases, trusted dismiss actors/audits and denied/duplicate
+isolation. Identity providers are controlled ports; this is not the gateway
+binary or full lifecycle acceptance. Remaining error, foreign-object, recovery
+and lifecycle cases still precede route cutover and Python deletion. The new
+test is registered in the existing mandatory full database gate, but these
+local changes are not yet merged or qualified by hosted CI.
+
+The integrated gateway lifecycle helper has independent source-review clearance and
+reuses the actual issuance process/dependency owner for suspend, revoke, mirror
+refusal and publication refusal, including the held-claim conflict and durable
+duplicate guards. Configured local execution and integrated-source qualification
+passed; hosted qualification remains pending. Its explicit
+public error expectations do not replace the frozen direct-response contract;
+candidate routing and controlled identity ports are not production route
+cutover. No gateway route change, reachable Canvas Python endpoint deletion or deployment has been
+performed in this lane; those actions remain gated by the required evidence.
+The credentials release is now explicitly authorized and in progress above;
+that does not replace the remaining migration and deployment gates.
+
+Cleanup also found unique unmerged UI key-custody work in `827ab777b` on local
+main and the security branch. Both references are preserved. Backend
+`key_reference` contract proof and ownership handoff must precede its port; mock
+UI tests alone do not establish compatibility. See the
+[preservation hold](rust-migrations/marty-ui-worktree-cleanup-inventory-2026-09-07.md#ui-preservation-and-compatibility-hold-2026-09-08).
+
+### Earlier preparation checkpoints (historical)
+
+The eight operations handlers are now composed into the native executable with
+one shared credential lifecycle service; gateway routing remains unchanged.
+Actual-process auth/transport, ten configured operations/lifecycle test entries,
+362 issuance unit tests and independent review passed at `211ae9d8b`. The
+subsequent actual-main four-case lifecycle/publication test passed in 8.72s at
+`8df5df68f`, with ten retained configured status regressions in 55.09s. The public
+gateway path and fresh-head hosted qualification remain open.
+See the [composition checkpoint](rust-migrations/canvas-review-resolution.md#native-composition-checkpoint-2026-09-08).
+The combined draft passed 2,699 Python tests (three skips) in 202.58s and all
+four executable smoke tests in 7.03s. Worker CI at `67ee5c986` identified strict
+output rejection after successful early renewal and shutdown checks; bounded
+output classification was added without allowing that output. The `4b26aacb1`
+run identified the SQLx slow-query warning signature. A worker-only repair keeps
+slow SQL statements at DEBUG with the same one-second threshold, preserving
+operational warnings/errors and the existing logging filters. Its real PostgreSQL
+baseline/WARN/DEBUG test passed in 6.88s, all seven worker controls (including the
+16-case frozen logging matrix) passed, and strict Clippy passed in 26.09s. The
+actual-main lifecycle gate also passed on the combined local source in 7.06s.
+Full native BODY/expiry qualification remains open; no strict gate is relaxed.
+
+Parallel consumer hardening now includes a shared generated-release image plan
+and complete effective-model checks for all 19 application services. The local
+verification rehearsal pin also owns recorded provenance, fixing a mutable-tag
+race without changing the Python issuance/worker selection. Independent review,
+76 focused tests and five actual config-only Compose comparisons passed; a
+mandatory generated-overlay CI gate was added. See the
+[consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md#generated-release-image-follow-up-2026-09-08).
+Worker BODY/expiry qualification, composed operations lifecycle gates, actual
+consumer switching and beta acceptance remain separate unfinished work.
+
+### Historical transport integration and merge gates
+
+The application REST repair at `2d864723f74831d4338e1686c242b1bad534a4b9`
+is on draft PR #814. [CI34200316184](https://github.com/ElevenID/marty-ui/actions/runs/34200316184)
+completed successfully with required checks passing. Runtime job `101977399347`
+passed 146 configured published-schema tests in 3379.26s and four
+worker/PostgreSQL tests in 98.32s. All four native header-timeout HTTPS cases,
+seven mixed-roster stages with 55 actual HTTPS requests and 104
+operation-timeout/TLS cases passed. This qualified checkpoint does not establish
+whole-worker cutover or qualify the newer integrated `4fbe9fdcb` candidate.
+The separately registered body corpus passed exact six-case regeneration in
+263.15s at `c092509c7`; [native body replay](rust-migrations/canvas-worker-native-body-replay.md)
+is implemented and reviewed locally on `feat/canvas-worker-native-body-replay-v1`,
+with runtime policy unchanged. Local gates passed 2,365 Python tests / three
+explicit skips, ten shared coordinator controls, 354 issuance library tests and
+strict all-target Clippy. Actual native Linux body qualification remains pending.
+
+The [live-provider expiry reference](rust-migrations/canvas-worker-live-provider-expiry.md)
+passed independent A/B captures in 113.34s and 112.78s at `4fbe9fdcb`, with
+identical 19,575-byte reports. The exact corpus is frozen and its registered
+ordinary regeneration passed locally in 113.12s with exact-owned cleanup.
+Published queued renewal revived the lease after original expiry while provider
+input was pending; both cases then succeeded. The separate native repository
+lock-wait diagnostic now passed two actual PostgreSQL cases and five pure
+controls in 43.35s. Both renewals returned true; the crossing case proved original
+expiry followed by a current lease, with exact identity checks and verified
+fixture removal. This
+is not full-worker provider/effect/recovery parity and does not permit weakening
+fresh-lock side-effect fences. The reference checkpoint's local validation passed 2,538 Python tests with
+three explicit skips in 170.56s, Rust compilation in 17.83s and strict all-target
+Clippy in 8.55s. Integrated head `ca1dcf00b` then failed
+[CI34207893818](https://github.com/ElevenID/marty-ui/actions/runs/34207893818):
+header parity passed in 107.46s, but BODY preflight stopped in 3.80s because
+the Rust job's Python environment lacked SQLAlchemy. No native BODY request
+ran; mixed/full configured suites were skipped. An isolated, pinned harness
+environment and import/input smoke check repair this setup boundary without
+changing runtime or frozen reference inputs. Fresh-head qualification is still
+required; local passes do not qualify actual BODY or live-provider expiry.
+
+Remote head `53468331f3018b05a0fd8c1c81f7a258b6e0714d` ran
+[CI34210124048](https://github.com/ElevenID/marty-ui/actions/runs/34210124048).
+Runtime job `102008916081` failed actual BODY parity after successful setup and
+header parity (104.99s). Application/roster prompt and application progress passed;
+roster progress observed `TerminalRetry` instead of success after the final 24s
+chunk. BODY preflight failed in 117.33s; later mixed/full groups were skipped.
+This supplies actual evidence for a scoped roster read-inactivity repair. In the separate LEASE
+worktree, the reviewed native expiry coordinator/controller are registered,
+with an early expiry preflight integrated before BODY and the full suite
+retained. Its first actual Linux native expiry replay failed at `3967412b7`
+before outcome publication, as recorded below. Local compilation
+passed in 11.23s, three new Rust pure controls in 0.00s and strict all-target
+Clippy in 33.18s. The complete LEASE Python suite passed 2,627 tests with three
+explicit skips in 195.22s. The exact isolated workflow import smoke loaded all
+six BODY and two expiry cases without executing either reference worker.
+No runtime policy, frozen source, consumer routing or deployment
+changed in this harness lane.
+
+The subsequent scoped roster repair uses the shared operation transport with a
+20s inactivity budget and a private prepared origin/address, preserving a single
+validated DNS pin without changing application 15s or unscoped/LTI/OAuth/signing
+policies. Independent review passed. Local validation passed 362 issuance library
+tests in 15.89s, strict all-target Clippy in 24.50s and all 104 frozen actual TLS
+transport cases; the full worker contract executable compiled in 38.55s.
+This repair still needs fresh-head hosted BODY and expiry parity; neither local
+checks nor the three previously passing BODY cases authorize cutover.
+
+Pushed head `3967412b7fbe4627a12f313e9d4a4b8156f14f93` reached
+[CI34212739731](https://github.com/ElevenID/marty-ui/actions/runs/34212739731).
+Runtime job `102017341528` passed setup, compilation, actual AGS/NRPS and header
+parity (108.69s), then failed native expiry preflight in 15.00s: its coordinator
+exited during `outcome-observed` before publishing a result. The byte-count-only
+diagnostic does not identify which invariant failed. BODY/mixed/full groups were
+skipped. A closed diagnostic repair is underway without changing frozen inputs,
+runtime behavior or timing gates. PR #814 stays draft and unrouted.
+
+The reviewed diagnostic repair passed the complete local Python suite (2,648
+tests, three explicit skips, 170.57s), four Rust coordinator controls (0.00s
+after 9.97s compilation), and strict all-target Clippy (5.17s). The raw frozen
+BODY/expiry hashes are unchanged. Fresh hosted native replay is still required.
+
+At `ce19e030c`, [CI34214817411](https://github.com/ElevenID/marty-ui/actions/runs/34214817411)
+runtime job `102024020884` passed header parity (106.41s), then failed expiry
+(15.14s) with `FailureRenewalBlocker`. Closed diagnostics and source inspection
+identify a harness identity mismatch: the shared launcher overrides the database
+application name expected by the observer. A narrow single-identity repair and
+actual SQLx-parser regression are underway; no renewal fence or frozen outcome
+is weakened. BODY/mixed/full suites were skipped and remain unqualified at this head.
+
+The identity repair now passes independent review, three new SQLx/frozen identity
+controls, four retained expiry controls, 82 focused Python tests (0.39s), and
+strict all-target Clippy (3.24s). Final compilation took 7.96s; actual native
+replay remains required. Parallel consumer preparation at `e93a419a5` adds exact
+native self-host loader rollback support without switching current consumers:
+84 PowerShell tests, 24 actual config-only Compose merges and the full Python
+suite (2,662 passes, three skips, 191.74s) passed. The updated
+[consumer audit](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md)
+retains generated-overlay, all-consumer, secret-wiring and operations-route gaps.
+
+Parallel work at `ceb5729a5` added an isolated DRY Rust signing diagnostic helper
+and explicit contract test target. All 45 frozen detail and six operation-message
+projections passed within 13 pure tests (0.01s after 33.64s compilation), with
+independent review and strict all-target Clippy (23.02s). The helper is not yet
+production-wired: overlapping crypto ownership, actual HTTP/decoding parity and
+adapter adoption remain gate 13 work. No signing feature or caller was removed.
+
+Earlier candidate `cf5182ef73678b5e0d47cacf23c1f5b38150cd5d` ran actual native timeout
+preflight in [CI34197335937](https://github.com/ElevenID/marty-ui/actions/runs/34197335937).
+Runtime job `101967919625` passed the prompt application control, then observed
+`TerminalSucceeded` instead of the required delayed-application retry, with
+job, fact, snapshot and target differences. This supersedes the earlier
+byte-count-only failure at `7ca035d03`. The roster cases and later configured
+suites were not reached. At that historical head, PR #814 was blocked: Rust Service Tests
+and CI Gate failed; the other checks completed successfully apart from the
+expected scorecard skip. See the
+[native timeout record](rust-migrations/canvas-worker-native-timeout-replay.md).
+This does not revoke the earlier scoped `f0` checkpoint below or qualify worker
+cutover. The isolated application REST repair is implemented and compiled in
+65s; its first unit run passed 353 tests in 18.12s. After the added malformed-header
+regression and test-spy type alias, final unit execution passed 354 tests in
+15.73s (8.94s compilation). Strict all-target Clippy passed in 21.75s;
+the subsequent `2d864723f` hosted qualification passed as recorded above.
+Explicit application/issued-drift scope uses
+the shared 15s operation transport; roster, LTI and signing paths remain unchanged.
+Roster read-inactivity parity is still unqualified. No frozen outcome, routing
+or deployment changed.
+
+Separately, body-reference A-v2 and independent B-v2 passed all six cases in
+265.68s and 266.63s at immutable input head
+`ffb515200c4611bbaa188d84c510074bb4a98c81`. Their 46,042 raw bytes agree exactly:
+SHA256 `e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
+Exact-owned cleanup passed. Permanent corpus registration and configured raw
+regeneration now pass; native body replay remains pending. This is published
+Python evidence, not worker cutover approval.
+
+Historical qualified deadline/composition checkpoint:
+`f0b60073093a89567e43a6fd6452100b2ddc67ec`:
+[CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)
+completed successfully, with all required checks passing, including Rust CodeQL.
+Runtime job `101944349432` passed **137 configured published-schema tests in
+3639.20s**, logged at `2026-09-08T06:21:43Z`, and **four configured
+worker/PostgreSQL tests in 96.32s**. Both native deadline cases,
+`early_release` and `deadline_cancel`, passed with three actual HTTPS requests
+each. Fresh deadline and four-case timeout published-reference regeneration
+passed; the seven-stage mixed-roster replay retained its 55-request trace.
+Unconfigured test counts are not database or actual-worker qualification.
+
+Hosted Release checks passed 1,694 tests with one existing skip, including both
+real Linux containment cases; Rust Images and Rust CodeQL succeeded. This
+qualifies the scoped deadline/renewal/prefix-preservation replay, not the whole
+worker, all consumer configurations, signing, UI/demo acceptance or deployment.
+PR #814 remains draft and unrouted. The later native timeout branch at
+`395cab656` and its later follow-ups, and the separate body-reference branch at
+`c5e77f260`, are **not qualified by this earlier head**. The later native timeout
+failure and pending repair gates are recorded above; no runtime timeout policy
+or frozen outcome was changed to obtain the historical `f0` result.
+
+#### Historical 121-entry checkpoint and development evidence
+
+Previously qualified composed worker checkpoint:
+`9cbba6b7bc687614e8c2d74ef78fab532e5888fb`,
+[CI34109922914](https://github.com/ElevenID/marty-ui/actions/runs/34109922914).
+Runtime job `101703569433` passed **121 configured tests in 3319.49s** and
+four configured worker/PostgreSQL tests in 96.40s. Its early mixed-roster
+preflight passed seven stages and 55 actual HTTPS requests in 365.39s; the
+complete suite repeated that native replay and regenerated the published
+reference. All four ledgers matched their exact frozen arrays, enforcing totals
+of 55 Canvas requests, 13 token scopes and 26 synthetic signer requests/operations.
+The earlier stage-0 token-reuse mismatch is repaired without weakening the oracle.
+The fast unconfigured 121-test/0.34s and worker 4-test/0.01s results are not
+database qualification.
+
+Image job `101703569310` passed all image builds, nine worker preflight cases,
+24 packaged startup cases and the 16-case published logging reference. The
+17-service bundle, 21 synthetic rollback merges and 15 consumer-source
+compositions also passed. Rust CodeQL `34109922824` succeeded. Compiler examples
+remain intact in packaged source. No routing, Python deletion or deployment
+occurred. PR #814 remains draft: real-provider deadline/timeout comparisons,
+remaining consumer/loader and remote-signing boundaries, and beta acceptance
+are not closed by these scoped passes.
+
+The subsequent deadline/timeout extensions used shared disposable-schema, TLS and safe output
+owners. Their focused fixture suite passed 190 tests in 14.89s, including real
+child-output and loopback tests. Revised deadline A/B passed in 102.79s/98.95s;
+four-case target-specific timeout A/B passed in 110.30s/109.39s. Both corpora
+were frozen from byte-identical raw observations, preserving numeric tokens.
+Mandatory regeneration tests are registered locally; 194 freeze/fixture/CI
+checks passed in 10.56s. The permanent four-case timeout reference regeneration
+passed in 115.08s. Native deadline replay is implemented locally: compilation,
+two timing-boundary tests, strict Clippy and 58 driver tests passed. Fresh deadline
+reference runs rejected DB/monotonic clock disagreement three times; reviewed
+numeric diagnostics measured the mismatch without identifying its host/VM cause.
+The fixed timing bounds remain unchanged. The combined focused suite now passes
+297 tests, with seven Rust timing/output tests and strict Clippy also passing.
+Independent parallel review identified a forced-coordinator-exit cleanup gap;
+the repair now retains database ownership in the outer Rust test and uses a
+verified, non-reaping Linux process-group owner. The actual forced-borrower
+database regression passed in 5.55s. At pushed head
+`f0b60073093a89567e43a6fd6452100b2ddc67ec`, hosted Release checks passed **1,694
+tests with one existing skip**, including both actual Linux child/grandchild
+containment cases. Rust Images and Rust CodeQL succeeded. The runtime job was
+still running at the historical 05:33 UTC checkpoint; it subsequently completed
+with the qualified 137-test result above, including both actual deadline cases.
+
+The separate local commit `c17f1e1fa66af86cbd4392c0921540e1d260ef57` adds the
+[four-case native timeout replay](rust-migrations/canvas-worker-native-timeout-replay.md)
+with shared database, process and output owners. Its full local Python suite
+passed **1,760 tests with three explicit skips** in 116.55s; compiled Rust
+controls and strict Clippy passed. At that historical checkpoint actual native
+timeout execution was pending; the later `cf5182ef7` diagnostic replay above
+established the application success-versus-retry mismatch. No runtime timeout
+policy was changed in that replay. A separate
+[clock audit](rust-migrations/canvas-worker-local-clock-audit-2026-09-07.md)
+reproduced an environment-level wall-clock step without worker code. Hosted
+Linux deadline qualification subsequently passed at `f0` without widening the
+bounds. Native timeout replay remains unqualified; neither it nor the separate
+body-reference work inherits the earlier checkpoint's qualification.
+
+#### Earlier checkpoint record (superseded by the evidence above)
+
+Previously qualified composed worker checkpoint:
+`6914387e563d1043948aaea7a5cc514be6055038`,
+[CI34089906961](https://github.com/ElevenID/marty-ui/actions/runs/34089906961).
+Runtime job `101641133956` passed **115 configured tests in 2444.37s** at
+`2026-09-07T07:01:57.0655556Z`; the unconfigured 115-test result in 0.36s is not
+qualification. Four worker/PostgreSQL tests passed in 95.63s. Independently
+inspected native resource-race markers (`platform_reconfigured` and
+`application_removed`) each made one HTTPS request; post-validation binding
+removal made zero. All five roster markers (0, 0, 1, 1, 1 requests) and
+one-HTTPS recovery-first remain. Image job `101641134087` passed nine preflight,
+24 packaged startup and 16 logging-reference cases; Rust CodeQL `34089906881`
+passed. Every exact-head check succeeded except the expected skipped scorecard.
+
+The [processor coverage inventory](rust-migrations/canvas-worker-processor-coverage.md)
+now accounts for fourteen actual-process outcomes, one controlled signing-result
+guard and two open typed-dispatch reconciliations. The three resource-related
+codes are qualified, not waived. An empty remaining-composed-code list does not
+close gate 9, lease expiry during provider effects, populated mixed-roster
+behavior, all-consumer routing or beta acceptance. Later local effect-expiry
+and mixed-roster work and the subsequent issuance-bundle inheritance repair do
+not inherit the 115-entry head's qualification. PR #814 remains open, draft and
+unrouted; production is unchanged. Earlier checkpoint narratives below retain
+historical evidence and do not supersede this latest qualification boundary.
+
+New local work, deliberately separate from that hosted checkpoint:
+
+- Latest attempt `f8670830b`, CI `34104771356`, failed the early mixed-roster
+  preflight in 25.79s: the metadata fix passed its stage-0 assertions, then exact
+  transport comparison observed 12 versus 10 requests and four versus two token
+  exchanges. Per-invocation token reuse is repaired locally from the exact Python
+  source, with no cross-job/tenant cache or frozen-trace normalization.
+  Image configuration gates passed, but a compiler documentation file was missing
+  from the deliberately test-free image context. Its five examples were moved
+  unchanged into packaged source; fresh image/runtime qualification remains.
+- Exact clean-worktree repair checkpoint `30292f4b8` passed 1,390 Python tests
+  with one existing skip in 113.98s, 347 Rust issuance unit tests in 16.49s and
+  all five compiler examples in 0.41s. These local checks do not qualify the
+  previously failing mixed-roster HTTPS replay. Independent review additionally
+  identified and repaired compiler-input Markdown gate selection and strict
+  release-Compose source parsing. The focused gate suite passed 156 tests;
+  all 15 real Linux consumer-source renders passed after parser hardening.
+- Source inspection found separate request-timeout parity gaps: application
+  REST/AGS uses 15s in Python versus 20s natively, while roster uses 20s; OAuth
+  refresh uses 15s versus 10s. Python inactivity limits also differ from the
+  native total-request deadline. Actual worker captures are still required;
+  a blanket timeout change would lose roster behavior. The ongoing three-read
+  job-deadline experiment does not qualify these operation-level boundaries.
+- A repository-scoped [worktree inventory](rust-migrations/marty-ui-worktree-cleanup-inventory-2026-09-07.md)
+  preserves the separate crypto worker's unmerged branches and ignored release
+  evidence/recordings. Clean Git status alone does not authorize their deletion.
+  Configuration-only consumer coverage now includes 15 conformance/catalog/beta
+  compositions using a checksum-pinned standalone Compose 5.4 renderer; existing
+  Compose 2.38 bundle qualification remains separate and unchanged. The beta
+  source matrix covers the seven tracked layers, not the runner's later generated
+  release-image and verification-image overrides or an actual deployed model.
+
+- The [typed dispatch reconciliation](rust-migrations/canvas-worker-dispatch-reconciliation.md)
+  now preserves all three legacy dispatch failures and two controls through
+  twice-identical published-worker captures, plus a third frozen-equality pass
+  in 25.13s. Five actual compiler tests prove Rust's non-optional, asynchronous,
+  object-result boundary. The local Python suite passes 1,234 tests with one
+  existing skip; 120 registered published-schema entries are not 120 qualified
+  runtime passes. Consumer loader removal and whole-worker qualification remain.
+- CI `34098106567` at `8e7f66d46` exposed a Compose 2.38.2 bundle-reset defect;
+  [the compatible repair](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
+  preserves all 17 Rust models and the issuance family on both Compose 2.38.2
+  and 5.4.0. Local commit `5aa086a1e` is not yet hosted image qualification.
+  Rust CodeQL `34098106562` passed. The runtime job is now terminal: 118 configured
+  published-schema tests passed and one failed in 2761.77s. Mixed-roster stage 0
+  exposed a persisted worker-heartbeat metadata mismatch. Its narrow Rust repair
+  and ten database regression cases passed locally; no oracle assertions
+  were relaxed. Early mixed-roster CI feedback supplements the full suite.
+
+- The [effect-expiry regression](rust-migrations/canvas-worker-effect-expiry.md)
+  passed its real-database-time rollback and successful-before-expiry controls
+  in 38.14s after independent review. It uses a controlled provider, not a
+  complete worker or real provider I/O.
+- The [complete-worker mixed-roster reference](rust-migrations/canvas-worker-mixed-roster.md)
+  passed two independent published captures in 366.35s and 365.89s, with
+  byte-identical observations. Seven natural cycles cover one idle restart,
+  cursor resume/wrap, terminal candidates, identity/membership gates, negative
+  evidence, outage preservation, duplicate observations and recovery. The
+  reference is frozen, and the permanent comparison passed in 366.31s. Native
+  replay is implemented with mandatory Linux registration; actual native
+  execution found the stage-0 metadata mismatch and then the independently
+  observed transport mismatch above; successful native replay and qualification
+  remain pending. Payload-free ledger counts preserve the exact frozen trace.
+- The [self-host bundle repairs](rust-migrations/selfhost-bundle-image-audit-2026-09-07.md)
+  preserve the unqualified issuance family and select the existing Rust
+  signing-keys binary. Read-only rendering compares all 17 converted service
+  definitions without changing crypto implementation or deploying anything.
+- [Worker rollback hardening](rust-migrations/canvas-worker-consumer-audit-2026-09-07.md)
+  now captures exact worker launch vectors and both runtime selectors without
+  secrets, validates all data targets before stopping beta, and passes 21
+  synthetic configuration merges on each tested Compose version. This is local
+  config-only verification, not an actual deployment or restore qualification.
+
+An earlier full local Python suite passed 1,201 tests with one existing skip in
+62.16s after the frozen corpus, numeric-token and driver-failure tests. These results do not grant native-worker
+cutover, Python deletion, production promotion or aggregate acceptance.
+
+The [target-validation reference](rust-migrations/canvas-worker-validation.md)
+freezes twenty actual published-worker cases with matching independent captures:
+no Canvas reads, exact terminal errors, disabled targets and preserved issued
+rows/token ciphertext. Native replay is now implemented using the shared process
+fixture. Two actual reference-removal races now account for the previously
+uncovered application/candidate-invalid errors without disabling foreign keys;
+all earlier observations remain unchanged. Four processor-failure cases now
+cover invalid requirements, missing LTI identity, unsupported candidate processing
+and template removal after application read, without a new production code path.
+Coverage accounting separates validation from processor outcomes. Rust terminal
+summaries match all nine captured validation codes. The race checkpoint passed
+407 Rust tests and strict Clippy; the expanded corpus passes 907 Python tests
+with one existing opt-in skip. The initial eleven native validation cases passed
+at `56f4658e1` (CI34053145533, Rust CodeQL34053145588): all 70 configured tests
+passed in 1399.33 seconds, with eight image-preflight and 24 packaged startup
+cases. The newer `a7e8ff320` checkpoint now passes CI34054910209 and
+Rust CodeQL34054910162: 70 configured tests in 1520.47 seconds, all seventeen
+actual native validation/failure markers (zero requests), eight image-preflight
+and 24 packaged startup cases. This includes all three reference-removal
+barriers. Broader processor failures remain open, so gate 9 is not closed.
+
+Three roster-configuration cases additionally freeze invalid batch/maximum
+settings and continued non-roster application processing. Rust now defers those
+errors to roster jobs and shares lossless MMF integer parsing instead of aborting
+startup through a separate `i64` parser. The public constructor and valid debug
+fields are preserved. Current local checks pass 414 Rust tests (including five
+worker-binary tests), strict Clippy, 907 Python tests and all 34 configured local
+worker entries in 515.83 seconds. Subsequent checkpoint `f195ad484` passed
+CI34056846912 and Rust CodeQL34056846952: 70 configured runtime entries in
+1280.90 seconds, all twenty actual native validation/failure cases, eight image
+preflight and 24 packaged startup cases with API health retained. The roster
+correction is now qualified at that boundary; whole-worker cutover remains open.
+
+The existing PostgreSQL worker suite additionally covers the typed-processor
+no-signing guard: four forbidden result keys across seven JSON value shapes,
+plus two successful controls. All 28 forbidden results terminate before result
+sanitization, with static errors, cleared result/leases and disabled targets;
+valid siblings retain successful sanitized results. All three configured
+PostgreSQL tests passed locally in 92.93 seconds, including existing lifecycle
+and renewal regressions; strict Clippy passed and the disposable fixture was
+removed. This is native worker-cycle coverage, not a new published-Python oracle
+or whole-worker acceptance. No production implementation was deleted or changed
+for this guard regression.
+
+The same `f195ad484` checkpoint also passed all three configured Linux
+PostgreSQL worker-contract entries in 94.99 seconds, retaining the guard and
+existing lifecycle/renewal cases.
+
+The two reference privacy prerequisites now have landed
+[Credentials PR269](https://github.com/ElevenID/marty-credentials/pull/269)
+at protected `d418ac0df283625f43b0c011fb1c72fd7d3013a9`:
+shared bounded diagnostics and allowlisted worker error events without changing
+job behavior. Exact-head CI34058252789 passed, including 1673 tests and 200
+subtests on each Python version (3.11/3.12), plus Rust, PostgreSQL, binding,
+security and WASM checks. Merge-queue CI34058846815 and protected-main
+CI34059299079 also passed. [Credentials PR271](https://github.com/ElevenID/marty-credentials/pull/271)
+now freezes 63 hardened observations from the existing reference tests, with
+matching independent captures and mandatory provenance/regeneration checks.
+Maintainer-review capture-tool regressions pass locally: 741 affected tests,
+200 subtests and all 63 regenerated observations. PR271 landed at
+`948bca975b493285c512c20a13d5abf8ee5e6305` after exact-head CI34061052204 and
+protected merge-queue CI34061438212 passed; protected-main CI34061898106 also passed.
+The [native privacy replay](rust-migrations/canvas-worker-privacy.md) now covers
+twelve worker observations locally through PostgreSQL, with complete
+producer/formatter fields and explicit class/storage mappings. Failure-first
+tests drove scoped Rust queue-recovery and stable-event corrections, preserving
+the existing tenant-atomic revocation cleanup and verifying encrypted token
+removal with an unrelated-tenant retention control. The six processing cases now
+use payload-free Rust failure categories with canonical diagnostic reconstruction,
+shared retry-hint construction and known-error preservation controls. Signing
+privacy observations, fresh exact-head qualification and whole-worker acceptance
+remain required before closing gates 13/14.
+Existing frozen observations, reachable features and other-worker code remain untouched.
+
+The [whole-worker OAuth revocation reference](rust-migrations/canvas-worker-oauth-revocation.md)
+now freezes seven actual published-process HTTPS/SQL observations from matching
+independent captures. It covers remote success, rate limiting, rejection, redirect
+and timeout, both token secrets and unrelated-tenant retention. Native replay and
+mandatory Linux CI registration are implemented and the seven-case native boundary
+is now qualified, as are the owner-fence and patch extensions at d0a09792.
+Retry-After, backoff and queue qualification remain pending. No runtime mapping has
+been changed on the basis of the unqualified Windows transport diagnostic.
+The actual native loopback-HTTP adapter test separately reproduced two frozen
+classification differences; a revocation-only Rust correction preserves the
+worker's general timeout mapping, exchange/refresh semantics and atomic cleanup.
+The seven-case native HTTPS/SQL replay passed exact-head Linux qualification below.
+
+The separate two-case ownership-transfer extension now has actual published
+200/429 captures and unchanged regeneration. After receipt of a held DELETE,
+the synthetic connection is transferred to a replacement owner; the stale
+worker preserves the complete replacement row, platform and all three encrypted
+secrets. Native replay shares the existing vault/database/process/marker owners
+and was registered in the mandatory Linux gate at 75 top-level entries; both
+native cases are now qualified at d0a09792. The original seven-case artifact is unchanged.
+Local Python regressions pass 926 tests with one existing opt-in skip; strict
+Rust Clippy and integration compilation pass. No runtime or consumer is changed
+by this extension. Patch failure and Retry-After extensions remain separate.
+
+A separately frozen disconnect-marker write-failure capture now proves that the
+published worker attempts the platform UPDATE, handles its synthetic database
+failure, and still removes the connection and both token secrets while retaining
+the unrelated tenant's secret. Independent captures and regeneration match.
+Native replay reuses the existing database barrier and process owners, retaining
+atomic native cleanup; its Linux qualification passed at d0a09792 (77 configured
+entries). Transport and ownership artifacts remain unchanged. Retry-After
+edges and the remaining whole-worker gates are not declared complete.
+
+The remote-revocation Retry-After extension now separately freezes eight actual
+published-worker cases: missing/malformed/negative/zero headers, past/future HTTP
+dates, capped and oversized integers. Independent captures and regeneration
+match; all failures retain encrypted secrets and use the observed durable retry
+deadline. Native replay shares the existing timestamp producer and HTTPS-owned
+deadline comparator, with explicit OAuth storage-field mapping and fail-closed
+evidence controls. Local Python948PASS/1opt-inSKIP and strict Rust Clippy pass;
+79 configured entries were registered at introduction. Native timing qualification
+has now passed at75d82 below.
+No runtime, consumer or feature is changed by this acceptance extension.
+
+The [OAuth contract coverage audit](rust-migrations/canvas-worker-oauth-revocation-coverage-audit.md)
+now distinguishes qualified transport evidence from remaining queue/lease,
+counter and secret-resolution requirements. Its later-history backoff gap has
+five independently matched published-process captures and implemented native
+replay at retry counts1,9,10,11,999. Stored deadlines, counter increments and
+token retention are checked without modifying running state. Local24behavior
+and954Python tests pass (one existing opt-in skip); strict Clippy passes. The
+81-entry native Linux gate has now passed at75d82 below. No runtime or feature was removed.
+
+The [queue parity extension](rust-migrations/canvas-worker-oauth-revocation-queue.md)
+now freezes two actual nonempty selection observations with batch limits 3 and 25.
+It found and corrects a real Rust null-order mismatch: overdue dated retries must
+precede undated connections, matching the published worker. The repository
+regression failed before the one-line fix and passes afterward; the reference
+regenerates exactly. All unselected rows and ciphertexts remain unchanged.
+Shared native fixture preparation avoids a second scheduler or seed owner.
+The 84-entry suite awaits exact-head Linux qualification; no feature was deleted.
+
+The [acquired-lease extension](rust-migrations/canvas-worker-oauth-revocation-lease.md)
+adds four independently matched actual-worker observations: stored leases at the
+30-second floor, 120-second normal value and 300-second cap, including an oversized
+integer configuration. The latter preserves its non-idle phase and requires
+completed revocation writes; it does not claim the later ordinary job-leasing
+overflow disappeared. Existing queue/reference values remain unchanged. Shared
+matrix/fixture/process owners are reused. Native replay is implemented and the
+86-entry increment is now qualified by the later 90-entry run below. No runtime or feature changed.
+
+The [nonempty selection-cap reference](rust-migrations/canvas-worker-oauth-revocation-selection.md)
+now compares actual published and Rust repositories on 509 rows at limits
+0/499/500/501/2147483648. Counts and every ordered selected ID match; all rows,
+ciphertexts and issued records remain unchanged. Both real-repository gates pass
+locally. This is repository-boundary evidence, not 500 remote calls or whole-worker
+completion. Existing process evidence is retained. The 88-entry increment is now
+qualified by the later 90-entry run below; secret-resolution qualification remains.
+
+The [cycle-counter reference](rust-migrations/canvas-worker-oauth-revocation-counters.md)
+now freezes actual cycle API return values for success, retry and both owner-loss
+outcomes. Permanent published-image regeneration passes all four cases; native
+Rust cycle replay is implemented with real database/vault/HTTPS dependencies and
+all seven returned fields compared. It preserves the original durable/HTTP checks
+and reuses the existing fixture and ownership-transfer protocol. Local strict
+Clippy, 24 Rust behavior tests and 991 Python tests pass (one existing opt-in skip).
+The 90-entry increment passed native Linux qualification at e70e3abcc, recorded below.
+This is not standalone-loop or active-job processor acceptance, and no deployed
+consumer or feature was removed.
+
+The earlier 86-entry run CI34072045954 at3e9b401f6 finished84PASS/2FAIL: limited
+queue and lease replay hit a nullable retry-deadline decoder error in the test
+observer. The exact failure was reproduced against the real published schema;
+the observer is corrected without changing worker behavior or frozen expectations.
+All23 earlier native revocation markers and separate4workerDB cases passed.
+The failed run is not a qualified composed checkpoint. The corrected 90-entry
+followup subsequently passed; its exact evidence is recorded below.
+
+The [secret-resolution reference](rust-migrations/canvas-worker-oauth-revocation-secrets.md)
+adds six actual published worker captures for absent/malformed/missing/disabled or
+other-tenant-only secret IDs. Independent regeneration matches full retry, reference,
+secret usage and zero-request observations. Three real schema rejections preserve
+the tenant-prefix constraint; those are not worker scenarios. Review also found
+and fixed a native empty-token dispatch gap using a real-cycle regression and a
+counting provider. The published save API rejects empty plaintext before worker
+startup, so that regression is not presented as a published-process capture.
+Shared fixtures and cycle construction are retained. This extension qualified in
+the later 98-entry run below; no consumer or feature was removed.
+
+Latest qualified UI checkpoint `29bf8c226e13df1a708355538cc913adcbfa987f` passed
+CI34079614572 and all applicable exact-head checks, including Rust CodeQL34079614417.
+Runtime job101612295594 passed 103 configured tests in 2245.41s and the separate
+four-test PostgreSQL worker contract in 96.22s. Image job101612295627 passed eight
+preflight and 24 packaged startup cases. All 39 native OAuth process/cycle markers
+were verified: the prior33 plus six zero-request secret cases. Real schema/empty-token
+regressions and both repository comparisons passed. The actual newer-generation
+recovery marker passed with one HTTPS request and full-row preservation. Earlier
+validation/privacy boundaries are retained. Both repository terminal-race winners
+and actual completion-first process atomicity now pass. The later recovery-first
+and deployed-logging/image-default repairs need fresh qualification. No unconfigured
+early return is counted as parity.
+PR814 remains draft/unrouted; these are retained boundary qualifications, not
+authorization to remove live Python or claim aggregate beta acceptance.
+
+The [cross-corpus processor audit](rust-migrations/canvas-worker-processor-coverage.md)
+reconciles stale readiness wording with that exact runtime evidence: all nine
+target-validation codes and seven Retry-After deadline cases are qualified.
+Of seventeen separate processor outcomes, seven have actual-process evidence,
+one has a real worker/PostgreSQL guard with a controlled processor, seven await
+composed observations and two require typed-dispatch reconciliation. The exhaustive
+inventory keeps every normative outcome; no deletion gate is waived. This avoids
+mistaking the validation corpus's local twelve-code remainder for twelve global gaps.
+
+[Credentials issue270](https://github.com/ElevenID/marty-credentials/issues/270)
+tracks an aggregate release gate: both exact published Windows Core 0.1.60 and
+0.1.61 wheels retain three compatibility failures against the unchanged issuance
+suite (141 passes), unlike the current source-built CI dependency. Qualification
+used isolated checksum-verified packages, not replacement global installations.
+A reviewed canonical Rust release and artifact/pin reconciliation remain needed.
+
+The [Retry-After deadline reference](rust-migrations/canvas-worker-retry-after.md)
+now freezes seven actual published-worker cases across HTTP dates, malformed,
+negative/zero and clamped/oversized integer headers. Two independent captures
+match exactly; native replay is implemented and qualified on Linux.
+Focused tests confirmed oversized-integer fallback in both Rust helpers; a
+single shared parser correction now passes local regressions and a real HTTP
+provider test. The uncorrected replay at `f9ee06b42` confirmed the oversized-header
+failure in Linux (66 configured passes, one failure; CI34050156566).
+Correction `a6826de39` passed CI34051487770 and Rust CodeQL34051487785:
+all 67 configured runtime tests passed in 1264.77 seconds, explicitly including
+all seven native HTTPS/deadline cases. Image job101535819407 passed eight
+preflight and 24 packaged startup cases. This qualifies the frozen scheduling
+boundary; it is not a completed worker cutover. Later checkpoints still need
+their own exact-head checks.
+
+The [packaged startup/configuration gate](rust-migrations/canvas-worker-image-startup.md)
+passes locally for all eight frozen startup cases under three key/database
+configuration modes (24 starts), using the fresh Linux image from `2e282db33`.
+It reuses the official migration probe and exact startup observations; hosted
+image job101527827400 at `505dcf506` also passed all 24 cases. A known pre-worker image was correctly
+rejected, and fixture resources were cleaned up after both controls. This is
+not a consumer cutover.
+
+The [worker image launch contract](rust-migrations/canvas-worker-image-entrypoint.md)
+adds explicit worker selection through the existing shared Rust entrypoint and
+an eight-case packaged preflight gate. The dedicated CI image preserves its API
+default and existing secret-loader path. All eight real-image cases and API health
+passed at `e424761f5` (image job101523616820 in CI34046951418). The same head's
+65 configured runtime tests passed in 1151.92 seconds, and Rust CodeQL34046951414
+passed. The newer 24-case extension passes locally and in hosted image job101527827400;
+the complete runtime job101527827413 for `505dcf506` also passed all 65 configured
+tests in 1165.59 seconds (CI34048520936; Rust CodeQL34048520957 passed).
+Compose/Kubernetes consumers and whole-worker cutover gates are unchanged.
+
+The [retryable competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers-retry.md)
+has two matching independent captures and a passing local regeneration gate.
+Both replacement workers reach fresh idle at the durable retry
+boundary without an early provider read; after real retry eligibility, the same
+job succeeds on attempt two and its target stays enabled. Native replay passed
+at `507b0def6` (CI34045421238, Rust34045421228): all 65 configured tests passed in
+1182.10 seconds, including the actual two-request retry-reclaimer case. This
+does not qualify a whole-worker cutover or a deployment.
+
+The [competing-reclaimer reference](rust-migrations/canvas-worker-reclaimers.md)
+has two matching independent captures and a mandatory regeneration gate. After
+real final-attempt crash/expiry, two actual processes are observed blocked at the
+job-table barrier, then reach fresh idle with one dead-letter and no additional
+provider request. Native replay passed at `54692c4e4` (CI34043971766,
+Rust34043971750), with all 62 configured tests passing in 1038.42 seconds;
+remaining ownership and completion races are still open.
+
+The [local branch cleanup checkpoint](rust-migrations/branch-cleanup-checkpoint.md)
+retires three already-merged CI branch names while retaining their exact commits
+and every worktree file. Migration, crypto and release-evidence work remain
+preserved; this is not an all-repository cleanup completion claim.
+
+The [concurrent scheduler reference](rust-migrations/canvas-worker-concurrent.md)
+has two matching captures and a mandatory regeneration gate. Two real schedulers
+are observed waiting on a fixture-owned database barrier before simultaneous
+release; exactly one job/provider request succeeds and both workers remain alive.
+Native replay passed at `a329b980e` (CI34042598584, Rust34042598554), including the
+actual one-request concurrent case and all 59 configured tests in 948.70 seconds.
+Final-attempt and retryable reclaimer concurrency are qualified above;
+changed-target races remain open.
+
+The [final-attempt crash reference](rust-migrations/canvas-worker-provider-final.md)
+has two identical independent captures and a mandatory regeneration gate. After
+actual attempt-eight renewal and forced process loss, real lease expiry leads
+to dead-letter/target-disable with no second provider request. Earlier attempts
+are explicitly seeded history, not executed evidence. Native final-attempt
+replay passed with strict generation checks at `e959e113d` (CI34041341592,
+Rust34041341506), including one actual HTTPS request and all 56 configured tests
+in 841.38 seconds. The newer two-final-reclaimer qualification is recorded above.
+The [newer-target recovery reference](rust-migrations/canvas-worker-provider-generation.md)
+now captures actual attempt-eight renewal/crash, a committed validated generation
+change and real expiry. Independent regeneration matches. Published Python disables
+the newer target; native replay explicitly retains Rust's stronger fence and requires
+the complete post-edit target row unchanged. Existing job, HTTPS, ciphertext and
+issuance assertions remain exact. This 98-entry extension qualified at df3ed290b;
+final-attempt completion versus recovery remains open. The fixture
+does not execute the operator configuration/validation API, and prior attempts are
+seeded history. No runtime feature or existing reference was deleted.
+
+The [final completion/recovery repository tests](rust-migrations/canvas-worker-final-completion-race.md)
+now force both terminal lock winners against the published schema with real
+30-second expiry, PostgreSQL-observed barriers and independent NOWAIT job-lock
+probes. Stale completion/failure/recovery preserve complete committed rows.
+Both directions pass locally; 1,012 Python tests pass with one existing skip.
+This first brought the local gate to 99 entries; it is now qualified at 29bf8c226. It is
+normative repository evidence, not published-process parity; actual worker/provider
+composition remains the next named gate-five task. No runtime feature was removed.
+
+The [completion-first whole-process reference](rust-migrations/canvas-worker-provider-completion.md)
+now independently captures actual HTTPS, terminal-write contention and real expiry.
+A distinct synthetic reclaimer identity and transitive PostgreSQL lock chain avoid
+mistaking the original worker's renewal for recovery. Completion alone commits a
+terminal job update, but the published process disables the target and leaves its
+success timestamp unset. Native replay preserves stronger atomicity and exact
+provider/job/issuance observations. This 103-entry extension is now qualified on
+Linux at 29bf8c226. The 1,019-test
+Python suite passes with one existing skip. No runtime feature or old reference was removed.
+
+The subsequent [recovery-first process extension](rust-migrations/canvas-worker-provider-recovery-first.md)
+has a successful actual published capture (36.44s) and independent complete
+reference regeneration (36.20s). A pre-row-lock statement barrier allows actual
+expiry and the distinct reclaimer to win; valid pre-expiry provider effects remain
+intact and the sole terminal write is dead-letter. Native replay explicitly
+requires fresh-clock stale-completion rejection and exact remaining state. The
+local gate now has 107 entries, pending configured Linux qualification. The full
+Python suite passes 1,026 tests with one existing skip (43.61s), and the original
+completion reference still matches after sharing the implementation (36.03s).
+Expiry during in-flight provider effects remains separate. No consumer or feature
+has been removed; the preceding 103-entry head's CI completed successfully without cancellation.
+
+The deployment-wiring audit also found and repaired a concrete Rust compatibility
+gap: [the worker ignored deployed LOG_LEVEL](rust-migrations/canvas-worker-logging-configuration.md).
+Sixteen independently captured logging-configuration inputs now replay through
+the native subscriber, retaining explicit RUST_LOG directives and static errors
+for invalid operator settings. Seven actual child-process rejection cases and all
+existing executable smoke tests pass locally. The packaged preflight grows from
+eight to nine cases. Image101620519633 at c3e51a4d5 now passes all nine preflight,
+24 startup and sixteen published logging-reference cases; combined runtime
+CI34082559053 remains in progress, so full exact-head qualification is pending.
+This does not switch any deployment consumer or replace the remaining worker gates.
+
+The [actual provider renewal/recovery reference](rust-migrations/canvas-worker-provider-recovery.md)
+now has two matching captures per case. A real pending HTTPS request spans lease
+and both heartbeat renewal without generation change. After forced process loss,
+real lease expiry and retry eligibility lead to the same job succeeding on attempt
+two with issuance/token ciphertext preserved. Reference regeneration passes
+locally; native replay passed at `d96a45ebe` (CI34039828427 and Rust34039828424),
+including actual renewal/recovery HTTPS and all 52 configured tests in 839.16 seconds. Final-attempt,
+concurrency and ownership-fence cases remain open.
+
+The [active-provider signal reference](rust-migrations/canvas-worker-provider-signals.md)
+now records SIGINT, SIGTERM and SIGKILL against actual published worker processes
+while a real HTTPS response is held. Each pair of independent captures agrees;
+the job remains leased and issuance/token ciphertext are preserved. Native replay
+includes Rust's intentional SIGTERM graceful drain and retains the original
+REST/facts/retry regression gates.
+The correction is now qualified at `499298659`: CI34038852781 and Rust
+CodeQL34038852821 passed; the configured log explicitly records SIGINT, SIGTERM,
+SIGKILL and all 49 tests passing in 580.28 seconds. The newer native recovery
+qualification is recorded above; subsequent extensions require fresh checks.
+This is not crash/restart or cleanup-finally evidence.
+The first Linux run failed before signal delivery because native leased jobs
+retain an internal target-generation fence absent from Python's result. The
+comparison now asserts that exact field explicitly and retains full state checks;
+public job results exclude it. No runtime fence or frozen observation was changed.
+This correction's Linux qualification is recorded above; fresh checks remain
+required for later changes.
+
+The [retry/rejection worker reference](rust-migrations/canvas-worker-retry-reference.md)
+now records real database eligibility and unchanged job identity across retry
+success, 503 failure and 401 token rejection. Two final captures agree; native
+adoption passed Linux CI at `32ec09029`: CI34036161060 and Rust CodeQL34036161086
+are successful. The configured job explicitly exercised all five native retry
+stages and passed all 44 tests in 653.61 seconds. No clocks, retry timestamps
+or job outcomes are patched.
+
+The [all-four-fact worker reference](rust-migrations/canvas-worker-facts-reference.md)
+captures actual published assignment, quiz, module and course reads through the
+shared worker/HTTPS/OAuth/schema harness. Two captures match byte-for-byte. Its
+partial-rate-limit stage preserves three successful fact writes while the job
+retries and the negative assignment keeps policy denied. Native adoption is
+qualified on Linux at `6977a70ba`: CI34034992317 and Rust CodeQL34034992376 passed;
+the configured log confirms 16 all-fact and 4 original requests. The original
+assignment-only reference is retained. Its actual native worker gate passed at
+`0982a4a2c` with exact-head CI34033818678 and Rust CodeQL34033818668 successful.
+
+The [composed worker REST reference](rust-migrations/canvas-worker-rest-reference.md)
+now freezes four actual published worker processes using real HTTPS and encrypted
+OAuth persistence on the official schema: positive evidence, later negative
+evidence, duplicate reuse and a 429 retry honoring Retry-After37. Two finalized
+captures agree byte-for-byte. Issued credential/transaction rows and encrypted
+token bytes remain unchanged, with selected job/fact/review/heartbeat projections
+recorded. The published HTTPS constraint remains intact; fixture-specific trust
+is isolated to the test child. Native assignment replay passed in the configured
+Linux database job with the actual binary and native OAuth storage; the fast
+unconfigured test run and Windows compile/lint are not runtime evidence. This remains
+separate from complete worker qualification. Startup head `017c7e423` now has
+successful hosted CI and Rust analysis.
+
+The [actual worker startup gate](rust-migrations/canvas-worker-startup.md) now
+freezes eight published process/idle-heartbeat observations from two identical
+captures. It reproduced the eager LTI identity failure, then verifies the Rust
+repair through actual child processes and the published PostgreSQL migrations.
+Missing, partial and invalid identity no longer blocks empty-queue startup;
+the shared signer still rejects it before resolution or signing. Both deployed
+PostgreSQL URL forms pass this boundary. Windows child isolation retains only
+the required OS path; POSIX signal assertions remain Linux CI evidence.
+The broader composed worker/provider and all-consumer gates remain open.
+All 37 configured image/schema tests pass (322.87 seconds, none ignored or
+filtered), plus 325 library, 5 binary, 22 behavior and 53 affected Python tests.
+Strict Clippy, formatting and CI Bash syntax pass; owned fixture inventory is
+empty. This startup implementation still requires fresh exact-head hosted checks.
+
+The tested native depth implementation is committed and pushed at `185af81d5`;
+its fresh CI and Rust analysis are now successful. The owned worktree was
+clean after that push. The [whole-worker cutover inventory](rust-migrations/canvas-worker-cutover-readiness.md)
+now maps all 14 normative legacy gaps to actual test boundaries and lists base,
+beta-overlay, self-host and Kubernetes consumer wiring. It identifies the missing
+composed worker/provider/published-schema gate and boot-configuration checks as
+the next implementation targets. A cleared-environment local binary diagnostic
+now exits 1 when rollout is disabled and the deployment-default LTI identity is
+empty; the original process-signal harness always supplied that identity. The
+startup checkpoint above now repairs and qualifies that recorded boundary.
+Existing codec evidence remains retained; it
+must not substitute for worker composition. The issuance plan's stale 32-route/
+12-unported-gRPC snapshot is corrected to the coverage contract's 63 native HTTP,
+68 remaining HTTP and 12 native gRPC methods, with consumer adoption separate.
+
+Native depth adoption now matches all 64 provider, 64 managed validation and
+192 full credential-route observations. The 127-container guard is removed:
+one flat parsed arena and iterative writer preserve deep responses, while the
+255-container validation policy remains at its own boundary. Stack-safe database
+ownership covers lifecycle application/delivery/binding/platform reads, copies,
+replacement and destruction, with database literal numbers kept distinct from
+Python response-number policy. An additional 32 native follow-up operations read
+and retain prior deep responses after provider refusals and preserve newer
+success events. Small-stack and literal-number tests cover the ownership paths.
+The required native provider and full-route gates reuse the frozen depth
+reference; old JSON/UTF-7 artifacts remain unchanged.
+See [native depth scope and evidence](../contracts/canvas-json-depth.md).
+All 36 configured image/schema gates pass (308.32 seconds, none ignored or
+filtered), along with 325 library, 5 worker, 34 managed HTTP, 22 issuance behavior,
+102 affected Python and 104 native TLS cases. Strict Clippy, formatting and
+CI-runner syntax pass; the exact owned fixture inventory is empty. Reference
+head `2d8797be8` is hosted-green; this implementation needs fresh hosted checks.
+Whole-worker/all-consumer readiness is the next inventory to refresh, not a
+completion claim from this matrix. PR #814 remains draft and unrouted.
+
+The following reference checkpoint is historical and was completed before the
+native depth implementation above:
+
+Published depth behavior is now independently frozen across 64 validation,
+64 provider/helper and 192 full credential-route cases. Validation allows excerpt
+container depth 255 and fails at 256; array payload wrapping adds a level.
+Provider parsing and PostgreSQL saves succeed through every tested depth up to
+1,600. Therefore the then-current native 127-container guard was a confirmed cutover
+gap, not a compatibility policy. The fixture ceiling is not a runtime limit.
+Nonrecursive typed structural witnesses preserve deep response evidence without
+altering application recursion settings; complete validation wire bodies and
+full-route state evidence remain retained. Two raw captures agree byte-for-byte.
+The new required configured gate regenerates the entire reference.
+See [depth evidence and native next steps](../contracts/canvas-json-depth.md).
+That reference checkpoint changed test observation/capture infrastructure, not
+runtime behavior. Native depth adoption is recorded above; worker cutover is open.
+All 33 configured image/schema tests pass (301.31 seconds, none ignored or
+filtered), including unchanged prior JSON/UTF-7 references and native replay.
+All 102 affected Python tests, the large exclusive-create capture test, strict
+Clippy, formatting and CI-runner syntax pass. Previous implementation head
+`52785f6ff` is hosted-green; this depth checkpoint requires fresh hosted checks.
+
+Native JSON response adoption now passes the independently frozen 66-provider,
+66-managed-validation and 198-full-credential-route matrix. One parser retains
+lossless text/keys, duplicate-key order, non-finite values, signed zero and large
+integers. Validation rendering and PostgreSQL representability remain separate:
+no early normalization, unchanged delivery rows after late failures, and newer
+Rust success events preserved. Shared replay/observation code also retains UTF-7
+coverage; wire checks reject duplicate rendered keys before map normalization.
+The CI runner requires direct JSON provider and full-route native gates.
+See [JSON consumer evidence and native scope](../contracts/canvas-json-consumers.md).
+
+The unchanged reference was captured twice byte-for-byte at `6b127aef0`, whose
+hosted CI and Rust CodeQL are now green. Local native gates pass 322 library,
+5 worker, 32 managed HTTP, 22 behavior, 88 affected Python and 104 TLS cases,
+plus strict Clippy and formatting. All 32 configured image/schema tests pass
+(278.86 seconds, none ignored or filtered), regenerating the unchanged reference
+artifacts and exercising native routes. The exact owned fixture inventory is
+empty after cleanup. That `52785f6ff` implementation subsequently passed its
+hosted checks; newer implementation heads require their own checks.
+
+The depth guard from that initial JSON checkpoint is replaced by the native
+adoption above. General grammar is not proven by the finite depth matrix.
+Whole-worker/runtime/every-consumer adoption and other
+exceptional codec/transport gates remain open. PR #814 stays draft and unrouted;
+no reachable Python deletion or deployment change is authorized by this matrix.
+
+UTF-7 response bodies are now integrated through shared lossless native text,
+metadata and provider-error values. Validation renders retained-surrogate
+failures as the published plain HTTP 500. Lifecycle persistence detects invalid
+encoding only after canonical publication/credential persistence and provider
+completion; typed encoding failures map to 500 without changing generic retry
+errors. Native replay passes twelve provider observations, twelve managed HTTP
+responses, and all 36 full credential routes with real PostgreSQL and local HTTP.
+Complete credential/delivery rows and failure ordering match the frozen reference;
+newer Rust success events remain intact, with none emitted after failed saves.
+The 28th configured image/schema gate is required by CI. This closes the UTF-7
+body integration scope, not JSON/non-scalar parsing, remaining exceptional codecs
+or whole-worker/all-consumer adoption. PR #814 remains draft and unrouted.
+All 28 configured image/schema tests pass (247.37 seconds, none ignored or
+filtered), along with 313 library, 5 worker, 29 managed HTTP, 22 behavior,
+70 affected Python and 104 native TLS cases, strict Clippy and formatting.
+The preceding `96f55bb6e` head is hosted-green; this implementation checkpoint
+requires its own hosted checks before landing.
+
+### Earlier transport checkpoints (historical)
+
+Full published credential-route evidence now covers 36 UTF-7 scenarios through
+actual authenticated suspend/reinstate/revoke routes and real PostgreSQL saves.
+Two independent captures agree: 18 retained-surrogate cases return HTTP 500
+after canonical credential persistence, leaving the entire delivery row unchanged;
+18 scalar/truncated cases return HTTP 200 and save the delivery projection.
+No issuance events are added by these published routes. Publication/provider/save
+ordering is observed, and every earlier validation/provider/helper observation
+is unchanged. The required image diagnostic regenerates the expanded artifact.
+This settles the previously open published response-policy question; native
+lossless body/metadata/error adoption and full-route replay remain unfinished.
+The current generic native retry HTTP 503 must not be mistaken for parity with
+these late encoding/save failures. See the
+[full-route evidence](../contracts/canvas-text-boundaries.md#full-credential-route-continuation).
+All 27 configured image/schema tests pass (247.71 seconds, none ignored or
+filtered), together with 70 affected Python tests and formatting/lint checks.
+The preceding `61c5dd185` head has successful hosted CI and Rust analysis;
+this evidence checkpoint still needs its own hosted checks and stays unrouted.
+
+UTF-7 now has one complete-input native decoder for strict and replacement modes,
+using lossless Python codepoints. Independent frozen digests cover 2,347,269
+inputs per mode, including every supplementary scalar and all single-unit
+padding combinations; 134 explicit cases and 39 earlier text boundaries pass.
+Strict encoded labels are adopted and match 201 observations across five aliases.
+The new tests exposed an embedded-NUL codec-name ValueError, now preserved before
+alias normalization at both lookup boundaries. Validation grows 41 to 47,
+provider 90 to 97 and TLS 99 to 104, with every old observation unchanged.
+The required 27th image test exercises label-error persistence and recovery;
+the timeout gate regenerates the full codec evidence. See
+[UTF-7 codec scope and evidence](../contracts/canvas-utf7-codec.md).
+Response-body/metadata/error adoption and full credential-route qualification
+remain open; decoder availability does not close those gates.
+All 27 configured image/schema tests pass (257.17 seconds, none ignored or
+filtered), together with 312 library, 5 worker, 28 managed HTTP, 22 behavior,
+70 affected Python and 104 native TLS cases, strict Clippy and formatting.
+Previous `20d7787f9` CI and Rust analysis are green; this checkpoint requires
+fresh hosted qualification and remains draft/unrouted.
+
+Lossless native text groundwork now preserves Python codepoints without implicit
+replacement, escaping or surrogate folding. Shared excerpt logic uses this owner;
+three tests replay the 39 frozen helper text boundaries and verify validation,
+supplementary/noncharacter handling and bounded prefix consumption. The decoder
+and strict-label continuation above builds on this foundation; response-body
+adoption remains unfinished.
+
+Two independent image captures now cover twelve UTF-7 managed-app, twelve
+provider and twelve real delivery-helper/save observations. Retained surrogates
+produce managed HTTP 500 or a failed delivery save with unchanged persisted state;
+truncated-away surrogates and supplementary scalar text succeed. This distinguishes
+rendering from provider values and database encoding/JSON validation. A required
+26th configured image test regenerates the diagnostic. Full credential transition,
+publication and native UTF-7/metadata/error integration remain open; this evidence
+does not qualify that broader scope. Details are in the text-boundary document.
+Local gates pass: 309 library, 5 worker, 28 managed HTTP, 22 behavior, 70 affected
+Python and 99 native TLS cases, plus strict Clippy and formatting. The full 26-test
+configured image suite passed in 217.10 seconds. Subsequent whole-row diagnostic
+strengthening passed its updated image comparison and the unchanged 90-case
+provider comparison. Preceding `a75e2fa43` CI and Rust analysis are green; this
+checkpoint still requires fresh hosted qualification.
+
+Continuation-ordinal parity now preserves the published interpreter's 4,300-digit
+limit without inventing a machine-integer cap. The previous implementation failed
+the independently captured regression; native checks now match all 60 new
+parameter/text/excerpt observations and the previous 177 header observations.
+The TLS corpus grows from 96 to 99 with old observations unchanged. Independent
+published captures expand managed validation from 37 to 41 and status-provider
+behavior from 86 to 90, also preserving every previous observation. Actual HTTP
+validation replays 21 response cases. The full configured image gate regenerates
+the new artifact and adds a required ordinal lifecycle persistence/recovery
+scenario, bringing the suite to 25 tests.
+All 25 configured image/schema tests pass (214.76 seconds, none ignored or
+filtered), alongside 306 library, 5 worker, 28 managed HTTP, 22 behavior and 70
+affected Python tests, 99 native TLS cases, strict Clippy and formatting checks.
+The preceding `da23f8b4f` head is hosted-green; the ordinal checkpoint still needs
+fresh hosted checks and does not authorize routing the draft candidate.
+
+UTF-7 investigation has established a lossless-text requirement, not completed
+that codec: 39 independent helper/rendering observations preserve lone surrogates
+as numeric codepoints. Fourteen renderings fail, while truncation can remove the
+surrogate before rendering and allow success. Rejecting or replacing it during
+decoding would lose behavior. Native representation/decoding and full consumer
+qualification remain open. See [text boundary evidence](../contracts/canvas-text-boundaries.md).
+
+Seven ISO-2022 variants now share a native stateful decoder, retaining ordinary
+text, multi-character mappings and the distinct internal-codec/pending-buffer
+errors. Independent image captures cover 134 active-state witnesses, 8,816,262
+state inputs and 6,386,038 escape-boundary inputs per mode, and 1,167 responses
+across 23 labels. Validation grows 31 to 37, provider 82 to 86 and TLS 85 to 96
+without changing old observations. Native 305 library, 5 worker, 28 managed HTTP,
+22 behavior, 70 affected Python and 96 TLS checks plus strict Clippy pass.
+The new lifecycle persistence/recovery scenario is required by CI. All 24 configured
+published-image/schema tests pass (212.24 seconds, none ignored/filtered), including
+full artifact regeneration and lifecycle recovery. The prior `e06a90acc` CI and
+Rust analysis passed; this continuation still requires fresh hosted qualification.
+See [ISO-2022 evidence](../contracts/canvas-iso2022-codecs/README.md).
+
+EUC-KR now preserves both two-byte text and eight-byte Hangul composition through
+the shared Rust complete-input owner used by GB18030. Independently captured
+evidence covers all 16,777,216 component triples (11,172 valid), 65,792 short inputs,
+769 component observations, 98,304 mutated/prefix/suffix inputs per mode and 98
+responses across nine labels. The previous fallback failed before repair. Local
+303 library, 5 worker, 28 managed HTTP, 22 behavior and 70 affected Python tests
+pass, as does strict Clippy. Native TLS matches all 85 observations, preserving
+the previous 84. All 23 configured image/schema tests pass (197.45 seconds, none
+ignored/filtered), including complete EUC-KR regeneration and unchanged previous
+codec artifacts. Fresh hosted qualification remains required.
+See [EUC-KR evidence](../contracts/canvas-euc-kr-codec.md).
+Other codec families and whole-worker/all-consumer adoption remain open.
+
+GB18030 now has a native compact range/pair decoder shared by response text and
+strict encoded labels. Two independent immutable-image captures agreed before
+implementation; the previous UTF-8 fallback failed the regression. Rust matches
+all 1,587,600 four-byte pointers, all single/two-byte inputs, 88,741 byte-class
+sequences per mode and 428 response examples across two labels. The 84-case native
+TLS replay passes and preserves the previous 83 observations. Local 301 library,
+5 worker, 28 managed HTTP, 22 behavior, 70 affected Python checks and strict Clippy
+pass. All 23 configured published-image/schema tests pass (158.38 seconds, none
+ignored/filtered), including full artifact regeneration. The preceding `cf8246918`
+head is hosted-green; this continuation still requires fresh hosted qualification.
+Details and format:
+[GB18030 evidence](../contracts/canvas-gb18030-codec.md). PR #814 remains draft and
+unrouted; no deployment or reachable-Python deletion occurs.
+
+Multibyte response qualification adds 15 East Asian codecs through a shared native
+state-machine decoder, also reused for strict encoded charset labels. Independently
+captured immutable-image tables cover 64 labels, 2,415 reachable states and 618,240
+byte transitions. Independent HTTPX/strict decoding hashes qualify 620,655 witness
+inputs per mode, and 165 response examples retain multi-character mappings and
+malformed-input replacement. The old native UTF-8 fallback failed before repair.
+The published-helper/native TLS corpus expands from 68 to 83 cases with every old
+observation unchanged. Local 299 library, 5 worker, 28 managed HTTP, 22 behavior,
+70 workflow/image/ownership/cutover checks, strict Clippy and all 23 configured
+image/schema tests pass. No dependencies or runtime Python are added. The prior
+integration head `ded29ea7c` CI and Rust CodeQL passed; new source still requires
+its own hosted checks. UTF-7 and remaining special/escape codecs,
+exceptional metadata/JSON/configuration/transport behavior and whole-worker/all-
+consumer adoption remain open. No deployment or reachable-Python deletion occurs.
+
+Protected main advanced through CI/cache repair PR #815 at
+`f5c4da685f5723a7614649c883bfaa540dd153f1`, conflicting with PR #814 in the
+workflow, workflow tests, worker lifecycle and process-signal diagnostics. GitHub
+reported the charset head `3c4995e8e` as unmergeable, with no check suites; this
+was an integration conflict, not a failed test or permission configuration.
+The reconciliation retains main's cache improvements and concurrent isolated
+database runner, moves all 20 newer Canvas assertions into the extracted script,
+and keeps the separate TLS gate. Both connection-release and worker-cancellation
+cleanup protections remain, with distinct responsibilities and existing tests.
+Local 70 workflow/image/ownership/cutover checks, 297 library, 5 worker, 28 managed
+HTTP, 22 behavior, strict Clippy and 68 TLS cases pass. The configured worker
+PostgreSQL suite passes all three tests (92.63 seconds), including all 60 renewal
+outcomes and lifecycle/disposal checks. All 23 configured published-image/schema
+tests also pass (140.67 seconds, none ignored or filtered). POSIX process signals still require
+hosted Linux evidence; the Windows gate explicitly does not claim to exercise them.
+This integration does not approve worker cutover or change any deployment.
+
+Charset-header qualification adds 177 independent observations covering ordinary,
+quoted and RFC2231 parameters, continuation ordering, label decoding, registered
+dotted aliases, malformed-group error identity, and JSON/empty-body bypasses.
+The old native parser failed the frozen corpus. One shared Rust parser now passes
+it and reuses the codec registry and strict/replacement Unicode primitive; no
+runtime Python or dependency is added. The 326 registry aliases describe lookup
+semantics, not a claim that every referenced codec is implemented.
+Two independent immutable-image captures also expand validation from 28 to 31
+cases and status providers from 79 to 82, preserving every previous observation.
+Native managed HTTP and the real validation transport retain the distinct success,
+JSON and failure paths. The shared real HTTP/PostgreSQL lifecycle fixture now
+also verifies charset diagnostics, committed canonical status and recovery.
+Local 297 library, 5 worker, 28 managed HTTP, 22 behavior, 42 workflow/image/
+ownership tests, strict Clippy and 68 native TLS cases pass. All 23 configured
+published-image/schema tests pass; CI explicitly requires both Unicode and charset
+recovery tests. Prior head `137c939561d08c20c59fc6c780294501b9458a1b` CI and Rust
+CodeQL completed successfully; this continuation requires its own hosted checks.
+Unqualified multibyte/stateful codecs (including encoded parameter labels),
+exceptional metadata/JSON/configuration/transport behavior, whole-worker and
+all-consumer adoption still prevent cutover approval. No reachable Python is
+deleted, no rollout changes, and PR #814 remains draft. Branch reconciliation,
+UI/demo/crypto preservation, CSCA follow-up, recordings/device/wallet evidence,
+aggregate beta deployment and uninterrupted soak remain in the full active goal.
+
+Status-provider qualification expands the published corpus from 63 to 79 cases,
+preserving all earlier observations. Two independent immutable-image captures
+freeze success/error response decoding for bridge synchronization and real-provider
+revocation. The old native boundary lost Unicode error identity; one typed
+`synchronize_provider` owner now preserves it. The existing lifecycle port delegates
+to that owner and stores diagnostic text, matching the published route's explicit
+`str(exc)` persistence behavior. No message-based error-class inference is used.
+The new real HTTP/PostgreSQL runtime scenario proves two decoder failures preserve
+committed canonical status, attempt counters and diagnostics; subsequent JSON
+success clears the error. It reuses the baseline runtime fixture and retains its
+tenant-vault, event-ordering and late-persistence-failure checks.
+Local 296 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
+ownership tests, strict Clippy and all 68 existing TLS observations pass. The full
+configured 22-test image suite passes (136.27 seconds, none ignored/filtered);
+fresh hosted checks must qualify this continuation. Prior
+`81236f778b9a5403a6ad3bc5c9667e509a318361` CI was cancelled after the subsequent
+source push; its Rust CodeQL completed successfully. Cancellation is not a pass.
+The full goal stays active, PR #814 draft/unrouted, and deployments unchanged.
+
+The Unicode-text continuation adds shared UTF-16/32 decoding for both byte orders
+and all 16 published aliases. A new 372-case language-neutral corpus separately
+freezes text and JSON/excerpt outcomes, including BOM requirements, invalid
+scalars/surrogates, truncated prefixes and JSON precedence. Independent captures
+agree; the unchanged native decoder failed, and the replacement passes. The
+actual published application corpus expands from 20 to 28 cases: missing required
+BOMs return plain HTTP 500, successful provider bodies are not text-decoded, and
+short prefixes receive replacement characters. Native full-router replay and an
+eight-case real HTTP transport regression preserve these distinctions via typed
+decoder errors, not network-failure results. All earlier observations remain.
+Local 296 library, 5 worker, 28 management HTTP, 22 behavior, 42 workflow/image/
+ownership tests, strict Clippy and the existing 68 TLS cases pass. All 21 configured
+published-image tests pass (137.06 seconds, none ignored/filtered); fresh hosted
+checks must qualify this continuation. The previous pushed
+`ef24ba1a128d2db91b242da99496f9de51dafb80` has successful CI and Rust CodeQL.
+PR #814 stays draft and unrouted.
+
+Other multibyte/stateful codecs, extended headers/label normalization, exceptional
+JSON behavior remain open. The validation and status UTF-16/32 response boundaries
+are now qualified for their frozen inputs; other exception/configuration paths
+still need whole-consumer evidence. Whole-consumer cutover, Python deletion,
+branch reconciliation, demos/device/wallet/CSCA follow-up and aggregate beta/soak
+remain required. The checkpoints below retain prior evidence chronologically.
+
+The preceding single-byte continuation replaces hand-maintained ASCII/Latin-1
+branches with one shared Rust table decoder for 73 codecs and 291 registered
+aliases. The language-neutral tables come from the exact published response
+helper, not WHATWG approximations; the immutable-image gate independently
+checks them. Four representative code-page cases extend the TLS corpus to 68,
+preserving all 64 prior observations. Native 68-case replay, 294 library, 5 worker,
+28 management HTTP, 22 behavior and 42 workflow/image/ownership tests pass;
+strict all-target Clippy passes. Windows UTF-8 output and Unicode JSON record
+parsing repairs have regression coverage. No runtime Python or new dependency
+was introduced. See [the codec contract](rust-migrations/canvas-response-codecs.md).
+All 21 configured published-image tests also pass (164.97 seconds, none ignored
+or filtered). Fresh hosted qualification remains required for this continuation.
+The prior pushed head
+`69dbfe4bc2005834efb764d8d37bb91e35565b91` has green CI and Rust CodeQL;
+those results do not qualify later source changes. PR #814 remains draft.
+
+Current open gates are multibyte/stateful text codecs, extended charset headers
+and decoder exception boundaries; broader provider configuration/transport
+behavior; whole-worker/runtime and every deployment consumer; immediate removal
+of superseded Python after those gates; branch preservation/cleanup; all-demo,
+device/wallet and CSCA lifecycle follow-up; aggregate beta release and a new
+uninterrupted soak. Beta 217 does not qualify the current candidate. No deployment
+or other-worker change was made. The following paragraphs retain historical
+qualification checkpoints, not additional claims about the newest source.
+
+Core text-charset qualification extends the shared TLS corpus to64 observations,
+retaining the previous47. Two independent published-source captures freeze
+ASCII/Latin-1 mappings and aliases, UTF-8 signature handling, first/quoted charset
+parameters, fallback and character-counted excerpts. The unchanged native text
+projection failed; a shared Rust text owner now passes native64 replay. Both
+consumers retain Content-Type alongside decompressed bytes, while JSON decoding
+remains independent. Local293 library tests, supporting suites and strict Clippy
+pass. Additional Python codecs and extended charset headers still block blanket
+text parity and all-consumer cutover.
+The full configured21 published-image tests also pass (none ignored/filtered);
+fresh hosted qualification remains required for this continuation.
+
+Compressed-response qualification extends the shared TLS corpus to47 cases,
+preserving all31 prior observations. The immutable published image supports
+gzip/deflate/identity, not Brotli. Two independent captures freeze16 added
+compression, error and progress cases; unchanged Rust failed them. Shared
+streaming Rust decoding now passes native47 replay and is used by both failed
+response projection and successful validation draining. Actual status transport
+also preserves gzip-compressed UTF-16 JSON. General text charset and remaining
+transport/configuration/all-consumer gates remain open.
+Local291 library tests, supporting worker/API/behavior suites, strict Clippy and
+all21 configured published-image tests pass. Offline dependency bans/licenses/
+sources pass; fresh hosted advisory and image checks remain required.
+
+Unicode JSON qualification extends the shared TLS corpus to31 cases, preserving
+the previous21 observations. The exact published helper accepts UTF-8 BOM and
+UTF-16/32 JSON in either byte order, with/without BOM, independently of the text
+charset. Two independent captures agree; the unchanged native decoder failed,
+and the shared Rust byte decoder now passes all31 native TLS cases. Status
+synchronization retains bytes instead of applying lossy text decoding first.
+Local288 library,5 worker,28 management HTTP,22 behavior,40 workflow/image/ownership
+tests and strict Clippy pass; full configured21 published-image tests pass.
+General text charsets, compression and wider adoption gates remain open.
+
+Response-body qualification now extends the real TLS corpus from17 to21 cases,
+retaining every prior observation. Two independent published-source captures
+confirm valid JSON at/above the former64KiB validation buffer, bounded text
+excerpts, and a read timeout after that prefix. Native21 TLS replay passes. A
+real validation-transport regression reproduced lost JSON fields at exactly64KiB;
+the repair consumes failed responses completely before shared JSON/text projection
+and rejects later stalls/truncation. Only non-JSON text excerpts are limited to
+1000 characters plus ellipsis; request-body limits and origin policy are unchanged.
+Local286 library,5 worker,28 management HTTP,22 behavior,40 workflow/image/ownership
+tests and strict Clippy pass. The full configured published-image suite passes
+all21 tests (none ignored). Charset/compression and wider transport gates remain.
+
+The [managed validation boundary](rust-migrations/canvas-validation-boundary.md)
+now freezes20 responses and lookup/file/HTTP effects from the actual published
+application middleware, route and adapter; two independent captures agree. The
+native full management router matches all20 after restoring typed UTF-8 failures
+as plain500 responses, unsupported-provider short-circuiting, configuration-error
+result shape, and the second lazy token lookup that observes file rotation.
+Canonical tenant-secret checks are unchanged. Local285 library,5 worker,
+28 management HTTP,22 behavior and40 ownership/workflow/image tests plus strict
+Clippy pass. The new mandatory published-image gate expands the schema suite to21.
+The complete configured21-test run passes (134.71s), with no ignored/filtered cases.
+Fresh hosted qualification is required; source completion is not deployment.
+
+The native operation-deadline owner is now wired in the candidate source to both
+status synchronization and credentials-validation HTTP. Startup retains the
+original floating-point value rather than rejecting Python-accepted timeout
+ranges. All19 published import-acceptance cases replay through the actual config,
+and all17 native TLS cases match the unchanged published socket oracle using the
+new transport and real config. Shared origin/DNS policy remains authoritative;
+catalog, OAuth and worker HTTP retain their existing separately qualified policy.
+
+Maintainer review also corrected validation returning success at response headers:
+it now drains successful bodies without retaining them, rejects truncation/stalls,
+and accepts ongoing progress beyond one total timeout. The new regression failed
+before repair. Local qualification passes285 library tests,5 worker tests,
+22 behavior tests,40 ownership/workflow/image tests and strict all-target Clippy.
+Final full configured schema qualification passes all20 tests (126.72s), including
+both lifecycle variants. An earlier19/20 run failed at Docker cleanup; it is
+retained as failed evidence, not reclassified or masked by excluding a test.
+
+Draft#814 remains unmerged. Prior hosted head40fccb65e had two failures with one cause:
+the loopback certificate fixture's four Python crypto imports lacked ownership
+metadata. Exact test-only allowances now document those imports; a regression
+proves they authorize neither service imports nor duplicate fixture imports.
+No guard logic, scan scope or production crypto owner was relaxed. Native TLS
+replay is now a mandatory CI step. Transport headcd5396ef2 completed CI34002852973
+and Rust CodeQL34002852955 successfully. The new validation-boundary repair above
+requires its own fresh hosted checks; prior-head green checks cannot qualify it.
+
+The20-case validation continuation above supersedes the earlier error/lookup
+ordering finding for its frozen inputs. Remaining cutover gates include broader
+URL/template/response-encoding behavior, backpressured writes and early replies,
+whole-worker/runtime adoption and every deployment consumer. No reachable Python
+was deleted or pending-only lifecycle default switched. No deployment changed.
+The host restart interrupts beta soak; current beta health is not inferred from
+test-container availability. See the latest section in
+[provider configuration evidence](rust-migrations/canvas-provider-configuration.md).
+
+### Earlier operations qualification history (superseded where noted above)
+
+Docker became available again. The first full schema run passed19/20, including
+the19 fresh adapter imports; the remaining TLS probe lacked writable certificate
+storage in its read-only image. A timeout-probe-only8MiB tmpfs fixes that fixture,
+and all17 socket observations now pass in the published HTTPX0.26.0/httpcore1.0.9/
+AnyIO4.14.2 runtime. A shared native lossless scalar/per-operation deadline runner
+is implemented and passes six focused tests plus the280-test library suite, but
+is not yet wired into HTTP consumers. The full configured schema rerun now passes
+all20 tests (432.49s); new hosted checks remain required. Existing live timeout
+policies and production are unchanged.
+
+Timeout qualification now includes 17 independently repeated, real loopback-TLS
+observations from the exact published Canvas HTTP factory/pinning transport.
+They confirm that Python uses progress-sensitive operation deadlines, whereas
+Rust currently uses a whole-response deadline and rejects several values at
+startup that Python accepts. A new mandatory image test cross-checks those socket
+outcomes; the helper gate additionally verifies 19 full adapter imports in fresh
+processes. These new gates await hosted qualification. Native timeout repair and
+all-consumer adoption remain open; no cutover is implied by a Python baseline.
+See [configuration evidence](rust-migrations/canvas-provider-configuration.md).
+
+The latest [provider configuration continuation](rust-migrations/canvas-provider-configuration.md)
+adds one lazy Rust operator-secret owner and 39 independently captured helper
+observations (20 secret, 19 timeout), including file rotation, optional I/O,
+UTF-8, whitespace and newline handling. Validation's canonical tenant policy and
+required non-Canvas secret policies are preserved. MMF float grammar and ordered
+timeout evaluation replace the Rust-only parser; actual network timeout/range
+and full endpoint error parity remain open. Runtime commit `6fdc86272` passed
+CI33997949251 and Rust CodeQL33997949236. New configuration changes require fresh
+hosted checks, including the new pinned-image helper cross-check. Docker's Linux
+engine is currently unavailable locally; this does not qualify a local full gate
+or current deployment health. The reported host restart interrupts continuous
+beta-soak evidence. Production remains unchanged by this lane.
+
+The status provider now has shared runtime configuration/HTTP assembly and a
+63-case published replay through the actual configuration parser. Eight new cases
+correct missing-issuer null projection, legacy BASE_URL trust/fallback and empty
+organization gating, preserving all original 55 observations. A real encrypted
+tenant-vault + credential/delivery PostgreSQL + loopback HTTP contract verifies
+durable mirror failures/recovery and rejects success if the delivery disappears
+after the external call. Normal token-file and timeout precedence are tested.
+At that checkpoint, eager/missing-file and numeric edge differences remained cutover blockers;
+no live consumer has adopted the factory. Prior provider commit `340a0503b` passed
+CI33996860721 and Rust CodeQL33996860698; new changes require fresh hosted gates.
+The new local runtime/fault tests passed before Docker became unavailable; 267
+library tests, 33 workflow/image tests and strict Clippy passed. The final full
+schema run was blocked at container creation for all17 Docker-dependent tests;
+only its Docker-free replay passed. This is not a green full-suite result. The
+daemon reports `Docker Desktop is unable to start`; no restart was attempted.
+
+The initial [Canvas lifecycle status provider candidate](rust-migrations/canvas-status-provider.md)
+now implements bridge POST and Badgr DELETE synchronization plus canonical-only
+suspend/reinstate, with 55 independently frozen published protocol cases matching
+the Rust replay and a fresh published-image capture. Shared provider primitives
+retain validation's distinct secret policy. Actual loopback HTTP tests cover
+wire payloads/headers and non-followed redirects; environment/factory wiring,
+TLS/transport edge cases and all-consumer cutover remain open. Draft #814's prior
+head `8b75c27c0b64c437356bbb0e6dd1cb692cc4d36e` completed CI33995364201 and
+Rust CodeQL33995364199 successfully, including the packaged-worker contract that
+previously failed. New provider changes require their own hosted qualification.
+The expanded local candidate passes all 17 configured schema tests, 266 library
+tests, 5 worker tests, 22 combined behavior tests, 33 workflow/image tests and
+strict all-target Clippy. Two final deterministic-DNS provider captures preserve
+all 55 observations. No new deployment or Python deletion occurred.
+
+The [actual lifecycle/delivery candidate](rust-migrations/canvas-lifecycle-delivery.md)
+adds17 independently frozen published cases covering durable credential/delivery
+effects, provider failures, cancellation and competing resolution. It exposes and
+replaces the pending-only delivery behavior for the explicitly configured candidate;
+the default runtime adapter is not yet cut over. Bridge/Badgr provider qualification
+and all-consumer adoption remain required. A separate configured database regression
+reproduces a SQLx return-to-pool cancellation race consistent with the hosted worker
+signal failure; bounded post-operation connection validation fixes the local race
+without changing active-query or graceful-drain policy. Linux CI passed at the
+prior head identified above; subsequent changes must retain that gate.
+The expanded candidate passes15 configured schema tests,264 library tests,
+5 worker executable tests,22 combined behavior tests,33 workflow/image tests
+and strict Clippy locally. No new deployment or superseded Python deletion occurred.
+
+The [manual review resolver candidate](rust-migrations/canvas-review-resolution.md)
+completes implementation of all eight operations in the candidate router, still
+unrouted. All46 corrected-schema published HTTP/state cases pass without manual
+case exclusions, with supplementary audit rollback, token/action fences and
+shared application-lock checks. The actual credential service/PostgreSQL adapter
+is exercised for suspend/revoke with controlled publication. The exact official
+credentials#266 migration is mounted read-only and hash-verified for these tests;
+this is source-overlay qualification, not a newly released component. All12
+configured schema gates,260 library tests and20 focused CI/image tests pass locally.
+An additional45-case published manual-request capture agrees across two runs;
+native replay now matches syntax/body/content-type/auth-order and actor-header
+behavior for that corpus, after a reproduced empty-body negative control.
+Broader encoding/transport cases, lifecycle failure/cancellation/provider coverage,
+full hosted qualification and worker/all-consumer cutover remain open.
+
+Job operations #813 merged as `04e2ea2c7ca6107c4c9dc12809272c1190393b1c`
+after source and protected-queue CI/CodeQL passed. Its merged tree
+`e8469359abe331d66e92525e280821ed8451f50b` matches the verified union of the
+reviewed job branch and #807's CI work. Manual review continues in draft #814.
+The rebased candidate passes13 configured schema tests,261 library tests,
+22 combined behavior tests,33 workflow/image tests and all-target Clippy locally.
+The merged #813 worktree/local branch are retired, with both ignored caches
+preserved; no Python runtime feature or other-worker branch was removed.
 
 The [native operations read candidate](rust-migrations/canvas-operations-reads.md)
 implements four read APIs in the existing issuance crate, without live routing.
@@ -52,7 +1716,7 @@ it reproduced and corrects numeric display and control-whitespace differences.
 One shared Rust formatter consumes the frozen published Unicode15.0 text rules,
 with no runtime Python or new dependency. Ten configured schema gates,
 260 library tests,51 candidate/LTI behavior tests and20 focused CI/image tests
-pass locally. Manual review resolution, broader input/worker-interleaving qualification, hosted
+pass locally. The manual candidate above adds the last write; broader input/worker-interleaving qualification, hosted
 checks and all-consumer cutover remain required. No live routing has changed.
 
 The [operations baseline](rust-migrations/canvas-operations-freeze.md) captures
@@ -61,8 +1725,8 @@ the published Python router, authentication, service and real PostgreSQL.
 It merged through #811 as `aac7d9377891564e947042a98a3db24ed8ba92b0`.
 Two independent captures agree; all five original configured published-schema tests,
 all-target issuance Clippy and twenty focused CI/image tests pass locally.
-Manual resolution and full hosted/cutover qualification remain pending; the
-three candidate job writes above do not qualify all eight operations.
+Full hosted/cutover qualification remains pending; the combined candidate does
+not authorize consumer switching or deletion from its current passing corpus.
 
 The failed-handler recovery scenario exposes a published schema defect:
 the internal `evidence_recovered` claim is rejected by the manual-action-only

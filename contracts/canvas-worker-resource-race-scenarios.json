@@ -1,0 +1,26 @@
+{
+  "schema": "marty.canvas-worker-resource-race-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "retry_scenario": "canvas-worker-retry-scenarios.json",
+  "response": {"status": 503, "body": {"error": "synthetic-provider-unavailable"}},
+  "scope": "Observe an actual HTTPS request with its response held, change only the exact synthetic platform configuration or detach/delete the exact synthetic application, then release the response. No clock, job, lease, worker function or schema constraint is modified. Issued credentials and transactions remain unchanged. This does not qualify successful in-flight fact writes.",
+  "resource_sql": "SELECT jsonb_build_object('platform',(SELECT jsonb_build_object('config_version',config_version,'last_connection_error',last_connection_error,'validated',last_validated_at IS NOT NULL) FROM issuance_service.canvas_platforms WHERE id='platform-review'),'target',(SELECT jsonb_build_object('config_version',config_version,'application_id',application_id,'enabled',enabled) FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'),'application_present',EXISTS(SELECT 1 FROM issuance_service.applications WHERE id='application-review'))",
+  "job_row_sql": "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j",
+  "cases": [
+    {
+      "name": "platform_reconfigured",
+      "code": "canvas_platform_reconfigured",
+      "retryable": true,
+      "mutation": ["UPDATE issuance_service.canvas_platforms SET config_version=2,last_connection_error='synthetic-reconfigured' WHERE id='platform-review' AND organization_id='org-review'"]
+    },
+    {
+      "name": "application_removed",
+      "code": "canvas_application_unavailable",
+      "retryable": false,
+      "mutation": [
+        "UPDATE issuance_service.canvas_evidence_sync_targets SET application_id=NULL WHERE id='target-review' AND organization_id='org-review'",
+        "DELETE FROM issuance_service.applications WHERE id='application-review' AND organization_id='org-review'"
+      ]
+    }
+  ]
+}

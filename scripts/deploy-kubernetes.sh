@@ -147,6 +147,10 @@ catalog_services() {
   "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field k8s_deployment
 }
 
+resolve_kubernetes_issuance_image() {
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/check_kubernetes_issuance_image.py"
+}
+
 catalog_required_secret_envs() {
   "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" secrets "$1" --field env
 }
@@ -224,7 +228,7 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
+  local issuance_api_key token_hmac_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
   local integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
@@ -251,6 +255,8 @@ cmd_setup_secrets() {
   smtp_username="$(resolve_secret_input SMTP_USERNAME)"
   smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
+  token_hmac_key="$(resolve_secret_input TOKEN_HMAC_KEY)"
+  require_resolved_secret TOKEN_HMAC_KEY "$token_hmac_key"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
   notification_webhook_secret="$(resolve_secret_input NOTIFICATION_WEBHOOK_SECRET)"
   notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
@@ -307,6 +313,7 @@ cmd_setup_secrets() {
     --from-literal=SMTP_USERNAME="$smtp_username" \
     --from-literal=SMTP_PASSWORD="$smtp_password" \
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
+    --from-literal=TOKEN_HMAC_KEY="$token_hmac_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
     --from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret" \
@@ -394,15 +401,21 @@ cmd_status() {
 }
 
 cmd_update_images() {
+  # Image-only updates cannot replace a legacy command or inherited selector.
+  # This read-only snapshot is not a lock against concurrent operator changes.
+  if ! kubectl get deployment canvas-sync-worker -n "$NAMESPACE" -o json --request-timeout=10s 2>/dev/null \
+    | "$PYTHON_BIN" "$REPO_ROOT/scripts/check_canvas_worker_kubernetes_update.py" --namespace "$NAMESPACE"; then
+    error "Canvas worker image update refused; apply the reviewed full-manifest cutover first."
+    return 1
+  fi
   step "Rolling image update — tag: ${IMAGE_TAG}"
   while IFS= read -r svc; do
-    [[ -z "$svc" ]] && continue
+    # The external Python API is not built by this repository's image loop.
+    # Advance it only with its matching migration image in a reviewed deploy.
+    [[ -z "$svc" || "$svc" == "issuance" ]] && continue
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
   done < <(catalog_services app)
-  kubectl set image deployment/canvas-sync-worker \
-    "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}" \
-    -n "$NAMESPACE" 2>/dev/null && success "Updated canvas-sync-worker" || warn "Deployment 'canvas-sync-worker' not found (skipped)"
   kubectl set image deployment/ui "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" \
     -n "$NAMESPACE" 2>/dev/null && success "Updated ui" || warn "Deployment 'ui' not found (skipped)"
   kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \
@@ -411,6 +424,12 @@ cmd_update_images() {
 }
 
 cmd_deploy() {
+  local issuance_image
+  issuance_image="$(resolve_kubernetes_issuance_image)" || {
+    error "Kubernetes issuance image validation failed before deployment."
+    return 1
+  }
+  export MARTY_ISSUANCE_IMAGE="$issuance_image"
   step "Full Kubernetes Deploy"
 
   apply_manifest "${K8S_DIR}/00-namespace.yaml"

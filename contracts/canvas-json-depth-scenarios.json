@@ -1,0 +1,8 @@
+{
+  "schema": "marty.canvas-json-depth-scenarios/v1",
+  "boundary": "Bounded synthetic nested responses in the pinned disposable published app/provider/database; never a deployment endpoint.",
+  "depths": [1, 126, 127, 128, 129, 254, 255, 256, 257, 980, 995, 1000, 1001, 1490, 1500, 1600],
+  "shapes": ["array", "object"],
+  "statuses": [200, 403],
+  "leaf_json": "0"
+}

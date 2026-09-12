@@ -88,7 +88,7 @@ def _repository_key(repository: str) -> str:
     return repository.rsplit("/", 1)[1].lower()
 
 
-def _image_reference(artifact: dict[str, Any], expected_name: str) -> dict[str, str]:
+def image_reference(artifact: dict[str, Any], expected_name: str) -> dict[str, str]:
     uri = artifact.get("uri")
     digest = artifact.get("digest")
     _require(
@@ -108,6 +108,11 @@ def _image_reference(artifact: dict[str, Any], expected_name: str) -> dict[str, 
         f"{expected_name} image digest is invalid",
     )
     return {"uri": uri, "digest": digest, "reference": f"{uri}@{digest}"}
+
+
+# Retain the existing private name for callers while sharing the canonical
+# release formatter with read-only deployment input validation.
+_image_reference = image_reference
 
 
 def prepare_release(
@@ -234,7 +239,7 @@ def prepare_release(
             len(candidates) == 1,
             f"Official stack must contain exactly one {role} image",
         )
-        images[role] = _image_reference(candidates[0], image_name)
+        images[role] = image_reference(candidates[0], image_name)
     _require(
         len({image["digest"] for image in images.values()}) == len(images),
         "Official stack image roles must resolve to unique digests",

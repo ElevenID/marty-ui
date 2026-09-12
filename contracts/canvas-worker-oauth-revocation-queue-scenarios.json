@@ -1,0 +1,20 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-queue-scenarios/v1",
+  "base_scenario": "canvas-worker-oauth-revocation-scenarios.json",
+  "scope": "Actual nonempty worker selection with due, future, connected, active-lease, expired-lease and unleased controls; database trigger observes acquisition order without changing worker scheduling",
+  "cases": [
+    {"name": "limited_three", "status": 429, "body": {}, "headers": {"Retry-After": "86400"}, "delay_bounds": [86400, 86400], "request_count": 3, "environment": {"CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "3"}},
+    {"name": "all_eligible", "status": 429, "body": {}, "headers": {"Retry-After": "86400"}, "delay_bounds": [86400, 86400], "request_count": 5, "environment": {"CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "25"}}
+  ],
+  "before_start_sql": [
+    "INSERT INTO issuance_service.canvas_platforms (id,organization_id,canvas_account_id,canvas_base_url,lti_deployment_id,enabled) SELECT 'queue-platform-'||v.id,p.organization_id,'account-'||v.id,p.canvas_base_url,'deployment-'||v.id,true FROM issuance_service.canvas_platforms p CROSS JOIN (VALUES ('oldest'),('later'),('future'),('leased'),('connected'),('expired'),('unleased')) v(id) WHERE p.id='platform-review'",
+    "INSERT INTO issuance_service.canvas_oauth_connections SELECT (jsonb_populate_record(NULL::issuance_service.canvas_oauth_connections,to_jsonb(c)||jsonb_build_object('id','queue-'||v.id,'platform_id','queue-platform-'||v.id,'status',CASE WHEN v.id='connected' THEN 'connected' ELSE 'revocation_pending' END,'revoke_retry_at',clock_timestamp()+make_interval(secs=>v.offset_seconds),'refresh_lease_owner',CASE WHEN v.id IN ('leased','expired') THEN 'synthetic-prior-worker' ELSE NULL END,'refresh_lease_expires_at',CASE WHEN v.id='leased' THEN clock_timestamp()+interval '1 hour' WHEN v.id='expired' THEN clock_timestamp()-interval '1 hour' ELSE NULL END))).* FROM issuance_service.canvas_oauth_connections c CROSS JOIN (VALUES ('oldest',-300),('later',-60),('future',3600),('leased',-900),('connected',-800),('expired',-600),('unleased',-500)) v(id,offset_seconds) WHERE c.id='worker-rest-connection'",
+    "CREATE TABLE issuance_service.synthetic_revocation_acquisitions (ordinal bigserial PRIMARY KEY,connection_id text NOT NULL)",
+    "CREATE FUNCTION issuance_service.synthetic_observe_revocation_acquisition() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO issuance_service.synthetic_revocation_acquisitions (connection_id) VALUES (NEW.id); RETURN NEW; END $$",
+    "CREATE TRIGGER synthetic_observe_revocation_acquisition AFTER UPDATE OF refresh_lease_owner ON issuance_service.canvas_oauth_connections FOR EACH ROW WHEN (NEW.refresh_lease_owner='worker-revocation' AND OLD.refresh_lease_owner IS DISTINCT FROM NEW.refresh_lease_owner) EXECUTE FUNCTION issuance_service.synthetic_observe_revocation_acquisition()"
+  ],
+  "queue_rows_sql": "SELECT jsonb_object_agg(id,to_jsonb(c)) FROM issuance_service.canvas_oauth_connections c",
+  "queue_delay_sql": "SELECT bool_and(COALESCE(abs(extract(epoch FROM c.revoke_retry_at-c.updated_at)-86400)<=0.1,false)) FROM issuance_service.canvas_oauth_connections c JOIN issuance_service.synthetic_revocation_acquisitions a ON a.connection_id=c.id",
+  "queue_order_sql": "SELECT COALESCE(jsonb_agg(connection_id ORDER BY ordinal),'[]'::jsonb) FROM issuance_service.synthetic_revocation_acquisitions",
+  "queue_state_sql": "SELECT jsonb_agg(jsonb_build_object('id',id,'status',status,'retry_count',revoke_retry_count,'error_code',revoke_last_error_code,'lease_owner',refresh_lease_owner,'lease_expires_present',refresh_lease_expires_at IS NOT NULL,'retry_at_present',revoke_retry_at IS NOT NULL) ORDER BY id) FROM issuance_service.canvas_oauth_connections"
+}

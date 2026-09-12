@@ -1,4 +1,5 @@
-//! Canvas operations candidate. Not registered in the production router yet.
+//! Canvas operations handlers with explicit native runtime composition.
+//! Gateway routing and consumer cutover remain separately qualified.
 //!
 //! Read projections never serialize raw rows. Filtering deliberately follows
 //! the published 500-row pre-filter window rather than pushing every filter
@@ -34,6 +35,17 @@ pub struct CanvasOperationsService {
     pool: PgPool,
     security: ManagementSecurity,
     jobs: Option<PostgresCanvasLtiBootstrapSyncEnqueuer>,
+    reviews: Option<crate::canvas_review_resolution::CanvasReviewResolver>,
+}
+
+impl std::fmt::Debug for CanvasOperationsService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasOperationsService")
+            .field("job_operations_configured", &self.jobs.is_some())
+            .field("review_operations_configured", &self.reviews.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CanvasOperationsService {
@@ -43,6 +55,7 @@ impl CanvasOperationsService {
             pool,
             security: ManagementSecurity::new(management_key.filter(|key| !key.is_empty())),
             jobs: None,
+            reviews: None,
         }
     }
 
@@ -77,6 +90,18 @@ impl CanvasOperationsService {
             .map_err(enqueue_error)?;
         let row = self.load_job(organization, &ids.job_id).await?;
         self.job_view(organization, &row).await
+    }
+
+    #[must_use]
+    pub fn with_review_operations(
+        mut self,
+        lifecycle: Option<Arc<dyn crate::canvas_review_resolution::CanvasReviewLifecycle>>,
+    ) -> Self {
+        self.reviews = Some(crate::canvas_review_resolution::CanvasReviewResolver::new(
+            self.pool.clone(),
+            lifecycle,
+        ));
+        self
     }
 
     async fn transition_job(
@@ -308,9 +333,14 @@ impl CanvasOperationsService {
     }
 }
 
-/// Deliberately separate from the live issuance/gateway route registration.
+/// Shared handlers for isolated replay and explicit native runtime composition.
+/// This function does not alter the gateway's native route allowlist.
 pub fn candidate_router(service: CanvasOperationsService) -> Router {
     Router::new()
+        .route(
+            "/v1/integrations/canvas/evidence-policy-reviews/{id}/resolve",
+            post(resolve_review),
+        )
         .route(
             "/v1/integrations/canvas/applications/{id}/canvas-sync",
             post(enqueue),
@@ -345,6 +375,137 @@ async fn enqueue(
         .enqueue(&headers, &id)
         .await
         .map(|value| (StatusCode::ACCEPTED, Json(value)))
+}
+
+async fn resolve_review(
+    State(service): State<CanvasOperationsService>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, OperationsError> {
+    let headers = request.headers().clone();
+    // The transport owns request size limits; this candidate does not add a
+    // smaller application-body limit than the released Python endpoint.
+    let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+        .await
+        .map_err(|_| OperationsError::Internal)?;
+    // Published FastAPI decodes JSON before dependencies, but validates the
+    // request model after management authentication. Preserve that ordering.
+    let json_content = header(&headers, "content-type").is_none_or(|value| {
+        let media = value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        media
+            .strip_prefix("application/")
+            .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
+    });
+    let payload = if bytes.is_empty() {
+        Value::Null
+    } else if json_content {
+        serde_json::from_slice(&bytes).map_err(|error| {
+            OperationsError::Public(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"detail":[crate::python_json_diagnostic::diagnostic(&bytes, &error)]}),
+            )
+        })?
+    } else {
+        json!(String::from_utf8_lossy(&bytes))
+    };
+    service.authorize(&headers)?;
+    let (action, notes) = review_payload(&payload)?;
+    let organization = organization(&headers)?;
+    let actor = ["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]
+        .iter()
+        .filter_map(|name| header(&headers, name))
+        .find(|value| !value.is_empty());
+    let result = service
+        .reviews
+        .as_ref()
+        .ok_or(OperationsError::Internal)?
+        .resolve(organization, &id, action, notes, actor)
+        .await?;
+    Collection::Reviews.project(&result).map(Json)
+}
+
+fn review_payload(
+    value: &Value,
+) -> Result<(crate::canvas_review_resolution::ReviewAction, Option<&str>), OperationsError> {
+    use crate::canvas_review_resolution::ReviewAction;
+    if value.is_null() {
+        return Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":[validation_issue("missing",json!(["body"]),"Field required",Value::Null,None)]}),
+        ));
+    }
+    let Some(object) = value.as_object() else {
+        return Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":[
+                validation_issue("model_attributes_type",json!(["body"]),"Input should be a valid dictionary or object to extract fields from",value.clone(),None)
+            ]}),
+        ));
+    };
+    let mut errors = Vec::new();
+    let action = match object.get("action") {
+        Some(Value::String(action)) if action == "dismiss" => Some(ReviewAction::Dismiss),
+        Some(Value::String(action)) if action == "suspend" => Some(ReviewAction::Suspend),
+        Some(Value::String(action)) if action == "revoke" => Some(ReviewAction::Revoke),
+        Some(input) => {
+            errors.push(validation_issue(
+                "literal_error",
+                json!(["body", "action"]),
+                "Input should be 'dismiss', 'suspend' or 'revoke'",
+                input.clone(),
+                Some(json!({"expected":"'dismiss', 'suspend' or 'revoke'"})),
+            ));
+            None
+        }
+        None => {
+            errors.push(validation_issue(
+                "missing",
+                json!(["body", "action"]),
+                "Field required",
+                value.clone(),
+                None,
+            ));
+            None
+        }
+    };
+    let notes = match object.get("note") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(note)) => {
+            if note.chars().count() > 2000 {
+                errors.push(validation_issue(
+                    "string_too_long",
+                    json!(["body", "note"]),
+                    "String should have at most 2000 characters",
+                    json!(note),
+                    Some(json!({"max_length":2000})),
+                ));
+            }
+            Some(note.as_str())
+        }
+        Some(input) => {
+            errors.push(validation_issue(
+                "string_type",
+                json!(["body", "note"]),
+                "Input should be a valid string",
+                input.clone(),
+                None,
+            ));
+            None
+        }
+    };
+    if errors.is_empty() {
+        Ok((action.ok_or(OperationsError::Internal)?, notes))
+    } else {
+        Err(OperationsError::Public(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"detail":errors}),
+        ))
+    }
 }
 async fn retry_job(
     State(service): State<CanvasOperationsService>,
@@ -622,11 +783,24 @@ impl ListQuery {
 }
 
 fn validation(kind: &str, message: &str, input: &str, context: Option<Value>) -> OperationsError {
-    let mut error = json!({"type": kind, "loc": ["query", "limit"], "msg": message, "input": input, "url": format!("https://errors.pydantic.dev/2.11/v/{kind}")});
+    OperationsError::Public(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        json!({"detail": [validation_issue(kind,json!(["query","limit"]),message,json!(input),context)]}),
+    )
+}
+
+fn validation_issue(
+    kind: &str,
+    location: Value,
+    message: &str,
+    input: Value,
+    context: Option<Value>,
+) -> Value {
+    let mut error = json!({"type": kind, "loc": location, "msg": message, "input": input, "url": format!("https://errors.pydantic.dev/2.11/v/{kind}")});
     if let Some(context) = context {
         error["ctx"] = context;
     }
-    OperationsError::Public(StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": [error]}))
+    error
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -720,6 +894,7 @@ fn public_job_result(value: &Value) -> Value {
 
 pub enum OperationsError {
     Public(StatusCode, Value),
+    Lifecycle(crate::credential_management::CredentialManagementError),
     Internal,
 }
 impl OperationsError {
@@ -731,6 +906,10 @@ impl IntoResponse for OperationsError {
     fn into_response(self) -> Response {
         match self {
             Self::Public(status, body) => (status, Json(body)).into_response(),
+            Self::Lifecycle(error) => {
+                crate::credential_management_http::CredentialManagementHttpError::Lifecycle(error)
+                    .into_response()
+            }
             Self::Internal => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
             }
@@ -742,6 +921,166 @@ impl IntoResponse for OperationsError {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn every_frozen_operation_is_mounted_and_rejects_unauthenticated_access() {
+        assert_operations_transport(false).await;
+        assert_operations_transport(true).await;
+    }
+
+    async fn assert_operations_transport(composed: bool) {
+        use axum::{body::Body, http::Request};
+        use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+        use tower::ServiceExt;
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-operations.json"
+        ))
+        .unwrap();
+        let routes = contract["routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 8);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let service = CanvasOperationsService::new(pool.clone(), Some("synthetic-operations-key"));
+        let config =
+            crate::IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+                .unwrap();
+        let runtime = crate::IssuanceRuntime::new(&config).unwrap();
+        let documents =
+            StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name);
+        let router = if composed {
+            crate::http::router_with_canvas_operations(
+                runtime.state(),
+                documents.clone(),
+                crate::transport::TransportPolicy::new([
+                    "https://console.example.invalid".to_owned()
+                ]),
+                service,
+            )
+        } else {
+            candidate_router(service)
+        };
+        for route in routes {
+            let path = format!(
+                "{}{}",
+                contract["route_prefix"].as_str().unwrap(),
+                route["path"].as_str().unwrap()
+            )
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "synthetic"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+            for key in [None, Some("synthetic-wrong-key")] {
+                let mut request = Request::builder()
+                    .method(route["method"].as_str().unwrap())
+                    .uri(&path)
+                    .header("origin", "https://console.example.invalid")
+                    .header("x-request-id", "synthetic-operation-request")
+                    .header("content-type", "application/json");
+                if let Some(key) = key {
+                    request = request.header("x-api-key", key);
+                }
+                let response = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    router
+                        .clone()
+                        .oneshot(request.body(Body::from("{}")).unwrap()),
+                )
+                .await
+                .expect("management rejection must not wait for database access")
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+                if composed {
+                    assert_eq!(
+                        response.headers()["x-request-id"],
+                        "synthetic-operation-request"
+                    );
+                    assert_eq!(
+                        response.headers()["access-control-allow-origin"],
+                        "https://console.example.invalid"
+                    );
+                    assert_eq!(
+                        response.headers()["access-control-allow-credentials"],
+                        "true"
+                    );
+                }
+            }
+            if composed {
+                for (origin, status) in [
+                    ("https://console.example.invalid", StatusCode::OK),
+                    ("https://foreign.example.invalid", StatusCode::BAD_REQUEST),
+                ] {
+                    let response = router
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .method("OPTIONS")
+                                .uri(&path)
+                                .header("origin", origin)
+                                .header(
+                                    "access-control-request-method",
+                                    route["method"].as_str().unwrap(),
+                                )
+                                .header(
+                                    "access-control-request-headers",
+                                    "x-api-key,x-organization-id",
+                                )
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), status, "{path}");
+                    assert!(response.headers().contains_key("x-request-id"));
+                    assert_eq!(
+                        response
+                            .headers()
+                            .contains_key("access-control-allow-origin"),
+                        status == StatusCode::OK
+                    );
+                }
+                let response = crate::http::router(
+                    runtime.state(),
+                    documents.clone(),
+                    crate::transport::TransportPolicy::new(std::iter::empty::<String>()),
+                )
+                .oneshot(
+                    Request::builder()
+                        .method(route["method"].as_str().unwrap())
+                        .uri(&path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NOT_FOUND,
+                    "operations must remain optional: {path}"
+                );
+            }
+        }
+        // Negative route control: a missing registration must not look like a
+        // successful management-authentication barrier.
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/not-a-canvas-operation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        pool.close().await;
+    }
+
     #[test]
     fn public_job_projection_retains_only_legacy_scalar_fields() {
         assert_eq!(
@@ -750,10 +1089,15 @@ mod tests {
                 "candidate_id": "candidate", "facts_changed": 1.5,
                 "sources_checked": ["private"], "policy_allowed": {"private":true},
                 "roster_remaining": 8, "access_token": "synthetic-private",
+                "target_config_version": 1,
             })),
             json!({"facts_observed":2,"no_change":true,"application_id":null,"candidate_id":"candidate"})
         );
         assert_eq!(public_job_result(&Value::Null), json!({}));
+        assert_eq!(
+            public_job_result(&json!({"target_config_version": 1})),
+            json!({})
+        );
     }
 
     #[test]

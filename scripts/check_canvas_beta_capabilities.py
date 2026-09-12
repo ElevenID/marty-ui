@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -20,6 +21,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .canvas_worker_runtime import classify_worker_launch
+else:
+    from canvas_worker_runtime import classify_worker_launch
 
 MARTY_ORIGIN = "https://beta.elevenidllc.com"
 CANVAS_ORIGIN = "https://canvas-test.elevenidllc.com"
@@ -68,7 +73,7 @@ def _container_id(service: str) -> str:
     return payload
 
 
-def _container(service: str) -> tuple[dict[str, str], str, str]:
+def _container(service: str) -> tuple[dict[str, str], str, str, dict[str, Any]]:
     name = _container_id(service)
     payload = _docker_json("inspect", name)
     _require(isinstance(payload, list) and len(payload) == 1, f"{name} inspection was ambiguous")
@@ -86,10 +91,33 @@ def _container(service: str) -> tuple[dict[str, str], str, str]:
         if not isinstance(item, str) or "=" not in item:
             continue
         key, value = item.split("=", 1)
+        _require(key not in env, f"{name} environment contains duplicate settings")
         env[key] = value
     image_id = str(record.get("Image") or "")
     configured_image = str(config.get("Image") or "")
-    return env, image_id, configured_image
+    return env, image_id, configured_image, config
+
+
+def _native_image(worker: dict[str, str], image_id: str, reference: str) -> None:
+    _require(bool(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)), "Canvas worker image ID is invalid")
+    _require(bool(reference), "Canvas worker image reference is missing")
+    try:
+        images = _docker_json("image", "inspect", reference)
+    except CapabilityError:
+        # Config.Image is inspected data, not an approved diagnostic field.
+        raise CapabilityError("Canvas worker image inspection failed") from None
+    _require(isinstance(images, list) and len(images) == 1, "Canvas worker image inspection is ambiguous")
+    image = images[0]
+    _require(isinstance(image, dict) and image.get("Id") == image_id, "Canvas worker image reference no longer identifies the running image")
+    config = image.get("Config")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    _require(isinstance(labels, dict), "Canvas worker image provenance is missing")
+    _require(labels.get("org.opencontainers.image.source") == "https://github.com/ElevenID/marty-ui", "Canvas worker image source is invalid")
+    revision = labels.get("org.opencontainers.image.revision")
+    version = labels.get("org.opencontainers.image.version")
+    _require(isinstance(revision, str) and bool(re.fullmatch(r"[0-9a-f]{40}", revision)), "Canvas worker image revision is invalid")
+    _require(isinstance(version, str) and bool(version) and version != "development", "Canvas worker image release is invalid")
+    _require(worker.get("MARTY_UI_SHA") == revision and worker.get("MARTY_RELEASE_VERSION") == version, "Canvas worker runtime and image provenance differ")
 
 
 def _csv(value: str, setting: str) -> list[str]:
@@ -148,10 +176,15 @@ def _public_jwks(issuer_did: str) -> dict[str, dict[str, Any]]:
 
 def validate(expected_organization_id: str) -> dict[str, Any]:
     _require(bool(expected_organization_id.strip()), "Expected pilot organization ID is required")
-    issuance, issuance_image, issuance_reference = _container(ISSUANCE_SERVICE)
-    worker, worker_image, worker_reference = _container(WORKER_SERVICE)
-    _require(issuance_image == worker_image, "Canvas worker is not running the deployed issuance image")
-    _require(issuance_reference == worker_reference, "Canvas worker and issuance image references differ")
+    issuance, issuance_image, issuance_reference, _ = _container(ISSUANCE_SERVICE)
+    worker, worker_image, worker_reference, worker_config = _container(WORKER_SERVICE)
+    runtime = classify_worker_launch(worker_config.get("Entrypoint"), worker_config.get("Cmd"), worker)
+    _require(runtime is not None, "Deployed Canvas worker launch is unsupported")
+    if runtime == "native":
+        _native_image(worker, worker_image, worker_reference)
+    else:
+        _require(issuance_image == worker_image, "Canvas worker is not running the deployed issuance image")
+        _require(issuance_reference == worker_reference, "Canvas worker and issuance image references differ")
 
     _require(issuance.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "").lower() == "true", "Portable Canvas is not enabled in deployed beta issuance")
     pilot_orgs = _csv(issuance.get("CANVAS_PILOT_ORGANIZATION_IDS", ""), "CANVAS_PILOT_ORGANIZATION_IDS")
@@ -194,9 +227,10 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
     ):
         _require(worker.get(setting) == issuance.get(setting), f"Canvas worker {setting} differs from deployed issuance")
-    processor = worker.get("CANVAS_SYNC_PROCESSOR", "")
-    module, separator, function = processor.partition(":")
-    _require(bool(module and separator and function), "Deployed Canvas worker processor is invalid")
+    if runtime == "python":
+        processor = worker.get("CANVAS_SYNC_PROCESSOR", "")
+        module, separator, function = processor.partition(":")
+        _require(bool(module and separator and function), "Deployed Canvas worker processor is invalid")
     _require(
         worker.get("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS") == "600",
         "Deployed Canvas worker absolute job deadline must be 600 seconds",
@@ -214,7 +248,7 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
             "legacy_event_ingest_disabled": True,
             "issuer_did_rs256_signer": True,
             "public_jwks_matches_deployment": True,
-            "canvas_worker_running_same_image": True,
+            "canvas_worker_runtime_verified": True,
             "readiness_and_evidence_ttls_fail_closed": True,
             "worker_job_deadline_fail_closed": True,
         },

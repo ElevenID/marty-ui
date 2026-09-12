@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import ast
+from contextlib import nullcontext
+
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -15,9 +20,198 @@ ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 
 
+def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependencies():
+    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
+        "test-release-contracts"
+    ]
+    assert job["runs-on"] == "ubuntu-latest"
+    steps = {step.get("name"): step for step in job["steps"]}
+    installation = steps["Install released test dependencies"]["run"]
+    command = next(
+        line
+        for line in installation.splitlines()
+        if "uv pip install --system pytest" in line
+    )
+    assert {"pytest", "sqlalchemy"} <= set(command.split())
+    assert (
+        steps["Run repository release checks"]["run"]
+        == "python -m pytest tests -v --tb=short"
+    )
+
+
+def test_canvas_native_oracle_decodes_artifacts_and_child_output_as_utf8() -> None:
+    source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    native = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_native"
+    )
+    reads = [
+        node
+        for node in ast.walk(native)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "read_text"
+    ]
+    children = [
+        node
+        for node in ast.walk(native)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+    ]
+    assert len(reads) == 2 and len(children) == 1
+    for call in reads + children:
+        assert any(
+            keyword.arg == "encoding"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value == "utf-8"
+            for keyword in call.keywords
+        )
+
+
+def test_canvas_native_oracle_preserves_unicode_line_separators(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    native = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_native"
+    )
+    contracts = tmp_path / "contracts"
+    contracts.mkdir()
+    case = {"name": "synthetic_unicode_record"}
+    observation = {
+        "name": case["name"],
+        "status": 403,
+        "body": {"body_excerpt": "NEL\u0085LINE\u2028PARA\u2029"},
+    }
+    (contracts / "canvas-timeout-consumer-scenarios.json").write_text(
+        json.dumps({"cases": [case]}), encoding="utf-8"
+    )
+    (contracts / "canvas-timeout-consumer-oracle.json").write_text(
+        json.dumps({"cases": [observation]}, ensure_ascii=False), encoding="utf-8"
+    )
+    child = SimpleNamespace(
+        returncode=0,
+        stderr="",
+        stdout="CANVAS_TIMEOUT_NATIVE="
+        + json.dumps(observation, ensure_ascii=False)
+        + "\n",
+    )
+    namespace = {
+        "__file__": str(tmp_path / "scripts" / "oracle.py"),
+        "Path": Path,
+        "json": json,
+        "os": SimpleNamespace(environ={}),
+        "subprocess": SimpleNamespace(run=lambda *args, **kwargs: child),
+        "loopback_tls": lambda: nullcontext(
+            ("https://127.0.0.1:1", None, tmp_path / "synthetic.pem")
+        ),
+    }
+    exec(
+        compile(
+            ast.Module(body=[native], type_ignores=[]), "<owned-native-oracle>", "exec"
+        ),
+        namespace,
+    )
+    namespace["run_native"](tmp_path / "never-executed")
+    assert json.loads(capsys.readouterr().out) == {
+        "native_timeout_cases": 1,
+        "status": "passed",
+    }
+
+
 def _workflow(path: Path) -> tuple[str, dict[str, object]]:
     source = path.read_text(encoding="utf-8")
     return source, yaml.safe_load(source)
+
+
+def _assert_python_service_job_preserves_full_suite(document) -> None:
+    job = document["jobs"]["test-services"]
+    assert job["needs"] == "changes"
+    assert job["if"] == "needs.changes.outputs.python == 'true'"
+    assert not job.get("continue-on-error", False)
+    assert not job.get("services")
+    assert not job.get("env")
+    tests = [step for step in job["steps"] if step.get("name") == "Run tests"]
+    assert len(tests) == 1
+    assert tests[0] == {
+        "name": "Run tests",
+        "working-directory": "services",
+        "run": "python -m pytest -v --tb=short -x",
+    }
+    rust = document["jobs"]["test-rust-services"]
+    assert set(rust["services"]) == {"postgres", "redis"}
+    for service, port in (("postgres", 5432), ("redis", 6379)):
+        fixture = rust["services"][service]
+        assert fixture["image"].startswith(f"{service}:")
+        assert "@sha256:" in fixture["image"]
+        assert fixture["ports"] == [f"{port}:{port}"]
+        assert "--health-cmd" in fixture["options"]
+    assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
+        "localhost:5432/marty_atomic_test"
+    )
+    assert rust["env"]["VERIFICATION_SESSION_TEST_DATABASE_URL"].endswith(
+        "localhost:5432/marty_atomic_test"
+    )
+
+
+def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
+    _assert_python_service_job_preserves_full_suite(_workflow(CI_PATH)[1])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "drop-tests",
+        "narrow-tests",
+        "ignore-tests",
+        "skip-step",
+        "skip-job",
+        "tolerate-failure",
+        "restore-fixture",
+        "restore-url",
+        "drop-rust-postgres",
+        "drop-rust-redis",
+        "wrong-directory",
+    ],
+)
+def test_python_service_cleanup_guard_rejects_weakened_coverage(mutation) -> None:
+    document = _workflow(CI_PATH)[1]
+    job = document["jobs"]["test-services"]
+    step = next(step for step in job["steps"] if step.get("name") == "Run tests")
+    if mutation == "drop-tests":
+        job["steps"].remove(step)
+    elif mutation == "narrow-tests":
+        step["run"] += " -k image_strategy"
+    elif mutation == "ignore-tests":
+        step["run"] += " --ignore=common/tests"
+    elif mutation == "skip-step":
+        step["if"] = "false"
+    elif mutation == "skip-job":
+        job["if"] = "false"
+    elif mutation == "tolerate-failure":
+        step["continue-on-error"] = True
+    elif mutation == "restore-fixture":
+        job["services"] = {"redis": {"image": "redis:7"}}
+    elif mutation == "restore-url":
+        job["env"] = {"FLOW_POSTGRES_TEST_URL": "postgresql://localhost:5432/unused"}
+    elif mutation.startswith("drop-rust-"):
+        del document["jobs"]["test-rust-services"]["services"][
+            mutation.removeprefix("drop-rust-")
+        ]
+    elif mutation == "wrong-directory":
+        step["working-directory"] = "tests"
+    else:
+        raise AssertionError("unreviewed mutation")
+    with pytest.raises(AssertionError):
+        _assert_python_service_job_preserves_full_suite(document)
 
 
 def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -> None:
@@ -61,32 +255,550 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     assert 'test "$result" = success' in source
 
 
+@pytest.mark.parametrize(
+    "changed_path,rust_selected,all_selected",
+    [
+        ("rust/services/issuance/src/canvas_sync_processor_contract.md", True, False),
+        ("rust/services/issuance/src/canvas_sync_worker.rs", True, False),
+        ("docs/rust-migrations/canvas-worker-dispatch-reconciliation.md", False, False),
+        ("README.md", False, False),
+        ("rust/services/issuance/README.md", False, False),
+        ("scripts/test_canvas_worker_compose_render.py", True, True),
+        ("unclassified-synthetic-input", True, True),
+    ],
+)
+def test_actual_classifier_runs_compiler_consumed_markdown_through_rust_gates(
+    changed_path: str, rust_selected: bool, all_selected: bool, tmp_path: Path
+) -> None:
+    _, document = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in document["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    script = classifier["run"].replace("${{ github.event_name }}", "pull_request")
+    assert "${{" not in script
+    # Run the actual Bash classifier, not a Python copy of its path patterns.
+    # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
+    # repository or network. Results go to an owned synthetic output file, not
+    # the real Actions output file (/dev/stdout is unavailable in Git Bash).
+    prelude = """
+git() {
+  case "$1" in
+    fetch) return 0 ;;
+    diff) printf '%s\\n' "$SYNTHETIC_CHANGED_PATH" ;;
+    *) return 99 ;;
+  esac
+}
+export BASE_SHA=synthetic-base
+"""
+    # Windows' system bash launcher may point at an unconfigured WSL distro;
+    # use the Git Bash already required for this checkout's shell workflows.
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = (
+        str(git_bash)
+        if os.name == "nt" and git_bash.is_file()
+        else shutil.which("bash")
+    )
+    assert bash, "Bash is required to execute the workflow classifier regression"
+    environment = dict(os.environ)
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    environment["SYNTHETIC_CHANGED_PATH"] = changed_path
+    output = tmp_path / "synthetic-actions-output"
+    environment["GITHUB_OUTPUT"] = output.as_posix()
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input=prelude + script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    actual = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    expected = {
+        key: str(all_selected).lower()
+        for key in (
+            "all",
+            "ui",
+            "python",
+            "rust",
+            "release",
+            "verification",
+            "security",
+        )
+    }
+    expected["rust"] = str(rust_selected).lower()
+    assert actual == expected
+
+
 def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _, document = _workflow(CI_PATH)
     steps = document["jobs"]["test-rust-services"]["steps"]
     gate = next(
         step
         for step in steps
-        if step.get("name")
-        == "Run isolated database contract suites concurrently"
+        if step.get("name") == "Run isolated database contract suites concurrently"
     )
     assert "if" not in gate
     assert not gate.get("continue-on-error", False)
     assert gate["run"] == "python3 ../scripts/ci/run-db-contract-groups.py"
-    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(encoding="utf-8")
+    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert "canvas-worker-consumer-range-oracle.json" in published
     assert "canvas_published_schema_contract" in published
     assert '"${executables[0]}" --list' in published
     assert "grep -Fx 'heartbeat_readiness_matches_published_python: test'" in published
     assert "grep -Fx 'operations_match_frozen_published_python: test'" in published
-    assert "grep -Fx 'operations_reads_match_frozen_published_python: test'" in published
-    assert "grep -Fx 'operations_inputs_match_frozen_published_python: test'" in published
+    assert (
+        "grep -Fx 'operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'operations_reads_match_frozen_published_python: test'" in published
+    )
+    assert (
+        "grep -Fx 'operations_inputs_match_frozen_published_python: test'" in published
+    )
     assert "grep -Fx 'operations_jobs_match_frozen_published_python: test'" in published
     assert "grep -Fx 'operations_jobs_are_atomic_and_concurrent: test'" in published
     assert "grep -Fx 'enqueue_inputs_match_frozen_published_python: test'" in published
+    assert (
+        "grep -Fx 'operations_resolution_matches_corrected_published_schema: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'operations_resolution_fences_and_lifecycle_delegate: test'"
+        in published
+    )
+    assert "grep -Fx 'review_inputs_match_published_python: test'" in published
+    assert "grep -Fx 'review_lifecycle_matches_published_python: test'" in published
+    assert "grep -Fx 'status_provider_matches_published_python: test'" in published
+    assert "grep -Fx 'status_provider_matches_frozen_protocol: test'" in published
+    assert (
+        "grep -Fx 'status_runtime_matches_utf7_full_credential_routes: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'status_provider_matches_json_consumer_reference: test'" in published
+    )
+    assert (
+        "grep -Fx 'status_runtime_matches_json_full_credential_routes: test'"
+        in published
+    )
+    assert "grep -Fx 'status_provider_matches_json_depth_reference: test'" in published
+    assert (
+        "grep -Fx 'worker_rest_reference_matches_published_process: test'" in published
+    )
+    assert "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
+    assert "grep -Fx 'worker_rest_native_child: test'" in published
+    assert "grep -Fx 'worker_retry_matches_frozen_published_process: test'" in published
+    assert (
+        "grep -Fx 'worker_provider_recovery_matches_frozen_published_process: test'"
+        in published
+    )
+    assert "grep -Fx 'worker_provider_recovery_native_child: test'" in published
+    assert "grep -Fx 'worker_provider_final_native_child: test'" in published
+    assert "grep -Fx 'worker_provider_concurrent_native_child: test'" in published
+    assert "grep -Fx 'worker_provider_reclaimers_native_child: test'" in published
+    assert "grep -Fx 'worker_provider_reclaimers_retry_native_child: test'" in published
+    assert (
+        "grep -Fx 'worker_provider_reclaimers_retry_matches_frozen_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_provider_reclaimers_matches_frozen_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_reclaimers_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_reclaimers_retry_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_provider_concurrent_matches_frozen_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_concurrent_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_provider_final_matches_frozen_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_provider_final_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_provider_recovery_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_provider_signals_match_frozen_published_process: test'"
+        in published
+    )
+    assert "grep -Fx 'worker_provider_signals_native_child: test'" in published
+    assert (
+        "grep -Fx 'worker_provider_signals_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_retry_reference_matches_published_process: test'" in published
+    )
+    assert (
+        "grep -Fx 'worker_retry_after_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_validation_reference_matches_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_validation_repository_matches_frozen_errors: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_validation_matches_frozen_published_process: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_retry_after_matches_frozen_published_process: test'"
+        in published
+    )
+    assert "grep -Fx 'worker_facts_match_frozen_published_process: test'" in published
+    for name in [
+        "worker_roster_failure_reference_matches_published_process",
+        "worker_roster_failure_matches_frozen_published_process",
+    ]:
+        assert f"grep -Fx '{name}: test'" in published
+    for name in [
+        "worker_oauth_revocation_reference_matches_published_process",
+        "worker_oauth_revocation_matches_frozen_published_process",
+        "worker_oauth_revocation_native_child",
+        "worker_oauth_revocation_fence_reference_matches_published_process",
+        "worker_oauth_revocation_fence_matches_frozen_published_process",
+        "worker_oauth_revocation_patch_reference_matches_published_process",
+        "worker_oauth_revocation_patch_matches_frozen_published_process",
+        "worker_oauth_revocation_retry_after_reference_matches_published_process",
+        "worker_oauth_revocation_retry_after_matches_frozen_published_process",
+        "worker_oauth_revocation_backoff_reference_matches_published_process",
+        "worker_oauth_revocation_backoff_matches_frozen_published_process",
+        "worker_oauth_revocation_queue_reference_matches_published_process",
+        "worker_oauth_revocation_queue_matches_frozen_published_process",
+        "worker_oauth_revocation_repository_selection_matches_published_order",
+        "worker_oauth_revocation_lease_reference_matches_published_process",
+        "worker_oauth_revocation_lease_matches_frozen_published_process",
+        "worker_oauth_revocation_counters_reference_matches_published_cycle",
+        "worker_oauth_revocation_counters_matches_frozen_published_cycle",
+        "worker_oauth_revocation_secrets_reference_matches_published_process",
+        "worker_oauth_revocation_secrets_matches_frozen_published_process",
+        "worker_oauth_revocation_secret_reference_constraints_match_published_schema",
+        "worker_oauth_revocation_empty_token_is_not_dispatched",
+        "worker_provider_generation_reference_matches_published_process",
+        "worker_provider_generation_preserves_stronger_recovery_fence",
+        "worker_provider_generation_native_child",
+        "worker_final_completion_race_has_one_repository_winner",
+        "worker_effect_transaction_obeys_real_database_lease_expiry",
+        "worker_deadline_reference_matches_published_process",
+        "worker_deadline_matches_frozen_published_process",
+        "worker_deadline_native_child",
+        "canvas_published_borrowed_database::outer_database_owner_survives_forced_borrower_exit",
+        "canvas_published_borrowed_database::borrower_child",
+        "worker_timeout_reference_matches_published_process",
+        "worker_body_timeout_reference_matches_published_process",
+        "worker_lease_expiry_reference_matches_published_process",
+        "worker_body_timeout_matches_frozen_published_process",
+        "worker_body_timeout_native_child",
+        "worker_timeout_matches_frozen_published_process",
+        "worker_timeout_native_child",
+        "worker_mixed_roster_reference_matches_published_process",
+        "worker_mixed_roster_matches_frozen_published_process",
+        "worker_mixed_roster_native_child",
+        "worker_provider_completion_reference_matches_published_process",
+        "worker_provider_completion_preserves_atomic_terminal_winner",
+        "worker_provider_completion_native_child",
+        "canvas_worker_provider_completion_replay::completion_atomicity_check_rejects_reference_or_target_drift",
+        "worker_provider_recovery_first_reference_matches_published_process",
+        "worker_provider_recovery_first_preserves_terminal_winner",
+        "worker_provider_recovery_first_native_child",
+        "canvas_worker_provider_completion_replay::rejected_owner_check_rejects_unrelated_or_reference_drift",
+        "canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation",
+        "worker_oauth_revocation_selection_reference_matches_published_repository",
+        "worker_oauth_revocation_selection_repository_matches_published",
+    ]:
+        assert f"grep -Fx '{name}: test'" in published
+    assert (
+        "grep -Fx 'worker_facts_reference_matches_published_process: test'" in published
+    )
+    assert (
+        "grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'status_runtime_matches_json_depth_full_credential_routes: test'"
+        in published
+    )
+    for decoder in ("unicode", "charset", "iso2022", "ordinal", "utf7_label"):
+        assert (
+            f"grep -Fx 'status_runtime_preserves_{decoder}_failures_and_recovery: test'"
+            in published
+        )
+    assert (
+        "grep -Fx 'provider_configuration_matches_published_helpers: test'" in published
+    )
+    assert "grep -Fx 'validation_boundary_matches_published_http: test'" in published
+    assert (
+        "grep -Fx 'json_consumer_diagnostic_matches_published_boundaries: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'json_depth_diagnostic_matches_published_boundaries: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'timeout_consumer_matches_published_socket_behavior: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'utf7_consumer_diagnostic_matches_published_boundaries: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'status_runtime_preserves_credential_and_delivery_effects: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'status_runtime_composes_review_resolution_with_configured_http: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_native_composes_crypto_https_and_published_durability: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_fresh_gateway_admission_preserves_public_projection_without_legacy_fallback: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_historical_keyed_http_recovers_before_fresh_admission_guard: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_flow_grpc_provider_preserves_keyed_admission: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'didcomm_transport_reloads_valid_ca_bundles_without_disabling_tls: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'status_main_process_resolves_reviews_with_real_http_publication_and_mirror: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings: test'"
+        in published
+    )
+    assert (
+        "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
+        in published
+    )
     assert '"${executables[0]}" --nocapture --test-threads=1' in published
     assert "[[ ${#executables[@]} == 1" in published
+
+
+def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    gate = next(
+        step
+        for step in steps
+        if step.get("name") == "Test native Canvas operation timeout TLS parity"
+    )
+    assert "if" not in gate
+    assert not gate.get("continue-on-error", False)
+    assert (
+        "grep -Fx 'canvas_operation_http::tests::native_socket_case: test'"
+        in gate["run"]
+    )
+    assert "--native-executable" in gate["run"]
+    assert "select(.profile.test == true)" in gate["run"]
+    assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
+
+
+GATEWAY_REGISTRATIONS = [
+    (
+        "operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes",
+        "canvas_operations_gateway_replay",
+        "start_with_review_recovery",
+        4,
+        "gateway operations replay must not deadlock",
+    ),
+    (
+        "operations_gateway_candidate_preserves_review_lifecycle",
+        "canvas_gateway_lifecycle_replay",
+        "start_with_status_provider",
+        5,
+        "gateway lifecycle replay must not deadlock",
+    ),
+]
+
+
+def _assert_gateway_operations_registration(
+    published: str, source: str, registration
+) -> None:
+    name, module, database, connections, message = registration
+    inventory = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    assert published.splitlines().count(inventory) == 1
+    assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
+    assert published.rstrip().endswith(
+        '"${executables[0]}" --nocapture --test-threads=1'
+    )
+    assert (f'#[path = "support/{module}.rs"]\nmod {module};') in source
+    matches = re.findall(
+        r"((?:^#\[[^\n]+\]\s*\n)+)" + rf"^async fn {name}\(\) \{{(.*?)^\}}",
+        source,
+        re.M | re.S,
+    )
+    assert len(matches) == 1
+    attributes, body = matches[0]
+    assert attributes.strip() == "#[tokio::test]"
+    # Pin the small orchestration wrapper, not the replay implementation. Exact
+    # statements reject an extra opt-in, early success, dormant closure, ignored
+    # test, or omitted cleanup while allowing ordinary Rustfmt whitespace.
+    expected = """
+        if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+            return;
+        }
+        let owned = canvas_published_database::PublishedDatabase::start_with_review_recovery()
+            .await.unwrap();
+        let pool = PgPoolOptions::new().max_connections(4)
+            .connect(&owned.url).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            canvas_operations_gateway_replay::run(&pool, &owned.url),
+        ).await.expect("gateway operations replay must not deadlock");
+        pool.close().await;
+        owned.close().unwrap();
+    """
+    expected = expected.replace("canvas_operations_gateway_replay", module)
+    expected = expected.replace("start_with_review_recovery", database)
+    expected = expected.replace("max_connections(4)", f"max_connections({connections})")
+    expected = expected.replace("gateway operations replay must not deadlock", message)
+    assert re.sub(r"\s+", "", body) == re.sub(r"\s+", "", expected)
+
+
+@pytest.mark.parametrize("registration", GATEWAY_REGISTRATIONS)
+def test_gateway_operations_candidate_is_required_and_not_dormant(registration) -> None:
+    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    _assert_gateway_operations_registration(published, source, registration)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "inventory",
+        "duplicate-inventory",
+        "ignored",
+        "extra-opt-in",
+        "helper",
+        "database",
+        "wrong-specialized-database",
+        "cleanup",
+        "pool-cleanup",
+        "timeout",
+        "disabled-schema",
+        "filtered-full-run",
+    ],
+)
+@pytest.mark.parametrize("registration", GATEWAY_REGISTRATIONS)
+def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
+    mutation, registration
+):
+    published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    name, module, database, _connections, _message = registration
+    if mutation == "inventory":
+        published = "\n".join(
+            line for line in published.splitlines() if name not in line
+        )
+    elif mutation == "ignored":
+        source = source.replace(f"async fn {name}", f"#[ignore]\nasync fn {name}")
+    elif mutation == "duplicate-inventory":
+        line = next(
+            line for line in published.splitlines() if f"'{name}: test'" in line
+        )
+        published = published.replace(line, line + "\n" + line)
+    elif mutation == "disabled-schema":
+        published = published.replace(
+            'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"',
+            'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="0"',
+        )
+    elif mutation == "filtered-full-run":
+        published = published.replace(
+            '"${executables[0]}" --nocapture --test-threads=1',
+            '"${executables[0]}" unrelated_filter --nocapture --test-threads=1',
+        )
+    else:
+        start = source.index(f"async fn {name}")
+        end = source.index("\n}", start)
+        body = source[start:end]
+        original, changed = {
+            "extra-opt-in": (
+                "    let owned =",
+                "    if true { return; }\n    let owned =",
+            ),
+            "helper": (f"{module}::run", "unused_replay::run"),
+            "database": (f"{database}()", "start()"),
+            "wrong-specialized-database": (
+                f"{database}()",
+                "start_with_review_recovery()"
+                if database == "start_with_status_provider"
+                else "start_with_status_provider()",
+            ),
+            "cleanup": ("    owned.close().unwrap();", ""),
+            "pool-cleanup": ("    pool.close().await;", ""),
+            "timeout": ("from_secs(300)", "from_secs(3000)"),
+        }[mutation]
+        assert original in body
+        source = source[:start] + body.replace(original, changed) + source[end:]
+    with pytest.raises(AssertionError):
+        _assert_gateway_operations_registration(published, source, registration)
 
 
 def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:
@@ -118,7 +830,9 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     assert "Run safe Rust contract groups concurrently" in step_names
     assert "Run Flow database contract after workspace suite" in step_names
     assert "Run isolated database contract suites concurrently" in step_names
-    orchestrator = (ROOT / "scripts/ci/run-db-contract-groups.py").read_text(encoding="utf-8")
+    orchestrator = (ROOT / "scripts/ci/run-db-contract-groups.py").read_text(
+        encoding="utf-8"
+    )
     assert "run-published-canvas-contracts.sh" in orchestrator
     assert "run-rust-db-contracts.sh" in orchestrator
     assert "test-rust-db-contracts" not in document["jobs"]
@@ -127,11 +841,14 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
         str(step) for step in rust_job["steps"]
     )
     for group in ("workspace", "verification", "gateway"):
-        assert f'rust-{group}.status' in source
+        assert f"rust-{group}.status" in source
     assert "target/debug/flow-postgres-contract --test-threads=1" in source
     assert "target/debug/verification-postgres-contract" in source
     assert "target/debug/gateway-redis-contract" in source
-    assert "FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test" in source
+    assert (
+        "FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test"
+        in source
+    )
     assert "FLOW_CONTRACT_POSTGRES_URL" not in source
     assert "POSTGRES_DB=marty_atomic_test" not in source
     assert "cargo test --locked -p marty-flow --test postgres_integration" not in source
@@ -158,12 +875,16 @@ def test_ui_timing_refresh_runs_after_the_required_ci_gate() -> None:
     assert "workflows: [CI]" in source
     refresh = document["jobs"]["refresh"]
     assert refresh["if"] == "github.event.workflow_run.conclusion == 'success'"
-    assert "refresh-ui-test-timings" not in yaml.safe_load(
-        CI_PATH.read_text(encoding="utf-8")
-    )["jobs"]
+    assert (
+        "refresh-ui-test-timings"
+        not in yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]
+    )
 
 
-@pytest.mark.parametrize("scenario", ["missing", "empty", "unrelated", "nested", "malformed", "not_directory"])
+@pytest.mark.parametrize(
+    "scenario",
+    ["missing", "empty", "unrelated", "nested", "malformed", "not_directory"],
+)
 def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) -> None:
     _, document = _workflow(
         ROOT / ".github" / "workflows" / "refresh-ui-test-timings.yml"
@@ -187,11 +908,15 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
         elif scenario in {"nested", "malformed"}:
             nested = reports / "shard-1"
             nested.mkdir()
-            report = {"testResults": [{
-                "name": "/home/runner/work/marty-ui/marty-ui/ui/src/refresh.test.ts",
-                "startTime": 100,
-                "endTime": 150,
-            }]}
+            report = {
+                "testResults": [
+                    {
+                        "name": "/home/runner/work/marty-ui/marty-ui/ui/src/refresh.test.ts",
+                        "startTime": 100,
+                        "endTime": 150,
+                    }
+                ]
+            }
             (nested / "results.json").write_text(
                 json.dumps(report) if scenario == "nested" else "not JSON",
                 encoding="utf-8",
@@ -200,7 +925,11 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
     script = guard["run"].split("<<'NODE'\n", 1)[1].rsplit("\nNODE", 1)[0]
     result = subprocess.run(
         ["node", "--input-type=module", "--eval", script],
-        env={**os.environ, "TIMINGS_DIRECTORY": str(reports), "GITHUB_OUTPUT": str(output)},
+        env={
+            **os.environ,
+            "TIMINGS_DIRECTORY": str(reports),
+            "GITHUB_OUTPUT": str(output),
+        },
         capture_output=True,
         text=True,
     )
@@ -210,14 +939,23 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
         return
     assert result.returncode == 0, result.stderr
     available = scenario in {"nested", "malformed"}
-    assert output.read_text(encoding="utf-8").strip() == f"available={str(available).lower()}"
+    assert (
+        output.read_text(encoding="utf-8").strip()
+        == f"available={str(available).lower()}"
+    )
     if not available:
         assert "skipping timing refresh" in result.stdout
         return
 
     plan = tmp_path / "plan.json"
     refresh = subprocess.run(
-        ["node", str(ROOT / "ui/scripts/update-vitest-timings.mjs"), str(reports), "--output", str(plan)],
+        [
+            "node",
+            str(ROOT / "ui/scripts/update-vitest-timings.mjs"),
+            str(reports),
+            "--output",
+            str(plan),
+        ],
         capture_output=True,
         text=True,
     )
@@ -226,7 +964,10 @@ def test_ui_timing_refresh_checks_actual_reports(tmp_path: Path, scenario: str) 
         assert not plan.exists()
     else:
         assert refresh.returncode == 0, refresh.stderr
-        assert json.loads(plan.read_text(encoding="utf-8"))["tests"]["src/refresh.test.ts"] == 50
+        assert (
+            json.loads(plan.read_text(encoding="utf-8"))["tests"]["src/refresh.test.ts"]
+            == 50
+        )
 
 
 def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
@@ -242,9 +983,7 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         )
     )
     full = yaml.safe_load(
-        (ROOT / ".github" / "codeql" / "codeql-full.yml").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / ".github" / "codeql" / "codeql-full.yml").read_text(encoding="utf-8")
     )
     policy = json.loads(
         (ROOT / ".github" / "stack-tag-policy.json").read_text(encoding="utf-8")
@@ -275,8 +1014,7 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         assert "github.paginate(github.rest.pulls.listFiles" in scope["with"]["script"]
         assert "context.eventName !== 'pull_request'" in scope["with"]["script"]
         assert any(
-            step.get("name") == "Record scoped analysis skip"
-            for step in job["steps"]
+            step.get("name") == "Record scoped analysis skip" for step in job["steps"]
         )
         analysis_steps = [
             step for step in job["steps"] if step.get("name", "").startswith("Analyze")
@@ -309,9 +1047,7 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
 
 
 def test_warm_cache_uses_the_same_rust_test_profile() -> None:
-    _source, document = _workflow(
-        ROOT / ".github" / "workflows" / "warm-ci-caches.yml"
-    )
+    _source, document = _workflow(ROOT / ".github" / "workflows" / "warm-ci-caches.yml")
     assert document["jobs"]["rust"]["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
 
 
@@ -338,19 +1074,32 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
         assert ci["jobs"][name]["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     for job in warm["jobs"].values():
         assert job["if"] == "github.ref == 'refs/heads/main'"
-    for job, mode in ((ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
-                      (warm["jobs"]["images"], "READ_WRITE")):
-        credential_step = next(step for step in job["steps"] if step.get("name", "").startswith("Expose compiler"))
+    for job, mode in (
+        (ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
+        (warm["jobs"]["images"], "READ_WRITE"),
+    ):
+        credential_step = next(
+            step
+            for step in job["steps"]
+            if step.get("name", "").startswith("Expose compiler")
+        )
         script = credential_step["with"]["script"]
         assert "core.setSecret(token)" in script
         assert f"'SCCACHE_GHA_RW_MODE', '{mode}'" in script
-        build = next(step for step in job["steps"] if "secret-envs" in step.get("with", {}))
+        build = next(
+            step for step in job["steps"] if "secret-envs" in step.get("with", {})
+        )
         assert "sccache_token=SCCACHE_GHA_RUNTIME_TOKEN" in build["with"]["secret-envs"]
         assert "SCCACHE" not in build["with"].get("build-args", "")
-    assert all("cache-to" not in step.get("with", {})
-               for step in ci["jobs"]["test-rust-service-images"]["steps"])
+    assert all(
+        "cache-to" not in step.get("with", {})
+        for step in ci["jobs"]["test-rust-service-images"]["steps"]
+    )
     dockerfile = (ROOT / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
-    assert "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588" in dockerfile
+    assert (
+        "ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588"
+        in dockerfile
+    )
     assert "--mount=type=secret,id=sccache_token" in dockerfile
     assert "export RUSTC_WRAPPER=sccache" in dockerfile
     assert "cargo build --locked --release" in dockerfile
@@ -361,15 +1110,20 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     assert "sccache --start-server && sccache --stop-server" in dockerfile
     assert "FROM compiler_cache AS builder" in dockerfile
     assert dockerfile.count("ACTIONS_CACHE_SERVICE_V2=true") == 3
-    assert dockerfile.index("FROM compiler_cache AS builder") < dockerfile.index("cargo chef cook")
+    assert dockerfile.index("FROM compiler_cache AS builder") < dockerfile.index(
+        "cargo chef cook"
+    )
 
 
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     job = warm["jobs"]["images"]
     assert job["if"] == "github.ref == 'refs/heads/main'"
-    probe = next(step for step in job["steps"]
-                 if step.get("with", {}).get("target") == "cache_probe")
+    probe = next(
+        step
+        for step in job["steps"]
+        if step.get("with", {}).get("target") == "cache_probe"
+    )
     assert "continue-on-error" not in probe
     assert "github.run_id" in probe["with"]["build-args"]
     assert "github.run_attempt" in probe["with"]["build-args"]
@@ -380,7 +1134,9 @@ def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> Non
     assert "--from=cache_probe" not in builder
     script = (ROOT / "scripts/ci/verify-release-cache.sh").read_text(encoding="utf-8")
     assert "ACTIONS_CACHE_SERVICE_V2=true" in script
-    assert script.index("SCCACHE_GHA_RW_MODE=READ_WRITE") < script.index("SCCACHE_GHA_RW_MODE=READ_ONLY")
+    assert script.index("SCCACHE_GHA_RW_MODE=READ_WRITE") < script.index(
+        "SCCACHE_GHA_RW_MODE=READ_ONLY"
+    )
     assert script.count("sccache rustc") == 2
     assert script.count("--emit=link,dep-info") == 2
     assert script.count("sccache --stop-server") == 2
@@ -388,10 +1144,21 @@ def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> Non
 
 
 def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> None:
-    ignore = (ROOT / "rust/services/Dockerfile.ci.dockerignore").read_text(encoding="utf-8")
-    for item in ("!rust/**", "!proto/**", "!contracts/**", "!scripts/load-secrets-env.sh",
-                 "!scripts/ci/verify-release-cache.sh", "rust/services/*/tests",
-                 "rust/crates/*/tests", "rust/**/target", "rust/**/.env*"):
+    ignore = (ROOT / "rust/services/Dockerfile.ci.dockerignore").read_text(
+        encoding="utf-8"
+    )
+    for item in (
+        "!rust/**",
+        "!proto/**",
+        "!contracts/**",
+        "!services/entrypoint.sh",
+        "!scripts/load-secrets-env.sh",
+        "!scripts/ci/verify-release-cache.sh",
+        "rust/services/*/tests",
+        "rust/crates/*/tests",
+        "rust/**/target",
+        "rust/**/.env*",
+    ):
         assert item in ignore.splitlines()
     # Never drop embedded production contracts or vendored build-script inputs.
     assert "rust/third_party" not in ignore
@@ -409,18 +1176,28 @@ def test_every_issuance_integration_test_remains_registered() -> None:
     grouped = re.findall(r'#\[path = "([^"]+)"\]', harness)
     assert len(grouped) == 6
     registered.extend(f"tests/{name}" for name in grouped)
-    actual = {path.relative_to(directory).as_posix() for path in (directory / "tests").glob("*.rs")}
+    actual = {
+        path.relative_to(directory).as_posix()
+        for path in (directory / "tests").glob("*.rs")
+    }
     assert len(registered) == len(set(registered))
-    assert set(registered) == actual, "new test files must be registered, never silently skipped"
-    assert all("postgres" not in path and "executable_smoke" not in path for path in grouped)
+    assert set(registered) == actual, (
+        "new test files must be registered, never silently skipped"
+    )
+    assert all(
+        "postgres" not in path and "executable_smoke" not in path for path in grouped
+    )
 
 
 @pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
 @pytest.mark.parametrize("reopened", [False, True])
-def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: str, reopened: bool) -> None:
+def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(
+    event: str, reopened: bool
+) -> None:
     _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
     script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
-    harness = r'''
+    harness = (
+        r"""
       const deleted = [];
       const entries = [
         {id: 1, ref: 'refs/pull/23/merge'},
@@ -448,16 +1225,29 @@ def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(event: 
       await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
         github, context, core, callback => callback());
       if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
-    '''.replace("EVENT", json.dumps(event)).replace("REOPENED", json.dumps(reopened)).replace("SCRIPT", json.dumps(script))
-    result = subprocess.run(["node", "--input-type=module", "--eval", harness], capture_output=True, text=True)
+    """.replace("EVENT", json.dumps(event))
+        .replace("REOPENED", json.dumps(reopened))
+        .replace("SCRIPT", json.dumps(script))
+    )
+    result = subprocess.run(
+        ["node", "--input-type=module", "--eval", harness],
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("scenario", ["valid", "empty", "negative", "huge", "traversal", "malformed"])
-def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: Path, scenario: str) -> None:
-    paths = sorted(path.relative_to(ROOT / "ui").as_posix()
-                   for path in (ROOT / "ui/src").rglob("*")
-                   if path.is_file() and re.search(r"\.(test|spec)\.(ts|tsx)$", path.name))
+@pytest.mark.parametrize(
+    "scenario", ["valid", "empty", "negative", "huge", "traversal", "malformed"]
+)
+def test_reviewed_timing_adoption_validates_data_and_preserves_tests(
+    tmp_path: Path, scenario: str
+) -> None:
+    paths = sorted(
+        path.relative_to(ROOT / "ui").as_posix()
+        for path in (ROOT / "ui/src").rglob("*")
+        if path.is_file() and re.search(r"\.(test|spec)\.(ts|tsx)$", path.name)
+    )
     plan = {"defaultMilliseconds": 500, "tests": {paths[0]: 123}}
     if scenario == "empty":
         plan["tests"] = {}
@@ -466,11 +1256,20 @@ def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: P
     elif scenario == "traversal":
         plan["tests"]["src/../../outside.test.ts"] = 1
     source = tmp_path / "observations.json"
-    source.write_text("not JSON" if scenario == "malformed" else json.dumps(plan), encoding="utf-8")
+    source.write_text(
+        "not JSON" if scenario == "malformed" else json.dumps(plan), encoding="utf-8"
+    )
     output = tmp_path / "review.json"
     result = subprocess.run(
-        ["node", str(ROOT / "ui/scripts/adopt-vitest-timings.mjs"), str(source), "--output", str(output)],
-        capture_output=True, text=True,
+        [
+            "node",
+            str(ROOT / "ui/scripts/adopt-vitest-timings.mjs"),
+            str(source),
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
     )
     if scenario != "valid":
         assert result.returncode != 0
@@ -483,7 +1282,10 @@ def test_reviewed_timing_adoption_validates_data_and_preserves_tests(tmp_path: P
 
 
 def test_renewal_matrix_preserves_real_deadlines_and_all_combinations() -> None:
-    source = (ROOT / "rust/services/issuance/tests/support/canvas_worker_renewal_job_outcomes.rs").read_text(encoding="utf-8")
+    source = (
+        ROOT
+        / "rust/services/issuance/tests/support/canvas_worker_renewal_job_outcomes.rs"
+    ).read_text(encoding="utf-8")
     assert "tokio::join!(" in source
     for stage in ("lease", "target", "process"):
         assert f'isolated_group(pool, "{stage}")' in source

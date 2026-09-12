@@ -1,0 +1,16 @@
+# Explicit compatibility policy for native DIDComm; requires issuance-native
+# from the beta/candidate model. This does not select any gateway routes.
+# The exact directory may contain sender private keys. Mount it only into its
+# delivery owner, read-only, and never auto-create a missing host directory.
+# KMS-only key custody remains outstanding work (DIDCOMM-KMS-001).
+services:
+  issuance-native:
+    environment:
+      DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
+    volumes:
+      - type: bind
+        source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}
+        target: /run/secrets/didcomm-authcrypt
+        read_only: true
+        bind:
+          create_host_path: false

@@ -14,9 +14,10 @@ use crate::{
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_sync_lease::{lease_lost, CanvasSyncLease},
     canvas_sync_processor::{
-        CanvasAuthoritativeObservation, CanvasCandidateObservationSnapshot, CanvasFactCommit,
-        CanvasLinkedIdentitySnapshot, CanvasRosterCandidate, CanvasSyncApplicationSnapshot,
-        CanvasSyncPlatformSnapshot, CanvasSyncProcessorRepository, CanvasSyncResources,
+        application_unavailable, platform_reconfigured, CanvasAuthoritativeObservation,
+        CanvasCandidateObservationSnapshot, CanvasFactCommit, CanvasLinkedIdentitySnapshot,
+        CanvasRosterCandidate, CanvasSyncApplicationSnapshot, CanvasSyncPlatformSnapshot,
+        CanvasSyncProcessorRepository, CanvasSyncResources,
     },
     canvas_sync_worker::{CanvasSyncProcessingError, CanvasSyncTarget},
 };
@@ -586,16 +587,27 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         next_cursor: usize,
         roster_size: usize,
     ) -> Result<(), CanvasSyncProcessingError> {
-        let patch = json!({
+        let mut patch = json!({
             "roster_cursor": next_cursor,
             "roster_size": roster_size,
             "roster_cycle_completed_at": (next_cursor == 0).then(Utc::now),
         });
+        // The worker passes its target snapshot from before touching the run's
+        // heartbeat. Published roster progress restores these two snapshot keys,
+        // including their absence, rather than retaining this run's heartbeat.
+        // Reconcile only those keys: unrelated metadata may have changed since
+        // the snapshot and must retain its current transactional value.
+        for key in ["worker_id", "worker_heartbeat_at"] {
+            if let Some(value) = target.metadata.get(key) {
+                patch[key] = value.clone();
+            }
+        }
         let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(
             "UPDATE issuance_service.canvas_evidence_sync_targets
-             SET metadata = COALESCE(metadata::jsonb, '{}'::jsonb) || $4::jsonb,
+             SET metadata = (COALESCE(metadata::jsonb, '{}'::jsonb)
+                             - 'worker_id' - 'worker_heartbeat_at') || $4::jsonb,
                  next_run_at = CASE WHEN $5 THEN clock_timestamp() + interval '60 seconds' ELSE next_run_at END,
                  updated_at = clock_timestamp()
              WHERE id = $1 AND organization_id = $2 AND config_version = $3",
@@ -647,6 +659,21 @@ async fn lock_current_scope(
     .await
     .map_err(repository_error)?;
     if current.is_none() {
+        // Classification only: the failed scope guard still forbids every write.
+        // Preserve the published platform-specific outcome without treating
+        // unrelated target/binding changes as platform reconfiguration.
+        let version = sqlx::query_scalar::<_, i32>(
+            "SELECT config_version FROM issuance_service.canvas_platforms
+             WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+        )
+        .bind(&resources.platform.id)
+        .bind(&resources.platform.organization_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(repository_error)?;
+        if version.is_some_and(|version| version != resources.platform.config_version) {
+            return Err(platform_reconfigured());
+        }
         return Err(stale());
     }
     Ok(())
@@ -656,10 +683,11 @@ async fn lock_current_application(
     transaction: &mut Transaction<'_, Postgres>,
     application: &CanvasSyncApplicationSnapshot,
 ) -> Result<(), CanvasSyncProcessingError> {
-    let current = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM issuance_service.applications
-         WHERE id = $1 AND organization_id = $2 AND status = $3
+    let current = sqlx::query_scalar::<_, bool>(
+        "SELECT status = $3
            AND integration_context::jsonb IS NOT DISTINCT FROM $4::jsonb
+         FROM issuance_service.applications
+         WHERE id = $1 AND organization_id = $2
          FOR UPDATE",
     )
     .bind(&application.application.id)
@@ -669,10 +697,13 @@ async fn lock_current_application(
     .fetch_optional(&mut **transaction)
     .await
     .map_err(repository_error)?;
-    if current.is_none() {
-        return Err(stale());
+    match current {
+        // A deleted row is terminal, but edits still require a fresh retry.
+        // The row lock, subsequent update CAS and commit lease guard remain.
+        None => Err(application_unavailable()),
+        Some(false) => Err(stale()),
+        Some(true) => Ok(()),
     }
-    Ok(())
 }
 
 fn required_text(

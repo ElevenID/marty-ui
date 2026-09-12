@@ -1,8 +1,13 @@
 //! Bounded, redirect-free Canvas REST, AGS, and NRPS provider adapter.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    sync::Arc,
+};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use marty_oid4vci::lti::{
     canvas_lti_trust_profile, validate_canvas_lti_service_url,
@@ -18,14 +23,19 @@ use uuid::Uuid;
 
 use crate::{
     canvas_lti_tool_signing::CanvasLtiToolJwtSigner,
+    canvas_network_timeout::CanvasNetworkTimeout,
     canvas_oauth::{CanvasOAuthError, CanvasOAuthService},
+    canvas_operation_http::{
+        CanvasOperationHttpClient, CanvasOperationHttpError, CanvasOperationResponse,
+    },
     canvas_provider_http::{
-        canvas_retry_after_seconds, client_for_canvas_origin, CanvasHttpClientPolicy,
+        canvas_retry_after_seconds, client_for_canvas_origin, validate_canvas_origin,
+        CanvasHttpClientPolicy, CanvasOriginPolicy,
     },
     canvas_sync_processor::{
         ags_assertion, normalized_rest_payload, rest_assertion, CanvasAuthoritativeObservation,
-        CanvasAuthoritativeProvider, CanvasProviderReadError, CanvasRosterSnapshot,
-        CanvasSyncResources,
+        CanvasAuthoritativeProvider, CanvasProviderReadError, CanvasProviderRunScope,
+        CanvasRosterSnapshot, CanvasSyncResources,
     },
     canvas_sync_worker::CanvasSyncTarget,
 };
@@ -39,7 +49,125 @@ const TOKEN_RESPONSE_BYTES: usize = 65_536;
 const COLLECTION_PAGE_BYTES: usize = 8_388_608;
 const COLLECTION_MAX_PAGES: usize = 200;
 
-#[derive(Clone, Copy)]
+// Scoped REST evidence uses published HTTPX per-operation/inactivity budgets.
+// Neither scope changes the unscoped/OAuth/LTI total-client policy.
+const APPLICATION_REST_TIMEOUT_SECONDS: f64 = 15.0;
+const ROSTER_REST_TIMEOUT_SECONDS: f64 = 20.0;
+
+enum RestReadClient {
+    Operation(CanvasOperationHttpClient),
+    Total(reqwest::Client),
+}
+
+impl RestReadClient {
+    async fn get(
+        &self,
+        url: Url,
+        token: &str,
+    ) -> Result<ProviderResponse, CanvasProviderReadError> {
+        self.get_accept(url, token, "application/json").await
+    }
+
+    async fn get_accept(
+        &self,
+        url: Url,
+        token: &str,
+        accept: &str,
+    ) -> Result<ProviderResponse, CanvasProviderReadError> {
+        let mut headers = http::HeaderMap::new();
+        let mut authorization = http::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| CanvasProviderReadError::Unavailable)?;
+        authorization.set_sensitive(true);
+        headers.insert(http::header::AUTHORIZATION, authorization);
+        headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_str(accept)
+                .map_err(|_| CanvasProviderReadError::Unavailable)?,
+        );
+        match self {
+            Self::Operation(client) => client
+                .send(http::Method::GET, url, headers, Vec::new())
+                .await
+                .map(ProviderResponse::Operation)
+                .map_err(|error| match error {
+                    CanvasOperationHttpError::Origin => {
+                        CanvasProviderReadError::InvalidConfiguration
+                    }
+                    _ => CanvasProviderReadError::Unavailable,
+                }),
+            Self::Total(client) => client
+                .get(url)
+                .headers(headers)
+                .send()
+                .await
+                .map(ProviderResponse::Total)
+                .map_err(|_| CanvasProviderReadError::Unavailable),
+        }
+    }
+}
+
+enum ProviderResponse {
+    Total(Response),
+    Operation(CanvasOperationResponse),
+}
+
+impl From<Response> for ProviderResponse {
+    fn from(response: Response) -> Self {
+        Self::Total(response)
+    }
+}
+
+impl ProviderResponse {
+    fn response(&self) -> &Response {
+        match self {
+            Self::Total(response) => response,
+            Self::Operation(response) => &response.response,
+        }
+    }
+
+    async fn chunk(&mut self) -> Result<Option<Bytes>, CanvasProviderReadError> {
+        match self {
+            Self::Total(response) => response
+                .chunk()
+                .await
+                .map_err(|_| CanvasProviderReadError::Unavailable),
+            // Keep decoding, operation-timeout classification and driver-drop
+            // cancellation attached. Never read its underlying response body.
+            Self::Operation(response) => response
+                .chunk()
+                .await
+                .map_err(|_| CanvasProviderReadError::Unavailable),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CollectionProtocol {
+    CanvasRest,
+    Lti,
+}
+
+impl CollectionProtocol {
+    fn first_page(self, mut url: Url, limit: usize) -> Url {
+        if self == Self::CanvasRest {
+            url.query_pairs_mut()
+                .append_pair("per_page", &limit.clamp(1, 100).to_string());
+        }
+        url
+    }
+
+    fn rows(self, payload: &Value) -> Option<&Vec<Value>> {
+        payload.as_array().or_else(|| match self {
+            Self::CanvasRest => payload.get("items").and_then(Value::as_array),
+            Self::Lti => payload
+                .get("members")
+                .and_then(Value::as_array)
+                .or_else(|| payload.get("results").and_then(Value::as_array)),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum LtiCollectionKind {
     AgsResult,
     NrpsMembership,
@@ -61,6 +189,75 @@ impl LtiCollectionKind {
     }
 }
 
+// Owned, non-secret identity for a successful grant within ONE processor run.
+// Include the complete platform/trust identity, not just the requested scope.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct LtiTokenKey {
+    organization_id: String,
+    platform_id: String,
+    config_version: i32,
+    canvas_base_url: String,
+    trust_profile: String,
+    issuer: String,
+    client_id: String,
+    deployment_id: String,
+    token_endpoint: String,
+    kind: LtiCollectionKind,
+}
+
+impl LtiTokenKey {
+    fn new(resources: &CanvasSyncResources, endpoint: &str, kind: LtiCollectionKind) -> Self {
+        let platform = &resources.platform;
+        Self {
+            organization_id: platform.organization_id.clone(),
+            platform_id: platform.id.clone(),
+            config_version: platform.config_version,
+            canvas_base_url: platform.canvas_base_url.clone(),
+            trust_profile: platform.lti_trust_profile.clone(),
+            issuer: platform.lti_issuer.clone(),
+            client_id: platform.lti_client_id.clone(),
+            deployment_id: platform.lti_deployment_id.clone(),
+            token_endpoint: endpoint.to_owned(),
+            kind,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RunLtiTokens {
+    tokens: tokio::sync::Mutex<BTreeMap<LtiTokenKey, String>>,
+}
+
+impl std::fmt::Debug for RunLtiTokens {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunLtiTokens")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RunLtiTokens {
+    async fn get_or_request<F, Fut>(
+        &self,
+        key: LtiTokenKey,
+        request: F,
+    ) -> Result<String, CanvasProviderReadError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<String, CanvasProviderReadError>>,
+    {
+        // The async guard coalesces identical concurrent reads within this run.
+        // Cancellation/errors release it without caching a partial acquisition.
+        let mut tokens = self.tokens.lock().await;
+        if let Some(token) = tokens.get(&key) {
+            return Ok(token.clone());
+        }
+        let token = request().await?;
+        tokens.insert(key, token.clone());
+        Ok(token)
+    }
+}
+
 #[derive(Clone)]
 pub struct HttpCanvasAuthoritativeProvider {
     oauth: Arc<CanvasOAuthService>,
@@ -68,6 +265,8 @@ pub struct HttpCanvasAuthoritativeProvider {
     signer: Arc<dyn CanvasLtiToolJwtSigner>,
     policy: CanvasHttpClientPolicy,
     self_managed_origin_allowlist: Vec<String>,
+    run_tokens: Option<Arc<RunLtiTokens>>,
+    run_scope: Option<CanvasProviderRunScope>,
 }
 
 impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
@@ -76,6 +275,8 @@ impl std::fmt::Debug for HttpCanvasAuthoritativeProvider {
             .debug_struct("HttpCanvasAuthoritativeProvider")
             .field("policy", &self.policy)
             .field("oauth_api_key_configured", &!self.oauth_api_key.is_empty())
+            .field("run_scoped", &self.run_tokens.is_some())
+            .field("run_scope", &self.run_scope)
             .finish_non_exhaustive()
     }
 }
@@ -95,7 +296,74 @@ impl HttpCanvasAuthoritativeProvider {
             signer,
             policy,
             self_managed_origin_allowlist,
+            run_tokens: None,
+            run_scope: None,
         }
+    }
+
+    fn fresh_run(&self, scope: CanvasProviderRunScope) -> Self {
+        Self {
+            run_tokens: Some(Arc::new(RunLtiTokens::default())),
+            run_scope: Some(scope),
+            ..self.clone()
+        }
+    }
+
+    fn rest_timeout_seconds(&self) -> Option<f64> {
+        match self.run_scope {
+            Some(CanvasProviderRunScope::Application) => Some(APPLICATION_REST_TIMEOUT_SECONDS),
+            Some(CanvasProviderRunScope::BackgroundRoster) => Some(ROSTER_REST_TIMEOUT_SECONDS),
+            None => None,
+        }
+    }
+
+    async fn rest_client(
+        &self,
+        canvas_base_url: &str,
+    ) -> Result<(RestReadClient, Url), CanvasProviderReadError> {
+        if let Some(timeout) = self.rest_timeout_seconds() {
+            let policy = CanvasOriginPolicy::from(&self.policy);
+            if self.run_scope == Some(CanvasProviderRunScope::BackgroundRoster) {
+                let (client, base) = CanvasOperationHttpClient::prepare(
+                    policy,
+                    CanvasNetworkTimeout::from_seconds(timeout),
+                    canvas_base_url,
+                )
+                .await
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+                return Ok((RestReadClient::Operation(client), base));
+            }
+            let base = validate_canvas_origin(canvas_base_url, &policy)
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            Ok((
+                RestReadClient::Operation(CanvasOperationHttpClient::new(
+                    policy,
+                    CanvasNetworkTimeout::from_seconds(timeout),
+                )),
+                base,
+            ))
+        } else {
+            let (client, base) = client_for_canvas_origin(canvas_base_url, &self.policy)
+                .await
+                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            Ok((RestReadClient::Total(client), base))
+        }
+    }
+
+    async fn collection_client(
+        &self,
+        origin: &str,
+        protocol: CollectionProtocol,
+    ) -> Result<RestReadClient, CanvasProviderReadError> {
+        if protocol == CollectionProtocol::CanvasRest
+            && self.run_scope == Some(CanvasProviderRunScope::BackgroundRoster)
+        {
+            return self.rest_client(origin).await.map(|(client, _)| client);
+        }
+        let (client, _) = client_for_canvas_origin(origin, &self.policy)
+            .await
+            .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        Ok(RestReadClient::Total(client))
     }
 
     async fn oauth_token(
@@ -121,10 +389,9 @@ impl HttpCanvasAuthoritativeProvider {
         canvas_user_id: &str,
     ) -> Result<Value, CanvasProviderReadError> {
         let token = self.oauth_token(resources).await?;
-        let (client, base) =
-            client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
-                .await
-                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        let (client, base) = self
+            .rest_client(&resources.platform.canvas_base_url)
+            .await?;
         let scope = requirement
             .get("scope")
             .and_then(Value::as_object)
@@ -158,14 +425,10 @@ impl HttpCanvasAuthoritativeProvider {
             url.query_pairs_mut()
                 .append_pair("student_id", canvas_user_id);
         }
-        let response = client
-            .get(url)
-            .bearer_auth(&token)
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(|_| CanvasProviderReadError::Unavailable)?;
-        if response.status().as_u16() == 401 && response.headers().contains_key(WWW_AUTHENTICATE) {
+        let response = client.get(url, &token).await?;
+        if response.response().status().as_u16() == 401
+            && response.response().headers().contains_key(WWW_AUTHENTICATE)
+        {
             self.oauth
                 .mark_rejected_access_token(
                     &resources.platform.id,
@@ -185,7 +448,7 @@ impl HttpCanvasAuthoritativeProvider {
     async fn lti_access_token(
         &self,
         resources: &CanvasSyncResources,
-        scope: &str,
+        kind: LtiCollectionKind,
     ) -> Result<String, CanvasProviderReadError> {
         let expected = self.expected_lti_trust(resources)?;
         let endpoint = validate_canvas_lti_service_url(
@@ -197,6 +460,27 @@ impl HttpCanvasAuthoritativeProvider {
         if resources.platform.lti_client_id.trim().is_empty() {
             return Err(CanvasProviderReadError::InvalidConfiguration);
         }
+        // Preserve trust/endpoint/client checks even on a cache hit. Published
+        // application/roster processors keep successful token.value for their
+        // whole invocation; they do not inspect expires_in or evict on a later
+        // collection error. The next invocation always receives a fresh cache.
+        if let Some(tokens) = &self.run_tokens {
+            return tokens
+                .get_or_request(LtiTokenKey::new(resources, &endpoint, kind), || {
+                    self.acquire_lti_token(resources, &endpoint, kind.scope())
+                })
+                .await;
+        }
+        self.acquire_lti_token(resources, &endpoint, kind.scope())
+            .await
+    }
+
+    async fn acquire_lti_token(
+        &self,
+        resources: &CanvasSyncResources,
+        endpoint: &str,
+        scope: &str,
+    ) -> Result<String, CanvasProviderReadError> {
         let now = Utc::now().timestamp();
         let assertion = self
             .signer
@@ -211,7 +495,7 @@ impl HttpCanvasAuthoritativeProvider {
             .await
             .map_err(|_| CanvasProviderReadError::Unavailable)?;
         let endpoint_url =
-            Url::parse(&endpoint).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            Url::parse(endpoint).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         let origin = origin_url(&endpoint_url)?;
         let (client, _) = client_for_canvas_origin(origin.as_str(), &self.policy)
             .await
@@ -239,69 +523,126 @@ impl HttpCanvasAuthoritativeProvider {
             .await
             .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         self.enforce_lti_service_trust(resources, &validated)?;
-        let token = self.lti_access_token(resources, kind.scope()).await?;
+        let token = self.lti_access_token(resources, kind).await?;
         let mut next =
             Url::parse(&validated).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
         if let Some(user_id) = user_id {
             next.query_pairs_mut().append_pair("user_id", user_id);
         }
-        self.collection(next, &token, kind.accept(), limit, limit_error)
-            .await
+        self.collection(
+            next,
+            &token,
+            kind.accept(),
+            limit,
+            limit_error,
+            CollectionProtocol::Lti,
+        )
+        .await
     }
 
     async fn collection(
         &self,
-        mut next: Url,
+        next: Url,
         token: &str,
         accept: &str,
         limit: usize,
         limit_error: CanvasProviderReadError,
+        protocol: CollectionProtocol,
     ) -> Result<Vec<Value>, CanvasProviderReadError> {
         let expected_origin = origin_url(&next)?;
         reject_embedded_credentials(&next)?;
-        let (client, _) = client_for_canvas_origin(expected_origin.as_str(), &self.policy)
-            .await
-            .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
-        let mut output = Vec::new();
-        let mut visited = BTreeSet::new();
-        for _page in 0..COLLECTION_MAX_PAGES {
-            if !visited.insert(next.to_string()) {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            if origin_url(&next)? != expected_origin {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            let (payload, link) =
-                request_collection_page(&client, next.clone(), token, accept).await?;
-            let rows = payload
-                .as_array()
-                .or_else(|| payload.get("members").and_then(Value::as_array))
-                .or_else(|| payload.get("results").and_then(Value::as_array))
-                .ok_or(CanvasProviderReadError::Unavailable)?;
-            if rows.iter().any(|row| !valid_collection_item(row)) {
-                return Err(CanvasProviderReadError::Unavailable);
-            }
-            let remaining = limit.saturating_sub(output.len());
-            if rows.len() > remaining {
-                return Err(limit_error);
-            }
-            output.extend(rows.iter().cloned());
-            let Some(candidate) = next_link(&link)? else {
-                return Ok(output);
-            };
-            if output.len() >= limit {
-                return Err(limit_error);
-            }
-            next = Url::parse(&candidate)
-                .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
-            reject_embedded_credentials(&next)?;
-        }
-        Err(limit_error)
+        let client = self
+            .collection_client(expected_origin.as_str(), protocol)
+            .await?;
+        collect_pages(&client, next, token, accept, limit, limit_error, protocol).await
     }
+
+    async fn roster_pages(
+        &self,
+        prepared: Option<&RestReadClient>,
+        next: Url,
+        token: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>, CanvasProviderReadError> {
+        let fallback;
+        let client = match prepared {
+            Some(client) => client,
+            None => {
+                reject_embedded_credentials(&next)?;
+                fallback = self
+                    .collection_client(origin_url(&next)?.as_str(), CollectionProtocol::CanvasRest)
+                    .await?;
+                &fallback
+            }
+        };
+        collect_pages(
+            client,
+            next,
+            token,
+            "application/json",
+            limit,
+            CanvasProviderReadError::RosterCollectionTooLarge,
+            CollectionProtocol::CanvasRest,
+        )
+        .await
+    }
+}
+
+async fn collect_pages(
+    client: &RestReadClient,
+    mut next: Url,
+    token: &str,
+    accept: &str,
+    limit: usize,
+    limit_error: CanvasProviderReadError,
+    protocol: CollectionProtocol,
+) -> Result<Vec<Value>, CanvasProviderReadError> {
+    let expected_origin = origin_url(&next)?;
+    reject_embedded_credentials(&next)?;
+    let mut output = Vec::new();
+    let mut visited = BTreeSet::new();
+    next = protocol.first_page(next, limit);
+    for _page in 0..COLLECTION_MAX_PAGES {
+        if !visited.insert(next.to_string()) {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        if origin_url(&next)? != expected_origin {
+            return Err(CanvasProviderReadError::InvalidConfiguration);
+        }
+        let (payload, link) =
+            request_collection_page(client, next.clone(), token, accept, protocol).await?;
+        let rows = protocol
+            .rows(&payload)
+            .ok_or(CanvasProviderReadError::Unavailable)?;
+        if rows.iter().any(|row| !valid_collection_item(row)) {
+            return Err(CanvasProviderReadError::Unavailable);
+        }
+        let remaining = limit.saturating_sub(output.len());
+        if rows.len() > remaining {
+            return Err(limit_error);
+        }
+        output.extend(rows.iter().cloned());
+        let Some(candidate) = next_link(&link)? else {
+            return Ok(output);
+        };
+        if output.len() >= limit {
+            return Err(limit_error);
+        }
+        next = Url::parse(&candidate).map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+        reject_embedded_credentials(&next)?;
+    }
+    Err(limit_error)
 }
 
 #[async_trait]
 impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
+    fn for_run(
+        self: Arc<Self>,
+        scope: CanvasProviderRunScope,
+    ) -> Arc<dyn CanvasAuthoritativeProvider> {
+        Arc::new(self.fresh_run(scope))
+    }
+
     async fn read_requirement(
         &self,
         resources: &CanvasSyncResources,
@@ -375,19 +716,29 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
         let has_ags = requirements
             .iter()
             .any(|value| text(value.get("source")) == "ags_result");
+        // Published roster setup performs OAuth lookup even for AGS-only
+        // bindings. Preserve its audit/refresh side effects before NRPS setup.
+        let token = self.oauth_token(resources).await;
         let mut snapshot = CanvasRosterSnapshot::default();
         if has_rest {
-            let token = self
-                .oauth_token(resources)
-                .await
-                .map_err(|error| match error {
-                    CanvasProviderReadError::RateLimited { .. } => error,
-                    _ => CanvasProviderReadError::RosterOAuthUnavailable,
-                })?;
-            let (_, base) =
-                client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
-                    .await
-                    .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+            let token = token.map_err(|error| match error {
+                CanvasProviderReadError::RateLimited { .. } => error,
+                _ => CanvasProviderReadError::RosterOAuthUnavailable,
+            })?;
+            let (prepared, base) =
+                if self.run_scope == Some(CanvasProviderRunScope::BackgroundRoster) {
+                    let (client, base) = self
+                        .rest_client(&resources.platform.canvas_base_url)
+                        .await?;
+                    (Some(client), base)
+                } else {
+                    // Retain the existing unscoped setup and per-collection policy.
+                    let (_, base) =
+                        client_for_canvas_origin(&resources.platform.canvas_base_url, &self.policy)
+                            .await
+                            .map_err(|_| CanvasProviderReadError::InvalidConfiguration)?;
+                    (None, base)
+                };
             let courses = requirements
                 .iter()
                 .filter(|value| text(value.get("source")) == "canvas_rest")
@@ -400,13 +751,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 url.query_pairs_mut()
                     .append_pair("enrollment_type[]", "student");
                 for user in self
-                    .collection(
-                        url,
-                        &token,
-                        "application/json",
-                        limit,
-                        CanvasProviderReadError::RosterCollectionTooLarge,
-                    )
+                    .roster_pages(prepared.as_ref(), url, &token, limit)
                     .await?
                 {
                     if let Some(id) = user.get("id").and_then(value_identifier) {
@@ -433,13 +778,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     &format!("courses/{}/bulk_user_progress", encoded(course)?),
                 )?;
                 let rows = self
-                    .collection(
-                        url,
-                        &token,
-                        "application/json",
-                        limit,
-                        CanvasProviderReadError::RosterCollectionTooLarge,
-                    )
+                    .roster_pages(prepared.as_ref(), url, &token, limit)
                     .await?;
                 let by_user = validated_course_completion_by_user(rows)?;
                 for user in &snapshot.canvas_user_ids {
@@ -454,6 +793,10 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                         },
                     );
                 }
+            }
+        } else if let Err(error) = token {
+            if error != CanvasProviderReadError::ReauthorizationRequired {
+                return Err(error);
             }
         }
         if has_ags {
@@ -580,27 +923,33 @@ async fn request_lti_token(
 }
 
 async fn request_collection_page(
-    client: &reqwest::Client,
+    client: &RestReadClient,
     url: Url,
     token: &str,
     accept: &str,
+    protocol: CollectionProtocol,
 ) -> Result<(Value, Vec<String>), CanvasProviderReadError> {
-    let response = client
-        .get(url)
-        .bearer_auth(token)
-        .header("Accept", accept)
-        .send()
-        .await
-        .map_err(|_| CanvasProviderReadError::Unavailable)?;
-    let link = link_header_values(response.headers());
+    let response = client.get_accept(url, token, accept).await?;
+    let status = response.response().status();
+    // The REST collection helper wraps ordinary HTTP status failures in
+    // HTTPException; LTI and the existing 401/403/429 classifications differ.
+    if protocol == CollectionProtocol::CanvasRest
+        && (status.is_client_error() || status.is_server_error())
+        && !matches!(status.as_u16(), 401 | 403 | 429)
+    {
+        return Err(CanvasProviderReadError::RosterHttpStatusFailure);
+    }
+    let link = link_header_values(response.response().headers());
     let payload = read_json_response(response, COLLECTION_PAGE_BYTES).await?;
     Ok((payload, link?))
 }
 
 async fn read_json_response(
-    mut response: Response,
+    response: impl Into<ProviderResponse>,
     maximum_bytes: usize,
 ) -> Result<Value, CanvasProviderReadError> {
+    let mut body = response.into();
+    let response = body.response();
     if response.status().is_redirection() {
         return Err(CanvasProviderReadError::InvalidConfiguration);
     }
@@ -609,7 +958,7 @@ async fn read_json_response(
     }
     if response.status().as_u16() == 429 {
         return Err(CanvasProviderReadError::RateLimited {
-            retry_after_seconds: canvas_retry_after_seconds(&response).unwrap_or(0),
+            retry_after_seconds: canvas_retry_after_seconds(response).unwrap_or(0),
         });
     }
     if !response.status().is_success() {
@@ -622,11 +971,7 @@ async fn read_json_response(
         return Err(CanvasProviderReadError::Unavailable);
     }
     let mut bytes = Vec::with_capacity(length.unwrap_or(0).min(maximum_bytes));
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| CanvasProviderReadError::Unavailable)?
-    {
+    while let Some(chunk) = body.chunk().await? {
         if bytes.len().saturating_add(chunk.len()) > maximum_bytes {
             return Err(CanvasProviderReadError::Unavailable);
         }
@@ -1006,8 +1351,445 @@ fn map_oauth_error(error: CanvasOAuthError) -> CanvasProviderReadError {
 }
 
 #[cfg(test)]
+#[path = "canvas_sync_provider_http_tests.rs"]
+mod operation_scope_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    // Exercise the unchanged token/collection HTTP adapters on synthetic local
+    // transport. Public-provider HTTPS/trust parity remains a separate gate.
+    #[derive(Default)]
+    struct RunTokenTraffic {
+        grants: usize,
+        fail_next_grant: bool,
+        collection_status: u16,
+        authorizations: Vec<String>,
+    }
+
+    struct RunTokenServer {
+        traffic: Arc<std::sync::Mutex<RunTokenTraffic>>,
+        client: reqwest::Client,
+        origin: String,
+        task: tokio::task::JoinHandle<std::io::Result<()>>,
+    }
+
+    impl Drop for RunTokenServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl RunTokenServer {
+        async fn start() -> Self {
+            use axum::{
+                extract::State,
+                http::{HeaderMap, StatusCode},
+                response::IntoResponse,
+                routing::{get, post},
+                Json, Router,
+            };
+
+            async fn grant(
+                State(traffic): State<Arc<std::sync::Mutex<RunTokenTraffic>>>,
+            ) -> axum::response::Response {
+                let mut traffic = traffic.lock().unwrap();
+                traffic.grants += 1;
+                if std::mem::take(&mut traffic.fail_next_grant) {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                }
+                Json(json!({
+                    "access_token": format!(" synthetic-run-token-{} ", traffic.grants),
+                    // Published callers retain token.value, without TTL refresh.
+                    "expires_in": 0,
+                }))
+                .into_response()
+            }
+
+            async fn collection(
+                State(traffic): State<Arc<std::sync::Mutex<RunTokenTraffic>>>,
+                headers: HeaderMap,
+            ) -> axum::response::Response {
+                let mut traffic = traffic.lock().unwrap();
+                traffic.authorizations.push(
+                    headers
+                        .get("authorization")
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+                if traffic.collection_status != 0 {
+                    return StatusCode::from_u16(traffic.collection_status)
+                        .unwrap()
+                        .into_response();
+                }
+                Json(json!([])).into_response()
+            }
+
+            let traffic = Arc::new(std::sync::Mutex::new(RunTokenTraffic::default()));
+            let app = Router::new()
+                .route("/token", post(grant))
+                .route("/collection", get(collection))
+                .with_state(traffic.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move { axum::serve(listener, app).await });
+            Self {
+                traffic,
+                client: reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .unwrap(),
+                origin,
+                task,
+            }
+        }
+
+        async fn token(
+            &self,
+            run: &RunLtiTokens,
+            key: LtiTokenKey,
+        ) -> Result<String, CanvasProviderReadError> {
+            let client_id = key.client_id.clone();
+            let scope = key.kind.scope();
+            run.get_or_request(key, || {
+                request_lti_token(
+                    &self.client,
+                    Url::parse(&format!("{}/token", self.origin)).unwrap(),
+                    &client_id,
+                    "synthetic-assertion",
+                    scope,
+                )
+            })
+            .await
+        }
+
+        async fn collection(&self, token: &str) -> Result<Value, CanvasProviderReadError> {
+            request_collection_page(
+                &RestReadClient::Total(self.client.clone()),
+                Url::parse(&format!("{}/collection", self.origin)).unwrap(),
+                token,
+                AGS_RESULT_ACCEPT,
+                CollectionProtocol::Lti,
+            )
+            .await
+            .map(|(payload, _)| payload)
+        }
+    }
+
+    pub(super) fn run_token_resources() -> CanvasSyncResources {
+        use crate::canvas_sync_processor::CanvasSyncPlatformSnapshot;
+
+        CanvasSyncResources {
+            platform: CanvasSyncPlatformSnapshot {
+                id: "synthetic-platform".into(),
+                organization_id: "synthetic-tenant".into(),
+                config_version: 1,
+                canvas_base_url: "https://canvas.example.invalid".into(),
+                lti_trust_profile: CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN.into(),
+                lti_issuer: "https://canvas.example.invalid".into(),
+                lti_client_id: "synthetic-client".into(),
+                lti_deployment_id: "synthetic-deployment".into(),
+                lti_auth_token_url: "https://canvas.example.invalid/login/oauth2/token".into(),
+            },
+            binding: Map::new(),
+            application: None,
+            application_template: None,
+        }
+    }
+
+    pub(super) fn run_token_key() -> LtiTokenKey {
+        let resources = run_token_resources();
+        LtiTokenKey::new(
+            &resources,
+            &resources.platform.lti_auth_token_url,
+            LtiCollectionKind::AgsResult,
+        )
+    }
+
+    pub(super) fn run_provider_without_database_io(
+    ) -> (HttpCanvasAuthoritativeProvider, sqlx::PgPool) {
+        use crate::{
+            canvas_lti_tool_signing::CanvasLtiToolSigningError,
+            canvas_oauth::CanvasOAuthServiceConfig,
+            canvas_oauth_http::HttpCanvasOAuthProvider,
+            canvas_oauth_postgres::{
+                PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault,
+            },
+            integration_secret::IntegrationSecretCipher,
+        };
+
+        struct UnusedSigner;
+        #[async_trait]
+        impl CanvasLtiToolJwtSigner for UnusedSigner {
+            async fn sign_jwt(&self, _: &Value) -> Result<String, CanvasLtiToolSigningError> {
+                panic!("factory and rejected-trust tests must not sign")
+            }
+
+            async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError> {
+                panic!("factory tests must not resolve signing keys")
+            }
+        }
+
+        // Lazy, zero-minimum pool: constructing this adapter performs no DB I/O.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .min_connections(0)
+            .connect_lazy("postgres://synthetic:synthetic@127.0.0.1:1/synthetic")
+            .unwrap();
+        let oauth = CanvasOAuthService::new(
+            Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
+            Arc::new(PostgresIntegrationSecretVault::new(
+                pool.clone(),
+                IntegrationSecretCipher::from_base64(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                )
+                .unwrap(),
+            )),
+            Arc::new(HttpCanvasOAuthProvider::new_with_policy(
+                std::time::Duration::from_secs(2),
+                Vec::new(),
+                false,
+                false,
+            )),
+            Some("synthetic-management-key"),
+            CanvasOAuthServiceConfig {
+                issuer_base_url: "https://issuer.example.invalid".into(),
+                completion_base_url: "https://ui.example.invalid".into(),
+                portable_enabled: true,
+                pilot_organizations: BTreeSet::new(),
+                allow_private_networks: false,
+                allow_http_localhost: false,
+            },
+        )
+        .unwrap();
+        (
+            HttpCanvasAuthoritativeProvider::new(
+                Arc::new(oauth),
+                "synthetic-private-oauth-key",
+                Arc::new(UnusedSigner),
+                CanvasHttpClientPolicy {
+                    timeout: std::time::Duration::from_secs(2),
+                    private_origin_allowlist: Vec::new(),
+                    allow_private_networks: false,
+                    allow_http_localhost: false,
+                },
+                vec!["https://canvas.example.invalid".into()],
+            ),
+            pool,
+        )
+    }
+
+    #[tokio::test]
+    async fn run_provider_factory_resets_scoped_instances_and_keeps_templates_uncached() {
+        let (template, pool) = run_provider_without_database_io();
+        assert!(template.run_tokens.is_none());
+        let first = template.fresh_run(CanvasProviderRunScope::Application);
+        let first_cache = first.run_tokens.as_ref().unwrap();
+        first_cache
+            .get_or_request(run_token_key(), || async {
+                Ok("synthetic-private-access-token".into())
+            })
+            .await
+            .unwrap();
+        // A caller cannot extend a previous job's token lifetime by scoping an
+        // already-scoped instance. Cloning the stateless template also stays uncached.
+        let second = first.fresh_run(CanvasProviderRunScope::Application);
+        let second_cache = second.run_tokens.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(first_cache, second_cache));
+        assert!(second_cache.tokens.lock().await.is_empty());
+        assert!(template.clone().run_tokens.is_none());
+        let object: Arc<dyn CanvasAuthoritativeProvider> = Arc::new(first.clone());
+        let left = object.clone().for_run(CanvasProviderRunScope::Application);
+        let right = object.clone().for_run(CanvasProviderRunScope::Application);
+        let nested = left.clone().for_run(CanvasProviderRunScope::Application);
+        assert!(!Arc::ptr_eq(&object, &left));
+        assert!(!Arc::ptr_eq(&left, &right));
+        assert!(!Arc::ptr_eq(&left, &nested));
+        for debug in [format!("{first:?}"), format!("{first_cache:?}")] {
+            for private in [
+                "synthetic-private-access-token",
+                "synthetic-private-oauth-key",
+            ] {
+                assert!(!debug.contains(private));
+            }
+        }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn run_provider_rechecks_trust_before_considering_a_cached_grant() {
+        let (template, pool) = run_provider_without_database_io();
+        let run = template.fresh_run(CanvasProviderRunScope::Application);
+        let mut resources = run_token_resources();
+        let key = run_token_key();
+        run.run_tokens
+            .as_ref()
+            .unwrap()
+            .get_or_request(key, || async { Ok("synthetic-cached-token".into()) })
+            .await
+            .unwrap();
+        // The token cache key uses the validated endpoint, not this untrusted
+        // input. Corrupting it must reject before any network/signing or cache hit.
+        resources.platform.lti_auth_token_url = "https://untrusted.example.invalid/token".into();
+        assert_eq!(
+            run.lti_access_token(&resources, LtiCollectionKind::AgsResult)
+                .await,
+            Err(CanvasProviderReadError::InvalidConfiguration)
+        );
+        assert_eq!(
+            run.run_tokens.as_ref().unwrap().tokens.lock().await.len(),
+            1
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn run_tokens_reuse_success_without_ttl_refresh_and_coalesce_concurrent_reads() {
+        let server = RunTokenServer::start().await;
+        let run = RunLtiTokens::default();
+        let (first, concurrent) = tokio::join!(
+            server.token(&run, run_token_key()),
+            server.token(&run, run_token_key())
+        );
+        assert_eq!(first.unwrap(), "synthetic-run-token-1");
+        assert_eq!(concurrent.unwrap(), "synthetic-run-token-1");
+        assert_eq!(
+            server.token(&run, run_token_key()).await.unwrap(),
+            "synthetic-run-token-1"
+        );
+        assert_eq!(server.traffic.lock().unwrap().grants, 1);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_never_share_grants_between_concurrent_or_subsequent_runs() {
+        let server = RunTokenServer::start().await;
+        let first = RunLtiTokens::default();
+        let second = RunLtiTokens::default();
+        let (left, right) = tokio::join!(
+            server.token(&first, run_token_key()),
+            server.token(&second, run_token_key())
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_ne!(left, right);
+        assert_eq!(server.token(&first, run_token_key()).await.unwrap(), left);
+        assert_eq!(server.token(&second, run_token_key()).await.unwrap(), right);
+        let next = RunLtiTokens::default();
+        assert_eq!(
+            server.token(&next, run_token_key()).await.unwrap(),
+            "synthetic-run-token-3"
+        );
+        assert_eq!(server.traffic.lock().unwrap().grants, 3);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_separate_every_resource_identity_dimension_and_scope() {
+        let server = RunTokenServer::start().await;
+        let run = RunLtiTokens::default();
+        let baseline = run_token_resources();
+        let mut keys = vec![run_token_key()];
+        for dimension in 0..8 {
+            let mut resources = baseline.clone();
+            let platform = &mut resources.platform;
+            match dimension {
+                0 => platform.organization_id.push_str("-other"),
+                1 => platform.id.push_str("-other"),
+                2 => platform.config_version += 1,
+                3 => platform.canvas_base_url.push_str("/other"),
+                4 => platform.lti_trust_profile.push_str("-other"),
+                5 => platform.lti_issuer.push_str("/other"),
+                6 => platform.lti_client_id.push_str("-other"),
+                7 => platform.lti_deployment_id.push_str("-other"),
+                _ => unreachable!(),
+            }
+            keys.push(LtiTokenKey::new(
+                &resources,
+                &baseline.platform.lti_auth_token_url,
+                LtiCollectionKind::AgsResult,
+            ));
+        }
+        keys.push(LtiTokenKey::new(
+            &baseline,
+            "https://canvas.example.invalid/other-token",
+            LtiCollectionKind::AgsResult,
+        ));
+        keys.push(LtiTokenKey::new(
+            &baseline,
+            &baseline.platform.lti_auth_token_url,
+            LtiCollectionKind::NrpsMembership,
+        ));
+        assert_eq!(keys.iter().collect::<BTreeSet<_>>().len(), 11);
+        let mut acquired = BTreeSet::new();
+        for key in keys {
+            let token = server.token(&run, key.clone()).await.unwrap();
+            assert!(acquired.insert(token.clone()));
+            assert_eq!(server.token(&run, key).await.unwrap(), token);
+        }
+        assert_eq!(server.traffic.lock().unwrap().grants, 11);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_retry_failed_acquisition_but_retain_success_after_collection_errors() {
+        let server = RunTokenServer::start().await;
+        let run = RunLtiTokens::default();
+        server.traffic.lock().unwrap().fail_next_grant = true;
+        assert_eq!(
+            server.token(&run, run_token_key()).await,
+            Err(CanvasProviderReadError::Unavailable)
+        );
+        let token = server.token(&run, run_token_key()).await.unwrap();
+        for status in [503, 401] {
+            server.traffic.lock().unwrap().collection_status = status;
+            assert!(server.collection(&token).await.is_err());
+            assert_eq!(server.token(&run, run_token_key()).await.unwrap(), token);
+        }
+        server.traffic.lock().unwrap().collection_status = 0;
+        assert_eq!(server.collection(&token).await.unwrap(), json!([]));
+        let traffic = server.traffic.lock().unwrap();
+        assert_eq!(traffic.grants, 2);
+        assert_eq!(traffic.authorizations, vec![format!("Bearer {token}"); 3]);
+    }
+
+    #[tokio::test]
+    async fn run_tokens_cancelled_acquisition_releases_lock_without_caching_partial_token() {
+        let run = Arc::new(RunLtiTokens::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let task = {
+            let run = run.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                run.get_or_request(run_token_key(), || async {
+                    started.notify_one();
+                    std::future::pending::<Result<String, CanvasProviderReadError>>().await
+                })
+                .await
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                run.get_or_request(run_token_key(), || async { Ok("synthetic-retry".into()) })
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            "synthetic-retry"
+        );
+        assert_eq!(run.tokens.lock().await.len(), 1);
+        let debug = format!("{run:?}");
+        for private in ["synthetic-retry", "synthetic-client", "synthetic-tenant"] {
+            assert!(!debug.contains(private));
+        }
+    }
 
     #[test]
     fn pagination_accepts_standard_next_relation_forms_across_all_headers() {
@@ -1118,10 +1900,11 @@ mod tests {
 
         assert_eq!(
             request_collection_page(
-                &client,
+                &RestReadClient::Total(client.clone()),
                 Url::parse(&format!("http://{address}/collection")).unwrap(),
                 "token",
                 NRPS_MEMBERSHIP_ACCEPT,
+                CollectionProtocol::Lti,
             )
             .await,
             Err(CanvasProviderReadError::RateLimited {
@@ -1129,6 +1912,86 @@ mod tests {
             }),
         );
         server.abort();
+    }
+
+    #[test]
+    fn rest_collection_setup_preserves_query_and_protocol_specific_envelopes() {
+        let url =
+            Url::parse("https://canvas.test/api/v1/courses/42/users?enrollment_type%5B%5D=student")
+                .unwrap();
+        for (limit, page) in [(0, "1"), (2, "2"), (5000, "100")] {
+            let actual = CollectionProtocol::CanvasRest.first_page(url.clone(), limit);
+            assert_eq!(
+                actual.query(),
+                Some(format!("enrollment_type%5B%5D=student&per_page={page}").as_str())
+            );
+            assert_eq!(CollectionProtocol::Lti.first_page(url.clone(), limit), url);
+        }
+        for payload in [json!([]), json!({"items": []})] {
+            assert_eq!(
+                CollectionProtocol::CanvasRest.rows(&payload),
+                Some(&Vec::new())
+            );
+        }
+        for payload in [json!({"members": []}), json!({"results": []})] {
+            assert!(CollectionProtocol::CanvasRest.rows(&payload).is_none());
+            assert_eq!(CollectionProtocol::Lti.rows(&payload), Some(&Vec::new()));
+        }
+        assert!(CollectionProtocol::Lti
+            .rows(&json!({"items": []}))
+            .is_none());
+        assert!(CollectionProtocol::CanvasRest
+            .rows(&json!({"items": {}}))
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn rest_collection_status_failure_is_distinct_without_changing_lti_or_rate_limits() {
+        use axum::{extract::Path, http::StatusCode, response::Response, routing::get, Router};
+
+        async fn status(Path(code): Path<u16>) -> Response {
+            Response::builder()
+                .status(StatusCode::from_u16(code).unwrap())
+                .header("Retry-After", "37")
+                .body(axum::body::Body::from(
+                    "synthetic-provider-detail-never-persisted",
+                ))
+                .unwrap()
+        }
+        let app = Router::new().route("/{status}", get(status));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .unwrap();
+        for code in [400, 401, 403, 429, 503] {
+            for protocol in [CollectionProtocol::CanvasRest, CollectionProtocol::Lti] {
+                let actual = request_collection_page(
+                    &RestReadClient::Total(client.clone()),
+                    Url::parse(&format!("http://{address}/{code}")).unwrap(),
+                    "synthetic-token",
+                    "application/json",
+                    protocol,
+                )
+                .await;
+                let expected = match code {
+                    429 => CanvasProviderReadError::RateLimited {
+                        retry_after_seconds: 37,
+                    },
+                    401 | 403 => CanvasProviderReadError::Unavailable,
+                    _ if protocol == CollectionProtocol::CanvasRest => {
+                        CanvasProviderReadError::RosterHttpStatusFailure
+                    }
+                    _ => CanvasProviderReadError::Unavailable,
+                };
+                assert_eq!(actual, Err(expected), "status {code}");
+            }
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 
     #[test]
@@ -1311,10 +2174,11 @@ mod tests {
         assert_eq!(token, "bounded-token");
         for (path, accept) in [("ags", AGS_RESULT_ACCEPT), ("nrps", NRPS_MEMBERSHIP_ACCEPT)] {
             let (payload, _) = request_collection_page(
-                &client,
+                &RestReadClient::Total(client.clone()),
                 Url::parse(&format!("http://{address}/{path}")).unwrap(),
                 &token,
                 accept,
+                CollectionProtocol::Lti,
             )
             .await
             .expect("collection response");

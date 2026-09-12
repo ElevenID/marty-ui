@@ -1,0 +1,398 @@
+{
+  "schema": "marty.didcomm-automatic-response-python-reference/v1",
+  "reference": {
+    "repository": "ElevenID/marty-credentials",
+    "source_commit": "9bd2747f040f203188529758ec38f0a5dce5ac5f",
+    "source_path": "services/issuance/infrastructure/api/routes.py",
+    "source_blob": "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a",
+    "functions": [
+      "_issuance_response_from_transaction",
+      "_didcomm_sign_and_deliver"
+    ],
+    "setup_path": "tests/unit/test_didcomm_boundary.py",
+    "setup_blob": "f373c4d1762f916b616e4b83a38101112ec78e85",
+    "capture_script": "_codex-tmp/capture-didcomm-automatic-response-v1.py",
+    "capture_script_sha256": "01b0fb9c598ddfc9c04a4984316ecd194691cdab5bc2208a4ac85b9f236746f6",
+    "capture": "Executed both unchanged helpers with existing controlled signing/encryption/endpoint setup, controlled HTTP status, successful repository finalization, and post-issuance callbacks. Actual response/state mutation and call counts recorded. Offer-generation dependency returns a fixed synthetic JSON object; offer encoding is not qualified.",
+    "scope": "Seven automatic response observations, not actual cryptography, PostgreSQL, transport or KMS. Success status/URI and holder selection are reconciliation inputs. Failed receipt endpoint URI and multiple-wallet repeated transport remain reference evidence only; native failure URI and no-resend safeguards are intentionally not changed by this slice."
+  },
+  "cases": [
+    {
+      "case": "success_holder",
+      "request": {
+        "holder_did": "did:example:holder",
+        "subject_did": null
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "issued",
+        "nonce_present": false,
+        "issued_at_present": true
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "issued",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://https://wallet.example/inbox"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [
+          "did:example:holder"
+        ],
+        "allocation": 1,
+        "signing": 1,
+        "packing": 1,
+        "transport": 1,
+        "finalize": 1,
+        "canvas_claim": 1,
+        "renewal": 1,
+        "event": 1,
+        "deliveries": 1
+      }
+    },
+    {
+      "case": "missing_holder",
+      "request": {
+        "holder_did": null,
+        "subject_did": null
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "pending",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://pending?transaction_id=tx-didcomm-diagnostic-privacy"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [],
+        "allocation": 0,
+        "signing": 0,
+        "packing": 0,
+        "transport": 0,
+        "finalize": 0,
+        "canvas_claim": 0,
+        "renewal": 0,
+        "event": 0,
+        "deliveries": 0
+      }
+    },
+    {
+      "case": "preflight_failure",
+      "request": {
+        "holder_did": "did:example:holder",
+        "subject_did": null
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "pending",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://pending?transaction_id=tx-didcomm-diagnostic-privacy"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [
+          "did:example:holder"
+        ],
+        "allocation": 0,
+        "signing": 0,
+        "packing": 0,
+        "transport": 0,
+        "finalize": 0,
+        "canvas_claim": 0,
+        "renewal": 0,
+        "event": 0,
+        "deliveries": 0
+      }
+    },
+    {
+      "case": "failed_receipt",
+      "request": {
+        "holder_did": "did:example:holder",
+        "subject_did": null
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "pending",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://https://wallet.example/inbox"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [
+          "did:example:holder"
+        ],
+        "allocation": 1,
+        "signing": 1,
+        "packing": 1,
+        "transport": 1,
+        "finalize": 0,
+        "canvas_claim": 0,
+        "renewal": 0,
+        "event": 0,
+        "deliveries": 0
+      }
+    },
+    {
+      "case": "subject_fallback",
+      "request": {
+        "holder_did": null,
+        "subject_did": "did:example:subject"
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "issued",
+        "nonce_present": false,
+        "issued_at_present": true
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "issued",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://https://wallet.example/inbox"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [
+          "did:example:subject"
+        ],
+        "allocation": 1,
+        "signing": 1,
+        "packing": 1,
+        "transport": 1,
+        "finalize": 1,
+        "canvas_claim": 1,
+        "renewal": 1,
+        "event": 1,
+        "deliveries": 1
+      }
+    },
+    {
+      "case": "holder_precedes_subject",
+      "request": {
+        "holder_did": "did:example:holder",
+        "subject_did": "did:example:subject"
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "issued",
+        "nonce_present": false,
+        "issued_at_present": true
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "issued",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://https://wallet.example/inbox"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [
+          "did:example:holder"
+        ],
+        "allocation": 1,
+        "signing": 1,
+        "packing": 1,
+        "transport": 1,
+        "finalize": 1,
+        "canvas_claim": 1,
+        "renewal": 1,
+        "event": 1,
+        "deliveries": 1
+      }
+    },
+    {
+      "case": "multiple_wallets",
+      "request": {
+        "holder_did": "did:example:holder",
+        "subject_did": null
+      },
+      "wallet_configs": [
+        {
+          "wallet_id": "wallet-a",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet A"
+        },
+        {
+          "wallet_id": "wallet-b",
+          "format_variant": "didcomm_v2",
+          "display_name": "Wallet B"
+        }
+      ],
+      "before": {
+        "status": "pending",
+        "nonce_present": true,
+        "issued_at_present": false
+      },
+      "after": {
+        "status": "issued",
+        "nonce_present": false,
+        "issued_at_present": true
+      },
+      "response": {
+        "id": "tx-didcomm-diagnostic-privacy",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "status": "issued",
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22synthetic_offer%22%3Atrue%7D",
+        "credential_offer_uris": {
+          "wallet-a": "didcomm://https://wallet.example/inbox",
+          "wallet-b": "didcomm://https://wallet.example/inbox"
+        },
+        "credential_offer_labels": {
+          "wallet-a": "Wallet A",
+          "wallet-b": "Wallet B"
+        },
+        "pre_auth_code": "synthetic-pre-auth",
+        "expires_at": "2026-09-10T00:00:00+00:00"
+      },
+      "calls": {
+        "holders": [
+          "did:example:holder",
+          "did:example:holder"
+        ],
+        "allocation": 2,
+        "signing": 2,
+        "packing": 2,
+        "transport": 2,
+        "finalize": 1,
+        "canvas_claim": 1,
+        "renewal": 1,
+        "event": 1,
+        "deliveries": 1
+      }
+    }
+  ]
+}

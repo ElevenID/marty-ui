@@ -79,6 +79,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_didcomm_is_native_without_selecting_initiation_or_sibling_paths() {
+        assert_eq!(
+            upstream_service(HttpMethod::Post, "/v1/issuance/didcomm/deliver"),
+            NATIVE_SERVICE
+        );
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/issuance/didcomm/deliver"),
+            (HttpMethod::Post, "/v1/issuance/didcomm/deliver/extra"),
+            (HttpMethod::Post, "/v1/issuance/didcomm"),
+            (HttpMethod::Post, "/v1/issuance/initiate"),
+            (HttpMethod::Post, "/v1/issuance"),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
+    fn every_canvas_operation_candidate_retains_legacy_routing_until_cutover() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-operations.json"
+        ))
+        .unwrap();
+        let routes = contract["routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 8);
+        for route in routes {
+            let method: HttpMethod = serde_json::from_value(route["method"].clone()).unwrap();
+            let path = format!(
+                "{}{}",
+                contract["route_prefix"].as_str().unwrap(),
+                route["path"].as_str().unwrap()
+            )
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "synthetic"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+            assert_eq!(
+                upstream_service(method, &path),
+                LEGACY_SERVICE,
+                "{method:?} {path}"
+            );
+        }
+    }
+
+    #[test]
     fn every_frozen_canvas_management_route_is_native() {
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-canvas-management.json"

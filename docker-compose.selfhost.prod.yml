@@ -563,13 +563,18 @@ services:
 
   # Durable Canvas jobs must never run inside the web-service lifespan.
   canvas-sync-worker:
-    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: canvas-sync-worker
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         . /app/load-secrets-env.sh
-        exec python -m issuance.canvas_worker
+        exec /usr/local/bin/marty-canvas-sync-worker
     environment:
+      SERVICE_NAME: canvas_sync_worker
       ENVIRONMENT: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL_TEMPLATE: *database-url-template
@@ -596,7 +601,6 @@ services:
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
       CANVAS_BACKGROUND_ROSTER_BATCH_SIZE: ${CANVAS_BACKGROUND_ROSTER_BATCH_SIZE:-500}
       CANVAS_BACKGROUND_ROSTER_MAX_SIZE: ${CANVAS_BACKGROUND_ROSTER_MAX_SIZE:-5000}
-      CANVAS_SYNC_PROCESSOR: ${CANVAS_SYNC_PROCESSOR:-issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target}
       CANVAS_SYNC_WORKER_BATCH_SIZE: ${CANVAS_SYNC_WORKER_BATCH_SIZE:-10}
       CANVAS_SYNC_WORKER_LEASE_SECONDS: ${CANVAS_SYNC_WORKER_LEASE_SECONDS:-120}
       CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS: ${CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS:-600}

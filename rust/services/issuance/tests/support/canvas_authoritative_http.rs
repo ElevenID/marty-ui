@@ -43,6 +43,7 @@ impl CanvasLtiToolJwtSigner for NoSigner {
 #[derive(Default)]
 struct ServerState {
     status: AtomicU16,
+    retry_after: Mutex<Option<String>>,
     requests: Mutex<Vec<(String, String, String)>>,
 }
 
@@ -81,7 +82,10 @@ async fn serve(State(state): State<Arc<ServerState>>, request: Request<Body>) ->
     if status != 0 {
         return Response::builder()
             .status(StatusCode::from_u16(status).unwrap())
-            .header("retry-after", "37")
+            .header(
+                "retry-after",
+                state.retry_after.lock().unwrap().as_deref().unwrap_or("37"),
+            )
             .header("www-authenticate", "Bearer")
             .body(Body::from("{}"))
             .unwrap();
@@ -269,6 +273,44 @@ async fn actual_rest_roster_pages_and_preloads_verified_negative_missing_progres
             .contains("SYNTHETIC_NO_RETENTION"));
     }
     assert_eq!(server.state.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn actual_rest_provider_preserves_frozen_oversized_retry_after() {
+    let (server, provider, resources, _) = setup().await;
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-retry-after-scenarios.json"
+    ))
+    .unwrap();
+    let case = scenarios["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "huge_integer")
+        .unwrap();
+    *server.state.retry_after.lock().unwrap() =
+        Some(case["headers"]["Retry-After"].as_str().unwrap().into());
+    server.state.status.store(429, Ordering::SeqCst);
+    match provider
+        .read_requirement(
+            &resources,
+            &requirement("assignment_score"),
+            Some("7"),
+            None,
+        )
+        .await
+    {
+        Err(CanvasProviderReadError::RateLimited {
+            retry_after_seconds,
+        }) => {
+            assert_eq!(Some(retry_after_seconds), case["delay_bounds"][0].as_u64());
+        }
+        _ => panic!("oversized Retry-After must retain its rate-limit category"),
+    }
+    let requests = server.state.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].1, "Bearer current-access-token");
+    assert_eq!(requests[0].2, "application/json");
 }
 
 #[tokio::test]

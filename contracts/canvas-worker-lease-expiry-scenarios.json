@@ -1,0 +1,20 @@
+{
+  "schema": "marty.canvas-worker-lease-expiry-scenarios/v1",
+  "source_sha256": {
+    "issuance.canvas_worker": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+    "issuance.infrastructure.api.canvas_routes": "f3ea0cd0f94da4b08d071f03cad47afddf1ff2a587210c6a442b0b2f2a331943",
+    "issuance.infrastructure.adapters.postgres_repository": "34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb",
+    "issuance.application.canvas_sync_jobs": "e3cc45ef4b40cf9f80ad46699768e7d584bde53e75d29f36ab783780fa03e5f9"
+  },
+  "environment": {
+    "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "120",
+    "CANVAS_SYNC_WORKER_LEASE_SECONDS": "30",
+    "CANVAS_SYNC_WORKER_POLL_SECONDS": "120",
+    "LOG_LEVEL": "WARNING"
+  },
+  "schedule": [0, 8, 16, 24, 34],
+  "cases": [
+    {"name": "renewal_lock_early_release", "release_policy": "request_plus_12"},
+    {"name": "renewal_lock_crosses_expiry", "release_policy": "original_expiry_plus_1"}
+  ]
+}

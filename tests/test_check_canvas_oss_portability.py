@@ -34,7 +34,9 @@ def write(path: Path, value: dict) -> Path:
     return path
 
 
-def runtime_context(release: str, source_id: str, *, gateway: str = "1", issuance: str = "2") -> dict:
+def runtime_context(
+    release: str, source_id: str, *, gateway: str = "1", issuance: str = "2"
+) -> dict:
     return {
         "schema_version": 1,
         "origin": "https://beta.elevenidllc.com",
@@ -44,7 +46,7 @@ def runtime_context(release: str, source_id: str, *, gateway: str = "1", issuanc
         "service_image_digests": {
             "gateway": "sha256:" + gateway * 64,
             "issuance": "sha256:" + issuance * 64,
-            "canvas-sync-worker": "sha256:" + issuance * 64,
+            "canvas-sync-worker": "sha256:" + "3" * 64,
         },
     }
 
@@ -79,7 +81,9 @@ def bootstrap_audit() -> dict:
     return {
         "schema_version": 1,
         "phase": "pre_start_only",
-        "commands": [{"argv": command, "exit_code": 0} for command in ALLOWED_BOOTSTRAP_COMMANDS],
+        "commands": [
+            {"argv": command, "exit_code": 0} for command in ALLOWED_BOOTSTRAP_COMMANDS
+        ],
         "web_started_after_bootstrap": True,
         "forbidden_operation_counts": {
             "rails_runner": 0,
@@ -92,7 +96,9 @@ def bootstrap_audit() -> dict:
     }
 
 
-def contract_driver_manifest(source_sha: str = "d" * 40, image_id: str = "e" * 64) -> dict:
+def contract_driver_manifest(
+    source_sha: str = "d" * 40, image_id: str = "e" * 64
+) -> dict:
     lock = load("deploy-config/catalog/canvas-oss.lock.json")
     driver = lock["contract_driver"]
     return {
@@ -136,7 +142,9 @@ def contract_execution(manifest: dict) -> dict:
 
 def test_checked_in_canvas_oss_contract_is_strict() -> None:
     lock = load("deploy-config/catalog/canvas-oss.lock.json")
-    Draft202012Validator(load("deploy-config/schemas/canvas-oss-lock.schema.json")).validate(lock)
+    Draft202012Validator(
+        load("deploy-config/schemas/canvas-oss-lock.schema.json")
+    ).validate(lock)
     validate_lock(lock)
     validate_execution_assets(lock)
     validate_catalog(load("deploy-config/catalog/canvas-oss-portability.json"))
@@ -163,12 +171,18 @@ def test_image_manifest_must_equal_reviewed_lock_digest() -> None:
 
 def test_bootstrap_rejects_rails_runner() -> None:
     audit = bootstrap_audit()
-    audit["commands"].append({"argv": ["bin/rails", "runner", "seed.rb"], "exit_code": 0})
+    audit["commands"].append(
+        {"argv": ["bin/rails", "runner", "seed.rb"], "exit_code": 0}
+    )
     with pytest.raises(ContractError, match="outside the exact lifecycle allowlist"):
         validate_bootstrap_audit(audit)
 
 
-def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path) -> None:
+@pytest.mark.parametrize("worker_mismatch", [None, "image_id", "configured_image"])
+def test_runtime_binding_requires_deployment_and_source_snapshot(
+    tmp_path: Path,
+    worker_mismatch: str | None,
+) -> None:
     source_id = "c" * 40
     context = write(
         tmp_path / "runtime.json",
@@ -202,7 +216,7 @@ def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path)
                 "image_digests": {
                     "gateway": "sha256:" + "1" * 64,
                     "issuance": "sha256:" + "2" * 64,
-                    "canvas-sync-worker": "sha256:" + "2" * 64,
+                    "canvas-sync-worker": "sha256:" + "3" * 64,
                 },
             },
             "ui_marker": {
@@ -220,7 +234,11 @@ def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path)
                 for container, image_service, image_id in (
                     ("marty-gateway", "gateway", "sha256:" + "1" * 64),
                     ("marty-issuance", "issuance", "sha256:" + "2" * 64),
-                    ("marty-canvas-sync-worker", "issuance", "sha256:" + "2" * 64),
+                    (
+                        "marty-canvas-sync-worker",
+                        "canvas-sync-worker",
+                        "sha256:" + "3" * 64,
+                    ),
                 )
             ],
         },
@@ -228,9 +246,26 @@ def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path)
     validate_runtime_binding(deployment, context, source_id)
     with pytest.raises(ContractError, match="explicitly reviewed"):
         validate_runtime_binding(deployment, context, "d" * 40)
+    if worker_mismatch is not None:
+        changed = json.loads(deployment.read_text(encoding="utf-8"))
+        worker = next(
+            item
+            for item in changed["images"]
+            if item["container"] == "marty-canvas-sync-worker"
+        )
+        worker[worker_mismatch] = (
+            "sha256:" + "9" * 64
+            if worker_mismatch == "image_id"
+            else "elevenid-local/issuance:mip-0.5.0-local-test"
+        )
+        write(deployment, changed)
+        with pytest.raises(ContractError):
+            validate_runtime_binding(deployment, context, source_id)
 
 
-def test_runtime_binding_rejects_current_ui_only_reused_backend_manifest(tmp_path: Path) -> None:
+def test_runtime_binding_rejects_current_ui_only_reused_backend_manifest(
+    tmp_path: Path,
+) -> None:
     source_id = "1" * 40
     source_digest = source_id + "2" * 24
     revision = "3" * 40
@@ -254,7 +289,11 @@ def test_runtime_binding_rejects_current_ui_only_reused_backend_manifest(tmp_pat
         },
     )
     markers = {
-        name: {"component": component, "release_version": release, "marty_ui_sha": source_id}
+        name: {
+            "component": component,
+            "release_version": release,
+            "marty_ui_sha": source_id,
+        }
         for name, component in {
             "local_ui": "ui",
             "local_gateway": "services",
@@ -266,8 +305,16 @@ def test_runtime_binding_rejects_current_ui_only_reused_backend_manifest(tmp_pat
         tmp_path / "local-deployment-manifest.json",
         {
             "release_version": release,
-            "runtime_source": {"repository": "marty-ui", "revision": revision, "source_digest": source_digest, "release_source_id": source_id},
-            "image": {"reference": f"elevenid-local/ui:{release}", "id": "sha256:" + "4" * 64},
+            "runtime_source": {
+                "repository": "marty-ui",
+                "revision": revision,
+                "source_digest": source_digest,
+                "release_source_id": source_id,
+            },
+            "image": {
+                "reference": f"elevenid-local/ui:{release}",
+                "id": "sha256:" + "4" * 64,
+            },
             "markers": markers,
             "backend_images_reused": True,
         },
@@ -308,9 +355,15 @@ def test_runtime_binding_rejects_missing_canvas_worker_image(tmp_path: Path) -> 
                 "release_version": release,
                 "marty_ui_sha": source_id,
                 "deployment_release_marker": release,
-                "image_digests": runtime_context(release, source_id)["service_image_digests"],
+                "image_digests": runtime_context(release, source_id)[
+                    "service_image_digests"
+                ],
             },
-            "ui_marker": {"component": "ui", "release_version": release, "marty_ui_sha": source_id},
+            "ui_marker": {
+                "component": "ui",
+                "release_version": release,
+                "marty_ui_sha": source_id,
+            },
             "images": [],
         },
     )
@@ -318,7 +371,9 @@ def test_runtime_binding_rejects_missing_canvas_worker_image(tmp_path: Path) -> 
         validate_runtime_binding(deployment, context, source_id)
 
 
-def test_full_finalize_requires_all_oss_cases_and_hosted_classification(tmp_path: Path) -> None:
+def test_full_finalize_requires_all_oss_cases_and_hosted_classification(
+    tmp_path: Path,
+) -> None:
     catalog = load("deploy-config/catalog/canvas-oss-portability.json")
     lock = load("deploy-config/catalog/canvas-oss.lock.json")
     lock["image"]["digest"] = image_manifest()["image_digest"]
@@ -331,7 +386,11 @@ def test_full_finalize_requires_all_oss_cases_and_hosted_classification(tmp_path
         "cases": [
             {
                 "id": case["id"],
-                "status": {"oss_required": "passed", "hosted_required": "hosted_required", "outside_gate": "outside_gate"}[case["classification"]],
+                "status": {
+                    "oss_required": "passed",
+                    "hosted_required": "hosted_required",
+                    "outside_gate": "outside_gate",
+                }[case["classification"]],
                 "evidence": "Sanitized contract observation.",
             }
             for case in catalog["cases"]
@@ -352,13 +411,25 @@ def test_full_finalize_requires_all_oss_cases_and_hosted_classification(tmp_path
         mode="full",
     )
     result = finalize(args)
-    Draft202012Validator(load("deploy-config/schemas/canvas-oss-portability-result.schema.json")).validate(result)
+    Draft202012Validator(
+        load("deploy-config/schemas/canvas-oss-portability-result.schema.json")
+    ).validate(result)
     assert result["status"] == "passed"
-    assert set(result["canvas"]["runtime_dependencies"]) == {"postgres", "redis", "mailpit", "edge"}
+    assert set(result["canvas"]["runtime_dependencies"]) == {
+        "postgres",
+        "redis",
+        "mailpit",
+        "edge",
+    }
     assert result["attestation"]["rails_runner_calls"] == 0
     assert result["driver"]["status"] == "executed"
     assert result["driver"]["host_browser_processes"] is False
-    assert next(case for case in result["cases"] if case["id"].startswith("new_quizzes"))["status"] == "hosted_required"
+    assert (
+        next(case for case in result["cases"] if case["id"].startswith("new_quizzes"))[
+            "status"
+        ]
+        == "hosted_required"
+    )
 
 
 def test_full_finalize_does_not_accept_skipped_required_case(tmp_path: Path) -> None:
@@ -371,7 +442,13 @@ def test_full_finalize_does_not_accept_skipped_required_case(tmp_path: Path) -> 
         "cases": [
             {
                 "id": case["id"],
-                "status": "not_run" if case["id"] == "learner_resource_launch" else {"oss_required": "passed", "hosted_required": "hosted_required", "outside_gate": "outside_gate"}[case["classification"]],
+                "status": "not_run"
+                if case["id"] == "learner_resource_launch"
+                else {
+                    "oss_required": "passed",
+                    "hosted_required": "hosted_required",
+                    "outside_gate": "outside_gate",
+                }[case["classification"]],
                 "evidence": "Sanitized contract observation.",
             }
             for case in catalog["cases"]
@@ -382,7 +459,9 @@ def test_full_finalize_does_not_accept_skipped_required_case(tmp_path: Path) -> 
         lock=write(tmp_path / "lock.json", lock),
         image_manifest=write(tmp_path / "image.json", image_manifest()),
         bootstrap_audit=write(tmp_path / "bootstrap.json", bootstrap_audit()),
-        runtime_context=write(tmp_path / "runtime.json", runtime_context("test", "b" * 40)),
+        runtime_context=write(
+            tmp_path / "runtime.json", runtime_context("test", "b" * 40)
+        ),
         observations=write(tmp_path / "observations.json", observations),
         output=tmp_path / "result.json",
         mode="full",
@@ -391,7 +470,9 @@ def test_full_finalize_does_not_accept_skipped_required_case(tmp_path: Path) -> 
         finalize(args)
 
 
-def test_contract_driver_manifest_rejects_native_or_environment_secret_execution() -> None:
+def test_contract_driver_manifest_rejects_native_or_environment_secret_execution() -> (
+    None
+):
     lock = load("deploy-config/catalog/canvas-oss.lock.json")
     manifest = contract_driver_manifest()
     observations = {"execution": contract_execution(manifest)}
@@ -417,7 +498,11 @@ def test_full_finalize_requires_contract_driver_manifest(tmp_path: Path) -> None
         "cases": [
             {
                 "id": case["id"],
-                "status": {"oss_required": "passed", "hosted_required": "hosted_required", "outside_gate": "outside_gate"}[case["classification"]],
+                "status": {
+                    "oss_required": "passed",
+                    "hosted_required": "hosted_required",
+                    "outside_gate": "outside_gate",
+                }[case["classification"]],
                 "evidence": "Sanitized contract observation.",
             }
             for case in catalog["cases"]
@@ -428,7 +513,9 @@ def test_full_finalize_requires_contract_driver_manifest(tmp_path: Path) -> None
         lock=write(tmp_path / "lock.json", lock),
         image_manifest=write(tmp_path / "image.json", image_manifest()),
         bootstrap_audit=write(tmp_path / "bootstrap.json", bootstrap_audit()),
-        runtime_context=write(tmp_path / "runtime.json", runtime_context("test", "b" * 40)),
+        runtime_context=write(
+            tmp_path / "runtime.json", runtime_context("test", "b" * 40)
+        ),
         observations=write(tmp_path / "observations.json", observations),
         output=tmp_path / "result.json",
         mode="full",

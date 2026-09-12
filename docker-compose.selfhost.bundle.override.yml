@@ -15,8 +15,12 @@
 # The base compose file still carries the runtime wiring, volumes, and secret
 # mounts. This override only swaps build contexts for the published images.
 
+# Compose v2.38 does not propagate !reset through a merged mapping anchor.
+# Reuse the tagged scalar, but attach build explicitly to each service so
+# published bundles never retain a local source-build fallback on that version.
+x-selfhost-build-reset: &selfhost-build-reset !reset null
+
 x-selfhost-service-image: &selfhost-service-image
-  build: !reset null
   image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/services:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
   pull_policy: always
 
@@ -28,6 +32,7 @@ services:
 
   revocation-profile-migrate:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: revocation_profile
 
@@ -43,86 +48,105 @@ services:
 
   gateway:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: gateway
 
   auth:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: auth
 
   organization:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: organization
 
   credential-template:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: credential_template
 
   trust-profile:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: trust_profile
 
-  issuance:
-    <<: *selfhost-service-image
-    environment:
-      SERVICE_NAME: issuance
-
+  # The issuance API and migrations retain their immutable Python artifact.
+  # The worker inherits its native secret-loader launch from the self-host base.
   canvas-sync-worker:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
-      SERVICE_NAME: issuance
+      SERVICE_NAME: canvas_sync_worker
 
   applicant:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: applicant
 
   notification:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: notification
 
   compliance-profile:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: compliance_profile
 
   presentation-policy:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: presentation_policy
 
   deployment-profile:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: deployment_profile
 
+  signing-keys:
+    <<: *selfhost-service-image
+    build: *selfhost-build-reset
+    environment:
+      SERVICE_NAME: signing_keys
+
   flow:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: flow
 
   verification:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: verification
 
   revocation-profile:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: revocation_profile
 
   device-registration:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: device_registration
 
   event-stream:
     <<: *selfhost-service-image
+    build: *selfhost-build-reset
     environment:
       SERVICE_NAME: event_stream
 

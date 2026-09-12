@@ -104,6 +104,14 @@ pub struct CredentialLifecycleEvent {
 pub struct CredentialManagementPortError(pub String);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum CanvasLifecycleSyncError {
+    #[error(transparent)]
+    Port(#[from] CredentialManagementPortError),
+    #[error("Canvas delivery response cannot be encoded for persistence")]
+    TextEncoding,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CredentialManagementError {
     #[error("Credential not found")]
     NotFound,
@@ -125,6 +133,8 @@ pub enum CredentialManagementError {
     PublicationUnavailable(String),
     #[error("Canvas lifecycle retry could not be recorded: {0}")]
     CanvasRetryUnavailable(String),
+    #[error("Canvas delivery response cannot be encoded for persistence")]
+    CanvasTextEncoding,
 }
 
 #[async_trait]
@@ -148,7 +158,7 @@ pub trait CredentialManagementRepository: Send + Sync {
         credential: &ManagedCredential,
         action: CredentialLifecycleAction,
         reason: Option<&str>,
-    ) -> Result<(), CredentialManagementPortError>;
+    ) -> Result<(), CanvasLifecycleSyncError>;
 }
 
 #[async_trait]
@@ -244,7 +254,14 @@ impl CredentialManagementService {
         self.repository
             .synchronize_canvas(&updated, action, reason)
             .await
-            .map_err(|error| CredentialManagementError::CanvasRetryUnavailable(error.0))?;
+            .map_err(|error| match error {
+                CanvasLifecycleSyncError::Port(error) => {
+                    CredentialManagementError::CanvasRetryUnavailable(error.0)
+                }
+                CanvasLifecycleSyncError::TextEncoding => {
+                    CredentialManagementError::CanvasTextEncoding
+                }
+            })?;
 
         self.events
             .emit(CredentialLifecycleEvent {
@@ -425,13 +442,13 @@ mod tests {
             _credential: &ManagedCredential,
             action: CredentialLifecycleAction,
             _reason: Option<&str>,
-        ) -> Result<(), CredentialManagementPortError> {
+        ) -> Result<(), CanvasLifecycleSyncError> {
             self.calls
                 .lock()
                 .expect("calls")
                 .push(format!("canvas:{}", action.as_str()));
             if let Some(error) = self.canvas_failure.lock().expect("canvas failure").clone() {
-                Err(CredentialManagementPortError(error))
+                Err(CredentialManagementPortError(error).into())
             } else {
                 Ok(())
             }

@@ -4,12 +4,14 @@ use std::{
     time::Duration,
 };
 
-use mmf_config::{ConfigLayer, LayeredConfig};
+use mmf_config::{numeric_config::PythonConfigInteger, ConfigLayer, LayeredConfig};
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::canvas_credentials_status::CanvasCredentialsStatusConfig;
 use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
+use crate::canvas_network_timeout::CanvasNetworkTimeout;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
@@ -19,6 +21,7 @@ pub struct IssuanceServiceConfig {
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
+    pub issuance_offer_ttl_minutes: PythonConfigInteger,
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
@@ -62,7 +65,8 @@ pub struct IssuanceServiceConfig {
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_credentials_api_origins: Vec<String>,
     pub canvas_credentials_validation: CanvasCredentialsValidationConfig,
-    pub canvas_credentials_validation_timeout: Duration,
+    pub canvas_credentials_status: CanvasCredentialsStatusConfig,
+    pub canvas_credentials_validation_timeout: CanvasNetworkTimeout,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
@@ -81,6 +85,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
+            .field(
+                "issuance_offer_ttl_minutes",
+                &self.issuance_offer_ttl_minutes,
+            )
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
@@ -219,6 +227,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 "canvas_credentials_validation_timeout",
                 &self.canvas_credentials_validation_timeout,
             )
+            .field("canvas_credentials_status", &self.canvas_credentials_status)
             .field(
                 "canvas_allow_private_base_urls",
                 &self.canvas_allow_private_base_urls,
@@ -279,6 +288,7 @@ struct DependencySettings {
 
 #[derive(Deserialize)]
 struct InitiationSettings {
+    offer_ttl_minutes: Value,
     organization_grpc_target: String,
     credential_template_grpc_target: String,
     revocation_profile_grpc_target: String,
@@ -353,6 +363,7 @@ impl IssuanceServiceConfig {
                     "revocation_profile_service_url": "http://revocation-profile:8013"
                 },
                 "initiation": {
+                    "offer_ttl_minutes": crate::initiation::DEFAULT_INITIATION_OFFER_TTL_MINUTES.to_string(),
                     "organization_grpc_target": "organization:9002",
                     "credential_template_grpc_target": "credential-template:9003",
                     "revocation_profile_grpc_target": "revocation-profile:9013",
@@ -390,6 +401,20 @@ impl IssuanceServiceConfig {
         let http_addr = SocketAddr::new(settings.server.host, settings.server.port);
         let grpc_addr = SocketAddr::new(settings.server.host, settings.server.grpc_port);
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
+        // Preserve Python int() grammar and width at startup; calendar limits
+        // belong to transaction creation, after existing-reservation recovery.
+        let offer_ttl = &settings.initiation.offer_ttl_minutes;
+        let issuance_offer_ttl_minutes = offer_ttl
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| offer_ttl.to_string())
+            .parse::<PythonConfigInteger>()
+            .map_err(|_| {
+                MmfError::new(
+                    ErrorCode::Configuration,
+                    "ISSUANCE_OFFER_TTL_MINUTES must be a Python-compatible integer",
+                )
+            })?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
@@ -490,7 +515,7 @@ impl IssuanceServiceConfig {
                     .with_detail("cause", error.to_string())
                 })
             })?;
-        let canvas_pilot_organizations =
+        let canvas_pilot_organizations: BTreeSet<String> =
             comma_separated_values(&values, "CANVAS_PILOT_ORGANIZATION_IDS")
                 .into_iter()
                 .collect();
@@ -553,7 +578,14 @@ impl IssuanceServiceConfig {
             canvas_credentials_api_origins.push(base_url.to_owned());
         }
         let canvas_credentials_validation = CanvasCredentialsValidationConfig {
-            operator_api_token: secret_value(&values, "CANVAS_CREDENTIALS_API_TOKEN")?,
+            operator_api_token: values
+                .get("CANVAS_CREDENTIALS_API_TOKEN")
+                .filter(|value| !value.is_empty())
+                .cloned(),
+            operator_api_token_file: values
+                .get("CANVAS_CREDENTIALS_API_TOKEN_FILE")
+                .filter(|value| !value.is_empty())
+                .cloned(),
             provider: optional_environment_value(&values, "CANVAS_CREDENTIALS_PROVIDER"),
             publish_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_PUBLISH_URL"),
             api_base_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_API_BASE_URL"),
@@ -569,14 +601,36 @@ impl IssuanceServiceConfig {
             ),
             allowed_api_origins: canvas_credentials_api_origins.clone(),
         };
-        let canvas_credentials_validation_timeout = positive_float_seconds(
-            &values,
-            "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+        let canvas_credentials_status = CanvasCredentialsStatusConfig {
+            provider: canvas_credentials_validation.clone(),
+            legacy_api_base_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_BASE_URL"),
+            status_sync_url: optional_environment_value(
+                &values,
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+            ),
+            revoke_url_template: optional_environment_value(
+                &values,
+                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+            ),
+            portable_enabled: canvas_portable_enabled,
+            pilot_organizations: canvas_pilot_organizations.clone(),
+        };
+        let (_, status_timeout) = crate::canvas_credentials_protocol::timeout_values(
             values
                 .get("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS")
-                .map(String::as_str)
-                .unwrap_or("20"),
-        )?;
+                .map(String::as_str),
+            values
+                .get("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS")
+                .map(String::as_str),
+        )
+        .map_err(|name| {
+            MmfError::new(
+                ErrorCode::Configuration,
+                format!("{name} must be a number of seconds"),
+            )
+        })?;
+        let canvas_credentials_validation_timeout =
+            CanvasNetworkTimeout::from_seconds(status_timeout);
         let canvas_allow_private_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
@@ -604,6 +658,7 @@ impl IssuanceServiceConfig {
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
+            issuance_offer_ttl_minutes,
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
@@ -649,6 +704,7 @@ impl IssuanceServiceConfig {
             canvas_private_origin_allowlist,
             canvas_credentials_api_origins,
             canvas_credentials_validation,
+            canvas_credentials_status,
             canvas_credentials_validation_timeout,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
@@ -729,6 +785,9 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
         );
     }
     let mut initiation = Map::new();
+    if let Some(value) = values.get("ISSUANCE_OFFER_TTL_MINUTES") {
+        initiation.insert("offer_ttl_minutes".to_owned(), json!(value));
+    }
     for (environment_name, setting_name) in [
         ("ORG_GRPC_TARGET", "organization_grpc_target"),
         ("CT_GRPC_TARGET", "credential_template_grpc_target"),
@@ -1011,28 +1070,6 @@ fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> 
     optional_trimmed(values.get(name).cloned())
 }
 
-fn positive_float_seconds(
-    values: &BTreeMap<String, String>,
-    name: &str,
-    fallback: &str,
-) -> Result<Duration, MmfError> {
-    let raw = values.get(name).map(String::as_str).unwrap_or(fallback);
-    let seconds = raw.parse::<f64>().map_err(|error| {
-        MmfError::new(
-            ErrorCode::Configuration,
-            format!("{name} must be a positive number of seconds"),
-        )
-        .with_detail("cause", error.to_string())
-    })?;
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return Err(MmfError::new(
-            ErrorCode::Configuration,
-            format!("{name} must be a positive number of seconds"),
-        ));
-    }
-    Ok(Duration::from_secs_f64(seconds))
-}
-
 fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
     let parsed = url::Url::parse(value).map_err(|error| {
         MmfError::new(
@@ -1177,6 +1214,7 @@ fn validate_production_grpc_service_token(
 
 #[cfg(test)]
 mod tests {
+    use crate::canvas_network_timeout::CanvasNetworkTimeout;
     use mmf_core::ErrorCode;
 
     use super::{validate_production_grpc_service_token, IssuanceServiceConfig};
@@ -1239,7 +1277,7 @@ mod tests {
         assert_eq!(config.token_rate_window, std::time::Duration::from_secs(60));
         assert_eq!(
             config.canvas_credentials_validation_timeout,
-            std::time::Duration::from_secs(20)
+            CanvasNetworkTimeout::from_seconds(20.0)
         );
         assert_eq!(
             config.canvas_credentials_validation,
@@ -1360,7 +1398,7 @@ mod tests {
         assert_eq!(provider.allowed_api_origins.len(), 2);
         assert_eq!(
             config.canvas_credentials_validation_timeout,
-            std::time::Duration::from_millis(2_500)
+            CanvasNetworkTimeout::from_seconds(2.5)
         );
         let debug = format!("{config:?}");
         for secret_value in [
@@ -1374,13 +1412,211 @@ mod tests {
             assert!(!debug.contains(secret_value));
         }
 
-        for value in ["0", "-1", "not-a-number", "NaN", "inf"] {
+        for value in ["", "not-a-number", "1__0"] {
             let error = IssuanceServiceConfig::from_values(values(&[(
                 "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
                 value,
             )]))
             .expect_err("invalid Canvas Credentials timeout");
             assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[tokio::test]
+    async fn canvas_status_reuses_operator_secret_loading_timeout_and_rollout_configuration() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../contracts/canvas-status-operator-token.txt"
+        );
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_API_TOKEN_FILE", fixture),
+            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "2.75"),
+            ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true"),
+            ("CANVAS_PILOT_ORGANIZATION_IDS", " org-review, ,org-review "),
+            (
+                "CANVAS_CREDENTIALS_BASE_URL",
+                " https://synthetic-legacy.example.invalid ",
+            ),
+            (
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+                " https://synthetic-bridge.example.invalid/status ",
+            ),
+            (
+                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+                " {api_base_url}/custom/{external_credential_id} ",
+            ),
+        ]))
+        .unwrap();
+        let status = &config.canvas_credentials_status;
+        assert_eq!(status.provider, config.canvas_credentials_validation);
+        assert_eq!(
+            crate::canvas_operator_secret::resolve_canvas_operator_token(
+                status.provider.operator_api_token.as_deref(),
+                status.provider.operator_api_token_file.as_deref(),
+                &crate::canvas_operator_secret::FileCanvasOperatorSecretReader
+            )
+            .await
+            .unwrap()
+            .as_deref(),
+            Some("synthetic-operator-file-token")
+        );
+        assert_eq!(
+            status.legacy_api_base_url.as_deref(),
+            Some("https://synthetic-legacy.example.invalid")
+        );
+        assert!(
+            status.provider.allowed_api_origins.is_empty(),
+            "legacy fallback cannot grant trust"
+        );
+        assert_eq!(
+            status.status_sync_url.as_deref(),
+            Some("https://synthetic-bridge.example.invalid/status")
+        );
+        assert_eq!(
+            status.revoke_url_template.as_deref(),
+            Some("{api_base_url}/custom/{external_credential_id}")
+        );
+        assert!(status.portable_enabled);
+        assert_eq!(
+            status
+                .pilot_organizations
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["org-review"]
+        );
+        assert_eq!(
+            config.canvas_credentials_validation_timeout,
+            CanvasNetworkTimeout::from_seconds(2.75)
+        );
+        let debug = format!("{config:?}");
+        for private in [
+            "synthetic-operator-file-token",
+            "synthetic-legacy",
+            "synthetic-bridge",
+            "custom/",
+        ] {
+            assert!(!debug.contains(private));
+        }
+
+        let direct = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_API_TOKEN", " synthetic-direct-token "),
+            (
+                "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+                "synthetic-unused-missing-file",
+            ),
+            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "1.5"),
+            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "3.25"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            direct
+                .canvas_credentials_status
+                .provider
+                .operator_api_token
+                .as_deref(),
+            Some(" synthetic-direct-token ")
+        );
+        assert_eq!(
+            direct.canvas_credentials_validation_timeout,
+            CanvasNetworkTimeout::from_seconds(3.25)
+        );
+    }
+
+    #[test]
+    fn canvas_operator_files_are_deferred_without_weakening_required_secrets() {
+        let missing = "synthetic-operator-file-that-does-not-exist";
+        let config = IssuanceServiceConfig::from_values(values(&[(
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+            missing,
+        )]))
+        .unwrap();
+        assert_eq!(
+            config.canvas_credentials_validation.operator_api_token,
+            None
+        );
+        assert_eq!(
+            config
+                .canvas_credentials_status
+                .provider
+                .operator_api_token_file
+                .as_deref(),
+            Some(missing)
+        );
+        let required =
+            IssuanceServiceConfig::from_values(values(&[("GRPC_SERVICE_TOKEN_FILE", missing)]))
+                .unwrap_err();
+        assert_eq!(required.code, ErrorCode::Configuration);
+    }
+
+    #[test]
+    fn canvas_timeout_grammar_preserves_order_and_unrestricted_range() {
+        for raw in ["  2.5  ", "２.５", "2_5e-1"] {
+            let config = IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+                raw,
+            )]))
+            .unwrap();
+            assert_eq!(
+                config.canvas_credentials_validation_timeout,
+                CanvasNetworkTimeout::from_seconds(2.5)
+            );
+        }
+        let error = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "invalid"),
+            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "2.5"),
+        ]))
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS"));
+        // Preserve configuration accepted by the independently verified import.
+        let huge = std::panic::catch_unwind(|| {
+            IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+                "1e30",
+            )]))
+        })
+        .expect("range conversion must not panic");
+        assert_eq!(
+            huge.unwrap()
+                .canvas_credentials_validation_timeout
+                .seconds(),
+            1e30
+        );
+    }
+
+    #[test]
+    fn canvas_startup_acceptance_matches_all_published_import_observations() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-provider-configuration-scenarios.json"
+        ))
+        .unwrap();
+        let oracle: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-provider-configuration-oracle.json"
+        ))
+        .unwrap();
+        let cases = cases["timeouts"].as_array().unwrap();
+        let expected = oracle["timeouts"].as_array().unwrap();
+        assert_eq!(cases.len(), 19);
+        assert_eq!(cases.len(), expected.len());
+        for (case, expected) in cases.iter().zip(expected) {
+            assert_eq!(case["name"], expected["name"]);
+            let mut environment = Vec::new();
+            for (key, name) in [
+                ("publish", "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS"),
+                ("status", "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS"),
+            ] {
+                if let Some(raw) = case[key].as_str() {
+                    environment.push((name.to_owned(), raw.to_owned()));
+                }
+            }
+            let result = IssuanceServiceConfig::from_values(environment);
+            if expected.get("error_class").is_some() {
+                assert!(result.is_err(), "{}", case["name"]);
+            } else {
+                result.unwrap();
+            }
         }
     }
 
@@ -1690,6 +1926,37 @@ mod tests {
             Some("https://didcomm-resolver.example/api")
         );
         assert!(!explicit.didcomm_allow_private_ips);
+    }
+
+    #[test]
+    fn initiation_offer_ttl_preserves_frozen_python_startup_grammar_and_width() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/initiation-offer-ttl-python-reference.json"
+        ))
+        .unwrap();
+        let cases = frozen["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 18);
+        for case in cases {
+            let mut configured = std::collections::BTreeMap::new();
+            if let Some(raw) = case["raw"].as_str() {
+                configured.insert("ISSUANCE_OFFER_TTL_MINUTES".to_owned(), raw.to_owned());
+            }
+            let result = IssuanceServiceConfig::from_values(configured);
+            if case["phase"] == "module-import" {
+                assert!(result.is_err(), "{}", case["case"]);
+            } else {
+                assert_eq!(
+                    result.unwrap().issuance_offer_ttl_minutes.as_decimal(),
+                    case["parsed_minutes"]
+                );
+            }
+        }
+        let layered = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUANCE_OFFER_TTL_MINUTES", "45"),
+            ("MARTY_ISSUANCE__INITIATION__OFFER_TTL_MINUTES", "90"),
+        ]))
+        .unwrap();
+        assert_eq!(layered.issuance_offer_ttl_minutes.to_i64(), Some(90));
     }
 
     #[test]

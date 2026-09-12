@@ -1,0 +1,76 @@
+{
+  "schema": "marty.canvas-worker-retry-scenarios/v1",
+  "extends": "canvas-worker-rest-scenarios.json",
+  "oracle_schema": "marty.canvas-worker-retry-oracle/v1",
+  "scope": "Actual durable retry eligibility and same-job identity across rate limiting, recovery, provider unavailability and OAuth token rejection; no clock or queue timing mutation",
+  "stages": [
+    {
+      "name": "initial_permit",
+      "status": 200,
+      "body": {
+        "id": 11,
+        "assignment_id": 9,
+        "score": 90,
+        "workflow_state": "graded",
+        "assignment": {
+          "points_possible": 100
+        },
+        "updated_at": "2026-09-01T00:01:00Z"
+      },
+      "expected_jobs": 1,
+      "expected_attempts": 1
+    },
+    {
+      "name": "short_rate_limit_uses_backoff",
+      "status": 429,
+      "headers": {
+        "Retry-After": "2"
+      },
+      "body": {
+        "error": "synthetic-rate-limit"
+      },
+      "expected_jobs": 2,
+      "expected_attempts": 1
+    },
+    {
+      "name": "same_job_retry_recovers",
+      "status": 200,
+      "body": {
+        "id": 11,
+        "assignment_id": 9,
+        "score": 10,
+        "workflow_state": "graded",
+        "assignment": {
+          "points_possible": 100
+        },
+        "updated_at": "2026-09-01T00:02:00Z"
+      },
+      "retry_existing": true,
+      "expected_jobs": 2,
+      "expected_attempts": 2
+    },
+    {
+      "name": "provider_unavailable_preserves_evidence",
+      "status": 503,
+      "body": {
+        "error": "synthetic-unavailable"
+      },
+      "expected_jobs": 3,
+      "expected_attempts": 1
+    },
+    {
+      "name": "same_job_retry_rejects_token",
+      "status": 401,
+      "headers": {
+        "WWW-Authenticate": "Bearer"
+      },
+      "body": {
+        "error": "synthetic-rejected-token"
+      },
+      "retry_existing": true,
+      "expected_jobs": 3,
+      "expected_attempts": 2
+    }
+  ],
+  "jobs_sql": "SELECT COALESCE(jsonb_agg(jsonb_build_object('status',status,'attempt_count',attempt_count,'max_attempts',max_attempts,'result',result,'last_error_code',last_error_code,'last_error_summary',last_error_summary,'lease_owner_present',lease_owner IS NOT NULL,'lease_expires_present',lease_expires_at IS NOT NULL,'started',started_at IS NOT NULL,'completed',completed_at IS NOT NULL,'retry_delay_within_backoff_bounds',CASE WHEN status='retry' THEN extract(epoch FROM available_at-updated_at) BETWEEN (15*power(2,attempt_count-1)-0.1) AND (20*power(2,attempt_count-1)+0.1) ELSE NULL END,'retry_scheduled',CASE WHEN status='retry' THEN available_at>updated_at ELSE NULL END) ORDER BY created_at,id),'[]'::jsonb) FROM issuance_service.canvas_evidence_sync_jobs"
+}

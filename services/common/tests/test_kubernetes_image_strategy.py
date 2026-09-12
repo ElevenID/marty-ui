@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from marty_devops.catalog import DeploymentCatalog
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 K8S_DIR = REPO_ROOT / "k8s" / "oracle"
@@ -34,7 +36,9 @@ def test_kubernetes_manifests_do_not_use_mutable_image_tags():
         for pattern in (MUTABLE_IMAGE_PATTERN, MUTABLE_TAG_ASSIGNMENT_PATTERN):
             for match in pattern.finditer(text):
                 line_no = text[: match.start()].count("\n") + 1
-                violations.append(f"{path.relative_to(REPO_ROOT)}:{line_no}: {match.group(0)}")
+                violations.append(
+                    f"{path.relative_to(REPO_ROOT)}:{line_no}: {match.group(0)}"
+                )
 
     assert violations == []
 
@@ -69,13 +73,61 @@ def test_kubernetes_update_script_updates_selfhost_image_variants():
     text = (REPO_ROOT / "scripts" / "deploy-kubernetes.sh").read_text(encoding="utf-8")
 
     assert "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" in text
-    assert "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" in text
-    assert "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}" in text
+    assert (
+        "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}"
+        in text
+    )
+    assert 'services --group "$1" --field k8s_deployment' in text
+    assert "done < <(catalog_services app)" in text
+    assert (
+        'deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}"'
+        in text
+    )
+    assert '[[ -z "$svc" || "$svc" == "issuance" ]] && continue' in text
+    assert (
+        "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}"
+        not in text
+    )
     assert "IMAGE_TAG=v1.1" not in text
 
 
+def test_kubernetes_worker_uses_catalog_native_per_service_image():
+    catalog = DeploymentCatalog.load(REPO_ROOT)
+    worker = "canvas-sync-worker"
+    assert worker in catalog.services_for_group("app")
+    assert catalog.service_field(worker, "k8s_deployment") == worker
+    assert catalog.service_field(worker, "image_name") == worker
+    assert catalog.service_field(worker, "dockerfile") == "services/Dockerfile"
+    assert catalog.service_field(worker, "service_name_env") == "canvas_sync_worker"
+    block = k8s_deployment_blocks(K8S_DIR / "07-microservices.yaml")[worker]
+    assert f"image: ${{OCIR_REGISTRY}}/marty-ui/{worker}:${{IMAGE_TAG}}" in block
+    assert 'command: ["/usr/local/bin/marty-canvas-sync-worker"]' in block
+    assert "image: ${MARTY_ISSUANCE_IMAGE}" not in block
+    assert "/marty-ui/issuance:${IMAGE_TAG}" not in block
+
+
+def test_kubernetes_external_issuance_and_migration_keep_the_same_pin():
+    api = k8s_deployment_blocks(K8S_DIR / "07-microservices.yaml")["issuance"]
+    migration = (K8S_DIR / "06a-issuance-migrations.yaml").read_text(encoding="utf-8")
+    for block in (api, migration):
+        assert "image: ${MARTY_ISSUANCE_IMAGE}" in block
+        assert "/marty-ui/issuance:${IMAGE_TAG}" not in block
+        assert "/marty-ui/canvas-sync-worker:${IMAGE_TAG}" not in block
+    catalog = DeploymentCatalog.load(REPO_ROOT)
+    assert (
+        catalog.service_field("issuance", "artifact_role")
+        == "marty-credentials-issuance"
+    )
+    assert (
+        catalog.service_field("issuance-migrations", "artifact_role")
+        == "marty-credentials-issuance"
+    )
+
+
 def test_registry_build_script_publishes_selfhost_image_variants():
-    text = (REPO_ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "scripts" / "build-push-registry.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert '"ui-selfhost"' in text
     assert "--build-arg UI_VARIANT=selfhost" in text
@@ -84,12 +136,17 @@ def test_registry_build_script_publishes_selfhost_image_variants():
 
 def test_ui_docker_builds_use_only_verified_public_release_dependencies():
     dockerfile = (REPO_ROOT / "docker" / "ui.Dockerfile").read_text(encoding="utf-8")
-    registry_build_script = (REPO_ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
+    registry_build_script = (
+        REPO_ROOT / "scripts" / "build-push-registry.sh"
+    ).read_text(encoding="utf-8")
 
-    assert 'dependencies.@elevenid/marty-api-core=file:/tmp/marty-api-core.tgz' in dockerfile
-    assert 'dependencies.@elevenid/marty-blog=file:/tmp/marty-blog.tgz' in dockerfile
-    assert 'MARTY_API_CORE_DIGEST#sha256:' in dockerfile
-    assert 'MARTY_BLOG_DIGEST#sha256:' in dockerfile
+    assert (
+        "dependencies.@elevenid/marty-api-core=file:/tmp/marty-api-core.tgz"
+        in dockerfile
+    )
+    assert "dependencies.@elevenid/marty-blog=file:/tmp/marty-blog.tgz" in dockerfile
+    assert "MARTY_API_CORE_DIGEST#sha256:" in dockerfile
+    assert "MARTY_BLOG_DIGEST#sha256:" in dockerfile
     assert "marty-subscriptions" not in dockerfile
     assert "COPY ../" not in dockerfile
     assert "--build-context" not in registry_build_script

@@ -1,0 +1,342 @@
+{
+  "schema": "marty.canvas-review-lifecycle-scenarios/v1",
+  "shared_seed": "canvas-issued-review-scenarios.json",
+  "real_lifecycle": true,
+  "seed": [
+    "UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=false WHERE id='target-review'",
+    "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at,last_error_code,last_error_summary) VALUES ('job-dead','org-review','target-review','dead_letter',8,8,now(),'{\"facts_changed\":1,\"no_change\":false,\"provider_payload\":{\"token\":\"synthetic-private\"},\"roster_remaining\":2}',now(),now(),'synthetic_failure','Bearer synthetic-private-token')",
+    "INSERT INTO issuance_service.canvas_award_candidates (id,organization_id,platform_id,binding_id,candidate_key,canvas_user_id,lti_subject,state,observed_at,created_at,updated_at) VALUES ('candidate-ops','org-review','platform-review','binding-review','numeric-user:7','7','subject-private','pending_claim',now(),now(),now())"
+  ],
+  "snapshot_sql": "SELECT jsonb_build_object('credential',(SELECT jsonb_build_object('status',status,'status_updated_at',status_updated_at,'revoked',revoked,'revoked_at',revoked_at,'revocation_reason',revocation_reason) FROM issuance_service.issued_credentials WHERE id='credential-review'),'deliveries',(SELECT jsonb_agg(to_jsonb(d) ORDER BY id) FROM issuance_service.credential_delivery_records d),'review',(SELECT jsonb_build_object('status',status,'claim_active',resolution_claim_token IS NOT NULL,'claim_action',resolution_claim_action,'action',resolution_action,'recovery_pending',resolution_recovery_pending,'notes',resolution_notes,'actor',resolved_by) FROM issuance_service.evidence_policy_reviews),'resolved_events',(SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'))",
+  "preserved_rows_sql": "SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t",
+  "cases": [
+    {
+      "name": "suspend_delivered",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "revoke_delivered",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "revoke",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "no_delivery",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "pending_delivery",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','pending','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "failed_delivery",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','failed','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "wallet_delivery",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','wallet','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "mirror_gate_disabled",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":false},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "binding_missing",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"missing\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "binding_disabled",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=false WHERE id='binding-review'"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "platform_disabled",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+        "UPDATE issuance_service.canvas_platforms SET enabled=false WHERE id='platform-review'"
+      ],
+      "expected_status": 200
+    },
+    {
+      "name": "mirror_failure",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "mirror_failure": true,
+      "expected_status": 200
+    },
+    {
+      "name": "publication_failure",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "publication_failure": true,
+      "expected_status": 503
+    },
+    {
+      "name": "suspend_revoked",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+        "UPDATE issuance_service.issued_credentials SET status='revoked',revoked=true WHERE id='credential-review'"
+      ],
+      "expected_status": 400
+    },
+    {
+      "name": "revoke_revoked",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "revoke"
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+        "UPDATE issuance_service.issued_credentials SET status='revoked',revoked=true WHERE id='credential-review'"
+      ],
+      "expected_status": 400
+    },
+    {
+      "name": "cancel_at_publication",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "cancel_at": "publication"
+    },
+    {
+      "name": "cancel_at_mirror",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "cancel_at": "mirror"
+    },
+    {
+      "name": "concurrent_at_publication",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-lifecycle/resolve",
+      "prepare_review": "review-lifecycle",
+      "real_lifecycle": true,
+      "body": {
+        "action": "suspend",
+        "note": "  synthetic reason  "
+      },
+      "sql": [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+        "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','{\"deployment_profile_id\":\"synthetic-profile\",\"canvas_feature_flags\":{\"enable_canvas_mirror_ops\":true},\"canvas_program_binding_id\":\"binding-review\",\"preserved\":\"synthetic-marker\",\"status_sync_attempts\":2}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')"
+      ],
+      "concurrent": true,
+      "expected_status": 200
+    }
+  ]
+}

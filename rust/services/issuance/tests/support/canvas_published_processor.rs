@@ -34,6 +34,13 @@ struct Provider {
 
 #[async_trait]
 impl CanvasAuthoritativeProvider for Provider {
+    fn for_run(
+        self: Arc<Self>,
+        _scope: marty_issuance_service::canvas_sync_processor::CanvasProviderRunScope,
+    ) -> Arc<dyn CanvasAuthoritativeProvider> {
+        self
+    }
+
     async fn read_requirement(
         &self,
         _: &CanvasSyncResources,

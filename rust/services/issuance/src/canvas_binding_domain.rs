@@ -18,7 +18,7 @@ use crate::{
 
 const FLOW_MODE: &str = "elevenid_orchestrated_canvas_evidence";
 const ISSUER_MODE: &str = "org_managed";
-const CANVAS_FEATURE_FLAGS: &[&str] = &[
+pub(crate) const CANVAS_FEATURE_FLAGS: &[&str] = &[
     "enable_canvas_evidence",
     "enable_canvas_lti",
     "enable_canvas_mirror_publish",

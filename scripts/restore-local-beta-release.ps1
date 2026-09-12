@@ -20,6 +20,7 @@ $ErrorActionPreference = "Stop"
 if (-not $ConfirmBetaRestore) { throw "-ConfirmBetaRestore is required" }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 if ([string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
     $TunnelEnvFile = Join-Path $repoRoot ".env.tunnel.beta.local"
 }
@@ -169,24 +170,6 @@ $applicationServices = @(
     "revocation-profile", "device-registration", "event-stream", "signing-keys", "issuance",
     "issuance-native", "canvas-sync-worker", "gateway"
 )
-Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
-
-$postgres = Get-ServiceContainer "postgres"
-Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-marty.dump"), "${postgres}:/tmp/beta-restore-marty.dump")
-Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-keycloak.dump"), "${postgres}:/tmp/beta-restore-keycloak.dump")
-foreach ($database in @("marty", "keycloak")) {
-    Invoke-Checked docker @("exec", $postgres, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$database' AND pid <> pg_backend_pid();")
-    Invoke-Checked docker @("exec", $postgres, "dropdb", "-U", "postgres", "--if-exists", $database)
-    Invoke-Checked docker @("exec", $postgres, "createdb", "-U", "postgres", "-O", $database, $database)
-    Invoke-Checked docker @("exec", $postgres, "pg_restore", "-U", "postgres", "-d", $database, "--no-owner", "--role=$database", "/tmp/beta-restore-$database.dump")
-}
-
-$redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
-Invoke-Checked docker (Get-ComposeArgs @("stop", "redis"))
-Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
-Invoke-Checked docker (Get-ComposeArgs @("start", "redis"))
-Wait-ForServiceHealth @("redis")
-
 $gatewayRecord = @($preDeploy | Where-Object { $_.service -eq "gateway" } | Select-Object -First 1)
 if ($gatewayRecord.Count -eq 1) {
     foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")) {
@@ -199,16 +182,40 @@ if ($gatewayRecord.Count -eq 1) {
 $restoreImages = Join-Path $resolvedArtifacts "restore-images.yml"
 $yaml = @("services:")
 $restoreServices = @()
+# Complete rollback launch/image/environment validation is read-only and precedes
+# the first stop/database/volume mutation. Never print resolved Compose secrets.
+$workerRecords = @($preDeploy | Where-Object { $_.service -eq "canvas-sync-worker" -and $_.running })
+if ($workerRecords.Count -gt 1) { throw "Ambiguous beta worker recovery records" }
+$workerLaunch = $null
+if ($workerRecords.Count -eq 1) {
+    $workerRecord = $workerRecords[0]
+    if ($workerRecord.image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid worker rollback image ID" }
+    $rawImage = & docker image inspect $workerRecord.image_id
+    if ($LASTEXITCODE -ne 0) { throw "Worker rollback image must be available for preflight inspection before stopping beta" }
+    $image = @((($rawImage -join "`n") | ConvertFrom-Json))
+    if ($image.Count -ne 1 -or $image[0].Id -cne $workerRecord.image_id) { throw "Worker rollback image identity mismatch" }
+    $currentWorker = $null
+    if ($null -eq $workerRecord.PSObject.Properties['rollback_launch']) {
+        $configArguments = Get-ComposeArgs @('config', '--format', 'json')
+        $rawConfiguration = & docker @configArguments
+        if ($LASTEXITCODE -ne 0) { throw "Legacy worker rollback requires a readable matching Compose configuration before stopping beta" }
+        $configuration = ($rawConfiguration -join "`n") | ConvertFrom-Json
+        $currentWorker = (Get-BetaWorkerField $configuration.services 'canvas-sync-worker').Value
+    }
+    $workerLaunch = Resolve-BetaWorkerRollbackLaunch -Record $workerRecord -CurrentWorker $currentWorker -ImageConfig $image[0].Config
+}
 foreach ($record in $preDeploy) {
     if ($record.running -and $record.service -in $applicationServices) {
         if ($record.image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid image ID for $($record.service)" }
         $restoreServices += [string]$record.service
         $yaml += "  $($record.service):"
         $yaml += "    image: $($record.image_id)"
+        $hasWorkerLaunch = $record.service -eq 'canvas-sync-worker'
+        if ($hasWorkerLaunch) { $yaml += @(ConvertTo-BetaWorkerRollbackLines -Launch $workerLaunch) }
         $compatibility = $record.PSObject.Properties["rollback_environment"]
         if ($null -ne $compatibility -and $null -ne $compatibility.Value) {
             $environment = @($compatibility.Value.PSObject.Properties)
-            if ($environment.Count -gt 0) {
+            if ($environment.Count -gt 0 -and -not $hasWorkerLaunch) {
                 $yaml += "    environment:"
             }
             foreach ($property in $environment) {
@@ -228,9 +235,30 @@ foreach ($record in $preDeploy) {
         }
     }
 }
+$uiRecord = @($preDeploy | Where-Object { $_.service -eq "ui-prod" -and $_.running } | Select-Object -First 1)
+if ($uiRecord.Count -eq 1 -and $uiRecord[0].image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid beta UI image ID" }
+# Resolve every existing data target before stopping services or restoring any
+# earlier store. A missing/mislabeled later volume must fail without partial restore.
+$postgres = Get-ServiceContainer "postgres"
+$redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
+$applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
-$applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
+Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
+
+Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-marty.dump"), "${postgres}:/tmp/beta-restore-marty.dump")
+Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-keycloak.dump"), "${postgres}:/tmp/beta-restore-keycloak.dump")
+foreach ($database in @("marty", "keycloak")) {
+    Invoke-Checked docker @("exec", $postgres, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$database' AND pid <> pg_backend_pid();")
+    Invoke-Checked docker @("exec", $postgres, "dropdb", "-U", "postgres", "--if-exists", $database)
+    Invoke-Checked docker @("exec", $postgres, "createdb", "-U", "postgres", "-O", $database, $database)
+    Invoke-Checked docker @("exec", $postgres, "pg_restore", "-U", "postgres", "-d", $database, "--no-owner", "--role=$database", "/tmp/beta-restore-$database.dump")
+}
+
+Invoke-Checked docker (Get-ComposeArgs @("stop", "redis"))
+Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
+Invoke-Checked docker (Get-ComposeArgs @("start", "redis"))
+Wait-ForServiceHealth @("redis")
 Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "test -s /backup/applicant_store.json && cp /backup/applicant_store.json /data/applicant_store.json.tmp && mv /data/applicant_store.json.tmp /data/applicant_store.json")
 Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + @("keycloak") + $restoreServices))
 Wait-ForServiceHealth (@("keycloak") + $restoreServices)
@@ -244,9 +272,7 @@ if ("issuance-native" -notin @($preDeploy.service)) {
     if ($nativeIssuance) { Invoke-Checked docker @("rm", "--force", $nativeIssuance) }
 }
 
-$uiRecord = @($preDeploy | Where-Object { $_.service -eq "ui-prod" -and $_.running } | Select-Object -First 1)
 if ($uiRecord.Count -eq 1) {
-    if ($uiRecord[0].image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid beta UI image ID" }
     $env:MARTY_UI_RELEASE_IMAGE = $uiRecord[0].image_id
     Invoke-Checked docker @("compose", "--project-name", $uiProject, "--env-file", $envFiles[0], "--env-file", $envFiles[1], "-f", $uiCompose, "up", "--detach", "--no-build", "--force-recreate", "--wait", "ui-prod")
 }

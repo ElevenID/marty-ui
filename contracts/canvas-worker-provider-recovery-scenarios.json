@@ -1,0 +1,7 @@
+{
+  "schema": "marty.canvas-worker-provider-recovery-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "cases": ["renewal", "recovery"],
+  "lease_seconds": 30,
+  "scope": "Actual renewal during held HTTPS, then completion or owned process loss followed by real expiry/retry/restart; not final-attempt or concurrent-owner fence qualification"
+}

@@ -1,0 +1,250 @@
+{
+  "schema": "marty.canvas-worker-facts-scenarios/v1",
+  "extends": "canvas-worker-rest-scenarios.json",
+  "oracle_schema": "marty.canvas-worker-facts-oracle/v1",
+  "scope": "Actual issued-drift worker across all four REST fact types; positive, negative, duplicate and partially rate-limited evidence",
+  "requirements": [
+    {
+      "requirement_id": "assignment",
+      "source": "canvas_rest",
+      "fact_type": "canvas.assignment_score",
+      "scope": {
+        "course_id": "42",
+        "activity_id": "9"
+      },
+      "pass_rule": {
+        "min_score_percent": 80
+      },
+      "required": true
+    },
+    {
+      "requirement_id": "quiz",
+      "source": "canvas_rest",
+      "fact_type": "canvas.quiz_score",
+      "scope": {
+        "course_id": "42",
+        "activity_id": "10"
+      },
+      "pass_rule": {
+        "min_score_percent": 80
+      },
+      "required": true
+    },
+    {
+      "requirement_id": "module",
+      "source": "canvas_rest",
+      "fact_type": "canvas.module_completion",
+      "scope": {
+        "course_id": "42",
+        "module_id": "3"
+      },
+      "pass_rule": {
+        "completed": true
+      },
+      "required": true
+    },
+    {
+      "requirement_id": "course",
+      "source": "canvas_rest",
+      "fact_type": "canvas.course_completion",
+      "scope": {
+        "course_id": "42"
+      },
+      "pass_rule": {
+        "completed": true
+      },
+      "required": true
+    }
+  ],
+  "stages": [
+    {
+      "name": "initial_all_permit",
+      "responses": {
+        "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 11,
+            "assignment_id": 9,
+            "score": 90,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:01:00Z"
+          }
+        },
+        "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 12,
+            "assignment_id": 10,
+            "score": 90,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:01:00Z"
+          }
+        },
+        "/api/v1/courses/42/modules/3?student_id=7": {
+          "status": 200,
+          "body": {
+            "id": 3,
+            "state": "completed",
+            "completed_at": "2026-09-01T00:01:00Z",
+            "updated_at": "2026-09-01T00:01:00Z"
+          }
+        },
+        "/api/v1/courses/42/users/7/progress": {
+          "status": 200,
+          "body": {
+            "requirement_count": 2,
+            "requirement_completed_count": 2,
+            "updated_at": "2026-09-01T00:01:00Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "all_deny",
+      "responses": {
+        "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 11,
+            "assignment_id": 9,
+            "score": 10,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        },
+        "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 12,
+            "assignment_id": 10,
+            "score": 10,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        },
+        "/api/v1/courses/42/modules/3?student_id=7": {
+          "status": 200,
+          "body": {
+            "id": 3,
+            "state": "started",
+            "completed_at": null,
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        },
+        "/api/v1/courses/42/users/7/progress": {
+          "status": 200,
+          "body": {
+            "requirement_count": 2,
+            "requirement_completed_count": 0,
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate_all_deny",
+      "responses": {
+        "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 11,
+            "assignment_id": 9,
+            "score": 10,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        },
+        "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 12,
+            "assignment_id": 10,
+            "score": 10,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        },
+        "/api/v1/courses/42/modules/3?student_id=7": {
+          "status": 200,
+          "body": {
+            "id": 3,
+            "state": "started",
+            "completed_at": null,
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        },
+        "/api/v1/courses/42/users/7/progress": {
+          "status": 200,
+          "body": {
+            "requirement_count": 2,
+            "requirement_completed_count": 0,
+            "updated_at": "2026-09-01T00:02:00Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "partial_rate_limit",
+      "responses": {
+        "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment": {
+          "status": 429,
+          "headers": {
+            "Retry-After": "37"
+          },
+          "body": {
+            "error": "synthetic-rate-limit"
+          }
+        },
+        "/api/v1/courses/42/assignments/10/submissions/7?include%5B%5D=assignment": {
+          "status": 200,
+          "body": {
+            "id": 12,
+            "assignment_id": 10,
+            "score": 90,
+            "workflow_state": "graded",
+            "assignment": {
+              "points_possible": 100
+            },
+            "updated_at": "2026-09-01T00:03:00Z"
+          }
+        },
+        "/api/v1/courses/42/modules/3?student_id=7": {
+          "status": 200,
+          "body": {
+            "id": 3,
+            "state": "completed",
+            "completed_at": "2026-09-01T00:03:00Z",
+            "updated_at": "2026-09-01T00:03:00Z"
+          }
+        },
+        "/api/v1/courses/42/users/7/progress": {
+          "status": 200,
+          "body": {
+            "requirement_count": 2,
+            "requirement_completed_count": 2,
+            "updated_at": "2026-09-01T00:03:00Z"
+          }
+        }
+      }
+    }
+  ],
+  "facts_sql": "SELECT COALESCE(jsonb_agg(jsonb_build_object('fact_type',fact_type,'assertion',assertion,'payload_hash',payload_hash,'verification_method',verification->>'method','effective_at',effective_at) ORDER BY fact_type,effective_at,payload_hash),'[]'::jsonb) FROM issuance_service.evidence_facts"
+}

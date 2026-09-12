@@ -2,6 +2,7 @@
 //! unowned PID. Uses only the parent contract's guarded synthetic database.
 
 use std::{
+    collections::BTreeMap,
     process::{Child, Command, ExitStatus, Stdio},
     time::Duration,
 };
@@ -9,7 +10,19 @@ use std::{
 use serde_json::Value;
 use sqlx::PgPool;
 
-struct OwnedWorker(Child);
+pub(super) struct OwnedWorker(pub(super) Child);
+
+/// The launcher owns the backend application identity. SQLx applies duplicate
+/// URL parameters in order, so this final value is the effective worker ID.
+/// Preserve the existing URL and test-database guard for every caller.
+pub(super) fn worker_database_url(database_url: &str, worker_id: &str) -> url::Url {
+    let mut database_url = url::Url::parse(database_url).unwrap();
+    assert!(database_url.path().ends_with("_test"));
+    database_url
+        .query_pairs_mut()
+        .append_pair("application_name", worker_id);
+    database_url
+}
 
 impl Drop for OwnedWorker {
     fn drop(&mut self) {
@@ -22,37 +35,76 @@ impl Drop for OwnedWorker {
 
 impl OwnedWorker {
     fn start(database_url: &str, worker_id: &str) -> Self {
-        let mut database_url = url::Url::parse(database_url).unwrap();
-        assert!(database_url.path().ends_with("_test"));
-        database_url
-            .query_pairs_mut()
-            .append_pair("application_name", worker_id);
+        Self::start_with_environment(
+            database_url,
+            worker_id,
+            &[
+                ("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "signal-org"),
+                ("CANVAS_LTI_TOOL_ISSUER_DID", "did:web:signal.invalid"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+        )
+    }
+
+    pub(super) fn start_with_environment(
+        database_url: &str,
+        worker_id: &str,
+        environment: &BTreeMap<String, String>,
+    ) -> Self {
+        Self::start_with_environment_and_output(
+            database_url,
+            worker_id,
+            environment,
+            Stdio::null(),
+            Stdio::null(),
+        )
+    }
+
+    /// Opt-in owned files only: callers retain independent read descriptors.
+    /// Existing signal/provider callers continue to discard both streams.
+    pub(super) fn start_with_environment_and_output(
+        database_url: &str,
+        worker_id: &str,
+        environment: &BTreeMap<String, String>,
+        stdout: Stdio,
+        stderr: Stdio,
+    ) -> Self {
+        let database_url = worker_database_url(database_url, worker_id);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_marty-canvas-sync-worker"));
+        command
+            .env_clear()
+            .env("DATABASE_URL", database_url.as_str())
+            .env("CANVAS_SYNC_WORKER_ID", worker_id)
+            .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
+            .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false")
+            .env(
+                "INTEGRATION_SECRET_MASTER_KEY",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .env("ISSUANCE_API_KEY", "synthetic-process-signal-key")
+            .env("SIGNING_KEYS_INTERNAL_URL", "https://signing.invalid")
+            .env("RUST_LOG", "error")
+            .envs(environment)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr);
+        // Windows socket providers need the OS installation path even when
+        // application configuration/credentials are intentionally cleared.
+        #[cfg(windows)]
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", system_root);
+        }
         Self(
-            Command::new(env!("CARGO_BIN_EXE_marty-canvas-sync-worker"))
-                .env_clear()
-                .env("DATABASE_URL", database_url.as_str())
-                .env("CANVAS_SYNC_WORKER_ID", worker_id)
-                .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
-                .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false")
-                .env(
-                    "INTEGRATION_SECRET_MASTER_KEY",
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-                )
-                .env("ISSUANCE_API_KEY", "synthetic-process-signal-key")
-                .env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "signal-org")
-                .env("CANVAS_LTI_TOOL_ISSUER_DID", "did:web:signal.invalid")
-                .env("SIGNING_KEYS_INTERNAL_URL", "https://signing.invalid")
-                .env("RUST_LOG", "error")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+            command
                 .spawn()
                 .expect("actual Canvas worker binary must be packaged"),
         )
     }
 
-    fn signal(&mut self, signal: &str) {
-        assert!(matches!(signal, "SIGINT" | "SIGTERM"));
+    pub(super) fn signal(&mut self, signal: &str) {
+        assert!(matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL"));
         assert!(
             self.0.try_wait().unwrap().is_none(),
             "worker exited before signal"
@@ -67,7 +119,7 @@ impl OwnedWorker {
         assert!(status.success(), "signal delivery to owned child failed");
     }
 
-    async fn wait(&mut self) -> ExitStatus {
+    pub(super) async fn wait(&mut self) -> ExitStatus {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(status) = self.0.try_wait().unwrap() {
@@ -198,4 +250,57 @@ pub async fn assert_process_signals(pool: &PgPool, database_url: &str) {
         eprintln!("worker process signal case {index}: passed");
     }
     eprintln!("actual worker process signals: idle and blocked SQL SIGINT/SIGTERM passed");
+}
+
+#[cfg(test)]
+mod launcher_identity_tests {
+    use super::worker_database_url;
+    use sqlx::postgres::{PgConnectOptions, PgSslMode};
+    use std::str::FromStr;
+
+    #[test]
+    fn launcher_database_identity_uses_real_sqlx_last_parameter_semantics() {
+        for query in [
+            "sslmode=disable&statement-cache-capacity=17",
+            "application_name=canvas-native-expiry-worker&sslmode=disable&statement-cache-capacity=17",
+            "application_name=first&sslmode=disable&application_name=second&statement-cache-capacity=17",
+        ] {
+            let raw = format!("postgres://synthetic-user:synthetic-password@127.0.0.1:6543/owned_test?{query}");
+            let original = url::Url::parse(&raw).unwrap();
+            for worker_id in ["worker-rest", "another-owned-worker", "worker&option=value"] {
+                let prepared = worker_database_url(&raw, worker_id);
+                let options = PgConnectOptions::from_str(prepared.as_str()).unwrap();
+                assert_eq!(options.get_application_name(), Some(worker_id));
+                assert_eq!(options.get_host(), "127.0.0.1");
+                assert_eq!(options.get_port(), 6543);
+                assert_eq!(options.get_username(), "synthetic-user");
+                assert_eq!(options.get_database(), Some("owned_test"));
+                assert!(matches!(options.get_ssl_mode(), PgSslMode::Disable));
+                assert_eq!(prepared.username(), original.username());
+                assert_eq!(prepared.password(), original.password());
+                assert_eq!(prepared.path(), original.path());
+                let mut expected: Vec<_> = original.query_pairs().into_owned().collect();
+                expected.push(("application_name".into(), worker_id.into()));
+                assert_eq!(prepared.query_pairs().into_owned().collect::<Vec<_>>(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn launcher_database_identity_keeps_the_existing_test_database_guard() {
+        for raw in [
+            "postgres://synthetic-user@127.0.0.1/production",
+            "postgres://synthetic-user@127.0.0.1/owned_test_extra",
+            "postgres://synthetic-user@127.0.0.1/owned?application_name=owned_test",
+        ] {
+            assert!(std::panic::catch_unwind(|| worker_database_url(raw, "worker-rest")).is_err());
+        }
+        let prepared = worker_database_url(
+            "postgres://synthetic-user@127.0.0.1/owned_test",
+            "worker-rest",
+        );
+        let options = PgConnectOptions::from_str(prepared.as_str()).unwrap();
+        assert_eq!(options.get_application_name(), Some("worker-rest"));
+        assert_eq!(prepared.query_pairs().count(), 1);
+    }
 }

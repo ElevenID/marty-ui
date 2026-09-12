@@ -198,8 +198,14 @@ impl InitiationDidcommDelivery for ContractDidcomm {
 }
 
 fn app(repository: ContractRepository) -> axum::Router {
-    let config =
-        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+    configured_app(repository, None)
+}
+
+fn configured_app(repository: ContractRepository, offer_ttl: Option<&str>) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(
+        offer_ttl.map(|value| ("ISSUANCE_OFFER_TTL_MINUTES".to_owned(), value.to_owned())),
+    )
+    .unwrap();
     let runtime = IssuanceRuntime::new(&config).unwrap();
     let initiation = InitiationService::new(
         InitiationPorts {
@@ -216,7 +222,8 @@ fn app(repository: ContractRepository) -> axum::Router {
         },
         "https://issuer.example",
     )
-    .unwrap();
+    .unwrap()
+    .with_offer_ttl_minutes(config.issuance_offer_ttl_minutes.clone());
     let projector =
         InitiationOfferProjector::new("https://issuer.example", Arc::new(ContractDidcomm)).unwrap();
     router_with_initiation(
@@ -303,5 +310,50 @@ async fn initiation_authentication_precedes_json_and_private_header_validation()
         .await
         .unwrap();
     assert_eq!(private_header.status(), 422);
+    assert!(repository.stored.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn initiation_http_projects_configured_expiry_and_fails_overflow_without_reservation() {
+    for (raw, expected) in [
+        ("45", "2026-08-30T12:45:00+00:00"),
+        ("0", "2026-08-30T12:00:00+00:00"),
+        ("-5", "2026-08-30T11:55:00+00:00"),
+    ] {
+        let repository = ContractRepository::default();
+        let response = configured_app(repository.clone(), Some(raw))
+            .oneshot(request(
+                serde_json::to_vec(&valid_request()).unwrap(),
+                Some("test-api-key"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(json_body(response).await["expires_at"], expected);
+        assert_eq!(
+            repository
+                .stored
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .expires_at
+                .to_rfc3339(),
+            expected
+        );
+    }
+    let repository = ContractRepository::default();
+    let response = configured_app(repository.clone(), Some("9223372036854775808"))
+        .oneshot(request(
+            serde_json::to_vec(&valid_request()).unwrap(),
+            Some("test-api-key"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 500);
+    assert_eq!(
+        json_body(response).await,
+        json!({"detail":"credential offer expiry is outside the supported calendar range"})
+    );
     assert!(repository.stored.lock().unwrap().is_none());
 }
