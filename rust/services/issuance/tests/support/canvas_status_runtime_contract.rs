@@ -356,6 +356,12 @@ impl ReviewCapabilities {
                 "revoke_delivered",
                 "mirror_failure",
                 "publication_failure",
+                "mirror_gate_disabled",
+                "binding_missing",
+                "binding_disabled",
+                "platform_disabled",
+                "suspend_revoked",
+                "revoke_revoked",
                 "pending_delivery",
                 "failed_delivery",
                 "wallet_delivery",
@@ -548,6 +554,9 @@ async fn review_cases(
         .fetch_one(pool)
         .await
         .unwrap();
+    let targets_before = review_target_rows(pool).await;
+    let initial_delivery = review_delivery_row(pool).await;
+    let configured_binding: Value = sqlx::query_scalar("SELECT canvas_credentials FROM issuance_service.canvas_program_bindings WHERE id='binding-review' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
     for &name in capabilities.cases() {
         let case = scenarios["cases"]
             .as_array()
@@ -562,11 +571,37 @@ async fn review_cases(
             .find(|case| case["name"] == name)
             .unwrap();
         let action = case["body"]["action"].as_str().unwrap();
+        let special = ReviewEffect::for_case(name);
+        let rejected = special == Some(ReviewEffect::Revoked);
+        sqlx::query("UPDATE issuance_service.canvas_program_bindings SET enabled=true,canvas_credentials=$1 WHERE id='binding-review' AND organization_id='org-review'")
+            .bind(if special.is_some() { json!({}) } else { configured_binding.clone() }).execute(pool).await.unwrap();
+        sqlx::query("UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review' AND organization_id='org-review'").execute(pool).await.unwrap();
         sqlx::query("DELETE FROM issuance_service.evidence_policy_reviews WHERE id='review-lifecycle' AND organization_id='org-review'").execute(pool).await.unwrap();
         insert_review(pool, "review-lifecycle").await;
         sqlx::query("UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review' AND organization_id='org-review'").execute(pool).await.unwrap();
-        sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,last_error=NULL,status='delivered',delivery_target='canvas_credentials' WHERE id='delivery-provider' AND organization_id='org-review'")
-            .bind(json!({"canvas_program_binding_id":"binding-review","unrelated_marker":44})).execute(pool).await.unwrap();
+        sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,last_error=NULL,status='delivered',delivery_target='canvas_credentials',external_credential_id=$2,external_issuer_id=$3,canvas_account_id=$4 WHERE id='delivery-provider' AND organization_id='org-review'")
+            .bind(json!({"canvas_program_binding_id":"binding-review","unrelated_marker":44}))
+            .bind(initial_delivery["external_credential_id"].as_str())
+            .bind(initial_delivery["external_issuer_id"].as_str())
+            .bind(initial_delivery["canvas_account_id"].as_str())
+            .execute(pool).await.unwrap();
+        if let Some(effect) = special {
+            let metadata = effect.original_metadata(case);
+            sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,canvas_account_id=NULL,external_credential_id=NULL,external_issuer_id=NULL WHERE id='delivery-provider' AND organization_id='org-review'")
+                .bind(metadata).execute(pool).await.unwrap();
+            match effect {
+                ReviewEffect::BindingDisabled => {
+                    sqlx::query("UPDATE issuance_service.canvas_program_bindings SET enabled=false WHERE id='binding-review' AND organization_id='org-review'").execute(pool).await.unwrap();
+                }
+                ReviewEffect::PlatformDisabled => {
+                    sqlx::query("UPDATE issuance_service.canvas_platforms SET enabled=false WHERE id='platform-review' AND organization_id='org-review'").execute(pool).await.unwrap();
+                }
+                ReviewEffect::Revoked => {
+                    sqlx::query("UPDATE issuance_service.issued_credentials SET status='revoked',revoked=true WHERE id='credential-review' AND organization_id='org-review'").execute(pool).await.unwrap();
+                }
+                ReviewEffect::MirrorGate | ReviewEffect::BindingMissing => {}
+            }
+        }
         let no_mirror = matches!(
             name,
             "no_delivery" | "pending_delivery" | "failed_delivery" | "wallet_delivery"
@@ -593,6 +628,9 @@ async fn review_cases(
         let credential_before = credential_row(pool).await;
         let delivery_before = review_delivery_row(pool).await;
         let secret_before: Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM issuance_service.organization_integration_secrets s WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
+        let prepared_targets = review_target_rows(pool).await;
+        let review_before: marty_issuance_service::owned_json_value::OwnedJsonValue = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-lifecycle' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
+        let events_before: marty_issuance_service::owned_json_value::OwnedJsonValue = sqlx::query_scalar("SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY id),'[]'::jsonb) FROM issuance_service.issuance_events e").fetch_one(pool).await.unwrap();
         let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'").fetch_one(pool).await.unwrap();
         *state.response_override.lock().unwrap() =
             (name == "mirror_failure").then(|| refusal.clone());
@@ -722,12 +760,12 @@ async fn review_cases(
             snapshot["review"],
             requests.expected_review(
                 &expected["snapshot"]["review"],
-                name != "publication_failure"
+                name != "publication_failure" && !rejected
             )
         );
         assert_eq!(
             snapshot["resolved_events"],
-            event_count + i64::from(name != "publication_failure")
+            event_count + i64::from(name != "publication_failure" && !rejected)
         );
         let credential_after = credential_row(pool).await;
         for (key, value) in credential_before.as_object().unwrap() {
@@ -744,6 +782,43 @@ async fn review_cases(
         }
         let delivery = review_delivery_row(pool).await;
         let calls = state.calls.lock().unwrap().clone();
+        assert_eq!(review_target_rows(pool).await, prepared_targets);
+        if rejected {
+            assert_eq!(expected["lifecycle_calls"], json!([]));
+            assert!(
+                calls.is_empty(),
+                "revoked rejection precedes publication and mirror"
+            );
+            assert_eq!(credential_after, credential_before);
+            assert_eq!(delivery, delivery_before);
+            let events_after: marty_issuance_service::owned_json_value::OwnedJsonValue = sqlx::query_scalar("SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY id),'[]'::jsonb) FROM issuance_service.issuance_events e").fetch_one(pool).await.unwrap();
+            assert_eq!(
+                events_after, events_before,
+                "revoked rejection cannot emit or modify any event"
+            );
+            let review_after: marty_issuance_service::owned_json_value::OwnedJsonValue = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-lifecycle' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
+            let mut released = review_before;
+            assert_ne!(
+                released["updated_at"], review_after["updated_at"],
+                "actual claim/release updates the review timestamp"
+            );
+            chrono::DateTime::parse_from_rfc3339(review_after["updated_at"].as_str().unwrap())
+                .unwrap();
+            released["updated_at"] = review_after["updated_at"].clone();
+            assert_eq!(
+                review_after, released,
+                "claim/release preserves every other review field"
+            );
+            assert_eq!(sqlx::query_scalar::<_, Value>("SELECT to_jsonb(s) FROM issuance_service.organization_integration_secrets s WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap(), secret_before);
+            assert_eq!(
+                sqlx::query_scalar::<_, Value>(preserved_sql)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap(),
+                preserved
+            );
+            continue;
+        }
         assert_eq!(calls[0]["port"], "publication");
         assert_eq!(calls[0]["action"], action);
         assert_eq!(calls[0]["status"], "active");
@@ -781,7 +856,27 @@ async fn review_cases(
             );
             continue;
         }
-        if no_mirror {
+        if special.is_some() {
+            assert_eq!(calls.len(), 1, "gated target cannot invoke the mirror");
+            assert_eq!(expected["lifecycle_calls"].as_array().unwrap().len(), 1);
+            for (key, value) in delivery_before.as_object().unwrap() {
+                if !["metadata", "last_error", "updated_at"].contains(&key.as_str()) {
+                    assert_eq!(&delivery[key], value, "{name} preserves raw delivery {key}");
+                }
+            }
+            let expected_delivery = &expected["snapshot"]["deliveries"][0];
+            assert_eq!(delivery["last_error"], expected_delivery["last_error"]);
+            let mut metadata = marty_issuance_service::owned_json_value::OwnedJsonValue::copy(
+                &delivery["metadata"],
+            );
+            timestamps(&mut metadata);
+            assert_eq!(
+                *metadata, expected_delivery["metadata"],
+                "exact frozen metadata includes attempts, flags and diagnostic keys"
+            );
+            chrono::DateTime::parse_from_rfc3339(delivery["updated_at"].as_str().unwrap()).unwrap();
+            assert_eq!(sqlx::query_scalar::<_, Value>("SELECT to_jsonb(s) FROM issuance_service.organization_integration_secrets s WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap(), secret_before);
+        } else if no_mirror {
             assert_eq!(calls.len(), 1, "{name}: publication only; no mirror HTTP");
             assert_eq!(
                 delivery, delivery_before,
@@ -900,6 +995,7 @@ async fn review_cases(
         );
         assert_eq!(credential_row(pool).await, credential_after);
         assert_eq!(review_delivery_row(pool).await, delivery);
+        assert_eq!(review_target_rows(pool).await, prepared_targets);
         assert_eq!(
             sqlx::query_scalar::<_, Value>(preserved_sql)
                 .fetch_one(pool)
@@ -907,6 +1003,70 @@ async fn review_cases(
                 .unwrap(),
             preserved
         );
+    }
+    // Restore the pre-matrix target configuration exactly; panic cleanup remains
+    // the outer exact-owned database/process guard, never a shared deployment.
+    sqlx::query("UPDATE issuance_service.canvas_program_bindings SET enabled=true,canvas_credentials=$1 WHERE id='binding-review' AND organization_id='org-review'")
+        .bind(configured_binding).execute(pool).await.unwrap();
+    sqlx::query("UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review' AND organization_id='org-review'").execute(pool).await.unwrap();
+    assert_eq!(review_target_rows(pool).await, targets_before);
+}
+
+async fn review_target_rows(
+    pool: &PgPool,
+) -> marty_issuance_service::owned_json_value::OwnedJsonValue {
+    sqlx::query_scalar("SELECT jsonb_build_object('bindings',(SELECT jsonb_agg(to_jsonb(b) ORDER BY id) FROM issuance_service.canvas_program_bindings b),'platforms',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM issuance_service.canvas_platforms p))").fetch_one(pool).await.unwrap()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReviewEffect {
+    MirrorGate,
+    BindingMissing,
+    BindingDisabled,
+    PlatformDisabled,
+    Revoked,
+}
+
+impl ReviewEffect {
+    fn for_case(name: &str) -> Option<Self> {
+        match name {
+            "mirror_gate_disabled" => Some(Self::MirrorGate),
+            "binding_missing" => Some(Self::BindingMissing),
+            "binding_disabled" => Some(Self::BindingDisabled),
+            "platform_disabled" => Some(Self::PlatformDisabled),
+            "suspend_revoked" | "revoke_revoked" => Some(Self::Revoked),
+            _ => None,
+        }
+    }
+
+    fn original_metadata(self, case: &Value) -> Value {
+        let setup = case["sql"].as_array().unwrap();
+        let inserts: Vec<_> = setup
+            .iter()
+            .map(|sql| sql.as_str().unwrap())
+            .filter(|sql| {
+                sql.starts_with("INSERT INTO issuance_service.credential_delivery_records")
+            })
+            .collect();
+        assert_eq!(inserts.len(), 1);
+        let metadata = inserts[0].strip_prefix("INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','").unwrap()
+            .strip_suffix("','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')").unwrap();
+        let metadata: Value = serde_json::from_str(metadata).unwrap();
+        assert_eq!(
+            metadata,
+            json!({"deployment_profile_id":"synthetic-profile","canvas_feature_flags":{"enable_canvas_mirror_ops":self != Self::MirrorGate},"canvas_program_binding_id":if self == Self::BindingMissing { "missing" } else { "binding-review" },"preserved":"synthetic-marker","status_sync_attempts":2})
+        );
+        let mutation = match self {
+            Self::BindingDisabled => Some("UPDATE issuance_service.canvas_program_bindings SET enabled=false WHERE id='binding-review'"),
+            Self::PlatformDisabled => Some("UPDATE issuance_service.canvas_platforms SET enabled=false WHERE id='platform-review'"),
+            Self::Revoked => Some("UPDATE issuance_service.issued_credentials SET status='revoked',revoked=true WHERE id='credential-review'"),
+            Self::MirrorGate | Self::BindingMissing => None,
+        };
+        assert_eq!(setup.len(), if mutation.is_some() { 6 } else { 5 });
+        if let Some(mutation) = mutation {
+            assert_eq!(setup.last().unwrap(), mutation);
+        }
+        metadata
     }
 }
 
@@ -1461,7 +1621,7 @@ pub(super) type ReviewTransportPorts = (
 
 /// Reuse the real main-process/dependency owner with a new request boundary.
 /// The factory is invoked only after the exact owned process becomes healthy.
-/// Its ports cannot opt out of the eight real-publication cases, claim-hold,
+/// Its ports cannot opt out of the fourteen real-lifecycle cases, claim-hold,
 /// token/body checks, raw persistence/duplicate checks or owned cleanup.
 pub(super) async fn run_review_operations_main_with_transport<F>(
     pool: &PgPool,
@@ -1713,6 +1873,51 @@ mod review_transport_tests {
     use super::*;
 
     #[test]
+    fn configured_skip_preconditions_preserve_original_metadata_and_setup() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-lifecycle-scenarios.json"
+        ))
+        .unwrap();
+        for name in [
+            "mirror_gate_disabled",
+            "binding_missing",
+            "binding_disabled",
+            "platform_disabled",
+            "suspend_revoked",
+            "revoke_revoked",
+        ] {
+            let effect = ReviewEffect::for_case(name).unwrap();
+            let case = scenarios["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            assert_eq!(effect.original_metadata(case)["status_sync_attempts"], 2);
+            let mut changed = case.clone();
+            for sql in changed["sql"].as_array_mut().unwrap() {
+                if sql
+                    .as_str()
+                    .unwrap()
+                    .starts_with("INSERT INTO issuance_service.credential_delivery_records")
+                {
+                    *sql = json!(sql
+                        .as_str()
+                        .unwrap()
+                        .replace("synthetic-profile", "changed-profile"));
+                }
+            }
+            assert!(std::panic::catch_unwind(|| effect.original_metadata(&changed)).is_err());
+            let mut changed = case.clone();
+            changed["sql"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("unexpected setup"));
+            assert!(std::panic::catch_unwind(|| effect.original_metadata(&changed)).is_err());
+        }
+    }
+
+    #[test]
     fn delivery_preconditions_are_bound_to_original_setup_not_outcomes() {
         let scenarios: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-review-lifecycle-scenarios.json"
@@ -1763,6 +1968,12 @@ mod review_transport_tests {
                 "revoke_delivered",
                 "mirror_failure",
                 "publication_failure",
+                "mirror_gate_disabled",
+                "binding_missing",
+                "binding_disabled",
+                "platform_disabled",
+                "suspend_revoked",
+                "revoke_revoked",
                 "pending_delivery",
                 "failed_delivery",
                 "wallet_delivery",

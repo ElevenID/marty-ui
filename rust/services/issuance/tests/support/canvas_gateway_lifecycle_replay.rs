@@ -1,5 +1,5 @@
 //! Candidate gateway -> actual issuance main -> real HTTP publication and mirror.
-//! Reuses the existing process/dependency owner and its eight lifecycle cases.
+//! Reuses the existing process/dependency owner and its fourteen lifecycle cases.
 //! Identity ports are controlled; production route selection is unchanged. This
 //! does not equate cancellation of an HTTP client with cancellation of a handler.
 
@@ -163,8 +163,26 @@ impl ReviewResponseExpectations for GatewayExpectations {
                         assert_direct(frozen, 503, json!("Revocation service unavailable"));
                         mip_expected(503, "service_error", "Revocation service unavailable", None)
                     }
-                    "suspend_delivered" | "revoke_delivered" | "mirror_failure" | "no_delivery"
-                    | "pending_delivery" | "failed_delivery" | "wallet_delivery" => {
+                    "suspend_revoked" | "revoke_revoked" => {
+                        let detail = if case["name"] == "suspend_revoked" {
+                            "Cannot suspend revoked credential"
+                        } else {
+                            "Credential already revoked"
+                        };
+                        assert_direct(frozen, 400, json!(detail));
+                        mip_expected(400, "service_error", detail, None)
+                    }
+                    "suspend_delivered"
+                    | "revoke_delivered"
+                    | "mirror_failure"
+                    | "no_delivery"
+                    | "pending_delivery"
+                    | "failed_delivery"
+                    | "wallet_delivery"
+                    | "mirror_gate_disabled"
+                    | "binding_missing"
+                    | "binding_disabled"
+                    | "platform_disabled" => {
                         assert_eq!(frozen["status"], 200);
                         assert_eq!(frozen["content_type"], "application/json");
                         // The shared fixture alone substitutes expected actor
@@ -213,14 +231,16 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     let transport = retained
         .get()
         .expect("gateway transport created after readiness");
-    assert_eq!(transport.requests.load(Ordering::SeqCst), 18);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 28);
     assert_eq!(transport.denied.load(Ordering::SeqCst), 1);
     assert_eq!(transport.foreign.load(Ordering::SeqCst), 1);
     // Suspend: foreign + outcome + held competitor + duplicate; revoke/mirror:
     // outcome + duplicate each; publication failure: outcome only. Invalid
     // session must never reach either upstream. Four non-mirroring delivery
     // cases add one outcome and one duplicate each, with no legacy selection.
-    assert_eq!(transport.http.counts(), (17, 0));
+    // Four configured-target skips add success+duplicate; two already-revoked
+    // rejections add one request each and do not resolve their reviews.
+    assert_eq!(transport.http.counts(), (27, 0));
 }
 
 #[cfg(test)]
@@ -265,6 +285,12 @@ mod tests {
             "pending_delivery",
             "failed_delivery",
             "wallet_delivery",
+            "mirror_gate_disabled",
+            "binding_missing",
+            "binding_disabled",
+            "platform_disabled",
+            "suspend_revoked",
+            "revoke_revoked",
         ] {
             let mut expected = frozen["observations"]
                 .as_array()
@@ -273,7 +299,11 @@ mod tests {
                 .find(|item| item["name"] == name)
                 .unwrap()
                 .clone();
-            if name != "publication_failure" {
+            let failed = matches!(
+                name,
+                "publication_failure" | "suspend_revoked" | "revoke_revoked"
+            );
+            if !failed {
                 assert!(expected["body"]["resolved_by"].is_null());
                 // Emulate only the already-tested shared owner's expected actor
                 // substitution; no observed HTTP response enters this port.
@@ -287,12 +317,18 @@ mod tests {
             );
             assert_eq!(expected, retained);
             assert_eq!(public.content_type, "application/json");
-            if name == "publication_failure" {
-                assert_eq!(public.status, 503);
+            if failed {
+                let (status, detail) = match name {
+                    "publication_failure" => (503, "Revocation service unavailable"),
+                    "suspend_revoked" => (400, "Cannot suspend revoked credential"),
+                    "revoke_revoked" => (400, "Credential already revoked"),
+                    _ => unreachable!(),
+                };
+                assert_eq!(public.status, status);
                 assert_eq!(public.message_id, ReviewMessageIdPolicy::RequireUuid);
                 assert_eq!(
                     public.body,
-                    json!({"error":"service_error","error_description":"Revocation service unavailable","message_id":REVIEW_MESSAGE_ID_SENTINEL})
+                    json!({"error":"service_error","error_description":detail,"message_id":REVIEW_MESSAGE_ID_SENTINEL})
                 );
             } else {
                 assert_eq!(public.status, 200);
