@@ -6,6 +6,19 @@ use tracing::instrument::WithSubscriber;
 mod didcomm_admission_recovery;
 
 #[tokio::test]
+async fn didcomm_flow_grpc_provider_preserves_keyed_admission() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Flow gRPC admission requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_admission_recovery::run_flow_grpc(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
 async fn didcomm_http_admission_recovers_real_keyed_reservation() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Admission recovery requires the exact-owned published schema gate");

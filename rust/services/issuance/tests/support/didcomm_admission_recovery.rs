@@ -42,10 +42,18 @@ const ID: &str = "ordinary-admission-recovery-synthetic";
 const CODE: &str = "synthetic-ordinary-recovery-pre-authorized-code";
 const API_KEY: &str = "synthetic-admission-management-key";
 
+#[path = "didcomm_flow_grpc_admission.rs"]
+mod flow_grpc;
+
+pub(super) async fn run_flow_grpc(database_url: &str) {
+    flow_grpc::run(database_url).await;
+}
+
 #[derive(Default)]
 struct Ports {
     calls: Mutex<Vec<&'static str>>,
     recovery_only: AtomicBool,
+    wallet_configs: Option<Vec<Value>>,
 }
 
 impl Ports {
@@ -102,9 +110,9 @@ impl InitiationTemplateResolver for Ports {
             credential_payload_format: "w3c_vcdm_v2_sd_jwt".into(),
             issuer_did: Some("did:web:issuer.example".into()),
             issuer_algorithm: Some("EdDSA".into()),
-            wallet_configs: vec![
+            wallet_configs: self.wallet_configs.clone().unwrap_or_else(|| vec![
                 json!({"wallet_id":"ordinary", "format_variant":"default", "display_name":"Ordinary Wallet"}),
-            ],
+            ]),
             ..InitiationTemplate::default()
         })
     }
@@ -189,7 +197,7 @@ impl InitiationDidcommDelivery for Ports {
         _: &CredentialTransaction,
         _: &str,
     ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError> {
-        panic!("ordinary-wallet admission never invokes DIDComm delivery")
+        panic!("ordinary or rejected keyed admission never invokes DIDComm delivery")
     }
 }
 
@@ -198,6 +206,20 @@ fn router(repository: Arc<PostgresCredentialRepository>, ports: Arc<Ports>, ttl:
         IssuanceServiceConfig::from_values([("ISSUANCE_OFFER_TTL_MINUTES".into(), ttl.into())])
             .unwrap();
     let runtime = IssuanceRuntime::new(&config).unwrap();
+    let (service, projector) = initiation(repository, ports, &config);
+    router_with_initiation(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
+        TransportPolicy::new([]),
+        InitiationHttpService::new(service, projector, Some(API_KEY)),
+    )
+}
+
+fn initiation(
+    repository: Arc<PostgresCredentialRepository>,
+    ports: Arc<Ports>,
+    config: &IssuanceServiceConfig,
+) -> (InitiationService, InitiationOfferProjector) {
     let service = InitiationService::new(
         InitiationPorts {
             repository,
@@ -216,12 +238,7 @@ fn router(repository: Arc<PostgresCredentialRepository>, ports: Arc<Ports>, ttl:
     .unwrap()
     .with_offer_ttl_minutes(config.issuance_offer_ttl_minutes.clone());
     let projector = InitiationOfferProjector::new("https://issuer.example", ports).unwrap();
-    router_with_initiation(
-        runtime.state(),
-        StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
-        TransportPolicy::new([]),
-        InitiationHttpService::new(service, projector, Some(API_KEY)),
-    )
+    (service, projector)
 }
 
 async fn request(app: &Router, body: &Value, key: &str) -> (StatusCode, Value) {
@@ -254,8 +271,7 @@ async fn snapshot(pool: &PgPool) -> Value {
         .bind(ID).fetch_one(pool).await.unwrap()
 }
 
-fn assert_created_response(response: &Value) {
-    let offer_uri = response["credential_offer_uri"].as_str().unwrap();
+fn assert_offer_uri(offer_uri: &str) {
     let parsed = url::Url::parse(offer_uri).unwrap();
     assert_eq!(parsed.scheme(), "openid-credential-offer");
     let pairs: Vec<_> = parsed.query_pairs().collect();
@@ -269,6 +285,11 @@ fn assert_created_response(response: &Value) {
             "grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":CODE}}
         })
     );
+}
+
+fn assert_created_response(response: &Value) {
+    let offer_uri = response["credential_offer_uri"].as_str().unwrap();
+    assert_offer_uri(offer_uri);
     assert_eq!(
         response,
         &json!({"id":ID, "organization_id":"org-1", "credential_template_id":"template-1",

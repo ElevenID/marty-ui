@@ -4599,6 +4599,7 @@ dependencies = [
  "jsonwebtoken",
  "log",
  "marty-didcomm",
+ "marty-flow",
  "marty-gateway",
  "marty-oid4vci",
  "marty-verification",
