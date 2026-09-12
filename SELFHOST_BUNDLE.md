@@ -22,9 +22,34 @@ The UI service uses the published `ui-selfhost` image variant, which excludes th
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
 
-Operators publish the images from a local workstation with `make selfhost-images-build-push TAG=<released-version>`, generate release artifacts with `make selfhost-images-release-artifacts TAG=<released-version>`, sign/verify with the Cosign targets, then stage this bundle with `make package-selfhost-bundle`.
+Use the image artifacts and verification evidence from the release workflow, then
+stage this bundle with `make package-selfhost-bundle` (Rust 1.95.0 and Docker
+Compose required). Packaging checks the image configuration; it does not publish
+images, authenticate their provenance, or deploy the stack. The former
+`selfhost-images-*` Make targets and Python packager are no longer present.
+
+Optional arguments retain directory and ZIP output:
+
+```bash
+make package-selfhost-bundle SELFHOST_BUNDLE_ARGS='--output-dir /existing/parent/customer-bundle --archive /existing/parent/customer-release'
+```
+
+`--archive` appends `.zip` to its basename. ZIPs contain the bundle directory,
+runtime files and directories. Unix packaging preserves executable modes;
+Windows-produced archives do not qualify POSIX shell permissions. Release
+bundles require the Linux packaging gate. Existing output is rejected by default.
+`--replace` accepts only an unchanged bundle carrying the generated
+`.marty-selfhost-bundle.json` inventory and retains the previous directory in a
+reported backup location. Choose a new archive basename for every run; existing
+archives are never overwritten. Paths through symlinks/reparse points, repository
+roots, source assets, and overlapping output/archive paths are rejected.
 
 Bundle generation fails if the staged output contains Docker `build:` keys or mutable image tag aliases such as `latest`, `prod`, `main`, or `dev`.
+
+Compose source files (including transitive `extends` inputs) are staged for
+rendering and removed only from the generated bundle after flattening. The
+extracted ZIP must render without the source checkout. Operator secret files
+remain external; packaging does not load their values.
 
 ## First run
 
