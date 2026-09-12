@@ -75,7 +75,6 @@ def test_native_profiles_are_not_implicitly_selected_by_release_or_legacy_confor
     None
 ):
     for path in (
-        "scripts/deploy-local-beta-release.ps1",
         "scripts/conformance_stack.py",
         "docker-compose.base.yml",
         "docker-compose.selfhost.prod.yml",
@@ -162,5 +161,5 @@ def test_pairing_and_full_model_guards_reject_configuration_loss(mutation) -> No
     with pytest.raises(AssertionError):
         gate["assert_model"](actual, expected)
     if mutation != "unrelated-service":
-        with pytest.raises(AssertionError):
+        with pytest.raises(gate["DidcommConfigurationError"]):
             gate["assert_native_policy_pairing"](actual)

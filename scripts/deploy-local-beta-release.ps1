@@ -7,6 +7,8 @@ param(
 
     [switch]$EnablePortableCanvas,
 
+    [switch]$EnableDidcommAuthcrypt,
+
     [string]$CanvasOrigin = "https://canvas-test.elevenidllc.com",
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
@@ -33,6 +35,7 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
+. (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
@@ -60,6 +63,10 @@ $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.profile.canvas-real.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.canvas-sandbox.yml")
 )
+$didcommProfiles = @(Get-BetaDidcommProfiles -Enabled ([bool]$EnableDidcommAuthcrypt))
+foreach ($profile in $didcommProfiles) {
+    $script:ComposeFiles += (Join-Path $script:RepoRoot $profile)
+}
 $script:ApplicationServices = @(
     "auth",
     "organization",
@@ -708,6 +715,7 @@ Write-Host "Origin: $BetaOrigin"
 Write-Host "Artifact directory: $script:ArtifactDir"
 Write-Host "Promotion eligible: $promotionEligible"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
+Write-Host "DIDComm authcrypt enabled: $([bool]$EnableDidcommAuthcrypt)"
 Write-Host "Compose project: $script:BetaProject"
 Write-Host "UI Compose project: $script:BetaUiProject"
 Write-Host "Network: $script:BetaNetwork"
@@ -721,6 +729,9 @@ if ($PlanOnly) {
         promotion_eligible = $promotionEligible
         beta_origin = $BetaOrigin
         portable_canvas_enabled = [bool]$EnablePortableCanvas
+        didcomm_authcrypt_enabled = [bool]$EnableDidcommAuthcrypt
+        didcomm_profiles = $didcommProfiles
+        didcomm_configuration_validated = $false
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
         compose_project = $script:BetaProject
@@ -792,6 +803,17 @@ $env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
 $env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
+}
+$docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
+$env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
+if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw "Existing beta docs image is not immutable"
+}
+Write-Step "Validate paired DIDComm configuration before image or service mutations"
+Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
+if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
     foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_ISSUANCE_IMAGE)) {
@@ -804,12 +826,6 @@ if ($OfficialStackRelease) {
 }
 else {
     Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
-}
-$docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
-if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
-$env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
-if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64}$') {
-    throw "Existing beta docs image is not immutable"
 }
 foreach ($service in @("postgres", "redis", "openbao", "keycloak", "applicant", "gateway")) {
     $container = Get-ComposeContainerId -Service $service
@@ -1051,6 +1067,8 @@ $imageDigestsPath = Join-Path $script:ArtifactDir "image-digests.json"
 Write-Utf8Text -Path $imageDigestsPath -Content ($env:ELEVENID_IMAGE_DIGESTS_JSON + "`n")
 
 Write-Step "Enter maintenance window and apply live migration"
+Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })

@@ -409,7 +409,18 @@ $loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachS
         for item in report["assignments"]
         if item["left"] == "$script:ComposeFiles" and item["operator"] == "PlusEquals"
     }
-    assert set(attached) == {"$releaseComposeFile", "$verificationImageOverride"}
+    profile_append = "(Join-Path $script:RepoRoot $profile)"
+    assert set(attached) == {
+        "$releaseComposeFile",
+        "$verificationImageOverride",
+        profile_append,
+    }
+    profile_loops = [
+        item for item in report["loops"] if item["condition"] == "$didcommProfiles"
+    ]
+    assert len(profile_loops) == 1
+    assert "$script:ComposeFiles += " + profile_append in profile_loops[0]["body"]
+    assert attached[profile_append]["offset"] < new["offset"]
     rehearsal = next(
         item
         for item in commands

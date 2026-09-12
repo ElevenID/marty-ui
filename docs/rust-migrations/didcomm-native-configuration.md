@@ -38,21 +38,35 @@ read-only file mount, enables private wallet endpoints, and provides
 standalone native service nor isolates an entire project by itself.
 
 Both native overlays are explicit additions. Existing legacy authcrypt and
-conformance overlays retain their standalone behavior. Neither the beta release
-runner nor the legacy conformance launcher selects the new overlays implicitly.
+conformance overlays retain their standalone behavior. The beta release runner's
+`-EnableDidcommAuthcrypt` switch selects both legacy and native authcrypt profiles;
+it never selects conformance networking or a private CA. Without that switch the
+selected profile list stays empty. The legacy conformance launcher is unchanged.
 
-## Required cutover integration still outstanding
+## Beta deployment pairing gate
 
-`scripts/deploy-local-beta-release.ps1` currently owns a closed `ComposeFiles`
-array and has no DIDComm authcrypt selector. An optional native overlay alone is
-**not** downgrade prevention: a caller could select legacy authcrypt without
-configuring the native owner. Before routing DIDComm to native delivery, the
-deployment owner must pair both exact policy overlays or reject the final
-rendered configuration. The reusable `assert_native_policy_pairing` assertion in
-`scripts/test_didcomm_native_compose.py` rejects legacy-only policy configuration,
-different policy sources, writable mounts, and automatic host-path creation.
-It is exercised by CI, but is not yet called by the deployment runner. No claim
-of deployment-time pairing enforcement is made by this configuration slice.
+An optional overlay alone is not downgrade prevention. The beta runner now uses
+`scripts/beta-didcomm-configuration.ps1` to pair both profiles and calls the shared
+stdlib validator in `scripts/validate_beta_didcomm_configuration.py`. It validates
+the actual complete rendered model, including the generated image override,
+before image pulls, builds, backups or service mutations, then revalidates before
+entering maintenance. Local release metadata/runtime-file staging precedes this
+gate; it does not stop or recreate services.
+
+Validation rejects selected-but-missing policies, legacy-only configuration,
+unexpected policy configuration without explicit opt-in, different policy
+sources, writable native mounts, automatic native host-path creation, and the
+same policy source mounted into unrelated services. Policy file contents are
+never read by this gate. Compose output stays in process memory with a 30-second
+timeout and an 8 MiB accepted JSON limit; errors and success output contain no
+model or environment values. `-PlanOnly` reports the boolean and profile names,
+explicitly marking configuration as unvalidated without invoking this validator.
+
+This enforces ownership/configuration pairing through the beta runner, not the
+contents of an issuer policy. Runtime tests must still prove missing issuers and
+invalid authcrypt keys fail closed, and direct manual Compose invocations do not
+receive runner enforcement automatically. This change does not switch routes or
+perform a deployment.
 
 Native CA startup/error/rotation parity is a separate outstanding qualification;
 the configuration gate does not execute the Rust service. DIDComm KMS corrections

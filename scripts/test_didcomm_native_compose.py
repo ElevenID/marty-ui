@@ -13,6 +13,9 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VALIDATOR = runpy.run_path(str(ROOT / "scripts/validate_beta_didcomm_configuration.py"))
+assert_native_policy_pairing = VALIDATOR["assert_native_policy_pairing"]
+DidcommConfigurationError = VALIDATOR["DidcommConfigurationError"]
 BASE = "docker-compose.base.yml"
 BETA = "docker-compose.beta.yml"
 ISOLATION = "docker-compose.profile.conformance.yml"
@@ -74,34 +77,6 @@ def assert_model(actual, expected):
     assert normalized(actual) == normalized(expected), (
         "Native DIDComm configuration changed outside its exact boundary"
     )
-
-
-def assert_native_policy_pairing(model):
-    """Reject an authcrypt-capable legacy model paired with unconfigured native delivery.
-
-    Call on a rendered model before selecting native DIDComm routes. This gate
-    does not itself change the deployment runner or gateway route ownership.
-    """
-    services = model["services"]
-    if "issuance-native" not in services:
-        return
-    legacy = services["issuance"]
-    native = services["issuance-native"]
-    policy = legacy["environment"].get("DIDCOMM_ENCRYPTION_POLICY_FILE")
-    if not policy:
-        return
-    assert native["environment"].get("DIDCOMM_ENCRYPTION_POLICY_FILE") == policy, (
-        "Configured legacy DIDComm encryption policy must also be configured for native delivery"
-    )
-    legacy_mounts = {item["target"]: item for item in legacy.get("volumes", [])}
-    native_mounts = {item["target"]: item for item in native.get("volumes", [])}
-    assert POLICY_TARGET in legacy_mounts and POLICY_TARGET in native_mounts
-    previous, candidate = legacy_mounts[POLICY_TARGET], native_mounts[POLICY_TARGET]
-    assert candidate["source"] == previous["source"], (
-        "Native DIDComm policy source differs from legacy"
-    )
-    assert candidate["type"] == "bind" and candidate["read_only"] is True
-    assert candidate["bind"]["create_host_path"] is False
 
 
 def assert_bindings(model, compose_command):
@@ -252,7 +227,7 @@ def run(compose_command=None):
     unpaired = render(BASE, BETA, LEGACY_AUTHCRYPT)
     try:
         assert_native_policy_pairing(unpaired)
-    except AssertionError:
+    except DidcommConfigurationError:
         pass
     else:
         raise AssertionError(
@@ -261,6 +236,23 @@ def run(compose_command=None):
     paired = render(BASE, BETA, LEGACY_AUTHCRYPT, AUTHCRYPT)
     assert_model(paired, expected_model(unpaired, authcrypt=True, conformance=False))
     assert_native_policy_pairing(paired)
+    image_owner = runpy.run_path(
+        str(ROOT / "scripts/test_beta_application_image_compose.py")
+    )
+    with tempfile.TemporaryDirectory(prefix="didcomm-generated-images-") as temporary:
+        directory = Path(temporary)
+        reports = image_owner["exercise"](
+            directory,
+            [image_owner["inputs"]("local"), image_owner["inputs"]("official")],
+        )
+        for mode, report in zip(("local", "official"), reports, strict=True):
+            overlay = directory / f"{mode}-images.yml"
+            overlay.write_text("\n".join(report["lines"]) + "\n", encoding="utf-8")
+            actual = render(BASE, BETA, LEGACY_AUTHCRYPT, AUTHCRYPT, str(overlay))
+            assert_model(
+                actual, image_owner["expected_model"](paired, report["services"], mode)
+            )
+            VALIDATOR["validate_model"](actual, authcrypt_enabled=True)
     print(
         "Native DIDComm Compose gates passed: exact merge ownership, synthetic bindings, missing-input rejection and legacy isolation"
     )
