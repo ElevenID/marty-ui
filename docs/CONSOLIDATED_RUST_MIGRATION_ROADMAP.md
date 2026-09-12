@@ -31,14 +31,20 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
-PR #814 remains draft and not deployed. Exact hosted `aa33eff6f` passed its
+PR #814 remains draft and not deployed. Hosted `184509745` has passed Rust
+formatting/packaging, service-image builds and all four runtime preflights;
+the full runtime job is still running. Its security scan found stale Bun Vitest
+4.1.10 dependencies. Reviewed local repair `b0fb087c2` aligns the suite and both
+manifest floors to 4.1.11; Bun/npm audits report zero vulnerabilities, 1,092 UI
+tests and 83 focused Python checks passed. It is not yet pushed or hosted-green.
+
+Earlier exact hosted `aa33eff6f` passed its
 configured runtime gate: 189 published-schema tests, zero failures, two explicit
 capture ignores, plus all four preflights. The formerly failing lease-expiry case
 passed in preflight and the full run; that does not establish the old intermittent
 cause is fixed. Runtime, images, browser and other listed jobs passed. The only
 direct CI failure was eleven formatting hunks in one shared helper; reviewed
-format-only repair `c2cc53e15` is integrated locally. Lint/package stages after
-formatting still need a new exact-head run, and no merge is claimed.
+format-only repair `c2cc53e15` is included in hosted `184509745`. No merge is claimed.
 
 DIDComm source `40b06fcc8`, integrated as `9b4a8b67a`, preserves five freshly
 captured Python state errors without moving eligibility ahead of durable
@@ -52,9 +58,24 @@ direct/projector successes, two wallet-503 cases, two untrusted-TLS cases and on
 wrong authcrypt sender key. It checks canonical decryption, linkage across status
 allocation/signing/persistence, durable outcomes and no-resend replay. Signing,
 issuer context and DID/status peers remain controlled; automatic cases are
-projector tests, not fresh initiation HTTP/admission. Concurrent ownership,
-post-transport recovery faults, gateway routing, consumer/image selection and
-safe Python retirement remain open. See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
+projector tests, not fresh initiation HTTP/admission. Reviewed recovery source
+`c8af5d9e` (local integration `985c0aa5e`) extends this to thirteen cases with actual
+claim concurrency and injected post-transport event-projection failure/recovery
+for both modes, without duplicate POST, allocation or signing.
+
+A separate candidate-only gateway gate now executes eleven cases over real
+gateway-to-native HTTP, published PostgreSQL and HTTPS delivery. It preserves
+management-key injection, trusted tenant, complete error envelopes and all five
+frozen state failures; a proven legacy trap remains unused by candidate traffic,
+including native unavailability. The configured combined run passed eight test
+functions in 36.35 seconds, strict issuance Clippy, nineteen-package formatting
+and 166 CI/preflight tests. Gateway identities and signing/DID/status peers remain
+controlled; this is not packaged-process or fresh automatic-admission proof.
+
+Production selection is unchanged. Native configuration/startup parity is next:
+resolver forwarding, explicit policy/CA mount ownership and CA rotation/failure
+semantics. Direct route cutover, fresh automatic/Flow admission, consumer/image
+selection and safe Python retirement remain open. See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
 The final combined native tree passed 377 issuance unit tests, eight HTTP tests,
 the configured nine-case composition plus five support controls, strict package

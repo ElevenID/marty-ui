@@ -106,8 +106,47 @@ support controls passed together in 6.58 seconds after strengthening review gaps
 The combined state-parity/composition tree then passed all 377 issuance unit
 tests, six direct HTTP tests, two initiation HTTP tests and strict package Clippy
 with all test targets. All 19 workspace packages passed the formatting check.
-Actual composed concurrent ownership and post-transport projection-recovery
-faults remain to qualify. None requires a KMS redesign.
+The subsequent recovery gate expands native composition to thirteen cases.
+For each encryption mode, a controlled barrier holds the real PostgreSQL claim
+while a second request observes signing/400 with no extra side effects. A scoped
+event-insert fault also proves transported-state recovery by the automatic
+projector: one event after repair, unchanged message/credential identity and no
+second POST, allocation or signing. The fault objects are removed and their
+absence checked. This does not assert that every concurrency interleaving was
+exercised; the stale-read busy/409 path remains separate unit evidence.
+
+## Direct gateway candidate qualification
+
+`didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback`
+executes eleven cases through the real gateway router/proxy and HTTP upstream
+into the same native delivery graph, published-schema PostgreSQL and HTTPS wallet.
+Only the exact direct POST owner is changed in candidate route tables; all other
+route fields and routes remain identical. An actual legacy HTTP trap is exercised
+once as a baseline, and candidate traffic never reaches it, including when the
+native listener is stopped. That unreachable control qualifies routing and
+server-error status, not exact transport-error body parity.
+
+The gate preserves distinct caller and management keys, trusted tenant injection,
+forged-header removal, complete authorization and native-error envelopes, five
+frozen Python eligibility errors, private-selector rejection, both crypto modes,
+durable failures and recovery/replay. Denied requests reach neither upstream.
+Gateway identities, signer and DID/status peers remain controlled; the gateway
+router runs in-process, not as a packaged ingress binary. Automatic projection
+is exercised for recovery/replay, not fresh initiation HTTP or Flow admission.
+
+The combined configured run passed eight test functions (thirteen native cases,
+eleven gateway cases and six support controls) in 36.35 seconds. Strict issuance
+Clippy with all test targets passed, all nineteen workspace packages passed
+formatting, and the CI/preflight registration suite passed 166 tests. The new
+gateway gate is mandatory in the full published-contract runner. These are local
+results, not exact-head hosted qualification or deployed consumer selection.
+
+Direct cutover still needs native startup/configuration parity. Beta native
+issuance lacks the legacy resolver settings; authcrypt and conformance overlays
+currently mount policy and CA only into legacy issuance. The native transport
+also loads its CA at startup rather than per delivery, changing invalid-file and
+rotation behavior. Correct these without broad key mounts, weaker defaults or a
+KMS redesign. Production route ownership and reachable Python remain unchanged.
 
 1. Qualify direct and automatic delivery through the shared actual native owner,
    including whole response fields, true crypto, durable finalization, failure,
