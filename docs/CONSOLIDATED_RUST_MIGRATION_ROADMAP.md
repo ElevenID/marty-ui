@@ -31,7 +31,7 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
-Current remaining Canvas work is six base gateway cases, thirteen full lifecycle
+Current remaining Canvas work is six base gateway cases, nine full lifecycle
 cases, production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
@@ -42,8 +42,13 @@ supersedes historical pending-failure and unimplemented-launch statements.
 
 PR #814 remains draft and not deployed. Reviewed batch `f60aefc74` is pushed;
 CI `34706838536` has passed security scanning and release-contract tests, with
-Rust runtime/image jobs still running at this checkpoint. The later keyed Flow
-test remains local and does not reset that hosted run. Hosted `184509745` passed Rust
+Rust image builds and Rust CodeQL also pass; the runtime job is still running
+at this checkpoint. The later keyed Flow and four delivery-mode Canvas lifecycle
+cases remain local and do not reset that hosted run. Canvas integration
+`9f6679395` qualifies eight of seventeen lifecycle cases with real gateway and
+main-process publication, preserving lossless delivery snapshots. Unkeyed native
+gRPC delivery qualification is running separately; no result is claimed yet.
+Hosted `184509745` passed Rust
 formatting/packaging, service-image builds, all four runtime preflights and the
 complete Rust Service Tests job in run `34701797735`. Its security scan found stale Bun Vitest
 4.1.10 dependencies. Reviewed local repair `b0fb087c2` aligns the suite and both
