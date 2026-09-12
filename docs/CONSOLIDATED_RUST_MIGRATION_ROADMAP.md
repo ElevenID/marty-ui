@@ -98,6 +98,17 @@ profiles and beta default/empty/custom/required-input comparisons; 161 integrate
 Python regression tests passed. These are configuration and launcher checks, not
 actual deployed conformance acceptance. No new native stack was started.
 
+The subsequent token-rate forwarding repair `e486d8046` preserves the legacy
+`${TOKEN_RATE_LIMIT:-30}` setting in the native owner. Its governed beta change
+is exactly that added field; the frozen pre-extraction model remains unchanged.
+Independent rendering passed all four conformance modes across five rate inputs.
+The complete integrated repository Python suite passed **3,266 tests, three
+skipped in 216.40s** at that commit, including the repaired semantic authentication
+guard across the shared service definition. Runtime integer/window parity remains
+separate work; forwarding alone does not prove it. The consumer retirement
+checklist now records concrete base, self-host, Flow and Envoy cutover batches
+and their required runtime gates, not completed deployment claims.
+
 Renewal activation's separate author worktree now passes fresh packaged-main
 delivery in both encryption modes, historical keyed recovery, embedded gateway
 selection and real Canvas association tests. The strengthened Canvas test covers
