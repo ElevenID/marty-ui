@@ -282,7 +282,7 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-/// Candidate owner only: the gateway coverage/selector is deliberately unchanged.
+/// Renewal owner selected by the gateway's exact, contract-gated renewal route.
 pub fn router(service: CredentialRenewalService) -> Router {
     Router::new()
         .route("/v1/issued-credentials/{credential_id}/renew", post(renew))

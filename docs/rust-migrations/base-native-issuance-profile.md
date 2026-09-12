@@ -94,7 +94,7 @@ not new configuration promises:
 | Inputs | Existing default or role / source |
 | --- | --- |
 | `ISSUER_DISPLAY_NAME`, `CORS_ALLOWED_ORIGINS` | ElevenID LLC; localhost:3000. Python issuance `main.py:176,409`; native `config.rs` discovery/server defaults. Gateway's `CORS_ORIGINS` is a different input. |
-| `TOKEN_RATE_WINDOW` | 60 seconds; Python `routes.py:770`, native rate-limit settings. Integer-grammar correction is a separate lane; this profile does not claim to close it. |
+| `TOKEN_RATE_WINDOW` | 60 seconds; Python `routes.py:770`, native rate-limit settings. Integer-grammar/window parity is integrated separately in `3552a9f84`; see [qualification and platform limits](token-rate-config-parity.md). Profile rendering does not establish runtime parity. |
 | `VCDM_RELATED_RESOURCE_MAX_BYTES`, `VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS` | 2,000,000 bytes / 10 seconds; Python `routes.py` related-resource owner and native initiation settings. |
 | `DIDCOMM_UNIVERSAL_RESOLVER_URL` | Preferred nonempty resolver alias, before `UNIVERSAL_RESOLVER_URL`; Python `application/rust_integration.py:840`, native `legacy_environment`. |
 | `CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS`, `CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES` | 60 seconds / 30 minutes; Python `canvas_routes.py:159-160`, native experience config. |
