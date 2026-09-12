@@ -110,9 +110,18 @@ configuration gate passed independently. Hosted qualification remains separate.
 Production and beta deployments are unchanged; this is locally reviewed source,
 not a merge or deployed acceptance claim. Fresh automatic HTTP/Flow admission,
 compatible consumer/image selection and safe Python retirement remain open.
-Automatic initiation also needs configured offer-TTL parity: the native default
-was hardcoded rather than using the existing operator setting. That independent
-Rust repair is underway, with no KMS changes. See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
+Configured offer-TTL parity is repaired in Rust (`2579307e2`) and the existing
+operator setting is forwarded to native beta issuance (`ef027ff22`). Eighteen
+unchanged Python observations cover parsing and expiry boundaries; the Compose
+gate checks default/custom/zero/negative bindings without clamping.
+Fresh automatic HTTP composition (`0d50538d2`, reviewed source `f14da5255`)
+now proves actual reservation and delivery for anoncrypt, authcrypt and mixed
+ordinary-wallet offers, plus keyed-push rejection before side effects. The author
+tree passed all ten configured target tests in 47.84 seconds and strict Clippy.
+Controlled clock, seed, signer and control-plane dependencies remain explicit;
+this is not packaged gateway or Flow acceptance. Holder fallback, genuine
+existing-reservation recovery and initiation gateway selection remain open.
+See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
 The final combined native tree passed 377 issuance unit tests, eight HTTP tests,
 the configured nine-case composition plus five support controls, strict package

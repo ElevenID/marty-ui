@@ -48,6 +48,43 @@ retained service Python tests, with three explicit skips, in 205.47 seconds.
 Its actual read-only Compose gate also passed independently. This does not
 replace the upcoming exact-head hosted run or aggregate beta acceptance.
 
+## Fresh automatic HTTP checkpoint
+
+Reviewed source `f14da5255`, integrated as `0d50538d2`, adds actual native HTTP
+admission through `InitiationService`, PostgreSQL reservation and the same
+delivery owner/Core/HTTPS graph. Three fresh successes cover anoncrypt, authcrypt
+and mixed ordinary-wallet offers. A keyed-push rejection precedes seed generation,
+reservation, signing, allocation and transport. Complete service DTOs, default
+expiry, durable binding and subsequent projector/direct replay are asserted.
+The final author run passed ten configured target tests in 47.84 seconds, retaining
+all fifteen native and thirteen gateway cases, and strict Clippy in 6.11 seconds.
+All eight exact-owned Docker objects across both author runs were verified absent.
+The new test is registered as mandatory in the published-contract CI runner.
+
+Clock, labeled synthetic seed values, signer and control-plane ports are controlled.
+This is not secure random generation, packaged gateway, independent-wallet or
+Flow qualification. Unkeyed HTTP initiation is not represented as idempotent
+replay: subsequent replay explicitly uses the committed reservation. Holder
+fallback and genuine existing-reservation admission recovery remain next gates.
+
+Rust offer-TTL repair `2579307e2` uses the existing shared Python-compatible
+integer configuration type and one configured initiation owner. The eighteen-case
+unchanged Python capture covers default/custom values, zero/negative values,
+integer spelling, invalid input and expiry overflow. Beta binding `ef027ff22`
+forwards the exact legacy expression; actual read-only Compose checks and 41
+configuration/selector/reference tests passed. See the
+[TTL evidence and limits](initiation-offer-ttl-parity.md). Neither change selects
+automatic routing or changes Core/KMS.
+
+Root requalification of combined `0d50538d2` passed 383 issuance library tests,
+three initiation HTTP tests, six direct HTTP tests and ten explicitly configured
+composition tests (47.55 seconds). Strict issuance library/test Clippy passed
+in 23.66 seconds; all nineteen workspace packages passed formatting. All six
+exact-owned test containers were independently verified absent. The mandatory
+registration/configuration/reference regression suite passed 120 tests. These
+results include the integrated TTL repair, unlike the earlier 3,135-test Python
+checkpoint, and still do not claim hosted CI or deployment acceptance.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
@@ -231,10 +268,11 @@ Neither snapshot projection nor isolated rejection is full admission evidence.
 Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
 not demonstrated migration regressions; working full peer2 has old/new evidence.
 
-1. Qualify fresh automatic HTTP initiation, including admission, real reservation,
-   configured offer expiry, mixed wallets, holder fallback and existing-reservation
-   recovery through the shared actual delivery owner. Direct delivery/recovery is
-   qualified above; controlled projector inputs are not fresh admission evidence.
+1. Complete automatic HTTP qualification beyond the fresh admission/reservation,
+   mixed-wallet successes and offer-expiry evidence recorded above: holder fallback,
+   missing holder, fresh transport failure, mixed keyed rejection and genuine
+   existing-reservation admission recovery remain. Direct/projector replay is not
+   a substitute for executing the actual admission recovery lookup.
 2. Retain the direct gateway gate and qualify the initiation route with a legacy
    trap before selecting it. Preserve management-key injection, trusted tenant and
    error projection. Qualify Flow/gRPC separately against its governed push target.

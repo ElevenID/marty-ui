@@ -92,3 +92,23 @@ do not replace the entire issuance service or all gRPC methods. Then qualify the
 governed Flow/gRPC push target. Preserve anoncrypt and true authcrypt without
 fallback. **DIDCOMM-KMS-001 remains explicitly deferred**; migrating custody from
 Python memory to Rust memory is not KMS-only custody.
+
+## Remaining admission and Flow qualification
+
+The fresh native HTTP gate now creates actual PostgreSQL reservations for both
+encryption modes and mixed ordinary-wallet success; direct/projector repetition
+uses the committed reservation. It does not establish genuine HTTP idempotent
+admission recovery. Extend this shared fixture for subject fallback, no holder,
+fresh transport failure and mixed-wallet keyed rejection. Then qualify ordinary
+keyed HTTP success/recovery/conflict and explicitly historical keyed DIDComm
+snapshots through the actual recovery lookup. Do not describe seeded historical
+rows as newly accepted keyed DIDComm initiation.
+
+Flow `rust/services/flow/src/instance_side_effects.rs` always supplies an
+idempotency key and `grpc_providers.rs` forwards it. Both legacy and native fresh
+DIDComm/mixed-wallet initiation reject that combination. A Flow target cutover
+must retain ordinary-wallet keyed recovery and this rejection; do not strip its
+key to force delivery and silently change retry guarantees. Qualify the actual
+Flow gRPC provider against the native tonic server/shared PostgreSQL owner.
+Unkeyed native RPC push is a separately governed service capability, not proof
+that current Flow requests push. Neither requires KMS changes.
