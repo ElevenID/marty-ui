@@ -173,6 +173,30 @@ contract and wallet-fixture sources between the author and integrated trees.
 Uncertain-delivery keyed HTTP recovery and governed unkeyed RPC push remain
 distinct extensions; actual Flow provider qualification is proceeding separately.
 
+## Keyed Flow provider checkpoint
+
+Reviewed source `71cd472f7` (local integration `25d2d06f9`) executes the actual
+Flow `GrpcIssuanceProvider`, MMF channel, tonic server and complete native
+`IssuanceGrpcPlatform` against PostgreSQL. Missing/wrong service tokens fail
+before admission. Ordinary keyed creation, actual recovery and conflict preserve
+the frozen hashes, nested claims, reserved VCT, expiry and existing offer-created
+bus behavior. Pure/mixed DIDComm keyed requests remain rejected before reservation,
+signing or delivery. No private test-only production constructor was exposed;
+the only dependency change is a local `marty-flow` dev-dependency.
+
+The exact Flow and retained HTTP gates passed in 3.39 and 3.58 seconds. The author
+suite passed fourteen configured tests in 80.40 seconds and strict Clippy in
+7.03 seconds. Its initial expected-claims fixture omitted the source-governed
+reserved `_vct`; the exact expected addition was repaired without changing the
+frozen request hashes or production code. All eighteen owned containers were
+verified absent. Root then qualified the combined historical/Flow integration:
+fifteen configured tests in 84.73 seconds, strict library/test Clippy in 21.88
+seconds, all nineteen-package formatting checks, and all fourteen owned containers
+independently absent. Event absence checks concern the existing post-RPC bus,
+not durable outbox or full Flow orchestration. Governed unkeyed RPC push and actual
+consumer selection remain separate. This local follow-up is not in hosted
+`f60aefc74`; that head's live CI is not being reset to add it.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
@@ -357,7 +381,7 @@ Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
 not demonstrated migration regressions; working full peer2 has old/new evidence.
 
 1. Retain the qualified fresh, ordinary-keyed and historical-keyed HTTP gates.
-   Complete the actual Flow provider boundary and governed unkeyed RPC push;
+   Retain the qualified keyed Flow provider boundary and complete governed unkeyed RPC push;
    do not strip Flow idempotency keys to force delivery. An optional additional
    historical unknown-delivery HTTP case must retain the already-qualified
    no-resend fence, not recreate the old pending reservation in memory.

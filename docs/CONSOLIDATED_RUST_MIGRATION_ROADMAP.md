@@ -40,7 +40,10 @@ operations still retain legacy gateway ownership. The
 [current Canvas audit](rust-migrations/canvas-worker-cutover-readiness.md#current-remaining-work-audit)
 supersedes historical pending-failure and unimplemented-launch statements.
 
-PR #814 remains draft and not deployed. Hosted `184509745` passed Rust
+PR #814 remains draft and not deployed. Reviewed batch `f60aefc74` is pushed;
+CI `34706838536` has passed security scanning and release-contract tests, with
+Rust runtime/image jobs still running at this checkpoint. The later keyed Flow
+test remains local and does not reset that hosted run. Hosted `184509745` passed Rust
 formatting/packaging, service-image builds, all four runtime preflights and the
 complete Rust Service Tests job in run `34701797735`. Its security scan found stale Bun Vitest
 4.1.10 dependencies. Reviewed local repair `b0fb087c2` aligns the suite and both
@@ -49,8 +52,8 @@ tests and 83 focused Python checks passed. The release-contract job also failed
 one wallet-fixture shutdown assertion: TCP connect did not guarantee server
 acceptance before shutdown. Reviewed test-only `c72ad1273` adds that explicit
 checkpoint; all 38 fixture tests and ten repeats of all three shutdown cases
-pass without changing runtime or relaxing assertions. Both repairs are local,
-not yet pushed or hosted-green. Integration `31b07a20a` passed 3,089 combined
+pass without changing runtime or relaxing assertions. Both repairs are now
+included in `f60aefc74` and their respective hosted jobs pass. Integration `31b07a20a` passed 3,089 combined
 root/service Python tests with three explicit skips before those later additions.
 
 Earlier exact hosted `aa33eff6f` passed its
@@ -144,6 +147,12 @@ delivery without resend, changed-request conflict, and failed/bare-issued
 no-delivery safeguards. All fourteen configured tests and strict Clippy passed.
 The remaining consumer steps are actual Flow/gRPC qualification, selecting the
 qualified routes/consumers, safe Python retirement and release/beta acceptance.
+The keyed Flow provider boundary has since passed in local `25d2d06f9`
+(reviewed source `71cd472f7`): actual provider/MMF channel/tonic/native platform
+and PostgreSQL, authenticated ordinary creation/recovery/conflict and unchanged
+pure/mixed DIDComm keyed rejection. The combined fifteen-test target and strict
+Clippy passed. Governed unkeyed RPC push remains next; full Flow orchestration,
+durable outbox and deployed selection are not claimed by this provider gate.
 The gateway candidate is now locally qualified in reviewed `2c4d4ff7e`
 (integration `c5a390593`): nine fresh scenarios traverse real gateway/upstream HTTP,
 the same native PostgreSQL/crypto/HTTPS graph, exact public redaction, upstream
