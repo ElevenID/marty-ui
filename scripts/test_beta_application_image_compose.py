@@ -291,7 +291,9 @@ def assert_report(report, mode):
         )
 
 
-def render_binding(directory, compose_command, *files):
+def render_binding(
+    directory, compose_command, *files, project="synthetic-beta-image-binding"
+):
     # This model contains only synthetic images and selectors. Unlike the actual
     # tracked-source renderer it intentionally tests two-variable interpolation.
     environment = {
@@ -320,7 +322,7 @@ def render_binding(directory, compose_command, *files):
         [
             *compose_command,
             "--project-name",
-            "synthetic-beta-image-binding",
+            project,
             "--env-file",
             "images.env",
             *(argument for file in files for argument in ("-f", str(file))),

@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import time
@@ -26,6 +27,10 @@ LOCAL_BUILD_FILE = "docker-compose.profile.local-build.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
 DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-authcrypt.yml"
+NATIVE_FILE = "docker-compose.profile.conformance-native.yml"
+NATIVE_IMAGES_FILE = "docker-compose.profile.conformance-native-images.yml"
+NATIVE_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-native-authcrypt.yml"
+NATIVE_CA_FILE = "docker-compose.profile.didcomm-native-conformance.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
 ONE_SHOT_SERVICES = {
@@ -71,7 +76,10 @@ def compose_command(
     include_haip: bool = False,
     include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
+    issuance_owner: str = "legacy",
 ) -> list[str]:
+    if issuance_owner not in {"legacy", "native"}:
+        raise ValueError("issuance owner must be legacy or native")
     command = ["docker", "compose", "--project-name", validate_project(project)]
     files = [*BASE_FILES]
     if use_ghcr:
@@ -86,8 +94,16 @@ def compose_command(
         files.insert(1, LOCAL_BUILD_FILE)
     if include_haip:
         files.append(HAIP_FILE)
+    if issuance_owner == "native":
+        files.append(NATIVE_FILE)
+        if use_ghcr:
+            files.append(NATIVE_IMAGES_FILE)
     if include_didcomm_authcrypt:
         files.append(DIDCOMM_AUTHCRYPT_FILE)
+        if issuance_owner == "native":
+            files.append(NATIVE_AUTHCRYPT_FILE)
+    if issuance_owner == "native":
+        files.append(NATIVE_CA_FILE)
     files.append(ISOLATION_FILE)
     for compose_file in files:
         command.extend(["--file", os.fspath(ROOT / compose_file)])
@@ -101,6 +117,7 @@ def rendered_config(
     include_haip: bool = False,
     include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
+    issuance_owner: str = "legacy",
 ) -> dict[str, Any]:
     completed = subprocess.run(
         [
@@ -109,6 +126,7 @@ def rendered_config(
                 include_haip=include_haip,
                 include_didcomm_authcrypt=include_didcomm_authcrypt,
                 use_ghcr=use_ghcr,
+                issuance_owner=issuance_owner,
             ),
             "config",
             "--format",
@@ -466,6 +484,18 @@ def main() -> int:
         help="mount the exact deployment-owned DIDComm authcrypt policy directory into issuance only",
     )
     parser.add_argument(
+        "--issuance-owner",
+        choices=("legacy", "native"),
+        default="legacy",
+        help="explicit gateway HTTP owner; native requires qualified source/artifacts; legacy reference remains the default",
+    )
+    parser.add_argument("--stack-manifest", type=Path)
+    parser.add_argument("--stack-checksums", type=Path)
+    parser.add_argument(
+        "--release-ui-revision",
+        help="full UI source revision bound by the authenticated stack manifest",
+    )
+    parser.add_argument(
         "--local-build",
         action="store_true",
         help="build the checked-out source; never certification-grade evidence",
@@ -497,6 +527,7 @@ def main() -> int:
         include_haip=args.haip,
         include_didcomm_authcrypt=args.didcomm_authcrypt,
         use_ghcr=not args.local_build,
+        issuance_owner=args.issuance_owner,
     )
 
     if args.command == "down":
@@ -512,8 +543,18 @@ def main() -> int:
         include_haip=args.haip,
         include_didcomm_authcrypt=args.didcomm_authcrypt,
         use_ghcr=not args.local_build,
+        issuance_owner=args.issuance_owner,
     )
     ports = validate_isolation(config, project)
+    native = None
+    if args.issuance_owner == "native":
+        native = runpy.run_path(str(ROOT / "scripts/conformance_native.py"))
+        native["validate_model"](
+            config,
+            project=project,
+            authcrypt=args.didcomm_authcrypt,
+            local_build=args.local_build,
+        )
     if args.command == "config":
         print(json.dumps(config, indent=2, sort_keys=True))
         return 0
@@ -526,12 +567,42 @@ def main() -> int:
         return 0
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)
+        native_plan = None
+        native_image = (
+            config["services"]["issuance-native"]["image"] if native else None
+        )
+        if native:
+            if args.local_build:
+                native["validate_capabilities"](
+                    json.loads(
+                        (ROOT / native["CAPABILITY_PATH"]).read_text(encoding="utf-8")
+                    )
+                )
+            else:
+                if not all(
+                    (
+                        args.stack_manifest,
+                        args.stack_checksums,
+                        args.release_ui_revision,
+                    )
+                ):
+                    raise ValueError(
+                        "Released native conformance requires stack manifest, checksums and exact release UI revision"
+                    )
+                native_plan = native["verify_release"](
+                    args.stack_manifest,
+                    args.stack_checksums,
+                    args.release_ui_revision,
+                    native_image,
+                )
         if args.local_build:
             build_result = subprocess.run(
                 [*command, "build", *local_build_arguments()], cwd=ROOT, check=False
             )
             if build_result.returncode:
                 return build_result.returncode
+            if native:
+                native["probe_image"](native_image, project, plan=None)
             up_result = subprocess.run(
                 # Keycloak configuration is intentionally a one-shot service.
                 # Compose's --wait treats its successful exit as an error even
@@ -549,6 +620,17 @@ def main() -> int:
         # as failures, so released images use the same explicit detached
         # lifecycle as a local build. Readiness belongs to the suite driver,
         # which probes the real public endpoint before starting a test plan.
+        if native:
+            pulled = subprocess.run(
+                ["docker", "pull", native_image],
+                cwd=ROOT,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if pulled.returncode:
+                return pulled.returncode
+            native["probe_image"](native_image, project, plan=native_plan)
         up_result = subprocess.run(
             [*command, "up", "--detach", "--no-build"], cwd=ROOT, check=False
         )

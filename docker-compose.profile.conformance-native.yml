@@ -1,0 +1,46 @@
+# Explicit disposable native HTTP selection; legacy reference consumers remain.
+x-conformance-grpc-auth: &conformance-grpc-auth
+  GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for native conformance}
+services:
+  issuance-native:
+    extends:
+      file: docker-compose.service.issuance-native.yml
+      service: issuance-native
+    image: ${MARTY_CONFORMANCE_PROJECT:?set the exact conformance project}-issuance-native
+    entrypoint: ["/app/services/entrypoint.sh"]
+    command: []
+    environment:
+      SERVICE_NAME: issuance_native
+      ISSUER_BASE_URL: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+      CORS_ALLOWED_ORIGINS: ${OIDF_PUBLIC_BASE_URL:?set OIDF_PUBLIC_BASE_URL to the HTTPS verifier URL}
+  gateway:
+    environment:
+      <<: *conformance-grpc-auth
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    depends_on:
+      issuance-native:
+        condition: service_healthy
+  auth:
+    environment: *conformance-grpc-auth
+  organization:
+    environment: *conformance-grpc-auth
+  credential-template:
+    environment: *conformance-grpc-auth
+  trust-profile:
+    environment: *conformance-grpc-auth
+  compliance-profile:
+    environment: *conformance-grpc-auth
+  presentation-policy:
+    environment: *conformance-grpc-auth
+  deployment-profile:
+    environment: *conformance-grpc-auth
+  flow:
+    environment: *conformance-grpc-auth
+  issuance:
+    environment: *conformance-grpc-auth
+  revocation-profile:
+    environment: *conformance-grpc-auth
+  device-registration:
+    environment: *conformance-grpc-auth
+  verification:
+    environment: *conformance-grpc-auth

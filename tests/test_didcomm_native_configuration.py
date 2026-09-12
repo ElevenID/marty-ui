@@ -13,11 +13,23 @@ AUTHCRYPT = "docker-compose.profile.didcomm-native-authcrypt.yml"
 CONFORMANCE = "docker-compose.profile.didcomm-native-conformance.yml"
 
 
+def _native_source(beta):
+    assert beta["services"]["issuance-native"] == {
+        "extends": {
+            "file": "docker-compose.service.issuance-native.yml",
+            "service": "issuance-native",
+        }
+    }
+    return yaml.safe_load(
+        (ROOT / "docker-compose.service.issuance-native.yml").read_text()
+    )["services"]["issuance-native"]
+
+
 def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
     base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
     beta = yaml.safe_load((ROOT / "docker-compose.beta.yml").read_text())
     legacy = base["services"]["issuance"]["environment"]
-    native = beta["services"]["issuance-native"]["environment"]
+    native = _native_source(beta)["environment"]
     for name in (
         "ISSUANCE_OFFER_TTL_MINUTES",
         "VCDM_RELATED_RESOURCE_URLS",
@@ -37,7 +49,7 @@ def _source_initiation_model():
     beta = yaml.safe_load((ROOT / "docker-compose.beta.yml").read_text())
     # Source-only guard; the explicit Compose gate checks the actual merge.
     services = deepcopy(base["services"])
-    services["issuance-native"] = beta["services"]["issuance-native"]
+    services["issuance-native"] = _native_source(beta)
     for name in ("flow", "issuance"):
         services[name]["environment"].update(beta["services"][name]["environment"])
     return base, beta, {"services": services}
@@ -122,7 +134,6 @@ def test_native_profiles_are_not_implicitly_selected_by_release_or_legacy_confor
     None
 ):
     for path in (
-        "scripts/conformance_stack.py",
         "docker-compose.base.yml",
         "docker-compose.selfhost.prod.yml",
         "docker-compose.ui-prod.yml",
@@ -131,6 +142,9 @@ def test_native_profiles_are_not_implicitly_selected_by_release_or_legacy_confor
         source = (ROOT / path).read_text(encoding="utf-8")
         assert AUTHCRYPT not in source
         assert CONFORMANCE not in source
+    stack = runpy.run_path(str(ROOT / "scripts/conformance_stack.py"))
+    command = stack["compose_command"]("marty-conformance-reference")
+    assert all(AUTHCRYPT not in part and CONFORMANCE not in part for part in command)
     legacy = yaml.safe_load(
         (ROOT / "docker-compose.profile.didcomm-authcrypt.yml").read_text()
     )

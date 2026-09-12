@@ -1,0 +1,217 @@
+"""Read-only Compose selection, whole-model preservation and synthetic binding gate.
+
+No daemon, images, operator environment files, network or application is used.
+"""
+
+from __future__ import annotations
+
+import argparse
+from copy import deepcopy
+import json
+from pathlib import Path
+import re
+import runpy
+import subprocess
+import tempfile
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+OWNER = runpy.run_path(str(ROOT / "scripts/conformance_stack.py"))
+NATIVE = runpy.run_path(str(ROOT / "scripts/conformance_native.py"))
+MERGE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
+PROJECT = "marty-conformance-native-config"
+COMMON = "docker-compose.service.issuance-native.yml"
+IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
+
+
+def files(*, native, local, authcrypt):
+    command = OWNER["compose_command"](
+        PROJECT,
+        issuance_owner="native" if native else "legacy",
+        use_ghcr=not local,
+        include_didcomm_authcrypt=authcrypt,
+    )
+    return [
+        command[index + 1] for index, part in enumerate(command) if part == "--file"
+    ]
+
+
+def synthetic_values(model, directory):
+    text = json.dumps(model)
+    values = {
+        key: "synthetic-owned-012345678901234567890123456789"
+        for key in re.findall(r"\$\{([A-Z0-9_]+):\?", text)
+    }
+    values.update(
+        MARTY_CONFORMANCE_PROJECT=PROJECT,
+        MARTY_SERVICES_IMAGE=IMAGE,
+        MARTY_ISSUANCE_IMAGE="synthetic.invalid/issuance@sha256:" + "b" * 64,
+        MARTY_UI_IMAGE="synthetic.invalid/ui@sha256:" + "c" * 64,
+        OIDF_PUBLIC_BASE_URL="https://conformance.example:9443",
+        OIDF_PUBLIC_PORT="9443",
+        OIDF_TLS_INTERNAL_PORT="9443",
+        PUBLIC_API_URL="https://conformance.example:9443",
+        CORS_ORIGINS="https://conformance.example:9443",
+        OIDF_TLS_CERT_DIR=(directory / "tls").as_posix(),
+        DIDCOMM_ENCRYPTION_POLICY_DIR=(directory / "policy").as_posix(),
+    )
+    return values
+
+
+def assert_native_delta(legacy, actual):
+    expected = deepcopy(legacy)
+    # The native owner is validated separately in full; all existing service,
+    # network, secret, volume, routing and mount fields are compared unchanged
+    # except the explicitly enumerated native authentication/selection delta.
+    expected["services"]["issuance-native"] = actual["services"]["issuance-native"]
+    token = actual["services"]["issuance-native"]["environment"]["GRPC_SERVICE_TOKEN"]
+    for name in NATIVE["TOKEN_CONSUMERS"]:
+        expected["services"][name]["environment"]["GRPC_SERVICE_TOKEN"] = token
+    gateway = expected["services"]["gateway"]
+    gateway["environment"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE["NATIVE_URL"]
+    gateway["depends_on"]["issuance-native"] = {
+        "condition": "service_healthy",
+        "required": True,
+    }
+    expected["x-conformance-grpc-auth"] = {"GRPC_SERVICE_TOKEN": token}
+    assert actual == expected, "Native selection changed an unowned existing field"
+
+
+def run(command):
+    def render(*paths, project=PROJECT):
+        return MERGE["render"](
+            *paths, profiles=("oidf",), project=project, compose_command=command
+        )
+
+    beta = render("docker-compose.base.yml", "docker-compose.beta.yml")
+    # Compose's no-interpolate representation may use list-form merged env/args
+    # versus map-form inherited env/args. Compare complete interpolated models
+    # below, plus the exact original source definition independently here.
+    common = yaml.safe_load((ROOT / COMMON).read_text(encoding="utf-8"))
+    frozen = yaml.safe_load(
+        (
+            ROOT / "tests/fixtures/issuance-native-compose-before-extraction.yml"
+        ).read_text(encoding="utf-8")
+    )
+    assert common == frozen, (
+        "Shared service differs from the pinned pre-extraction definition"
+    )
+    assert set(common) == {"services"} and set(common["services"]) == {
+        "issuance-native"
+    }
+    assert common["services"]["issuance-native"]["build"]["context"] == "."
+    for path in (
+        "docker-compose.beta.yml",
+        "docker-compose.profile.conformance-native.yml",
+    ):
+        source = yaml.safe_load((ROOT / path).read_text(encoding="utf-8"))
+        assert source["services"]["issuance-native"]["extends"] == {
+            "file": COMMON,
+            "service": "issuance-native",
+        }
+        assert (ROOT / path).parent / COMMON == ROOT / COMMON
+
+    with tempfile.TemporaryDirectory(prefix="conformance-native-render-") as temporary:
+        directory = Path(temporary)
+        before_source = yaml.safe_load(
+            (ROOT / "docker-compose.beta.yml").read_text(encoding="utf-8")
+        )
+        before_source["services"]["issuance-native"] = frozen["services"][
+            "issuance-native"
+        ]
+        before_path = directory / "beta-before.json"
+        before_path.write_text(json.dumps(before_source), encoding="utf-8")
+
+        def beta_binding(before, effective):
+            (directory / "images.env").write_text(
+                "".join(f"{key}={value}\n" for key, value in sorted(effective.items())),
+                encoding="utf-8",
+            )
+            return BIND["render_binding"](
+                directory,
+                command,
+                ROOT / "docker-compose.base.yml",
+                before_path if before else ROOT / "docker-compose.beta.yml",
+                project=PROJECT,
+            )
+
+        values = synthetic_values(beta, directory)
+        optional = set(re.findall(r"\$\{([A-Z0-9_]+):-", json.dumps(common)))
+        for overrides in (
+            {},
+            dict.fromkeys(optional, ""),
+            {key: "synthetic-custom" for key in optional},
+        ):
+            effective = {**values, **overrides}
+            assert beta_binding(False, effective) == beta_binding(True, effective), (
+                "Beta interpolation behavior changed"
+            )
+        required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", json.dumps(common)))
+        for key in sorted(required):
+            for missing in (True, False):
+                effective = {**values, key: ""}
+                if missing:
+                    effective.pop(key)
+                errors = []
+                for before in (False, True):
+                    try:
+                        beta_binding(before, effective)
+                    except subprocess.CalledProcessError as error:
+                        errors.append(error.stderr)
+                    else:
+                        raise AssertionError(
+                            "Required beta input unexpectedly accepted"
+                        )
+                # Compose may report a map key or list index for equivalent
+                # environment forms; retain the complete required-variable
+                # failure text, not that parser-internal collection location.
+                failures = [
+                    re.search(r"required variable .+", error).group(0)
+                    for error in errors
+                ]
+                assert len(failures) == 2 and failures[0] == failures[1]
+        for local in (False, True):
+            for authcrypt in (False, True):
+                baseline = render(
+                    *files(native=False, local=local, authcrypt=authcrypt)
+                )
+                selected = render(*files(native=True, local=local, authcrypt=authcrypt))
+                inputs = synthetic_values(selected, directory)
+                (directory / "images.env").write_text(
+                    "".join(
+                        f"{key}={value}\n" for key, value in sorted(inputs.items())
+                    ),
+                    encoding="utf-8",
+                )
+                baseline = BIND["render_binding"](
+                    directory,
+                    command,
+                    *files(native=False, local=local, authcrypt=authcrypt),
+                    project=PROJECT,
+                )
+                selected = BIND["render_binding"](
+                    directory,
+                    command,
+                    *files(native=True, local=local, authcrypt=authcrypt),
+                    project=PROJECT,
+                )
+                NATIVE["validate_model"](
+                    selected, project=PROJECT, authcrypt=authcrypt, local_build=local
+                )
+                OWNER["validate_isolation"](selected, PROJECT)
+                assert_native_delta(baseline, selected)
+                assert (
+                    selected["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"]
+                    == "issuance:9005"
+                )
+    print(
+        "PASS: beta whole-model/default/empty/custom/required-input preservation; four explicit native conformance compositions. Configuration only, not runtime acceptance."
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--compose-command", nargs="+", default=["docker", "compose"])
+    run(parser.parse_args().compose_command)

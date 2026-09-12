@@ -1,0 +1,6 @@
+# Same authenticated immutable services artifact as the conformance gateway.
+services:
+  issuance-native:
+    image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}
+    pull_policy: always
+    build: !reset null

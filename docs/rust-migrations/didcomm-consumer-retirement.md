@@ -65,3 +65,48 @@ rendered deployment, observed failure recovery or native activation evidence.
 Do not delete active Python encryption, policy or startup requirements until all
 intended consumers above have passed their gates. The unused decrypt/unpack
 adapter retirement in Credentials PR #275 does not authorize further deletion.
+
+## Explicit native conformance selection
+
+The conformance launcher retains `--issuance-owner legacy` as its default.
+`--issuance-owner native` adds a distinct native service and gateway URL, paired
+read-only CA mounts, and paired authcrypt policy mounts when `--didcomm-authcrypt`
+is selected. Native mode pairs the service token across the existing thirteen
+Rust/legacy clients and peers; it does not change Flow or Envoy targets. Missing
+required configuration, ambiguous mounts, token mismatches or legacy URL aliases
+fail validation. There is no automatic legacy fallback.
+
+Beta and conformance share `docker-compose.service.issuance-native.yml` at the
+repository root. The former beta definition is frozen at `cb1a01656703896ce552bff42c140f154a97026a`
+in `tests/fixtures/issuance-native-compose-before-extraction.yml`. Full rendered
+beta equality covers unset, empty and custom optional values, including exact
+required-variable failure text (Compose's map/list diagnostic location is not
+part of that behavior). The service file is required alongside the Compose files
+in the source checkout; it is not a runtime bind asset and must not be copied
+into the self-host runtime-asset directory. Existing beta deployment uses its
+source-verified full checkout. Self-host release bundle selection is unchanged.
+
+Released native `up` additionally requires `--stack-manifest`, `--stack-checksums`
+and `--release-ui-revision`. It reuses the official release input validator and
+existing `gh attestation verify ... --repo ElevenID/marty-ui` trust, then reads
+the authenticated UI source's coverage contract from the local Git object store.
+The closed floor requires initiation, direct DIDComm delivery and renewal native
+ownership; an older services digest that merely contains the binary is rejected.
+The tooling checkout need not equal the authenticated source revision. Exact
+RepoDigest and OCI source/revision/version labels are cross-checks, not signatures.
+
+The executable/linker probe uses an exact-owned, networkless, read-only container
+without secret mounts; cleanup verifies the random ownership label and exact ID.
+It is not route or behavioral acceptance. `--local-build` is explicitly source
+evidence, checks the same coverage floor, and cannot substitute for release
+attestation. Actual runtime conformance remains required and must fail on missing
+routes. Current artifacts without selected renewal are intentionally ineligible.
+
+Qualification commands: `python -m pytest tests/test_conformance_native.py
+tests/test_prepare_official_beta_release.py` and
+`python scripts/test_conformance_native_compose.py`. The latter performs only
+read-only Compose rendering with synthetic values: released/local source images
+crossed with anoncrypt/authcrypt, full existing-model preservation except the
+closed native auth/selection delta, and beta extraction parity. No native stack
+has been deployed or accepted by these configuration gates; Python retirement,
+KMS corrections and production remain outside this change.

@@ -115,35 +115,7 @@ def image_reference(artifact: dict[str, Any], expected_name: str) -> dict[str, s
 _image_reference = image_reference
 
 
-def prepare_release(
-    manifest_path: Path,
-    checksums_path: Path,
-    *,
-    recorder_revision: str,
-    expected_ui_revision: str,
-) -> dict[str, Any]:
-    manifest_path = manifest_path.resolve()
-    checksums_path = checksums_path.resolve()
-    _require(
-        manifest_path.parent == checksums_path.parent,
-        "Manifest and checksums must share one release directory",
-    )
-    checksums = _checksum_map(checksums_path)
-    manifest_digest = _sha256(manifest_path)
-    _require(
-        checksums.get(manifest_path.name) == manifest_digest,
-        "Official stack manifest checksum does not match SHA256SUMS",
-    )
-    _require(
-        COMMIT.fullmatch(recorder_revision) is not None,
-        "Recorder revision must be a full lowercase commit SHA",
-    )
-    _require(
-        COMMIT.fullmatch(expected_ui_revision) is not None,
-        "Expected UI revision must be a full lowercase commit SHA",
-    )
-
-    manifest = _load_json(manifest_path)
+def _validated_components(manifest: dict[str, Any], expected_ui_revision: str):
     _require(
         manifest.get("schema") == "marty.stack/v1",
         "Official stack manifest schema is unsupported",
@@ -243,6 +215,76 @@ def prepare_release(
     _require(
         len({image["digest"] for image in images.values()}) == len(images),
         "Official stack image roles must resolve to unique digests",
+    )
+
+    return release_version, revisions_by_repository, images
+
+
+def _checked_release_paths(
+    manifest_path: Path, checksums_path: Path
+) -> tuple[Path, str]:
+    manifest_path = manifest_path.resolve()
+    checksums_path = checksums_path.resolve()
+    _require(
+        manifest_path.parent == checksums_path.parent,
+        "Manifest and checksums must share one release directory",
+    )
+    checksums = _checksum_map(checksums_path)
+    manifest_digest = _sha256(manifest_path)
+    _require(
+        checksums.get(manifest_path.name) == manifest_digest,
+        "Official stack manifest checksum does not match SHA256SUMS",
+    )
+    return manifest_path, manifest_digest
+
+
+def validate_release_inputs(
+    manifest_path: Path,
+    checksums_path: Path,
+    *,
+    expected_ui_revision: str,
+) -> dict[str, Any]:
+    """Shared exact manifest/checksum/component/image binding; not signature verification."""
+    manifest_path, manifest_digest = _checked_release_paths(
+        manifest_path, checksums_path
+    )
+    _require(
+        COMMIT.fullmatch(expected_ui_revision) is not None,
+        "Expected UI revision must be a full lowercase commit SHA",
+    )
+    version, _, images = _validated_components(
+        _load_json(manifest_path), expected_ui_revision
+    )
+    return {
+        "release_version": version,
+        "marty_ui_sha": expected_ui_revision,
+        "stack_manifest_sha256": manifest_digest,
+        "images": images,
+    }
+
+
+def prepare_release(
+    manifest_path: Path,
+    checksums_path: Path,
+    *,
+    recorder_revision: str,
+    expected_ui_revision: str,
+) -> dict[str, Any]:
+    manifest_path, manifest_digest = _checked_release_paths(
+        manifest_path, checksums_path
+    )
+    _require(
+        COMMIT.fullmatch(recorder_revision) is not None,
+        "Recorder revision must be a full lowercase commit SHA",
+    )
+    _require(
+        COMMIT.fullmatch(expected_ui_revision) is not None,
+        "Expected UI revision must be a full lowercase commit SHA",
+    )
+
+    manifest = _load_json(manifest_path)
+    release_version, revisions_by_repository, images = _validated_components(
+        manifest, expected_ui_revision
     )
 
     _require(

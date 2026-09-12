@@ -595,6 +595,8 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     entrypoint = text("services/entrypoint.sh")
     compose = text("docker-compose.base.yml")
     beta = text("docker-compose.beta.yml")
+    assert "file: docker-compose.service.issuance-native.yml" in beta
+    beta += text("docker-compose.service.issuance-native.yml")
     production = text("docker-compose.selfhost.prod.yml")
     assert '"services/issuance"' in workspace
     assert "marty-issuance-service" in dockerfile
