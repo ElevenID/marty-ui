@@ -47,15 +47,23 @@ Rust service tests and image builds remain running at this observation.
 Reviewed Kubernetes native-owner configuration is integrated locally at
 `97ff18e48` (author `cc695ee84`). The final author checkpoint passed 30 Rust
 tests, strict Clippy/format checks and 164 Python guards; the integrated focused
-Python regression passed 127 tests in 4.99 seconds. It preserves custom shared
+Python regression passed 127 tests in 4.99 seconds. At integrated `54dbda667`,
+all 30 release-evidence Rust tests and strict Clippy passed, followed by the full
+Python regression: **3,542 passed, three skipped**, in 214.49 seconds. An earlier
+full run selected the wrong Git installation path for Bash discovery; correcting
+the runner PATH resolved those failures without changing test expectations.
+It preserves custom shared
 bindings and legacy ownership, rejects invalid selection before writes, and
 tests captured-model reuse. These are model/command-boundary proofs, not cluster
 acceptance. Release provenance and resolved runtime acceptance remain required;
 see [the Kubernetes qualification boundary](rust-migrations/kubernetes-native-issuance.md).
 
 Envoy routing remains in its separate worktree. Its supplementary actual-image
-attempt failed during Docker container creation before Envoy startup; Windows
-bind-path diagnosis and full Linux runtime coverage remain pending. A separate
+attempt now passes Docker creation and ownership checks but found a generator
+serialization defect: feature-unified arbitrary-precision JSON numbers became
+objects in YAML output. A bounded JSON-output correction and independently parsed
+numeric-scalar regression are in progress; full Linux runtime coverage remains
+pending. A separate
 Flow worker is implementing actual-main startup and public service-boundary
 checks. Packaged image boot, real gateway authentication, callback-worker
 delivery and self-host workload TLS remain explicit acceptance requirements.
