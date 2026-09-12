@@ -1,0 +1,539 @@
+{
+  "idempotency_guard_cases": [
+    {
+      "case": "didcomm-with-key",
+      "grpc": {
+        "detail": "idempotent initiation does not support DIDComm push delivery",
+        "rejected": true,
+        "response": {},
+        "status": "INVALID_ARGUMENT"
+      },
+      "http": {
+        "body": {
+          "detail": "idempotent initiation does not support DIDComm push delivery"
+        },
+        "rejected": true,
+        "status": 422
+      },
+      "key": "synthetic-key",
+      "wallets": [
+        {
+          "format_variant": "didcomm_v2"
+        }
+      ]
+    },
+    {
+      "case": "mixed-with-key",
+      "grpc": {
+        "detail": "idempotent initiation does not support DIDComm push delivery",
+        "rejected": true,
+        "response": {},
+        "status": "INVALID_ARGUMENT"
+      },
+      "http": {
+        "body": {
+          "detail": "idempotent initiation does not support DIDComm push delivery"
+        },
+        "rejected": true,
+        "status": 422
+      },
+      "key": "synthetic-key",
+      "wallets": [
+        {
+          "format_variant": "default"
+        },
+        {
+          "format_variant": "didcomm_v2"
+        }
+      ]
+    },
+    {
+      "case": "ordinary-with-key",
+      "grpc": {
+        "rejected": false,
+        "scope": "guard-fallthrough-only"
+      },
+      "http": {
+        "rejected": false,
+        "scope": "guard-fallthrough-only"
+      },
+      "key": "synthetic-key",
+      "wallets": [
+        {
+          "format_variant": "default"
+        }
+      ]
+    },
+    {
+      "case": "didcomm-without-key",
+      "grpc": {
+        "rejected": false,
+        "scope": "guard-fallthrough-only"
+      },
+      "http": {
+        "rejected": false,
+        "scope": "guard-fallthrough-only"
+      },
+      "key": null,
+      "wallets": [
+        {
+          "format_variant": "didcomm_v2"
+        }
+      ]
+    }
+  ],
+  "projector_cases": [
+    {
+      "case": "explicit-holder",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:holder",
+            "status_before": "pending",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://https://wallet.example/inbox"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "issued"
+        }
+      },
+      "input": {
+        "delivery_fails": false,
+        "holder_did": "did:example:holder",
+        "mixed_wallets": false,
+        "snapshot_only": false,
+        "subject_did": null,
+        "transaction_status": "pending"
+      }
+    },
+    {
+      "case": "subject-fallback",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:subject",
+            "status_before": "pending",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://https://wallet.example/inbox"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "issued"
+        }
+      },
+      "input": {
+        "delivery_fails": false,
+        "holder_did": null,
+        "mixed_wallets": false,
+        "snapshot_only": false,
+        "subject_did": "did:example:subject",
+        "transaction_status": "pending"
+      }
+    },
+    {
+      "case": "missing-holder",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "http": {
+        "delivery_calls": [],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://pending?transaction_id=synthetic-tx"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "input": {
+        "delivery_fails": false,
+        "holder_did": null,
+        "mixed_wallets": false,
+        "snapshot_only": false,
+        "subject_did": null,
+        "transaction_status": "pending"
+      }
+    },
+    {
+      "case": "delivery-failure",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:holder",
+            "status_before": "pending",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://pending?transaction_id=synthetic-tx"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "input": {
+        "delivery_fails": true,
+        "holder_did": "did:example:holder",
+        "mixed_wallets": false,
+        "snapshot_only": false,
+        "subject_did": null,
+        "transaction_status": "pending"
+      }
+    },
+    {
+      "case": "mixed-wallets",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "apple": "Apple",
+            "default": "Default Wallet",
+            "didcomm": "Synthetic Wallet",
+            "manager": "Manager"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "apple": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org/apple-wallet%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23apple-wallet%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+            "default": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+            "manager": "custom://open?existing=yes&credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org/credential-manager%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23credential-manager%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:holder",
+            "status_before": "pending",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "apple": "Apple",
+            "default": "Default Wallet",
+            "didcomm": "Synthetic Wallet",
+            "manager": "Manager"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "apple": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org/apple-wallet%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23apple-wallet%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+            "default": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+            "didcomm": "didcomm://https://wallet.example/inbox",
+            "manager": "custom://open?existing=yes&credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org/credential-manager%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23credential-manager%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "issued"
+        }
+      },
+      "input": {
+        "delivery_fails": false,
+        "holder_did": "did:example:holder",
+        "mixed_wallets": true,
+        "snapshot_only": false,
+        "subject_did": null,
+        "transaction_status": "pending"
+      }
+    },
+    {
+      "case": "recovered-pending-snapshot",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "pending"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:holder",
+            "status_before": "pending",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://https://wallet.example/inbox"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "issued"
+        }
+      },
+      "input": {
+        "delivery_fails": false,
+        "holder_did": "did:example:holder",
+        "mixed_wallets": false,
+        "snapshot_only": true,
+        "subject_did": null,
+        "transaction_status": "pending"
+      }
+    },
+    {
+      "case": "recovered-issued-snapshot",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "issued"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:holder",
+            "status_before": "issued",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://https://wallet.example/inbox"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "issued"
+        }
+      },
+      "input": {
+        "delivery_fails": false,
+        "holder_did": "did:example:holder",
+        "mixed_wallets": false,
+        "snapshot_only": true,
+        "subject_did": null,
+        "transaction_status": "issued"
+      }
+    },
+    {
+      "case": "recovered-failed-snapshot",
+      "grpc": {
+        "delivery_call_count": 0,
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "failed"
+        }
+      },
+      "http": {
+        "delivery_calls": [
+          {
+            "holder_did": "did:example:holder",
+            "status_before": "failed",
+            "transaction_id": "synthetic-tx"
+          }
+        ],
+        "response": {
+          "credential_offer_labels": {
+            "didcomm": "Synthetic Wallet"
+          },
+          "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A//issuer.example/org/synthetic-org%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23sd-jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22synthetic-pre-auth-code%22%7D%7D%7D",
+          "credential_offer_uris": {
+            "didcomm": "didcomm://pending?transaction_id=synthetic-tx"
+          },
+          "credential_template_id": "synthetic-template",
+          "expires_at": "2023-11-14T23:13:20+00:00",
+          "id": "synthetic-tx",
+          "organization_id": "synthetic-org",
+          "pre_auth_code": "synthetic-pre-auth-code",
+          "status": "failed"
+        }
+      },
+      "input": {
+        "delivery_fails": true,
+        "holder_did": "did:example:holder",
+        "mixed_wallets": false,
+        "snapshot_only": true,
+        "subject_did": null,
+        "transaction_status": "failed"
+      }
+    }
+  ],
+  "reference": {
+    "capture_command": "python scripts/capture_didcomm_projector_reference.py <credentials-checkout>",
+    "governed_didcomm_target": {
+      "http_delivery_failure": "sanitized-log-and-pending-uri",
+      "http_without_holder": "pending-uri",
+      "legacy_grpc": "openid-offer-only",
+      "native_rust_target": "same-delivery-semantics-as-http"
+    },
+    "idempotency_scope": "Original source-hashed If nodes executed in isolation; no admission/control-plane execution. Fallthrough is not proof of successful initiation.",
+    "native_offer_binding": "marty-rs 0.1.60",
+    "repository": "ElevenID/marty-credentials",
+    "scope": "Actual unchanged Python projectors and native offer construction. Fixed issuer URL, transaction snapshot and controlled delivery callback; no database, crypto delivery, admission, gateway projection, or KMS qualification. Full service DTOs retain pre_auth_code; public gateway redaction is separate. Recovered cases are snapshot inputs, not executed repository recovery.",
+    "source_blobs": {
+      "contracts/issuance-initiation.json": "27fca8ce6f8be71042c0f1e518817cc8302b6e43",
+      "services/issuance/application/rust_integration.py": "d04c283c279fc9f6d020d25627bad990a49100ee",
+      "services/issuance/domain/entities.py": "1b5e2eba90c1ec13c1a38135f4da92813f1d1073",
+      "services/issuance/infrastructure/adapters/grpc_adapter.py": "1fdd58e8e5f57954a8a48f6a6726354914d7be8d",
+      "services/issuance/infrastructure/api/routes.py": "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a"
+    },
+    "source_commit": "87eae30788924921a42848425d315e2f33f7ae41"
+  },
+  "schema": "marty.didcomm-projector-python-reference/v1"
+}
