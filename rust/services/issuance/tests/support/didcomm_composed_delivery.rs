@@ -561,7 +561,7 @@ async fn run_case(
     fresh: Option<FreshScenario>,
 ) {
     assert!(fault.is_none() || recovery.is_none());
-    assert!(fresh.is_none() || (automatic && !gateway && fault.is_none() && recovery.is_none()));
+    assert!(fresh.is_none() || (automatic && fault.is_none() && recovery.is_none()));
     let mut id = format!(
         "didcomm-composed-{}-{}-{fault:?}-{}-gateway{gateway}",
         if authenticated { "auth" } else { "anon" },
@@ -689,7 +689,7 @@ async fn run_case(
     let native_router = direct_router(delivery.clone());
     let gateway_body =
         json!({"organization_id":ORGANIZATION,"transaction_id":id,"holder_did":HOLDER});
-    let mut gateway_fixture = if gateway {
+    let mut gateway_fixture = if gateway && fresh.is_none() {
         let fixture = super::didcomm_gateway_replay::GatewayFixture::start(
             native_router.clone(),
             ORGANIZATION,
@@ -705,7 +705,7 @@ async fn run_case(
         router: gateway_fixture
             .as_ref()
             .map_or(native_router, |fixture| fixture.router.clone()),
-        gateway,
+        gateway: gateway && fresh.is_none(),
     };
     if let Some(fixture) = &gateway_fixture {
         let counts = fixture.counts();
@@ -728,6 +728,7 @@ async fn run_case(
             ..Default::default()
         }
     };
+    let mut fresh_gateway = None;
     let (reservation, fresh_response) = if let Some(scenario) = fresh {
         assert_eq!(
             before,
@@ -777,7 +778,51 @@ async fn run_case(
             assert_eq!(resolutions.load(Ordering::SeqCst), 0);
             assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
         }
-        let (status, response) = fresh_initiation::request(&fresh_router, scenario, false).await;
+        let (status, response) = if gateway {
+            if !authenticated && scenario == FreshScenario::ExplicitHolder {
+                let rejected = super::didcomm_gateway_replay::GatewayFixture::start_initiation(
+                    fresh_router.clone(),
+                    ORGANIZATION,
+                    "synthetic-invalid-management-key",
+                    ISSUER,
+                )
+                .await;
+                let (status, response) = rejected
+                    .initiate(&fresh_initiation::request_body(scenario))
+                    .await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED);
+                assert_eq!(
+                    super::didcomm_gateway_replay::assert_service_error_projection(response),
+                    json!({"detail":"Invalid API Key"})
+                );
+                assert_eq!(rejected.counts(), (1, 0));
+                assert_eq!(snapshot(pool, &id).await, before);
+                assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+                assert_eq!(allocations.load(Ordering::SeqCst), 0);
+                assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+                assert_eq!(wallet.captures().await, json!({"messages":[],"failures":0}));
+                rejected.close().await;
+            }
+            let fixture = super::didcomm_gateway_replay::GatewayFixture::start_initiation(
+                fresh_router.clone(),
+                ORGANIZATION,
+                API_KEY,
+                ISSUER,
+            )
+            .await;
+            let body = fresh_initiation::request_body(scenario);
+            fixture.assert_initiation_selection_and_denials(&body).await;
+            assert_eq!(snapshot(pool, &id).await, before);
+            assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+            let (status, public) = fixture.initiate(&body).await;
+            assert_eq!(status, StatusCode::OK, "{public}");
+            let response = fixture.assert_public_offer_projection(&public);
+            assert_eq!(fixture.counts(), (1, 1));
+            fresh_gateway = Some(fixture);
+            (status, response)
+        } else {
+            fresh_initiation::request(&fresh_router, scenario, false).await
+        };
         assert_eq!(status, StatusCode::OK);
         assert_eq!(admission.seeds.load(Ordering::SeqCst), 1);
         let committed = repository
@@ -941,6 +986,15 @@ async fn run_case(
                 0
             }
         );
+        if let Some(mut fixture) = fresh_gateway.take() {
+            assert_eq!(fixture.counts(), (1, 1));
+            fixture
+                .assert_unreachable_without_legacy_fallback(&fresh_initiation::request_body(
+                    fresh.unwrap(),
+                ))
+                .await;
+            fixture.close().await;
+        }
         peers.close().await;
         wallet.close_verified();
         return;
@@ -1338,6 +1392,15 @@ async fn run_case(
     assert_eq!(resolutions.load(Ordering::SeqCst), resolution_count);
     assert_eq!(allocations.load(Ordering::SeqCst), 1);
     assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+    if let Some(mut fixture) = fresh_gateway.take() {
+        assert_eq!(fixture.counts(), (1, 1));
+        fixture
+            .assert_unreachable_without_legacy_fallback(&fresh_initiation::request_body(
+                fresh.unwrap(),
+            ))
+            .await;
+        fixture.close().await;
+    }
     if let Some(mut fixture) = gateway_fixture.take() {
         assert_eq!(
             fixture.counts().1,
@@ -1363,6 +1426,10 @@ pub(super) async fn run_gateway(database_url: &str) {
 
 pub(super) async fn run_fresh_http(database_url: &str) {
     run_mode(database_url, false, true).await;
+}
+
+pub(super) async fn run_fresh_gateway(database_url: &str) {
+    run_mode(database_url, true, true).await;
 }
 
 async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
@@ -1395,7 +1462,7 @@ async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
                         true,
                         None,
                         None,
-                        false,
+                        gateway,
                         Some(scenario),
                     )
                     .await;
@@ -1407,7 +1474,7 @@ async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
                 true,
                 None,
                 None,
-                false,
+                gateway,
                 Some(FreshScenario::MixedWallet),
             )
             .await;
