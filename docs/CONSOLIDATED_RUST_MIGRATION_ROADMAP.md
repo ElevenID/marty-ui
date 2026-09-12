@@ -31,6 +31,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+Self-host native-owner configuration is now integrated locally at `e53cb2704`
+(reviewed author `05f7df2df`). Its full Python regression passed **3,412 tests,
+three skipped**, with frozen full-model preservation, default/empty/custom
+interpolation, all ten missing/empty required-input controls and independent
+settings/readiness review. Legacy issuance, Flow and direct HTTP consumers are
+preserved. This is configuration qualification, not packaged-runtime acceptance;
+see [self-host evidence and remaining gates](rust-migrations/selfhost-native-owner.md).
+Rust bundle restoration and isolated executable acceptance remain in progress.
+Hosted CI `34718953669` is still testing pushed `98e78b8d0`; the self-host commit
+has not been pushed over that live run. Production remains unchanged.
+
 Latest local integration is `20e2a9d14`: reviewed token rate/window parity
 (`3552a9f84`) and the isolated base native issuance opt-in profile are integrated.
 The combined issuance library passed **408 tests**. Base-profile qualification
