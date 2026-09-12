@@ -79,16 +79,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_didcomm_is_native_without_selecting_initiation_or_sibling_paths() {
+    fn didcomm_and_initiation_are_native_without_selecting_sibling_paths() {
         assert_eq!(
             upstream_service(HttpMethod::Post, "/v1/issuance/didcomm/deliver"),
+            NATIVE_SERVICE
+        );
+        assert_eq!(
+            upstream_service(HttpMethod::Post, "/v1/issuance/initiate"),
             NATIVE_SERVICE
         );
         for (method, path) in [
             (HttpMethod::Get, "/v1/issuance/didcomm/deliver"),
             (HttpMethod::Post, "/v1/issuance/didcomm/deliver/extra"),
             (HttpMethod::Post, "/v1/issuance/didcomm"),
-            (HttpMethod::Post, "/v1/issuance/initiate"),
+            (HttpMethod::Get, "/v1/issuance/initiate"),
+            (HttpMethod::Post, "/v1/issuance/initiate/extra"),
             (HttpMethod::Post, "/v1/issuance"),
         ] {
             assert_eq!(upstream_service(method, path), LEGACY_SERVICE);

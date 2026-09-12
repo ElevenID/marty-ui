@@ -1,7 +1,7 @@
-//! Direct selected-route and initiation candidate qualification share one gateway
+//! Direct and initiation selected-route qualification share one gateway
 //! fixture. Gateway middleware/proxy and issuance upstream HTTP are real; identity
 //! and initiation control-plane preflights are controlled. Only the exact consumer
-//! owner may differ; direct native routing is already selected in the contract.
+//! legacy-control owner may differ; native routing is selected in the contract.
 use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
@@ -85,13 +85,8 @@ fn select_consumer(original: RouteTable, candidate: bool, consumer: Consumer) ->
             found += 1;
             assert_eq!(before.methods.len(), 1);
             assert_eq!(
-                before.upstream_service,
-                if consumer == Consumer::Direct {
-                    "issuance-native"
-                } else {
-                    "issuance"
-                },
-                "only direct delivery has already been selected in the embedded contract"
+                before.upstream_service, "issuance-native",
+                "both qualified consumers are selected in the embedded contract"
             );
             assert!(before.auth_required);
             after.upstream_service = if candidate {
@@ -126,11 +121,7 @@ fn select_consumer(original: RouteTable, candidate: bool, consumer: Consumer) ->
             .zip(selected.routes())
             .filter(|(a, b)| a != b)
             .count(),
-        usize::from(if consumer == Consumer::Direct {
-            !candidate
-        } else {
-            candidate
-        }),
+        usize::from(!candidate),
         "only the exact consumer owner can differ from the embedded contract"
     );
     selected
@@ -732,7 +723,7 @@ fn native_selection_is_unchanged_and_legacy_control_changes_only_direct_owner() 
 }
 
 #[test]
-fn initiation_candidate_changes_only_the_existing_rewritten_post_owner() {
+fn initiation_native_selection_is_unchanged_and_legacy_control_changes_only_rewritten_post_owner() {
     let contract = GatewayContract::load().unwrap();
     for candidate in [true, false] {
         select_consumer(

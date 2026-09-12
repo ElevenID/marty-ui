@@ -4635,7 +4635,10 @@ mod tests {
                     assert_eq!(request.header("x-api-key"), Some(expected));
                 }
             }
-            if request.path == "/v1/issuance/token" {
+            if matches!(
+                request.path.as_str(),
+                "/v1/issuance/token" | "/v1/issuance/initiate"
+            ) {
                 assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }

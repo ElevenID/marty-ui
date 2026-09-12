@@ -893,6 +893,7 @@ mod tests {
             "organizations"
         );
         for (method, path) in [
+            (HttpMethod::Post, "/v1/issuance"),
             (HttpMethod::Post, "/v1/issuance/credential"),
             (HttpMethod::Post, "/v1/issuance/token"),
             (HttpMethod::Post, "/v1/issuance/nonce"),
