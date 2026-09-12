@@ -219,6 +219,28 @@ mod tests {
     #[test]
     fn real_read_only_account_lookup_handles_current_and_unknown_names() {
         assert!(account_home(None).unwrap().is_some());
+        // Establish a known system account independently of the production NSS
+        // wrapper. This public account database is not /etc/shadow; never emit
+        // its contents or consult operator HOME/USER values for expectations.
+        let accounts = std::fs::read_to_string("/etc/passwd").unwrap();
+        let mut roots = accounts
+            .lines()
+            .map(|line| line.split(':').collect::<Vec<_>>())
+            .filter(|fields| fields.first() == Some(&"root"));
+        let root = roots.next().expect("known root system account");
+        assert!(roots.next().is_none(), "unique root system account");
+        assert_eq!(root.len(), 7);
+        assert_eq!(root[2], "0");
+        let expected = PathBuf::from(root[5]);
+        assert!(expected.is_absolute());
+        assert!(
+            account_home(Some(OsStr::new(root[0]))).unwrap() == Some(expected.clone()),
+            "named NSS home must match the independent system account"
+        );
+        assert!(
+            expand(PathBuf::from("~root/packager-test")).unwrap() == expected.join("packager-test"),
+            "named expansion must retain the independently established home"
+        );
         assert!(account_home(Some(OsStr::new(
             "marty-packager-nonexistent-account-94b2fe13"
         )))

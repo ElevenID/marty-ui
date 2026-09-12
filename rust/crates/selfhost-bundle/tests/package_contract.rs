@@ -442,4 +442,15 @@ fn readonly_file_metadata_and_script_execution_modes_are_preserved() {
             & 0o777,
         0o755
     );
+    let mut archive =
+        zip::ZipArchive::new(fs::File::open(options.archive.as_ref().unwrap()).unwrap()).unwrap();
+    for (name, mode) in [
+        ("bundle/config/example.bin", 0o444),
+        ("bundle/scripts/launch.sh", 0o755),
+    ] {
+        assert_eq!(
+            archive.by_name(name).unwrap().unix_mode().unwrap() & 0o777,
+            mode
+        );
+    }
 }
