@@ -1,0 +1,744 @@
+//! Real native delivery, published-schema PostgreSQL, HTTPS and canonical Core crypto.
+//! Issuer context, credential signing and the local DID/status HTTP peers are controlled.
+//! This is not a packaged-service/gateway cutover or independent-wallet qualification.
+use std::{
+    collections::BTreeSet,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use async_trait::async_trait;
+use axum::{
+    body::{to_bytes, Body},
+    extract::State,
+    http::{HeaderMap, Request, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{TimeZone, Utc};
+use marty_didcomm::{types::ServiceEntry, DidDocument};
+use marty_issuance_service::{
+    canvas_issuance_guard::CanvasGuardConfig,
+    config::IssuanceServiceConfig,
+    credential::{
+        BuiltCredential, CredentialBuildRequest, CredentialBuilder, CredentialIssuanceError,
+        CredentialTransaction, CredentialTransactionStatus, IssuerContext, IssuerContextResolver,
+    },
+    credential_lifecycle::PostgresCredentialLifecycle,
+    credential_postgres::PostgresCredentialRepository,
+    http::router_with_didcomm_delivery,
+    initiation::{InitiationRepository, InitiationRequest, InitiationReservation},
+    initiation_didcomm::{
+        DidcommEndpointValidator, DidcommTransport, NativeDidcommEnvelope,
+        NativeInitiationDidcommDelivery, NativeInitiationDidcommPorts,
+    },
+    initiation_didcomm_http::InitiationDidcommHttpService,
+    initiation_response::InitiationOfferProjector,
+    transport::TransportPolicy,
+    IssuanceRuntime,
+};
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+use serde_json::{json, Value};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use tokio::{sync::oneshot, task::JoinHandle};
+use tower::ServiceExt;
+
+use super::{
+    didcomm_test_fixtures::authcrypt_parties_with_ids, didcomm_wallet_fixture::WalletFixture,
+};
+
+const ISSUER: &str = "did:web:fixture.example:issuer";
+const HOLDER: &str = "did:web:fixture.example:holder";
+const ORGANIZATION: &str = "didcomm-composed-org";
+const SIGNED_CREDENTIAL: &str = "synthetic-controlled-signed-credential";
+const API_KEY: &str = "synthetic-didcomm-management-key";
+const SERVICE_TOKEN: &str = "synthetic-didcomm-status-token";
+const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
+
+struct ControlledIssuer;
+
+#[async_trait]
+impl IssuerContextResolver for ControlledIssuer {
+    async fn resolve(
+        &self,
+        transaction: &CredentialTransaction,
+        format: &str,
+        _force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        assert_eq!(transaction.organization_id, ORGANIZATION);
+        assert_eq!(format, "dc+sd-jwt");
+        Ok(IssuerContext {
+            issuer_profile_id: "didcomm-profile".into(),
+            issuer_did: ISSUER.into(),
+            signing_service_id: "controlled-signing-port".into(),
+            algorithm: "EdDSA".into(),
+            verification_method_id: Some(format!("{ISSUER}#signing-1")),
+            public_jwk: None,
+            certificate_chain: vec![],
+            raw_context: json!({}),
+        })
+    }
+}
+
+struct ControlledBuilder {
+    calls: AtomicUsize,
+    allocations: Arc<Mutex<Vec<Value>>>,
+}
+
+#[async_trait]
+impl CredentialBuilder for ControlledBuilder {
+    async fn build(
+        &self,
+        request: &CredentialBuildRequest,
+    ) -> Result<BuiltCredential, CredentialIssuanceError> {
+        assert_eq!(request.organization_id, ORGANIZATION);
+        assert_eq!(request.subject_did.as_deref(), Some(HOLDER));
+        assert_eq!(request.issuer.issuer_did, ISSUER);
+        assert_eq!(request.claims["given_name"], "Synthetic");
+        assert_eq!(request.status_list_entries.len(), 1);
+        assert_eq!(request.status_list_entries[0]["index"], 7);
+        assert_eq!(
+            self.allocations.lock().unwrap().last().unwrap()["credential_id"],
+            request.credential_id
+        );
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(BuiltCredential {
+            credential_id: request.credential_id.clone(),
+            credential: SIGNED_CREDENTIAL.into(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct Peers {
+    sender: DidDocument,
+    recipient: DidDocument,
+    resolutions: Arc<AtomicUsize>,
+    allocations: Arc<AtomicUsize>,
+    allocation_requests: Arc<Mutex<Vec<Value>>>,
+}
+
+async fn sender(State(state): State<Peers>) -> Json<DidDocument> {
+    state.resolutions.fetch_add(1, Ordering::SeqCst);
+    Json(state.sender)
+}
+
+async fn recipient(State(state): State<Peers>) -> Json<DidDocument> {
+    state.resolutions.fetch_add(1, Ordering::SeqCst);
+    Json(state.recipient)
+}
+
+async fn allocate(
+    State(state): State<Peers>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    assert_eq!(headers["x-service-token"], SERVICE_TOKEN);
+    assert_eq!(body["organization_id"], ORGANIZATION);
+    assert_eq!(body["credential_format"], "sd_jwt_vc");
+    assert!(body["credential_id"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    state.allocations.fetch_add(1, Ordering::SeqCst);
+    state.allocation_requests.lock().unwrap().push(body);
+    Json(
+        json!({"organization_id":ORGANIZATION,"index":7,"status_list_url":"https://status.example/synthetic"}),
+    )
+}
+
+struct OwnedPeers {
+    origin: String,
+    task: JoinHandle<()>,
+    shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl OwnedPeers {
+    async fn start(state: Peers) -> Self {
+        let app = Router::new()
+            .route("/issuer/did.json", get(sender))
+            .route("/holder/did.json", get(recipient))
+            .route(
+                "/internal/revocation-profiles/didcomm-status/reserve-index",
+                post(allocate),
+            )
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (shutdown, stopped) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        Self {
+            origin,
+            task,
+            shutdown: Some(shutdown),
+        }
+    }
+
+    async fn close(mut self) {
+        self.shutdown.take().unwrap().send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), &mut self.task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+impl Drop for OwnedPeers {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+fn transaction(id: &str) -> CredentialTransaction {
+    CredentialTransaction {
+        id: id.into(),
+        organization_id: ORGANIZATION.into(),
+        credential_template_id: "didcomm-template".into(),
+        revocation_profile_id: Some("didcomm-status".into()),
+        renewal_of_credential_id: None,
+        applicant_id: None,
+        application_id: None,
+        subject_did: None,
+        idempotency_key_hash: None,
+        idempotency_request_hash: None,
+        status: CredentialTransactionStatus::Pending,
+        pre_authorized_code: format!("pre-auth-{id}"),
+        nonce: None,
+        claims: json!({"given_name":"Synthetic"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        credential_type: Some("EmployeeCredential".into()),
+        selective_disclosure_claims: vec![],
+        zk_predicate_claims: vec![],
+        credential_payload_format: FORMAT.into(),
+        wallet_configs: vec![
+            json!({"wallet_id":"didcomm","format_variant":"didcomm_v2","display_name":"Synthetic Wallet"}),
+        ],
+        validity_days: 365,
+        renewable: false,
+        renewal_window_days: 30,
+        delivery_mode: "wallet_only".into(),
+        issuer_profile_id: Some("didcomm-profile".into()),
+        issuer_mode: "org_managed".into(),
+        issuer_did: Some(ISSUER.into()),
+        issuer_algorithm: Some("EdDSA".into()),
+        signing_service_id: Some("controlled-signing-port".into()),
+        reserved_credential_id: None,
+        oid4vci_client_id: None,
+        created_at: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+        expires_at: Utc.timestamp_opt(1_700_003_600, 0).single().unwrap(),
+    }
+}
+
+fn direct_router(delivery: Arc<NativeInitiationDidcommDelivery>) -> Router {
+    let config =
+        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+    let runtime = IssuanceRuntime::new(&config).unwrap();
+    router_with_didcomm_delivery(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
+        TransportPolicy::new([]),
+        InitiationDidcommHttpService::new(delivery, Some(API_KEY)),
+    )
+}
+
+async fn direct_response(app: &Router, id: &str) -> (StatusCode, Value) {
+    let request = Request::post("/v1/issuance/didcomm/deliver")
+        .header("content-type", "application/json")
+        .header("x-api-key", API_KEY)
+        .header("x-organization-id", ORGANIZATION)
+        .body(Body::from(
+            json!({"organization_id":ORGANIZATION,"transaction_id":id,"holder_did":HOLDER})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    assert_eq!(response.headers()["content-type"], "application/json");
+    (
+        status,
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap(),
+    )
+}
+
+async fn direct(app: &Router, id: &str) -> Value {
+    let (status, body) = direct_response(app, id).await;
+    assert_eq!(status, StatusCode::OK);
+    body
+}
+
+async fn snapshot(pool: &PgPool, id: &str) -> Value {
+    sqlx::query_scalar("SELECT jsonb_build_object(
+        'transaction', (SELECT to_jsonb(t) FROM issuance_service.issuance_transactions t WHERE id=$1),
+        'credentials', (SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY id), '[]'::jsonb) FROM issuance_service.issued_credentials c WHERE transaction_id=$1),
+        'deliveries', (SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY id), '[]'::jsonb) FROM issuance_service.credential_delivery_records d WHERE transaction_id=$1),
+        'events', (SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY id), '[]'::jsonb) FROM issuance_service.issuance_events e WHERE transaction_id=$1))")
+        .bind(id).fetch_one(pool).await.unwrap()
+}
+
+fn assert_offer(response: &Value, reservation: &InitiationReservation, endpoint: &str) {
+    assert_offer_result(
+        response,
+        reservation,
+        "issued",
+        &format!("didcomm://{endpoint}"),
+    );
+}
+
+fn assert_materialized_binding(state: &Value, transaction_id: &str, endpoint: &str) {
+    assert_eq!(state["transaction"]["id"], transaction_id);
+    assert_eq!(state["transaction"]["organization_id"], ORGANIZATION);
+    let credential_id = &state["credentials"][0]["id"];
+    assert!(credential_id.as_str().is_some_and(|id| !id.is_empty()));
+    assert_eq!(
+        &state["transaction"]["reserved_credential_id"],
+        credential_id
+    );
+    for row in [&state["credentials"][0], &state["deliveries"][0]] {
+        assert_eq!(row["organization_id"], ORGANIZATION);
+        assert_eq!(row["transaction_id"], transaction_id);
+    }
+    let delivery = &state["deliveries"][0];
+    assert_eq!(&delivery["credential_id"], credential_id);
+    assert_eq!(delivery["delivery_target"], "didcomm_v2");
+    assert_eq!(delivery["metadata"]["protocol"], "didcomm_v2");
+    assert_eq!(delivery["metadata"]["holder_did"], HOLDER);
+    assert_eq!(delivery["metadata"]["service_endpoint"], endpoint);
+}
+
+fn assert_offer_result(
+    response: &Value,
+    reservation: &InitiationReservation,
+    status: &str,
+    delivery_uri: &str,
+) {
+    let offer_uri = response["credential_offer_uri"].as_str().unwrap();
+    let parsed = url::Url::parse(offer_uri).unwrap();
+    assert_eq!(parsed.scheme(), "openid-credential-offer");
+    let query: Vec<_> = parsed.query_pairs().collect();
+    assert_eq!(query.len(), 1);
+    assert_eq!(query[0].0, "credential_offer");
+    let offer: Value = serde_json::from_str(&query[0].1).unwrap();
+    assert_eq!(
+        offer,
+        json!({"credential_issuer":format!("https://issuer.example/org/{ORGANIZATION}"),"credential_configuration_ids":["EmployeeCredential#sd-jwt"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":reservation.transaction.pre_authorized_code}}})
+    );
+    assert_eq!(
+        response,
+        &json!({
+            "id":reservation.transaction.id,"organization_id":ORGANIZATION,"credential_template_id":"didcomm-template","status":status,
+            "credential_offer_uri":offer_uri,"credential_offer_uris":{"didcomm":delivery_uri},"credential_offer_labels":{"didcomm":"Synthetic Wallet"},
+            "pre_auth_code":reservation.transaction.pre_authorized_code,"expires_at":"2023-11-14T23:13:20+00:00"
+        })
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fault {
+    HttpRefused,
+    UntrustedTls,
+    WrongSenderKey,
+}
+
+fn decrypt_capture(
+    encrypted: &str,
+    authenticated: bool,
+    recipient_secret: &[u8; 32],
+    recipient: &DidDocument,
+    sender: &DidDocument,
+) -> marty_didcomm::types::DidcommMessage {
+    let plaintext = if authenticated {
+        let decrypted = marty_didcomm::decrypt_authenticated_jwe(
+            encrypted,
+            recipient_secret,
+            recipient,
+            sender,
+        )
+        .unwrap();
+        assert_eq!(decrypted.sender_kid, format!("{ISSUER}#key-1"));
+        assert_eq!(decrypted.recipient_kid, format!("{HOLDER}#key-1"));
+        decrypted.plaintext
+    } else {
+        marty_didcomm::decrypt_jwe(encrypted, recipient_secret).unwrap()
+    };
+    let message = marty_didcomm::unpack_didcomm_message(&plaintext).unwrap();
+    assert_eq!(message.from.as_deref(), Some(ISSUER));
+    assert_eq!(message.to, Some(vec![HOLDER.into()]));
+    message
+}
+
+async fn run_case(pool: &PgPool, authenticated: bool, automatic: bool, fault: Option<Fault>) {
+    let id = format!(
+        "didcomm-composed-{}-{}-{fault:?}",
+        if authenticated { "auth" } else { "anon" },
+        if automatic { "automatic" } else { "direct" }
+    );
+    let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
+        503
+    } else {
+        200
+    });
+    let endpoint = format!("{}/inbox", wallet.origin);
+    let (sender_document, sender_secret, mut recipient_document, recipient_secret) =
+        authcrypt_parties_with_ids(ISSUER, HOLDER);
+    recipient_document.service.push(
+        serde_json::from_value::<ServiceEntry>(
+            json!({"id":"#didcomm","type":"DIDCommMessaging","serviceEndpoint":endpoint}),
+        )
+        .unwrap(),
+    );
+    let resolutions = Arc::new(AtomicUsize::new(0));
+    let allocations = Arc::new(AtomicUsize::new(0));
+    let allocation_requests = Arc::new(Mutex::new(Vec::new()));
+    let peers = OwnedPeers::start(Peers {
+        sender: sender_document.clone(),
+        recipient: recipient_document.clone(),
+        resolutions: resolutions.clone(),
+        allocations: allocations.clone(),
+        allocation_requests: allocation_requests.clone(),
+    })
+    .await;
+    // The wallet owns this exact temporary directory and removes the synthetic policy too.
+    let policy = wallet.ca_file.parent().unwrap().join("didcomm-policy.json");
+    let mode = if authenticated {
+        json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(if fault == Some(Fault::WrongSenderKey) { [8_u8;32] } else { sender_secret })})
+    } else {
+        json!({"mode":"anoncrypt"})
+    };
+    std::fs::write(
+        &policy,
+        json!({"version":1,"issuers":{(ISSUER):mode}}).to_string(),
+    )
+    .unwrap();
+    let repository = Arc::new(PostgresCredentialRepository::new(
+        pool.clone(),
+        b"synthetic-composed-hmac-key",
+    ));
+    let reservation = repository
+        .reserve_idempotently(&transaction(&id))
+        .await
+        .unwrap();
+    assert!(reservation.created);
+    let before = snapshot(pool, &id).await;
+    let builder = Arc::new(ControlledBuilder {
+        calls: AtomicUsize::new(0),
+        allocations: allocation_requests.clone(),
+    });
+    let lifecycle = PostgresCredentialLifecycle::new(
+        pool.clone(),
+        url::Url::parse(&peers.origin).unwrap(),
+        Some(SERVICE_TOKEN),
+        Duration::from_secs(5),
+        CanvasGuardConfig {
+            enabled: false,
+            pilot_organizations: BTreeSet::new(),
+            evidence_max_age: Duration::from_secs(900),
+            readiness_max_age: Duration::from_secs(900),
+        },
+    )
+    .unwrap();
+    let delivery = Arc::new(
+        NativeInitiationDidcommDelivery::new(
+            NativeInitiationDidcommPorts {
+                repository,
+                issuer_resolver: Arc::new(ControlledIssuer),
+                builder: builder.clone(),
+                lifecycle: Arc::new(lifecycle),
+                envelope: Arc::new(NativeDidcommEnvelope::new(
+                    None,
+                    Some(&peers.origin),
+                    policy.to_str(),
+                )),
+                endpoints: Arc::new(DidcommEndpointValidator::new(true)),
+                transport: Arc::new(
+                    DidcommTransport::with_timeout(
+                        if fault == Some(Fault::UntrustedTls) {
+                            None
+                        } else {
+                            wallet.ca_file.to_str()
+                        },
+                        Duration::from_secs(5),
+                    )
+                    .unwrap(),
+                ),
+            },
+            "https://issuer.example",
+        )
+        .unwrap(),
+    );
+    let app = direct_router(delivery.clone());
+    let projector = InitiationOfferProjector::new("https://issuer.example", delivery).unwrap();
+    let request = InitiationRequest {
+        organization_id: ORGANIZATION.into(),
+        issuer_did: ISSUER.into(),
+        holder_did: Some(HOLDER.into()),
+        ..Default::default()
+    };
+    if let Some(fault) = fault {
+        assert!(
+            !automatic,
+            "negative first entrypoint is direct; retry also exercises automatic"
+        );
+        let expected = if fault == Fault::WrongSenderKey {
+            assert!(authenticated);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail":"DIDComm sender-authentication configuration is unavailable"}),
+            )
+        } else {
+            (
+                StatusCode::CONFLICT,
+                json!({"detail":"DIDComm delivery outcome requires reconciliation"}),
+            )
+        };
+        assert_eq!(direct_response(&app, &id).await, expected);
+        let captured = wallet.captures().await;
+        let state = snapshot(pool, &id).await;
+        if fault == Fault::WrongSenderKey {
+            assert_eq!(state, before, "wrong sender cannot reserve or issue");
+            assert_eq!(captured, json!({"messages":[],"failures":0}));
+            assert_eq!(allocations.load(Ordering::SeqCst), 0);
+            assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+        } else {
+            assert_eq!(state["transaction"]["status"], "issued");
+            assert_eq!(state["credentials"].as_array().unwrap().len(), 1);
+            assert_eq!(state["deliveries"].as_array().unwrap().len(), 1);
+            assert_eq!(state["events"], json!([]));
+            assert_eq!(state["deliveries"][0]["status"], "delivery_unknown");
+            assert_materialized_binding(&state, &id, &endpoint);
+            assert!(state["deliveries"][0]["metadata"]["encrypted_message"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()));
+            assert_eq!(
+                captured["messages"].as_array().unwrap().len(),
+                usize::from(fault == Fault::HttpRefused)
+            );
+            assert_eq!(
+                captured["failures"],
+                usize::from(fault == Fault::UntrustedTls)
+            );
+            assert_eq!(allocations.load(Ordering::SeqCst), 1);
+            assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+            if fault == Fault::HttpRefused {
+                let message = decrypt_capture(
+                    captured["messages"][0].as_str().unwrap(),
+                    authenticated,
+                    &recipient_secret,
+                    &recipient_document,
+                    &sender_document,
+                );
+                assert_eq!(message.thid.as_deref(), Some(id.as_str()));
+                assert_eq!(
+                    message.id,
+                    state["deliveries"][0]["metadata"]["didcomm_message_id"]
+                );
+                assert_eq!(
+                    message.attachments[0].id.as_deref(),
+                    state["credentials"][0]["id"].as_str()
+                );
+            }
+        }
+        assert_eq!(direct_response(&app, &id).await, expected);
+        let projected = serde_json::to_value(
+            projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_offer_result(
+            &projected,
+            &reservation,
+            "pending",
+            &format!("didcomm://pending?transaction_id={id}"),
+        );
+        assert_eq!(
+            snapshot(pool, &id).await,
+            state,
+            "failure replay cannot mutate durable state"
+        );
+        assert_eq!(
+            wallet.captures().await,
+            captured,
+            "failure replay cannot resend"
+        );
+        let expected_materializations = usize::from(fault != Fault::WrongSenderKey);
+        assert_eq!(
+            allocations.load(Ordering::SeqCst),
+            expected_materializations
+        );
+        assert_eq!(
+            builder.calls.load(Ordering::SeqCst),
+            expected_materializations
+        );
+        peers.close().await;
+        wallet.close_verified();
+        return;
+    }
+    let first = if automatic {
+        serde_json::to_value(
+            projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    } else {
+        direct(&app, &id).await
+    };
+    let captured = wallet.captures().await;
+    assert_eq!(captured["failures"], 0);
+    assert_eq!(captured["messages"].as_array().unwrap().len(), 1);
+    let encrypted = captured["messages"][0].as_str().unwrap();
+    let message = decrypt_capture(
+        encrypted,
+        authenticated,
+        &recipient_secret,
+        &recipient_document,
+        &sender_document,
+    );
+    assert_eq!(
+        message.r#type,
+        "https://didcomm.org/issue-credential/3.0/issue-credential"
+    );
+    assert!(uuid::Uuid::parse_str(&message.id).is_ok());
+    assert_eq!(message.from.as_deref(), Some(ISSUER));
+    assert_eq!(message.to, Some(vec![HOLDER.into()]));
+    assert_eq!(message.thid.as_deref(), Some(id.as_str()));
+    assert_eq!(
+        message.body,
+        json!({"goal_code":"issue-vc","comment":"Here is your credential"})
+    );
+    assert_eq!(message.attachments.len(), 1);
+    assert_eq!(message.attachments[0].format.as_deref(), Some(FORMAT));
+    assert_eq!(
+        message.attachments[0].media_type.as_deref(),
+        Some("application/vc+sd-jwt")
+    );
+    assert!(message.attachments[0].data.json.is_none());
+    assert!(message.attachments[0].data.links.is_none());
+    assert_eq!(
+        URL_SAFE_NO_PAD
+            .decode(message.attachments[0].data.base64.as_deref().unwrap())
+            .unwrap(),
+        SIGNED_CREDENTIAL.as_bytes()
+    );
+    let state = snapshot(pool, &id).await;
+    assert_eq!(state["transaction"]["status"], "issued");
+    for key in ["credentials", "deliveries", "events"] {
+        assert_eq!(state[key].as_array().unwrap().len(), 1);
+    }
+    let credential = &state["credentials"][0];
+    let credential_id = credential["id"].as_str().unwrap();
+    assert_materialized_binding(&state, &id, &endpoint);
+    assert_eq!(
+        *allocation_requests.lock().unwrap(),
+        vec![
+            json!({"organization_id":ORGANIZATION,"credential_format":"sd_jwt_vc","credential_id":credential_id})
+        ]
+    );
+    assert_eq!(credential["credential_jwt"], SIGNED_CREDENTIAL);
+    assert_eq!(credential["subject_did"], HOLDER);
+    assert_eq!(message.attachments[0].id.as_deref(), Some(credential_id));
+    let record = &state["deliveries"][0];
+    assert_eq!(record["status"], "delivered");
+    assert_eq!(record["metadata"]["didcomm_message_id"], message.id);
+    assert!(record["metadata"].get("encrypted_message").is_none());
+    assert_eq!(state["events"][0]["event_type"], "credential_issued");
+    assert_eq!(state["events"][0]["transaction_id"], id);
+    assert_eq!(
+        state["events"][0]["metadata"]["credential_id"],
+        credential_id
+    );
+    assert_eq!(state["events"][0]["metadata"]["service_endpoint"], endpoint);
+    assert_eq!(
+        state["events"][0]["metadata"]["delivery_protocol"],
+        "didcomm_v2"
+    );
+    let receipt = json!({"transaction_id":id,"credential_id":credential_id,"holder_did":HOLDER,"service_endpoint":endpoint,"didcomm_message_id":message.id,"status":"delivered","error":null});
+    if automatic {
+        assert_offer(&first, &reservation, &endpoint);
+    } else {
+        assert_eq!(first, receipt);
+    }
+    let resolution_count = resolutions.load(Ordering::SeqCst);
+    assert_eq!(resolution_count, if authenticated { 2 } else { 1 });
+    let repeated = if automatic {
+        serde_json::to_value(
+            projector
+                .project(reservation.clone(), &request)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    } else {
+        direct(&app, &id).await
+    };
+    assert_eq!(repeated, first);
+    assert_eq!(
+        direct(&app, &id).await,
+        receipt,
+        "cross-entrypoint receipt replay"
+    );
+    let cross_offer = serde_json::to_value(
+        projector
+            .project(reservation.clone(), &request)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_offer(&cross_offer, &reservation, &endpoint);
+    assert_eq!(
+        snapshot(pool, &id).await,
+        state,
+        "replays preserve every durable row as equal JSON values"
+    );
+    assert_eq!(wallet.captures().await, captured);
+    assert_eq!(resolutions.load(Ordering::SeqCst), resolution_count);
+    assert_eq!(allocations.load(Ordering::SeqCst), 1);
+    assert_eq!(builder.calls.load(Ordering::SeqCst), 1);
+    peers.close().await;
+    wallet.close_verified();
+}
+
+pub(super) async fn run(database_url: &str) {
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(5))
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout='5s'")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(database_url)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(120), async {
+        for authenticated in [false, true] {
+            for automatic in [false, true] {
+                run_case(&pool, authenticated, automatic, None).await;
+            }
+            for fault in [Fault::HttpRefused, Fault::UntrustedTls] {
+                run_case(&pool, authenticated, false, Some(fault)).await;
+            }
+        }
+        run_case(&pool, true, false, Some(Fault::WrongSenderKey)).await;
+    })
+    .await
+    .expect("bounded composed DIDComm acceptance");
+    pool.close().await;
+}

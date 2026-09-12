@@ -2,6 +2,30 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/didcomm_wallet_fixture.rs"]
+mod didcomm_wallet_fixture;
+
+#[path = "support/didcomm_test_fixtures.rs"]
+mod didcomm_test_fixtures;
+
+#[path = "support/didcomm_composed_delivery.rs"]
+mod didcomm_composed_delivery;
+
+#[tokio::test]
+async fn didcomm_native_composes_crypto_https_and_published_durability() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("DIDComm composed test requires the explicit owned Docker gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .expect("start exact-owned published-schema DIDComm database");
+    didcomm_composed_delivery::run(&owned.url).await;
+    owned
+        .close_verified()
+        .expect("verify exact-owned database cleanup");
+}
+
 #[path = "support/canvas_worker_deadline_replay.rs"]
 mod canvas_worker_deadline_replay;
 
