@@ -4,6 +4,16 @@ Source audit: UI `79b2e3645`, Credentials protected main `ddd6b4e4383fe1000e3255
 This is a source inventory, not deployed configuration or acceptance evidence.
 DIDComm KMS corrections remain deferred. Production is unchanged.
 
+Current integration checkpoint: UI `5461a0251`. The original audit and proposed
+batches below are historical requirements, not a claim that their configuration
+work is still absent. Base and self-host native owners and the Rust self-host
+packager are integrated; Flow base opt-in/self-host selection has rendered
+loader/provider-factory qualification. Kubernetes configuration is integrated at
+`97ff18e48`, with model and closed deployment-command tests, not cluster
+acceptance. Envoy and actual Flow-main acceptance remain separate active work.
+See the [current roadmap](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md) and each
+linked qualification record for the precise evidence and remaining runtime gates.
+
 The eight Canvas operations and standalone initiation/direct-delivery selection
 do not establish that every supported consumer has left Python. Renewal admission
 is being implemented separately; see [its frozen evidence](credential-renewal-retirement.md).
@@ -131,14 +141,15 @@ rejects requests when hit count is at least the configured capacity. Native
 `token_rate_limit.rs:58-59` uses the same comparison for nonnegative capacities;
 its existing zero-capacity unit test explicitly checks reject-all behavior.
 
-Outstanding runtime grammar parity: Python accepts negative capacities (all
-requests receive 429), whitespace/underscores/Unicode decimal digits and integers
-beyond native `usize`; native `config.rs:972-982` uses Rust `FromStr`, so some
-previously accepted settings instead fail startup. Zero itself is supported by
-both implementations. Raw empty environment values fail numeric parsing in both,
-but Compose's `:-30` maps empty input to the normal default before startup.
-Capture and qualify a separate Rust parser/runtime correction; this configuration
-repair does not claim to close that existing gap or change KMS behavior.
+The grammar gap found by that historical audit has since received a separate
+[Rust parser and runtime parity implementation](token-rate-config-parity.md).
+Current configuration uses shared `PythonConfigInteger`; the limiter preserves
+negative/zero rejection, unbounded positive thresholds and exact window/header
+behavior against the frozen 40-case Python reference. This is not the old
+`usize`/`FromStr` implementation. Raw empty environment values still fail numeric
+parsing, while Compose's `:-30` maps empty input to the normal default before
+startup. Final integrated hosted and deployment acceptance remain required;
+the original configuration-only forwarding repair does not supply that proof.
 
 ## Remaining consumer implementation batches (source audit only)
 
