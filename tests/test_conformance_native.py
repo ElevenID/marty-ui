@@ -66,6 +66,47 @@ def test_every_existing_client_requires_paired_token(name, token):
         )
 
 
+@pytest.mark.parametrize("rate", ["30", "1200", "0"])
+def test_token_capacity_is_paired_without_rejecting_legacy_zero(rate):
+    value = model()
+    for name in ("issuance", "issuance-native"):
+        value["services"][name]["environment"]["TOKEN_RATE_LIMIT"] = rate
+    native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
+    value["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = (
+        "different"
+    )
+    with pytest.raises(ValueError):
+        native.validate_model(
+            value, project=PROJECT, authcrypt=False, local_build=False
+        )
+
+
+@pytest.mark.parametrize("fault", [None, "rate", "other-field", "rewritten-before"])
+def test_beta_token_repair_guard_accepts_only_one_source_derived_delta(fault):
+    import runpy
+
+    gate = runpy.run_path(
+        str(native.ROOT / "scripts/test_conformance_native_compose.py")
+    )
+    previous = model()
+    previous["services"]["issuance"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
+    previous["services"]["issuance-native"]["environment"].pop("TOKEN_RATE_LIMIT")
+    actual = deepcopy(previous)
+    actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
+    gate["assert_beta_token_rate_repair"](previous, actual)
+    if fault == "rate":
+        actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = "30"
+    elif fault == "other-field":
+        actual["services"]["gateway"]["environment"]["ISSUANCE_API_KEY"] = "changed"
+    elif fault == "rewritten-before":
+        previous["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = (
+            "1200"
+        )
+    if fault:
+        with pytest.raises(AssertionError):
+            gate["assert_beta_token_rate_repair"](previous, actual)
+
+
 def model(*, local=False, authcrypt=False):
     env = {
         key: "synthetic"
@@ -88,6 +129,7 @@ def model(*, local=False, authcrypt=False):
         )
     }
     env.update(
+        TOKEN_RATE_LIMIT="30",
         GRPC_SERVICE_TOKEN="synthetic-conformance-token-0123456789",
         ISSUER_BASE_URL="https://conformance.example",
         DIDCOMM_ALLOW_PRIVATE_IPS="true",

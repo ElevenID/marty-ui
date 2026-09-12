@@ -110,3 +110,32 @@ crossed with anoncrypt/authcrypt, full existing-model preservation except the
 closed native auth/selection delta, and beta extraction parity. No native stack
 has been deployed or accepted by these configuration gates; Python retirement,
 KMS corrections and production remain outside this change.
+
+### Token-rate configuration follow-up
+
+The pre-extraction beta native definition omitted `TOKEN_RATE_LIMIT` even though
+base legacy issuance forwards `${TOKEN_RATE_LIMIT:-30}` (`docker-compose.base.yml:899`)
+and native `config.rs:873-878` consumes it. The shared native definition now
+forwards that exact expression. This is an explicit one-field repair to beta,
+not unchanged beta behavior; the frozen pre-extraction fixture is unmodified.
+The whole-model gate permits only the added native capacity field, derived from
+the independently rendered legacy owner. All other beta fields and required
+input failures remain checked unchanged.
+
+Real Compose tests cover unset/empty values becoming `30`, explicit `30`, `1200`,
+and `0` across beta and all four conformance modes. Model guards reject missing
+or mismatched capacities. These tests prove configuration forwarding, not runtime
+limiter acceptance. Credentials `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`,
+`services/issuance/infrastructure/api/routes.py:769-791`, uses Python `int` and
+rejects requests when hit count is at least the configured capacity. Native
+`token_rate_limit.rs:58-59` uses the same comparison for nonnegative capacities;
+its existing zero-capacity unit test explicitly checks reject-all behavior.
+
+Outstanding runtime grammar parity: Python accepts negative capacities (all
+requests receive 429), whitespace/underscores/Unicode decimal digits and integers
+beyond native `usize`; native `config.rs:972-982` uses Rust `FromStr`, so some
+previously accepted settings instead fail startup. Zero itself is supported by
+both implementations. Raw empty environment values fail numeric parsing in both,
+but Compose's `:-30` maps empty input to the normal default before startup.
+Capture and qualify a separate Rust parser/runtime correction; this configuration
+repair does not claim to close that existing gap or change KMS behavior.

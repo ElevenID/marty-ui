@@ -32,6 +32,8 @@ services:
       # Match legacy issuance resolution without enabling private wallet endpoints.
       # Authcrypt policy and conformance CA mounts remain separate explicit overlays.
       ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
+      # Preserve the legacy Compose token limiter's operator-selected capacity.
+      TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
       DIDCOMM_ALLOW_PRIVATE_IPS: ${DIDCOMM_ALLOW_PRIVATE_IPS:-false}

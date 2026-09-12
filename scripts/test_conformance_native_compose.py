@@ -24,6 +24,13 @@ BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py
 PROJECT = "marty-conformance-native-config"
 COMMON = "docker-compose.service.issuance-native.yml"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
+TOKEN_RATE_CASES = (
+    (None, "30"),
+    ("", "30"),
+    ("30", "30"),
+    ("1200", "1200"),
+    ("0", "0"),
+)
 
 
 def files(*, native, local, authcrypt):
@@ -79,6 +86,19 @@ def assert_native_delta(legacy, actual):
     assert actual == expected, "Native selection changed an unowned existing field"
 
 
+def assert_beta_token_rate_repair(previous, actual):
+    """One explicit repair, not a rewrite of the frozen original definition."""
+    expected = deepcopy(previous)
+    before = expected["services"]["issuance-native"]["environment"]
+    assert "TOKEN_RATE_LIMIT" not in before
+    before["TOKEN_RATE_LIMIT"] = previous["services"]["issuance"]["environment"][
+        "TOKEN_RATE_LIMIT"
+    ]
+    assert actual == expected, (
+        "Beta changed outside the exact token-rate binding repair"
+    )
+
+
 def run(command):
     def render(*paths, project=PROJECT):
         return MERGE["render"](
@@ -95,8 +115,23 @@ def run(command):
             ROOT / "tests/fixtures/issuance-native-compose-before-extraction.yml"
         ).read_text(encoding="utf-8")
     )
-    assert common == frozen, (
-        "Shared service differs from the pinned pre-extraction definition"
+    base_source = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
+    token_expression = base_source["services"]["issuance"]["environment"][
+        "TOKEN_RATE_LIMIT"
+    ]
+    assert token_expression == "${TOKEN_RATE_LIMIT:-30}"
+    expected_common = deepcopy(frozen)
+    assert (
+        "TOKEN_RATE_LIMIT"
+        not in expected_common["services"]["issuance-native"]["environment"]
+    )
+    expected_common["services"]["issuance-native"]["environment"][
+        "TOKEN_RATE_LIMIT"
+    ] = token_expression
+    assert common == expected_common, (
+        "Shared service changed beyond the governed token-rate repair"
     )
     assert set(common) == {"services"} and set(common["services"]) == {
         "issuance-native"
@@ -145,8 +180,18 @@ def run(command):
             {key: "synthetic-custom" for key in optional},
         ):
             effective = {**values, **overrides}
-            assert beta_binding(False, effective) == beta_binding(True, effective), (
-                "Beta interpolation behavior changed"
+            assert_beta_token_rate_repair(
+                beta_binding(True, effective), beta_binding(False, effective)
+            )
+        for configured, expected_rate in TOKEN_RATE_CASES:
+            effective = dict(values)
+            if configured is not None:
+                effective["TOKEN_RATE_LIMIT"] = configured
+            actual = beta_binding(False, effective)
+            assert_beta_token_rate_repair(beta_binding(True, effective), actual)
+            assert (
+                actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"]
+                == expected_rate
             )
         required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", json.dumps(common)))
         for key in sorted(required):
@@ -174,40 +219,53 @@ def run(command):
                 assert len(failures) == 2 and failures[0] == failures[1]
         for local in (False, True):
             for authcrypt in (False, True):
-                baseline = render(
-                    *files(native=False, local=local, authcrypt=authcrypt)
-                )
                 selected = render(*files(native=True, local=local, authcrypt=authcrypt))
                 inputs = synthetic_values(selected, directory)
-                (directory / "images.env").write_text(
-                    "".join(
-                        f"{key}={value}\n" for key, value in sorted(inputs.items())
-                    ),
-                    encoding="utf-8",
-                )
-                baseline = BIND["render_binding"](
-                    directory,
-                    command,
-                    *files(native=False, local=local, authcrypt=authcrypt),
-                    project=PROJECT,
-                )
-                selected = BIND["render_binding"](
-                    directory,
-                    command,
-                    *files(native=True, local=local, authcrypt=authcrypt),
-                    project=PROJECT,
-                )
-                NATIVE["validate_model"](
-                    selected, project=PROJECT, authcrypt=authcrypt, local_build=local
-                )
-                OWNER["validate_isolation"](selected, PROJECT)
-                assert_native_delta(baseline, selected)
-                assert (
-                    selected["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"]
-                    == "issuance:9005"
-                )
+                for configured, expected_rate in TOKEN_RATE_CASES:
+                    effective = dict(inputs)
+                    if configured is not None:
+                        effective["TOKEN_RATE_LIMIT"] = configured
+                    (directory / "images.env").write_text(
+                        "".join(
+                            f"{key}={value}\n"
+                            for key, value in sorted(effective.items())
+                        ),
+                        encoding="utf-8",
+                    )
+                    baseline = BIND["render_binding"](
+                        directory,
+                        command,
+                        *files(native=False, local=local, authcrypt=authcrypt),
+                        project=PROJECT,
+                    )
+                    selected = BIND["render_binding"](
+                        directory,
+                        command,
+                        *files(native=True, local=local, authcrypt=authcrypt),
+                        project=PROJECT,
+                    )
+                    NATIVE["validate_model"](
+                        selected,
+                        project=PROJECT,
+                        authcrypt=authcrypt,
+                        local_build=local,
+                    )
+                    OWNER["validate_isolation"](selected, PROJECT)
+                    assert_native_delta(baseline, selected)
+                    assert (
+                        selected["services"]["flow"]["environment"][
+                            "ISSUANCE_GRPC_TARGET"
+                        ]
+                        == "issuance:9005"
+                    )
+                    assert (
+                        selected["services"]["issuance-native"]["environment"][
+                            "TOKEN_RATE_LIMIT"
+                        ]
+                        == expected_rate
+                    )
     print(
-        "PASS: beta whole-model/default/empty/custom/required-input preservation; four explicit native conformance compositions. Configuration only, not runtime acceptance."
+        "PASS: beta whole-model preservation with one explicit token-rate repair; four native conformance compositions x five token-rate inputs. Configuration only, not runtime acceptance."
     )
 
 
