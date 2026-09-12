@@ -151,6 +151,28 @@ completed its Rust Service Tests job successfully in run `34701797735`; that
 run still failed the two separately repaired security/release-contract jobs.
 This is not exact-head hosted acceptance of the newer local integration.
 
+## Historical keyed DIDComm admission
+
+Reviewed source `23d1bc76a` (integration `20f9e6988`) seeds five explicitly
+historical transactions using the production idempotency binding and PostgreSQL
+reservation APIs, then executes actual keyed HTTP admission. Pending and Failed
+states are covered in both modes; bare Issued without a delivery is a separate
+negative control. Pending recovery performs one real delivery and two subsequent
+keyed HTTP retries return the same complete response without another send,
+allocation or signing. Failed/bare-Issued rows retain pending delivery URIs and
+zero effects. Changed claims with the same key return the exact conflict response.
+Template/revocation/clock/seed ports are forbidden after the early recovery lookup.
+These are not newly accepted keyed DIDComm requests: the fresh rejection remains.
+
+The focused five-case gate passed in 5.13 seconds and the complete fourteen-test
+configured target in 85.40 seconds, with strict Clippy in 32.17 seconds. All 16
+exact-owned containers across the runs were independently verified absent.
+An initial test fixture key violated the real key grammar; only that synthetic
+label was corrected, not validation behavior. Root verified identical Rust,
+contract and wallet-fixture sources between the author and integrated trees.
+Uncertain-delivery keyed HTTP recovery and governed unkeyed RPC push remain
+distinct extensions; actual Flow provider qualification is proceeding separately.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
@@ -334,11 +356,11 @@ Neither snapshot projection nor isolated rejection is full admission evidence.
 Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
 not demonstrated migration regressions; working full peer2 has old/new evidence.
 
-1. Qualify explicitly historical keyed DIDComm admission snapshots with actual
-   delivery/recovery without weakening fresh DIDComm rejection. Ordinary-wallet
-   keyed success/recovery/conflict is qualified above; direct/projector repetition
-   is not a substitute for executing DIDComm admission recovery. Keep actual
-   persisted Issued+Delivered state distinct from a stale in-memory Failed snapshot.
+1. Retain the qualified fresh, ordinary-keyed and historical-keyed HTTP gates.
+   Complete the actual Flow provider boundary and governed unkeyed RPC push;
+   do not strip Flow idempotency keys to force delivery. An optional additional
+   historical unknown-delivery HTTP case must retain the already-qualified
+   no-resend fence, not recreate the old pending reservation in memory.
 2. Retain the direct gateway gate and qualify the initiation route with a legacy
    trap before selecting it. Preserve management-key injection, trusted tenant and
    error projection. Qualify Flow/gRPC separately against its governed push target.

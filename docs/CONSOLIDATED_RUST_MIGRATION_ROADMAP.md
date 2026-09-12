@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. Aggregate `marty-ui@v1.1.217` is published and deployed to beta at source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. The standalone Rust Canvas worker remains unrouted: composed head `afc8bd754` passed complete CI, including 169 configured published-schema tests and 11 worker/PostgreSQL tests. Two explicit reference-capture tests and two manual repository diagnostics remain ignored, not parity gates. Coordinated native consumer selection and subsequent gateway acceptance work are prepared on separate unmerged branches, not deployed or qualified by that older head's CI. Reachable Python features and other-worker crypto work are preserved. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. Native Canvas worker launch wiring is implemented in newer local source, but all eight remaining Canvas operations retain legacy gateway ownership. PR #814 remains draft; its older head's Rust Service Tests passed, while newer reviewed source still needs exact-head CI, landing and effective consumer acceptance. Reachable Python features and other-worker crypto work are preserved until retirement gates pass. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -30,6 +30,15 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
 ## Current execution snapshot — 2026-09-12
+
+Current remaining Canvas work is six base gateway cases, thirteen full lifecycle
+cases, production adoption/transport qualification of the 51-observation signing
+diagnostic helper, compatible artifacts and effective consumer acceptance. Native
+worker launch wiring and Kubernetes HMAC configuration are already implemented
+in source; source selection is not deployment acceptance. All eight Canvas
+operations still retain legacy gateway ownership. The
+[current Canvas audit](rust-migrations/canvas-worker-cutover-readiness.md#current-remaining-work-audit)
+supersedes historical pending-failure and unimplemented-launch statements.
 
 PR #814 remains draft and not deployed. Hosted `184509745` passed Rust
 formatting/packaging, service-image builds, all four runtime preflights and the
@@ -129,7 +138,12 @@ ordinary-wallet keyed admission recovery now passes in reviewed source `21453158
 (integration `fb6d266c8`): actual PostgreSQL lookup, exact frozen hashes, complete
 response/row equality and conflict rejection across changed TTLs, with no repeated
 template/clock/seed/issuer work. Its eleven configured tests and strict Clippy pass.
-Historical keyed DIDComm admission recovery and initiation gateway selection remain open.
+Historical keyed HTTP recovery is now qualified by reviewed `23d1bc76a`
+(integration `20f9e6988`): five actual PostgreSQL/HTTP scenarios, repeated keyed
+delivery without resend, changed-request conflict, and failed/bare-issued
+no-delivery safeguards. All fourteen configured tests and strict Clippy passed.
+The remaining consumer steps are actual Flow/gRPC qualification, selecting the
+qualified routes/consumers, safe Python retirement and release/beta acceptance.
 The gateway candidate is now locally qualified in reviewed `2c4d4ff7e`
 (integration `c5a390593`): nine fresh scenarios traverse real gateway/upstream HTTP,
 the same native PostgreSQL/crypto/HTTPS graph, exact public redaction, upstream

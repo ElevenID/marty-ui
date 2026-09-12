@@ -1,4 +1,52 @@
-# Canvas worker cutover readiness — 2026-09-08
+# Canvas worker cutover readiness — 2026-09-12
+
+## Current remaining-work audit
+
+Source audit at `04daa0342`, rechecked on 2026-09-12, supersedes the historical
+pending/failed statements below. Hosted head `184509745` completed its Rust
+Service Tests job successfully in run `34701797735`; the overall run failed only
+the separately repaired security and release-contract checks. This does not
+qualify the newer local integration's exact head or establish deployment.
+
+- Base gateway corpus: 46 names, 40 represented in the shared fixture, six still
+  absent: `review_suspend`, `review_revoke`, `review_failed`,
+  `review_recovered_failure`, `review_recovered_success`, `review_concurrent`.
+- Full lifecycle corpus: 17 cases, four selected by the actual HTTP publisher
+  fixture (`suspend_delivered`, `revoke_delivered`, `mirror_failure`,
+  `publication_failure`). Thirteen remain: `no_delivery`, `pending_delivery`,
+  `failed_delivery`, `wallet_delivery`, `mirror_gate_disabled`, `binding_missing`,
+  `binding_disabled`, `platform_disabled`, `suspend_revoked`, `revoke_revoked`,
+  `cancel_at_publication`, `cancel_at_mirror`, `concurrent_at_publication`.
+  A held competing 409 is not the complete frozen concurrent case. Supplementary
+  75 operations-input, 45 review-input and 28 enqueue-input observations are
+  direct corpora, not automatically gateway-qualified.
+- All eight Canvas operations still remain outside the native HTTP allow-list.
+  Preserve their legacy ownership until the remaining gateway cases pass.
+- Signing diagnostics remain a real adoption gap: `signing_error_detail.rs` is
+  imported by its test target, not the production library/adapters. Its 45 helper
+  plus six remote-operation observations need scoped production adoption and
+  actual HTTP/status/decoding qualification, coordinated with crypto ownership.
+  This is not authorization for a KMS redesign.
+
+Native worker launch wiring is already implemented in source: base Compose,
+self-host loader, GHCR/bundle and generated beta mappings, Kubernetes image and
+command, Kubernetes `TOKEN_HMAC_KEY`, shared validators and immutable
+issuance/migration pairing. Sources include `0e33a36aa`, `662edbc15` and
+`910245c0d`. The native launch classifier rejects nonempty
+`CANVAS_SYNC_PROCESSOR` and unresolved direct `DATABASE_URL_TEMPLATE`; Kubernetes
+explicitly clears the inherited selector, and image-only updates reject a legacy
+launch before writes. Do not recreate these migrations or mistake source wiring
+for deployed acceptance.
+
+Remaining consumer work is integrated-head qualification/landing, compatible
+published artifacts and effective consumer acceptance. The inspected release
+lock still selects issuance `0.1.72`. Complete safe Python retirement and the
+aggregate beta demos/device checks/soak afterward; production stays unchanged.
+The next bounded Canvas implementation is the four delivery-mode lifecycle
+cases, followed by the missing manual-review/recovery cases. Actual cancellation
+and concurrency evidence remains required for those named outcomes.
+
+## Historical checkpoints (not current blocker status)
 
 Latest local integration `4d8b5728b` includes qualified oversized-note gateway
 parity from `574cb4895`: 42 native forwards, zero candidate legacy, thirteen pure
