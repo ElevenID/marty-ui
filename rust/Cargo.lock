@@ -4602,6 +4602,7 @@ dependencies = [
  "marty-flow",
  "marty-gateway",
  "marty-oid4vci",
+ "marty-platform-clock",
  "marty-verification",
  "mmf-config",
  "mmf-core",
@@ -4751,6 +4752,16 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "marty-platform-clock"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
+ "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

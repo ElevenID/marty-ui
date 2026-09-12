@@ -1,5 +1,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
+#[cfg(test)]
+#[path = "token_rate_limit_http_tests.rs"]
+mod token_rate_limit_http_tests;
+
 use axum::{
     body::to_bytes,
     extract::{ConnectInfo, FromRequest, Path, RawForm, RawQuery, Request, State},
@@ -2393,15 +2397,17 @@ async fn token_rate_limit_middleware(
         .map_or("unknown".to_owned(), |ConnectInfo(address)| {
             address.ip().to_string()
         });
-    if limiter.check(&client) {
-        return next.run(request).await;
+    match limiter.check_request(&client) {
+        Ok(true) => return next.run(request).await,
+        Ok(false) => {}
+        Err(_) => return crate::transport::unhandled_http_failure(),
     }
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
         Json(json!({"detail": "Rate limit exceeded"})),
     )
         .into_response();
-    if let Ok(value) = HeaderValue::from_str(&limiter.retry_after_seconds().to_string()) {
+    if let Ok(value) = HeaderValue::from_str(limiter.retry_after_header()) {
         response
             .headers_mut()
             .insert(http_header::RETRY_AFTER, value);

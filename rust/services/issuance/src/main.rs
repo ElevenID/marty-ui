@@ -611,7 +611,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 ),
             )
             .with_operations(canvas_operations),
-            TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
+            TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
         ),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

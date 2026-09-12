@@ -71,8 +71,8 @@ pub struct IssuanceServiceConfig {
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
     pub dependency_timeout: Duration,
-    pub token_rate_limit: usize,
-    pub token_rate_window: Duration,
+    pub token_rate_limit: PythonConfigInteger,
+    pub token_rate_window: PythonConfigInteger,
 }
 
 impl std::fmt::Debug for IssuanceServiceConfig {
@@ -309,8 +309,8 @@ struct DidcommSettings {
 
 #[derive(Deserialize)]
 struct RateLimitSettings {
-    requests: usize,
-    window_seconds: u64,
+    requests: Value,
+    window_seconds: Value,
 }
 
 impl IssuanceServiceConfig {
@@ -403,18 +403,10 @@ impl IssuanceServiceConfig {
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
         // Preserve Python int() grammar and width at startup; calendar limits
         // belong to transaction creation, after existing-reservation recovery.
-        let offer_ttl = &settings.initiation.offer_ttl_minutes;
-        let issuance_offer_ttl_minutes = offer_ttl
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| offer_ttl.to_string())
-            .parse::<PythonConfigInteger>()
-            .map_err(|_| {
-                MmfError::new(
-                    ErrorCode::Configuration,
-                    "ISSUANCE_OFFER_TTL_MINUTES must be a Python-compatible integer",
-                )
-            })?;
+        let issuance_offer_ttl_minutes = parse_python_integer_setting(
+            "ISSUANCE_OFFER_TTL_MINUTES",
+            &settings.initiation.offer_ttl_minutes,
+        )?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
@@ -710,8 +702,14 @@ impl IssuanceServiceConfig {
             canvas_allow_http_localhost_base_urls,
             canvas_local_admin_token,
             dependency_timeout: Duration::from_secs(10),
-            token_rate_limit: settings.rate_limit.requests,
-            token_rate_window: Duration::from_secs(settings.rate_limit.window_seconds),
+            token_rate_limit: parse_python_integer_setting(
+                "TOKEN_RATE_LIMIT",
+                &settings.rate_limit.requests,
+            )?,
+            token_rate_window: parse_python_integer_setting(
+                "TOKEN_RATE_WINDOW",
+                &settings.rate_limit.window_seconds,
+            )?,
         })
     }
 }
@@ -872,19 +870,10 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
     }
     let mut rate_limit = Map::new();
     if let Some(requests) = values.get("TOKEN_RATE_LIMIT") {
-        rate_limit.insert(
-            "requests".to_owned(),
-            json!(parse_legacy_number::<usize>("TOKEN_RATE_LIMIT", requests)?),
-        );
+        rate_limit.insert("requests".to_owned(), json!(requests));
     }
     if let Some(window_seconds) = values.get("TOKEN_RATE_WINDOW") {
-        rate_limit.insert(
-            "window_seconds".to_owned(),
-            json!(parse_legacy_number::<u64>(
-                "TOKEN_RATE_WINDOW",
-                window_seconds
-            )?),
-        );
+        rate_limit.insert("window_seconds".to_owned(), json!(window_seconds));
     }
     Ok(json!({
         "server": server,
@@ -967,6 +956,23 @@ fn comma_separated_values(values: &BTreeMap<String, String>, name: &str) -> Vec<
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn parse_python_integer_setting(
+    name: &str,
+    value: &Value,
+) -> Result<PythonConfigInteger, MmfError> {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string())
+        .parse()
+        .map_err(|_| {
+            MmfError::new(
+                ErrorCode::Configuration,
+                format!("{name} must be a Python-compatible integer"),
+            )
+        })
 }
 
 fn parse_legacy_number<T>(name: &str, value: &str) -> Result<T, MmfError>
@@ -1273,8 +1279,8 @@ mod tests {
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
         assert!(config.token_hmac_key.is_none());
-        assert_eq!(config.token_rate_limit, 30);
-        assert_eq!(config.token_rate_window, std::time::Duration::from_secs(60));
+        assert_eq!(config.token_rate_limit.as_decimal(), "30");
+        assert_eq!(config.token_rate_window.as_decimal(), "60");
         assert_eq!(
             config.canvas_credentials_validation_timeout,
             CanvasNetworkTimeout::from_seconds(20.0)
@@ -1713,8 +1719,8 @@ mod tests {
             config.token_hmac_key.as_deref(),
             Some("token-hmac-contract-key")
         );
-        assert_eq!(config.token_rate_limit, 12);
-        assert_eq!(config.token_rate_window, std::time::Duration::from_secs(45));
+        assert_eq!(config.token_rate_limit.as_decimal(), "12");
+        assert_eq!(config.token_rate_window.as_decimal(), "45");
         assert_eq!(
             config.canvas_lti_state_ttl,
             std::time::Duration::from_secs(720)
@@ -1816,7 +1822,7 @@ mod tests {
 
     #[test]
     fn invalid_legacy_rate_limit_fails_closed() {
-        for (name, value) in [("TOKEN_RATE_LIMIT", "-1"), ("TOKEN_RATE_WINDOW", "later")] {
+        for (name, value) in [("TOKEN_RATE_LIMIT", "1__0"), ("TOKEN_RATE_WINDOW", "later")] {
             let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
                 .expect_err("invalid rate limit");
             assert_eq!(error.code, ErrorCode::Configuration);
