@@ -31,9 +31,9 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
-PR #814 remains draft and not deployed. Hosted `184509745` has passed Rust
-formatting/packaging, service-image builds and all four runtime preflights;
-the full runtime job is still running. Its security scan found stale Bun Vitest
+PR #814 remains draft and not deployed. Hosted `184509745` passed Rust
+formatting/packaging, service-image builds, all four runtime preflights and the
+complete Rust Service Tests job in run `34701797735`. Its security scan found stale Bun Vitest
 4.1.10 dependencies. Reviewed local repair `b0fb087c2` aligns the suite and both
 manifest floors to 4.1.11; Bun/npm audits report zero vulnerabilities, 1,092 UI
 tests and 83 focused Python checks passed. The release-contract job also failed
