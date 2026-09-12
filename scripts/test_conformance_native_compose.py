@@ -23,6 +23,7 @@ MERGE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
 PROJECT = "marty-conformance-native-config"
 COMMON = "docker-compose.service.issuance-native.yml"
+RUNTIME = "docker-compose.service.issuance-native-runtime.yml"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 TOKEN_RATE_CASES = (
     (None, "30"),
@@ -99,6 +100,18 @@ def assert_beta_token_rate_repair(previous, actual):
     )
 
 
+def complete_common(common, runtime):
+    """Resolve the one reviewed structural edge, not arbitrary Compose inputs."""
+    assert set(common) == set(runtime) == {"services"}
+    assert set(common["services"]) == set(runtime["services"]) == {"issuance-native"}
+    wrapper = deepcopy(common["services"]["issuance-native"])
+    assert wrapper.pop("extends") == {"file": RUNTIME, "service": "issuance-native"}
+    structural = runtime["services"]["issuance-native"]
+    assert set(structural) == {"build", "depends_on", "healthcheck", "restart"}
+    assert set(wrapper) == {"environment", "networks"}
+    return {"services": {"issuance-native": {**deepcopy(structural), **wrapper}}}
+
+
 def run(command):
     def render(*paths, project=PROJECT):
         return MERGE["render"](
@@ -109,7 +122,10 @@ def run(command):
     # Compose's no-interpolate representation may use list-form merged env/args
     # versus map-form inherited env/args. Compare complete interpolated models
     # below, plus the exact original source definition independently here.
-    common = yaml.safe_load((ROOT / COMMON).read_text(encoding="utf-8"))
+    common = complete_common(
+        yaml.safe_load((ROOT / COMMON).read_text(encoding="utf-8")),
+        yaml.safe_load((ROOT / RUNTIME).read_text(encoding="utf-8")),
+    )
     frozen = yaml.safe_load(
         (
             ROOT / "tests/fixtures/issuance-native-compose-before-extraction.yml"

@@ -904,6 +904,8 @@ jobs:
         run: python3 scripts/test_didcomm_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Verify explicit native conformance selection
         run: python3 scripts/test_conformance_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
+      - name: Verify opt-in base native issuance configuration
+        run: python3 scripts/test_base_native_issuance_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Expose compiler cache credentials to BuildKit secrets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:

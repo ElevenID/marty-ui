@@ -1,4 +1,5 @@
-# Same authenticated immutable services artifact as the conformance gateway.
+# Shared explicit immutable native image selection; no trust or routing defaults.
+# Release provenance/behavior acceptance is separate from Compose rendering.
 services:
   issuance-native:
     image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}

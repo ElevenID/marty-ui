@@ -1,0 +1,16 @@
+# Explicit paired compatibility policy; no CA/private-IP defaults or routing.
+# Unlike the historical short legacy mount, missing directories are not created.
+# Key custody migration remains DIDCOMM-KMS-001, outside this profile.
+x-native-issuance-policy: &native-issuance-policy
+  environment:
+    DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
+  volumes:
+    - type: bind
+      source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}
+      target: /run/secrets/didcomm-authcrypt
+      read_only: true
+      bind:
+        create_host_path: false
+services:
+  issuance: *native-issuance-policy
+  issuance-native: *native-issuance-policy

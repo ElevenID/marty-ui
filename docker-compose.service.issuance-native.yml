@@ -2,11 +2,9 @@
 # Kept at repository root so build/context and relative paths retain beta semantics.
 services:
   issuance-native:
-    build:
-      context: .
-      dockerfile: services/Dockerfile
-      args:
-        SERVICE_NAME: issuance-native
+    extends:
+      file: docker-compose.service.issuance-native-runtime.yml
+      service: issuance-native
     environment:
       GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
       ENVIRONMENT: beta
@@ -73,20 +71,5 @@ services:
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
-    depends_on:
-      issuance-migrations:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      signing-keys:
-        condition: service_healthy
-      revocation-profile:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8005/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
     networks:
       - marty-network
-    restart: unless-stopped

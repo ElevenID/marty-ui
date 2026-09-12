@@ -20,8 +20,12 @@ def _native_source(beta):
             "service": "issuance-native",
         }
     }
-    return yaml.safe_load(
-        (ROOT / "docker-compose.service.issuance-native.yml").read_text()
+    extraction = runpy.run_path(
+        str(ROOT / "scripts/test_conformance_native_compose.py")
+    )
+    return extraction["complete_common"](
+        yaml.safe_load((ROOT / extraction["COMMON"]).read_text()),
+        yaml.safe_load((ROOT / extraction["RUNTIME"]).read_text()),
     )["services"]["issuance-native"]
 
 

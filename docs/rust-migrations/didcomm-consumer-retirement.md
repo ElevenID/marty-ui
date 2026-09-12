@@ -173,6 +173,14 @@ consumers; changing the gateway alone does not retire them.
 
 ### Batch 1: general base native profile
 
+Configuration-only checkpoint: the opt-in base profile, neutral structural
+runtime extraction, shared immutable-image overlay and paired explicit policy
+profile are implemented in the isolated follow-up. See
+[the complete inventory and qualification boundary](base-native-issuance-profile.md).
+The default base, Flow/Envoy, legacy loopback ports and unselected consumers remain
+unchanged. This is not packaged runtime acceptance or authorization to delete
+Python; the required runtime gates below remain outstanding.
+
 - Add a distinct native owner and explicit gateway URL in a general opt-in
   profile. Do not reuse conformance's private-IP allowance or synthetic CA.
 - Bind the actual executable, complete build/image selection, HTTP 8005/gRPC

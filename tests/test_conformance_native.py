@@ -533,7 +533,19 @@ def test_shared_compose_file_is_in_checkout_packaging_boundary():
     assert "git -C $script:RepoRoot rev-parse HEAD" in deployment
     common_model = yaml.safe_load((native.ROOT / common).read_text(encoding="utf-8"))
     assert not common_model["services"]["issuance-native"].get("volumes")
-    assert common_model["services"]["issuance-native"]["build"]["context"] == "."
+    runtime_path = "docker-compose.service.issuance-native-runtime.yml"
+    assert common_model["services"]["issuance-native"]["extends"] == {
+        "file": runtime_path,
+        "service": "issuance-native",
+    }
+    runtime = yaml.safe_load((native.ROOT / runtime_path).read_text(encoding="utf-8"))
+    assert runtime["services"]["issuance-native"]["build"]["context"] == "."
+    assert set(runtime["services"]["issuance-native"]) == {
+        "build",
+        "depends_on",
+        "healthcheck",
+        "restart",
+    }
 
 
 def assert_required_compose_gate(workflow):
