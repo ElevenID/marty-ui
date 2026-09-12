@@ -900,6 +900,8 @@ jobs:
             --suite consumers --compose-command "$compose_renderer"
       - name: Verify generated beta application image configuration
         run: python3 scripts/test_beta_application_image_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
+      - name: Verify native DIDComm configuration ownership
+        run: python3 scripts/test_didcomm_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Expose compiler cache credentials to BuildKit secrets
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
