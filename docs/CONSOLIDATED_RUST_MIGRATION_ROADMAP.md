@@ -90,6 +90,13 @@ seconds and the existing adapter/event regression in 3.87 seconds, with strict
 Clippy; all four exact fixture containers were independently absent. This does
 not yet qualify rendered provider selection or packaged/public Flow startup.
 
+The combined tree at `5a292ec65` independently passed the configured Flow gate
+in 5.72 seconds, with both owned fixture containers verified absent, and all
+79 CI-registration guards. Its complete Python regression passed **3,478 tests,
+three skipped** in 206.39 seconds. Rendered Flow secret-loader/provider selection,
+Rust-owned Kubernetes configuration and Envoy initiation routing are the active
+parallel consumer work; these results do not qualify those unfinished bindings.
+
 Credentials [PR #275](https://github.com/ElevenID/marty-credentials/pull/275)
 merged through the protected queue at `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
 Protected main and the merged tree were independently verified; the tree is
