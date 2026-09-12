@@ -43,6 +43,16 @@ deleted and no deployment occurred; standalone aliases and sibling routes remain
 unchanged. Hosted `84665d26d` is still a separate older batch. Earlier ownership
 statements below describe that hosted or historical state, not this local tree.
 
+The integrated `e7e048e65` tree subsequently passed the full repository `tests/`
+suite: **3,044 passed, three skipped in 203.89s**, using Python 3.12 and an isolated
+temporary directory. This does not relabel the separate service or hosted suites.
+Retirement audit also found a remaining beta DIDComm caller: the legacy credential
+renewal route invokes initiation internally. Native post-issuance renewal
+finalization exists, but renewal admission still needs a frozen behavioral
+reference and migration. Supported standalone URL aliases and shared Canvas
+service callers remain separate deletion gates; the native worker itself is
+already wired in source.
+
 Latest local initiation selection is `845de6a62`: exact native POST initiation,
 unchanged public rewrite/authentication, 65 native plus 66 remaining operations
 from the frozen 131. Full gateway/issuance and sixteen composed DIDComm tests,
