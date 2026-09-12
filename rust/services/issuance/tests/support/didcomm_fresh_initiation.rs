@@ -26,9 +26,10 @@ use std::sync::{
 use tower::ServiceExt;
 
 use super::{
-    transaction, ControlledIssuer, InitiationOfferProjector, IssuanceRuntime,
-    IssuanceServiceConfig, NativeInitiationDidcommDelivery, PostgresCredentialRepository,
-    StaticDiscoveryDocuments, TransportPolicy, API_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION,
+    transaction, ControlledIssuer, CredentialTransactionStatus, InitiationOfferProjector,
+    IssuanceRuntime, IssuanceServiceConfig, NativeInitiationDidcommDelivery,
+    PostgresCredentialRepository, StaticDiscoveryDocuments, TransportPolicy, API_KEY, FORMAT,
+    HOLDER, ISSUER, ORGANIZATION,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub(super) enum Scenario {
     SubjectOnly,
     MissingHolder,
     WalletRefused,
+    Historical(CredentialTransactionStatus),
 }
 
 impl Scenario {
@@ -50,6 +52,17 @@ impl Scenario {
             // The frozen projector corpus uses a controlled delivery exception;
             // this composed case reaches the same pending result after real HTTP 503.
             Self::WalletRefused => "preflight_failure",
+            Self::Historical(CredentialTransactionStatus::Pending) => "recovered-pending-snapshot",
+            Self::Historical(CredentialTransactionStatus::Issued) => "recovered-issued-snapshot",
+            Self::Historical(CredentialTransactionStatus::Failed) => "recovered-failed-snapshot",
+            Self::Historical(_) => panic!("unsupported historical admission scenario"),
+        }
+    }
+
+    pub(super) fn historical_status(self) -> Option<CredentialTransactionStatus> {
+        match self {
+            Self::Historical(status) => Some(status),
+            _ => None,
         }
     }
 }
@@ -80,6 +93,10 @@ impl InitiationClientRepository for Admission {
 #[async_trait]
 impl InitiationTemplateResolver for Admission {
     async fn resolve(&self, id: &str) -> Result<InitiationTemplate, InitiationDependencyError> {
+        assert!(
+            self.scenario.historical_status().is_none(),
+            "recovery precedes template lookup"
+        );
         assert_eq!(id, "didcomm-template");
         let mut wallets = transaction(&self.id).wallet_configs;
         if self.scenario == Scenario::MixedWallet {
@@ -103,6 +120,10 @@ impl InitiationRevocationProfileValidator for Admission {
         organization: &str,
         profile: Option<&str>,
     ) -> Result<(), InitiationDependencyError> {
+        assert!(
+            self.scenario.historical_status().is_none(),
+            "recovery precedes revocation lookup"
+        );
         assert_eq!(organization, ORGANIZATION);
         assert_eq!(profile, Some("didcomm-status"));
         Ok(())
@@ -122,6 +143,10 @@ impl InitiationRelatedResourceValidator for Admission {
 }
 impl InitiationSeedGenerator for Admission {
     fn generate(&self) -> InitiationSeed {
+        assert!(
+            self.scenario.historical_status().is_none(),
+            "historical recovery must not allocate a new seed"
+        );
         assert_eq!(
             self.seeds.fetch_add(1, Ordering::SeqCst),
             0,
@@ -135,6 +160,10 @@ impl InitiationSeedGenerator for Admission {
 }
 impl InitiationClock for Admission {
     fn now(&self) -> chrono::DateTime<Utc> {
+        assert!(
+            self.scenario.historical_status().is_none(),
+            "historical recovery must not consult the clock"
+        );
         Utc.timestamp_opt(1_700_000_000, 0).single().unwrap()
     }
 }
@@ -199,7 +228,15 @@ pub(super) fn request_body(scenario: Scenario) -> Value {
 pub(super) async fn request(
     router: &Router,
     scenario: Scenario,
-    keyed: bool,
+    key: Option<&str>,
+) -> (StatusCode, Value) {
+    request_with_body(router, &request_body(scenario), key).await
+}
+
+pub(super) async fn request_with_body(
+    router: &Router,
+    body: &Value,
+    key: Option<&str>,
 ) -> (StatusCode, Value) {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../../contracts/issuance-initiation.json"
@@ -210,16 +247,12 @@ pub(super) async fn request(
         .header("content-type", "application/json")
         .header("x-api-key", API_KEY)
         .header("x-organization-id", ORGANIZATION);
-    if keyed {
-        request = request.header("idempotency-key", "synthetic-fresh-didcomm-key");
+    if let Some(key) = key {
+        request = request.header("idempotency-key", key);
     }
     let response = router
         .clone()
-        .oneshot(
-            request
-                .body(Body::from(request_body(scenario).to_string()))
-                .unwrap(),
-        )
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap();
     let status = response.status();

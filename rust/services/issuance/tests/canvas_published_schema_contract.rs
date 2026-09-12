@@ -28,6 +28,19 @@ mod didcomm_test_fixtures;
 mod didcomm_composed_delivery;
 
 #[tokio::test]
+async fn didcomm_historical_keyed_http_recovers_before_fresh_admission_guard() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Historical DIDComm recovery requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_historical_http(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
 async fn didcomm_fresh_gateway_admission_preserves_public_projection_without_legacy_fallback() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Gateway admission requires the exact-owned published schema gate");

@@ -32,7 +32,9 @@ use marty_issuance_service::{
     credential_lifecycle::PostgresCredentialLifecycle,
     credential_postgres::PostgresCredentialRepository,
     http::router_with_didcomm_delivery,
-    initiation::{InitiationRepository, InitiationRequest, InitiationReservation},
+    initiation::{
+        idempotency_binding, InitiationRepository, InitiationRequest, InitiationReservation,
+    },
     initiation_didcomm::{
         DidcommEndpointValidator, DidcommTransport, NativeDidcommEnvelope,
         NativeInitiationDidcommDelivery, NativeInitiationDidcommPorts,
@@ -624,11 +626,27 @@ async fn run_case(
         pool.clone(),
         b"synthetic-composed-hmac-key",
     ));
-    let seeded_reservation = if fresh.is_none() {
-        let reservation = repository
-            .reserve_idempotently(&transaction(&id))
-            .await
-            .unwrap();
+    let historical = fresh.and_then(FreshScenario::historical_status);
+    let historical_key = format!(
+        "historical-{}-{}",
+        if authenticated { "auth" } else { "anon" },
+        historical.map_or_else(|| "none".to_owned(), |status| format!("{status:?}"))
+    );
+    let seeded_reservation = if fresh.is_none() || historical.is_some() {
+        let mut initial = transaction(&id);
+        if let Some(status) = historical {
+            // Explicit historical origin: real hashes and a real repository insert,
+            // not a newly admitted DIDComm request or a fabricated recovered snapshot.
+            let request =
+                serde_json::from_value(fresh_initiation::request_body(fresh.unwrap())).unwrap();
+            let binding = idempotency_binding(Some(&historical_key), &request)
+                .unwrap()
+                .unwrap();
+            initial.idempotency_key_hash = Some(binding.key_hash);
+            initial.idempotency_request_hash = Some(binding.request_hash);
+            initial.status = status;
+        }
+        let reservation = repository.reserve_idempotently(&initial).await.unwrap();
         assert!(reservation.created);
         Some(reservation)
     } else {
@@ -729,7 +747,10 @@ async fn run_case(
         }
     };
     let mut fresh_gateway = None;
-    let (reservation, fresh_response) = if let Some(scenario) = fresh {
+    let mut historical_http = None;
+    let (reservation, fresh_response) = if let Some(scenario) =
+        fresh.filter(|_| historical.is_none())
+    {
         assert_eq!(
             before,
             json!({"transaction":null,"credentials":[],"deliveries":[],"events":[]})
@@ -751,7 +772,12 @@ async fn run_case(
                     .fetch_one(pool)
                     .await
                     .unwrap();
-            let rejected = fresh_initiation::request(&fresh_router, scenario, true).await;
+            let rejected = fresh_initiation::request(
+                &fresh_router,
+                scenario,
+                Some("synthetic-fresh-didcomm-key"),
+            )
+            .await;
             assert_eq!(
                 u64::from(rejected.0.as_u16()),
                 contract["idempotency"]["didcomm_push_with_idempotency"]["http_status"]
@@ -821,7 +847,7 @@ async fn run_case(
             fresh_gateway = Some(fixture);
             (status, response)
         } else {
-            fresh_initiation::request(&fresh_router, scenario, false).await
+            fresh_initiation::request(&fresh_router, scenario, None).await
         };
         assert_eq!(status, StatusCode::OK);
         assert_eq!(admission.seeds.load(Ordering::SeqCst), 1);
@@ -871,9 +897,86 @@ async fn run_case(
             },
             Some(response),
         )
+    } else if historical.is_some() {
+        assert!(!gateway);
+        let scenario = fresh.unwrap();
+        let (router, admission) =
+            fresh_initiation::router(repository.clone(), delivery.clone(), issuer, &id, scenario);
+        let (status, response) =
+            fresh_initiation::request(&router, scenario, Some(&historical_key)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+        historical_http = Some((router, admission));
+        (seeded_reservation.unwrap(), Some(response))
     } else {
         (seeded_reservation.unwrap(), None)
     };
+    if let Some((router, admission)) = &historical_http {
+        // These are genuine repeated keyed HTTP requests, unlike the unkeyed
+        // fresh cases' direct/projector replay. Recovery reloads persisted state.
+        let response = fresh_response.as_ref().unwrap();
+        let after = snapshot(pool, &id).await;
+        let captured = wallet.captures().await;
+        let resolution_count = resolutions.load(Ordering::SeqCst);
+        let allocation_count = allocations.load(Ordering::SeqCst);
+        let build_count = builder.calls.load(Ordering::SeqCst);
+        for _ in 0..2 {
+            assert_eq!(
+                fresh_initiation::request(router, fresh.unwrap(), Some(&historical_key)).await,
+                (StatusCode::OK, response.clone())
+            );
+        }
+        let mut changed = fresh_initiation::request_body(fresh.unwrap());
+        changed["claims"]["given_name"] = json!("Different synthetic request");
+        assert_eq!(
+            fresh_initiation::request_with_body(router, &changed, Some(&historical_key)).await,
+            (
+                StatusCode::CONFLICT,
+                json!({"detail":"idempotency key was already used for a different issuance request"})
+            )
+        );
+        assert_eq!(snapshot(pool, &id).await, after);
+        assert_eq!(wallet.captures().await, captured);
+        assert_eq!(resolutions.load(Ordering::SeqCst), resolution_count);
+        assert_eq!(allocations.load(Ordering::SeqCst), allocation_count);
+        assert_eq!(builder.calls.load(Ordering::SeqCst), build_count);
+        assert_eq!(admission.seeds.load(Ordering::SeqCst), 0);
+        if historical != Some(CredentialTransactionStatus::Pending) {
+            let expected_status = if historical == Some(CredentialTransactionStatus::Failed) {
+                "failed"
+            } else {
+                "issued"
+            };
+            assert_offer_result(
+                response,
+                &reservation,
+                expected_status,
+                &format!("didcomm://pending?transaction_id={id}"),
+            );
+            assert_eq!(
+                after, before,
+                "terminal historical transaction without a delivery cannot materialize one"
+            );
+            assert_eq!(captured, json!({"messages":[],"failures":0}));
+            assert_eq!((resolution_count, allocation_count, build_count), (0, 0, 0));
+            peers.close().await;
+            wallet.close_verified();
+            return;
+        }
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/didcomm-projector-python-reference.json"
+        ))
+        .unwrap();
+        let recovered = frozen["projector_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["case"] == fresh.unwrap().python_case())
+            .unwrap();
+        assert_eq!(response["status"], recovered["http"]["response"]["status"]);
+        // Full crypto, credential, offer and durable-state assertions below now
+        // qualify the real Pending -> Issued+Delivered admission recovery path.
+    }
     if matches!(
         fresh,
         Some(FreshScenario::MissingHolder | FreshScenario::WalletRefused)
@@ -1417,22 +1520,37 @@ async fn run_case(
 }
 
 pub(super) async fn run(database_url: &str) {
-    run_mode(database_url, false, false).await;
+    run_mode(database_url, Gate::Direct).await;
 }
 
 pub(super) async fn run_gateway(database_url: &str) {
-    run_mode(database_url, true, false).await;
+    run_mode(database_url, Gate::Gateway).await;
 }
 
 pub(super) async fn run_fresh_http(database_url: &str) {
-    run_mode(database_url, false, true).await;
+    run_mode(database_url, Gate::Fresh).await;
 }
 
 pub(super) async fn run_fresh_gateway(database_url: &str) {
-    run_mode(database_url, true, true).await;
+    run_mode(database_url, Gate::FreshGateway).await;
 }
 
-async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
+pub(super) async fn run_historical_http(database_url: &str) {
+    run_mode(database_url, Gate::Historical).await;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    Direct,
+    Gateway,
+    Fresh,
+    FreshGateway,
+    Historical,
+}
+
+async fn run_mode(database_url: &str, gate: Gate) {
+    let gateway = matches!(gate, Gate::Gateway | Gate::FreshGateway);
+    let fresh = matches!(gate, Gate::Fresh | Gate::FreshGateway);
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(5))
@@ -1448,6 +1566,38 @@ async fn run_mode(database_url: &str, gateway: bool, fresh: bool) {
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(120), async {
+        if gate == Gate::Historical {
+            for authenticated in [false, true] {
+                for status in [
+                    CredentialTransactionStatus::Pending,
+                    CredentialTransactionStatus::Failed,
+                ] {
+                    run_case(
+                        &pool,
+                        authenticated,
+                        true,
+                        None,
+                        None,
+                        false,
+                        Some(FreshScenario::Historical(status)),
+                    )
+                    .await;
+                }
+            }
+            run_case(
+                &pool,
+                false,
+                true,
+                None,
+                None,
+                false,
+                Some(FreshScenario::Historical(
+                    CredentialTransactionStatus::Issued,
+                )),
+            )
+            .await;
+            return;
+        }
         if fresh {
             for authenticated in [false, true] {
                 for scenario in [
