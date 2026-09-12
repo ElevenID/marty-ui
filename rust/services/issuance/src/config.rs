@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use mmf_config::{ConfigLayer, LayeredConfig};
+use mmf_config::{numeric_config::PythonConfigInteger, ConfigLayer, LayeredConfig};
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -21,6 +21,7 @@ pub struct IssuanceServiceConfig {
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
+    pub issuance_offer_ttl_minutes: PythonConfigInteger,
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
@@ -84,6 +85,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
+            .field(
+                "issuance_offer_ttl_minutes",
+                &self.issuance_offer_ttl_minutes,
+            )
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
@@ -283,6 +288,7 @@ struct DependencySettings {
 
 #[derive(Deserialize)]
 struct InitiationSettings {
+    offer_ttl_minutes: Value,
     organization_grpc_target: String,
     credential_template_grpc_target: String,
     revocation_profile_grpc_target: String,
@@ -357,6 +363,7 @@ impl IssuanceServiceConfig {
                     "revocation_profile_service_url": "http://revocation-profile:8013"
                 },
                 "initiation": {
+                    "offer_ttl_minutes": crate::initiation::DEFAULT_INITIATION_OFFER_TTL_MINUTES.to_string(),
                     "organization_grpc_target": "organization:9002",
                     "credential_template_grpc_target": "credential-template:9003",
                     "revocation_profile_grpc_target": "revocation-profile:9013",
@@ -394,6 +401,20 @@ impl IssuanceServiceConfig {
         let http_addr = SocketAddr::new(settings.server.host, settings.server.port);
         let grpc_addr = SocketAddr::new(settings.server.host, settings.server.grpc_port);
         let issuer_base_url = validate_issuer_base_url(&settings.discovery.issuer_base_url)?;
+        // Preserve Python int() grammar and width at startup; calendar limits
+        // belong to transaction creation, after existing-reservation recovery.
+        let offer_ttl = &settings.initiation.offer_ttl_minutes;
+        let issuance_offer_ttl_minutes = offer_ttl
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| offer_ttl.to_string())
+            .parse::<PythonConfigInteger>()
+            .map_err(|_| {
+                MmfError::new(
+                    ErrorCode::Configuration,
+                    "ISSUANCE_OFFER_TTL_MINUTES must be a Python-compatible integer",
+                )
+            })?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
@@ -637,6 +658,7 @@ impl IssuanceServiceConfig {
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
+            issuance_offer_ttl_minutes,
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
@@ -763,6 +785,9 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
         );
     }
     let mut initiation = Map::new();
+    if let Some(value) = values.get("ISSUANCE_OFFER_TTL_MINUTES") {
+        initiation.insert("offer_ttl_minutes".to_owned(), json!(value));
+    }
     for (environment_name, setting_name) in [
         ("ORG_GRPC_TARGET", "organization_grpc_target"),
         ("CT_GRPC_TARGET", "credential_template_grpc_target"),
@@ -1901,6 +1926,37 @@ mod tests {
             Some("https://didcomm-resolver.example/api")
         );
         assert!(!explicit.didcomm_allow_private_ips);
+    }
+
+    #[test]
+    fn initiation_offer_ttl_preserves_frozen_python_startup_grammar_and_width() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/initiation-offer-ttl-python-reference.json"
+        ))
+        .unwrap();
+        let cases = frozen["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 18);
+        for case in cases {
+            let mut configured = std::collections::BTreeMap::new();
+            if let Some(raw) = case["raw"].as_str() {
+                configured.insert("ISSUANCE_OFFER_TTL_MINUTES".to_owned(), raw.to_owned());
+            }
+            let result = IssuanceServiceConfig::from_values(configured);
+            if case["phase"] == "module-import" {
+                assert!(result.is_err(), "{}", case["case"]);
+            } else {
+                assert_eq!(
+                    result.unwrap().issuance_offer_ttl_minutes.as_decimal(),
+                    case["parsed_minutes"]
+                );
+            }
+        }
+        let layered = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUANCE_OFFER_TTL_MINUTES", "45"),
+            ("MARTY_ISSUANCE__INITIATION__OFFER_TTL_MINUTES", "90"),
+        ]))
+        .unwrap();
+        assert_eq!(layered.issuance_offer_ttl_minutes.to_i64(), Some(90));
     }
 
     #[test]

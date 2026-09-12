@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
+use mmf_config::numeric_config::PythonConfigInteger;
 use rand::RngCore;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -22,6 +23,7 @@ const RESERVED_CLAIMS: &[&str] = &[
     "_credential_document",
 ];
 const VCDM_V2_CONTEXT: &str = "https://www.w3.org/ns/credentials/v2";
+pub const DEFAULT_INITIATION_OFFER_TTL_MINUTES: i64 = 10_080;
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -301,6 +303,7 @@ pub struct InitiationPorts {
 pub struct InitiationService {
     ports: InitiationPorts,
     issuer_base_url: String,
+    offer_ttl_minutes: PythonConfigInteger,
 }
 
 impl std::fmt::Debug for InitiationService {
@@ -324,7 +327,28 @@ impl InitiationService {
         Ok(Self {
             ports,
             issuer_base_url,
+            offer_ttl_minutes: DEFAULT_INITIATION_OFFER_TTL_MINUTES.into(),
         })
+    }
+
+    #[must_use]
+    pub fn with_offer_ttl_minutes(mut self, minutes: PythonConfigInteger) -> Self {
+        self.offer_ttl_minutes = minutes;
+        self
+    }
+
+    fn offer_expires_at(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<DateTime<Utc>, InitiationServiceError> {
+        self.offer_ttl_minutes
+            .to_i64()
+            .and_then(Duration::try_minutes)
+            .and_then(|duration| now.checked_add_signed(duration))
+            // Python datetime, unlike chrono, cannot represent year zero or
+            // expanded years. Do not panic, clamp, or reject valid integers at startup.
+            .filter(|expires| (1..=9999).contains(&expires.year()))
+            .ok_or(InitiationServiceError::OfferExpiryOutOfRange)
     }
 
     pub async fn initiate(
@@ -382,6 +406,7 @@ impl InitiationService {
         }
         let now = self.ports.clock.now();
         let seed = self.ports.seeds.generate();
+        let expires_at = self.offer_expires_at(now)?;
         let mut transaction = CredentialTransaction {
             id: seed.transaction_id,
             organization_id: request.organization_id.clone(),
@@ -417,7 +442,7 @@ impl InitiationService {
             reserved_credential_id: None,
             oid4vci_client_id: authorized_client.map(|client| client.client_id),
             created_at: now,
-            expires_at: now + Duration::minutes(10_080),
+            expires_at,
         };
         let remote_format = remote_credential_format(&transaction.credential_payload_format)
             .map_err(|_| InitiationServiceError::UnsupportedPayloadFormat)?;
@@ -568,6 +593,8 @@ pub enum InitiationServiceError {
     Repository(#[from] InitiationRepositoryError),
     #[error("issuer base URL is required")]
     InvalidIssuerBaseUrl,
+    #[error("credential offer expiry is outside the supported calendar range")]
+    OfferExpiryOutOfRange,
     #[error("organization was not found")]
     OrganizationNotFound,
     #[error("authorized_client_id is not registered for this organization")]
@@ -985,8 +1012,7 @@ mod tests {
         .expect("valid initiation request")
     }
 
-    #[tokio::test]
-    async fn shared_service_preserves_dependency_order_and_short_circuits_recovery() {
+    fn service_harness() -> (InitiationService, Arc<TestRepository>, CallLog) {
         let calls = CallLog::default();
         let repository = Arc::new(TestRepository {
             calls: calls.clone(),
@@ -1008,6 +1034,91 @@ mod tests {
             "https://issuer.example/",
         )
         .unwrap();
+        (service, repository, calls)
+    }
+
+    #[tokio::test]
+    async fn configured_offer_expiry_matches_unchanged_python_construction_boundaries() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/initiation-offer-ttl-python-reference.json"
+        ))
+        .unwrap();
+        let cases = frozen["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 18);
+        for case in cases {
+            if case["phase"] == "module-import" {
+                continue;
+            }
+            let (service, repository, calls) = service_harness();
+            let service = service
+                .with_offer_ttl_minutes(case["parsed_minutes"].as_str().unwrap().parse().unwrap());
+            let result = service.initiate(&request(), None).await;
+            if case["phase"] == "accepted" {
+                let reservation = result.unwrap();
+                assert!(reservation.created);
+                assert_eq!(
+                    reservation.transaction.created_at.to_rfc3339(),
+                    case["created_at"]
+                );
+                assert_eq!(
+                    reservation.transaction.expires_at.to_rfc3339(),
+                    case["expires_at"]
+                );
+                assert!(repository.transaction.lock().unwrap().is_some());
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(InitiationServiceError::OfferExpiryOutOfRange)
+                ));
+                assert!(repository.transaction.lock().unwrap().is_none());
+                let stages = calls.take();
+                assert!(!stages.contains(&"resolve-required-remote-kms-issuer-context"));
+                assert!(!stages.contains(&"reserve-transaction-atomically"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_reservation_preserves_expiry_after_valid_or_oversized_ttl_change() {
+        let (service, _, calls) = service_harness();
+        let service = service.with_offer_ttl_minutes(45_i64.into());
+        let created = service
+            .initiate(&request(), Some("stable-ttl-retry"))
+            .await
+            .unwrap();
+        assert_eq!(
+            created.transaction.expires_at - created.transaction.created_at,
+            Duration::minutes(45)
+        );
+        calls.take();
+        for configured in ["-5", "9223372036854775808"] {
+            let changed = service
+                .clone()
+                .with_offer_ttl_minutes(configured.parse().unwrap());
+            let recovered = changed
+                .initiate(&request(), Some("stable-ttl-retry"))
+                .await
+                .unwrap();
+            assert!(!recovered.created);
+            assert_eq!(
+                recovered.transaction.expires_at,
+                created.transaction.expires_at
+            );
+            assert_eq!(recovered.transaction.id, created.transaction.id);
+            assert_eq!(
+                calls.take(),
+                [
+                    "validate-organization",
+                    "validate-authorized-client",
+                    "recover-idempotent-transaction"
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_service_preserves_dependency_order_and_short_circuits_recovery() {
+        let (service, _, calls) = service_harness();
         let mut request = request();
         request.claims = None;
         let created = service

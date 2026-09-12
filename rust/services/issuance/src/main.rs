@@ -494,7 +494,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             clock: Arc::new(SystemInitiationClock),
         },
         config.issuer_base_url.clone(),
-    )?;
+    )?
+    .with_offer_ttl_minutes(config.issuance_offer_ttl_minutes.clone());
     let initiation_projector =
         InitiationOfferProjector::new(config.issuer_base_url.clone(), didcomm_delivery)?;
     let initiation_http = InitiationHttpService::new(

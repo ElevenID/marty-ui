@@ -500,6 +500,7 @@ fn issuance_response(value: InitiationOfferResponse) -> IssuanceResponse {
 
 fn initiation_status(error: InitiationServiceError) -> Status {
     match error {
+        InitiationServiceError::OfferExpiryOutOfRange => Status::internal(error.to_string()),
         InitiationServiceError::Request(_) => Status::invalid_argument(error.to_string()),
         InitiationServiceError::Repository(InitiationRepositoryError::IdempotencyConflict) => {
             Status::already_exists(error.to_string())
@@ -1203,6 +1204,7 @@ mod tests {
                 ["offer_created".to_owned()],
             ));
         let (initiation, projector, stored) = initiation_platform();
+        let initiation = initiation.with_offer_ttl_minutes(45_i64.into());
         let service = candidate.with_initiation(initiation, projector);
         let request = InitiateIssuanceRequest {
             organization_id: "org-a".into(),
@@ -1239,6 +1241,11 @@ mod tests {
             .expect("committed transaction");
         assert_eq!(stored.claims["profile"], json!({"level":2}));
         assert_eq!(stored.claims["roles"], json!(["member"]));
+        assert_eq!(
+            stored.expires_at - stored.created_at,
+            chrono::Duration::minutes(45)
+        );
+        assert_eq!(response.expires_at, stored.expires_at.to_rfc3339());
         let event = events.recv().await.expect("offer-created event");
         assert_eq!(event.event_type, "offer_created");
         assert_eq!(event.transaction_id, response.id);
@@ -1274,6 +1281,16 @@ mod tests {
         .err()
         .expect("legacy and nested claims are mutually exclusive");
         assert_eq!(conflict.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn initiation_expiry_overflow_is_a_sanitized_internal_grpc_failure() {
+        let status = initiation_status(InitiationServiceError::OfferExpiryOutOfRange);
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(
+            status.message(),
+            "credential offer expiry is outside the supported calendar range"
+        );
     }
 
     #[tokio::test]
