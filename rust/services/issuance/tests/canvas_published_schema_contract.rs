@@ -2,6 +2,22 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/didcomm_admission_recovery.rs"]
+mod didcomm_admission_recovery;
+
+#[tokio::test]
+async fn didcomm_http_admission_recovers_real_keyed_reservation() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Admission recovery requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_admission_recovery::run(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
 #[path = "support/didcomm_wallet_fixture.rs"]
 mod didcomm_wallet_fixture;
 
