@@ -38,11 +38,18 @@ qualify the newer local integration's exact head or establish deployment.
   Supplementary
   75 operations-input, 45 review-input and 28 enqueue-input observations are
   direct corpora, not automatically gateway-qualified.
-- All eight Canvas operations still remain outside the native HTTP allow-list.
-  Their activation audit found one configuration dependency: beta must forward
-  the existing `CANVAS_CREDENTIALS_STATUS_SYNC_URL` expression to issuance-native
-  to preserve configured suspend/revoke mirroring. The bounded eight-route
-  activation and unset/empty/custom configuration controls are in progress.
+- All eight Canvas operations are selected in local `300b92e9d`, from reviewed
+  `b15560e28`: 73 native / 58 remaining / 131 total. Beta forwards the existing
+  `CANVAS_CREDENTIALS_STATUS_SYNC_URL` expression to issuance-native to preserve
+  configured suspend/revoke mirroring. Unset/empty/custom rendered controls pass.
+  Gateway 109 library plus three smoke tests, issuance 386 library tests, all
+  twelve configured database gates, pure guards, 99 Python checks, strict Clippy
+  (37.62s) and all 19 package formatting checks passed. All 34 exact owned
+  container IDs were independently absent. Two old legacy-owner assertions were
+  updated to native; their authentication, identity and body assertions remain.
+  The embedded positive gateway route table is unchanged by test fixtures; only
+  the negative control changes exactly eight owners back to legacy. Exact-head
+  CI, landing and deployment remain open; no sibling route or Python was removed.
   Signing diagnostics are not on this operations callgraph and do not block
   that separate activation slice.
 - Signing diagnostics remain a real adoption gap: `signing_error_detail.rs` is

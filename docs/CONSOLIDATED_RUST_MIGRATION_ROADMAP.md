@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. Native Canvas worker launch wiring is implemented in newer local source, but all eight remaining Canvas operations retain legacy gateway ownership. PR #814 remains draft; its older head's Rust Service Tests passed, while newer reviewed source still needs exact-head CI, landing and effective consumer acceptance. Reachable Python features and other-worker crypto work are preserved until retirement gates pass. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. Native Canvas worker launch wiring and selection of the eight additional Canvas operations are implemented and qualified locally, not deployed. PR #814 remains draft; newer reviewed source still needs exact-head CI, landing and effective consumer acceptance. Reachable Python features and other-worker crypto work are preserved until retirement gates pass. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -31,6 +31,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+Latest local selection is `300b92e9d`, integrating reviewed `b15560e28`: all eight
+Canvas operations now use the unchanged embedded native gateway route table.
+Coverage is **73 native / 58 remaining / 131 total**. Beta forwards the existing
+status-sync URL expression to preserve configured review mirroring; unset,
+empty and custom synthetic Compose controls passed. Gateway 109 library plus
+three smoke tests, issuance 386 library tests, all twelve configured database
+gates, pure guards, 99 Python checks, strict Clippy and 19-package formatting
+passed. All 34 owned test containers were independently absent. No Python was
+deleted and no deployment occurred; standalone aliases and sibling routes remain
+unchanged. Hosted `84665d26d` is still a separate older batch. Earlier ownership
+statements below describe that hosted or historical state, not this local tree.
+
 Latest local initiation selection is `845de6a62`: exact native POST initiation,
 unchanged public rewrite/authentication, 65 native plus 66 remaining operations
 from the frozen 131. Full gateway/issuance and sixteen composed DIDComm tests,
@@ -51,13 +63,13 @@ Python inline-ASGI oracle. Full named concurrency is integrated as `857754367`;
 no network-disconnect cancellation guarantee is claimed. Runtime source and
 frozen expectations are unchanged; the real-HTTP bridge projection is explicit.
 
-Current remaining Canvas work is final operations source activation/adoption,
-production adoption/transport qualification of the 51-observation signing
+Current remaining Canvas work is exact-head qualification and landing of the
+operations activation, production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
 in source; source selection is not deployment acceptance. All eight Canvas
-operations still retain legacy gateway ownership. Activation is now in progress
-with the audited missing beta status-sync URL forwarding repair; signing
+operations are now selected locally, but not yet deployed. The audited missing
+beta status-sync URL forwarding repair is integrated; signing
 diagnostics are a separate consumer boundary, not an operations prerequisite.
 Reviewed reference capture `cad8684ab` adds 35 inputs, 105 remote-operation and
 102 caller observations, independently reproduced with eight guards. Decoder,
