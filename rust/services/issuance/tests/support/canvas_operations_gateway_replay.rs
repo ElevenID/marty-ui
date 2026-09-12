@@ -1,5 +1,5 @@
-//! Candidate-only gateway -> real HTTP -> packaged issuance -> owned PostgreSQL.
-//! Production coverage is not changed. Identity/membership are controlled ports;
+//! Embedded native gateway -> real HTTP -> packaged issuance -> owned PostgreSQL.
+//! Only the negative legacy control rewrites selection. Identity/membership are controlled ports;
 //! persistence, gateway middleware/proxy, HTTP transport and issuance are real.
 //! Suspend/revoke/publication/recovery through the gateway remain separate gates.
 
@@ -153,13 +153,13 @@ fn select_routes(original: RouteTable, routing: Routing) -> RouteTable {
             if expected.contains(&key) {
                 assert!(found.insert(key), "duplicate operation route");
                 assert_eq!(
-                    route.upstream_service, "issuance",
-                    "published coverage changed"
+                    route.upstream_service, "issuance-native",
+                    "embedded native operations coverage changed"
                 );
                 assert_eq!(route.methods.len(), 1);
                 assert!(route.auth_required);
-                if routing == Routing::CandidateNative {
-                    candidate.upstream_service = "issuance-native".into();
+                if routing == Routing::PublishedLegacy {
+                    candidate.upstream_service = "issuance".into();
                 }
             }
         }
@@ -183,7 +183,7 @@ fn select_routes(original: RouteTable, routing: Routing) -> RouteTable {
     }
     assert_eq!(
         differences,
-        if routing == Routing::CandidateNative {
+        if routing == Routing::PublishedLegacy {
             8
         } else {
             0
@@ -382,6 +382,8 @@ impl CountedHttp {
     }
 }
 
+// Retain the shared helper/registered gate name; its positive path now executes
+// embedded production selection without candidate rewrites.
 pub(super) fn candidate_router(native_port: u16, legacy_port: u16) -> (Router, Arc<CountedHttp>) {
     router(native_port, legacy_port, Routing::CandidateNative)
 }
@@ -1911,7 +1913,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_selection_changes_only_eight_real_route_destinations() {
+    fn embedded_selection_is_unchanged_and_legacy_control_changes_only_eight_destinations() {
         for candidate in [Routing::PublishedLegacy, Routing::CandidateNative] {
             let contract = GatewayContract::load().unwrap();
             select_routes(contract.runtime_route_table().unwrap(), candidate);

@@ -25,6 +25,8 @@ const CANVAS_OAUTH: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
 const CANVAS_MANAGEMENT: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-management.json");
+const CANVAS_OPERATIONS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-canvas-operations.json");
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
@@ -99,6 +101,75 @@ struct HttpOperation {
     canvas_oauth_behavior_case: Option<String>,
     #[serde(default)]
     canvas_management_behavior_case: Option<String>,
+    #[serde(default)]
+    canvas_operations_behavior_case: Option<CanvasOperationsCase>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+enum CanvasOperationsCase {
+    Enqueue,
+    Jobs,
+    Job,
+    Retry,
+    ResolveJob,
+    Candidates,
+    Reviews,
+    ResolveReview,
+}
+
+impl CanvasOperationsCase {
+    const ALL: [Self; 8] = [
+        Self::Enqueue,
+        Self::Jobs,
+        Self::Job,
+        Self::Retry,
+        Self::ResolveJob,
+        Self::Candidates,
+        Self::Reviews,
+        Self::ResolveReview,
+    ];
+
+    fn route(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Enqueue => (
+                "POST",
+                "/applications/{application_id}/canvas-sync",
+                "enqueue_canvas_application_sync_route",
+            ),
+            Self::Jobs => ("GET", "/canvas-sync-jobs", "list_canvas_sync_jobs_route"),
+            Self::Job => (
+                "GET",
+                "/canvas-sync-jobs/{job_id}",
+                "get_canvas_sync_job_route",
+            ),
+            Self::Retry => (
+                "POST",
+                "/canvas-sync-jobs/{job_id}/retry",
+                "retry_canvas_sync_job_route",
+            ),
+            Self::ResolveJob => (
+                "POST",
+                "/canvas-sync-jobs/{job_id}/resolve",
+                "resolve_canvas_sync_job_route",
+            ),
+            Self::Candidates => (
+                "GET",
+                "/canvas-award-candidates",
+                "list_canvas_award_candidates_route",
+            ),
+            Self::Reviews => (
+                "GET",
+                "/evidence-policy-reviews",
+                "list_evidence_policy_reviews_route",
+            ),
+            Self::ResolveReview => (
+                "POST",
+                "/evidence-policy-reviews/{review_id}/resolve",
+                "resolve_evidence_policy_review_route",
+            ),
+        }
+    }
 }
 
 impl HttpOperation {
@@ -115,6 +186,7 @@ impl HttpOperation {
             + usize::from(self.canvas_lti_behavior_case.is_some())
             + usize::from(self.canvas_oauth_behavior_case.is_some())
             + usize::from(self.canvas_management_behavior_case.is_some())
+            + usize::from(self.canvas_operations_behavior_case.is_some())
     }
 }
 
@@ -856,6 +928,16 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_canvas_lti_cases = BTreeSet::new();
     let mut native_canvas_oauth_cases = BTreeSet::new();
     let mut native_canvas_management_cases = BTreeSet::new();
+    // Freeze the already-qualified source contract; changing its historical
+    // limits/status text is not necessary to select the eight exact operations.
+    require(
+        format!("{:x}", Sha256::digest(canonical_lf(CANVAS_OPERATIONS)))
+            == "73f4ac04e2158f9b84ca69fdfeff74191434d4739cb4252ca0daf98aa3b69120",
+        "Canvas operations behavior provenance changed",
+    )?;
+    let canvas_operations: Value = serde_json::from_slice(CANVAS_OPERATIONS)
+        .map_err(|error| contract_error("invalid Canvas operations contract", error))?;
+    let mut native_canvas_operations_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -1128,6 +1210,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                         }),
                 "native Canvas management operation diverges from its behavior contract",
             )?;
+        } else if let Some(behavior_case) = operation.canvas_operations_behavior_case {
+            validate_canvas_operations_operation(operation, &canvas_operations)?;
+            require(
+                native_canvas_operations_cases.insert(behavior_case),
+                "duplicate native Canvas operations behavior case",
+            )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
         }
@@ -1181,6 +1269,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_canvas_management_cases == frozen_canvas_management_cases,
         "native Canvas management behavior coverage is incomplete",
+    )?;
+    require(
+        native_canvas_operations_cases == BTreeSet::from(CanvasOperationsCase::ALL),
+        "native Canvas operations behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -1319,6 +1411,37 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     })
 }
 
+fn validate_canvas_operations_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    let case = operation
+        .canvas_operations_behavior_case
+        .ok_or_else(|| invalid("native Canvas operations behavior case is missing"))?;
+    let (method, suffix, name) = case.route();
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.method == method
+            && operation.path == format!("/v1/integrations/canvas{suffix}")
+            && operation.operation == name
+            && contract["schema"] == "marty.issuance-canvas-operations/v1"
+            && contract["route_prefix"] == "/v1/integrations/canvas"
+            && contract["routes"].as_array().is_some_and(|routes| {
+                routes.len() == 8
+                    && routes
+                        .iter()
+                        .filter(|route| route["method"] == method && route["path"] == suffix)
+                        .count()
+                        == 1
+            })
+            && contract["behavior"]["note_max_length"] == 2000
+            && contract["behavior"]["post_query_filter_window"] == 500
+            && contract["behavior"]["actor_priority"]
+                == serde_json::json!(["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]),
+        "native Canvas operation diverges from its exact behavior contract",
+    )
+}
+
 fn validate_initiation_operation(
     operation: &HttpOperation,
     contract: &Value,
@@ -1405,11 +1528,106 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_didcomm_operation, validate_embedded_contract,
-        validate_initiation_operation, Coverage, HttpOperation, CANVAS_LTI, CANVAS_MANAGEMENT,
-        COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, DIDCOMM,
-        INITIATION,
+        canonical_lf, validate_canvas_operations_operation, validate_didcomm_operation,
+        validate_embedded_contract, validate_initiation_operation, CanvasOperationsCase, Coverage,
+        HttpOperation, CANVAS_LTI, CANVAS_MANAGEMENT, CANVAS_OPERATIONS, COVERAGE,
+        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, DIDCOMM, INITIATION,
     };
+
+    #[test]
+    fn canvas_operations_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(CANVAS_OPERATIONS).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| operation.get("canvas_operations_behavior_case").is_some())
+            .collect();
+        assert_eq!(selected.len(), CanvasOperationsCase::ALL.len());
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_canvas_operations_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for value in [
+                serde_json::json!(true),
+                serde_json::json!(1),
+                serde_json::json!({}),
+                serde_json::json!("unknown"),
+            ] {
+                let mut changed = original.clone();
+                changed["canvas_operations_behavior_case"] = value;
+                assert!(parse(changed).is_err());
+            }
+            for (field, value) in [
+                ("canvas_operations_behavior_case", Value::Null),
+                ("method", serde_json::json!("DELETE")),
+                (
+                    "path",
+                    serde_json::json!("/v1/integrations/canvas/platforms"),
+                ),
+                ("operation", serde_json::json!("list_canvas_platforms")),
+                ("initiation_behavior_contract", Value::Bool(true)),
+                (
+                    "canvas_management_behavior_case",
+                    serde_json::json!("list_canvas_platforms"),
+                ),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(
+                    validate_canvas_operations_operation(&parse(changed).unwrap(), &contract)
+                        .is_err()
+                );
+            }
+            let mut removed = original.clone();
+            removed
+                .as_object_mut()
+                .unwrap()
+                .remove("canvas_operations_behavior_case");
+            assert!(
+                validate_canvas_operations_operation(&parse(removed).unwrap(), &contract).is_err()
+            );
+            let mut extra_segment = original.clone();
+            extra_segment["path"] =
+                serde_json::json!(format!("{}/extra", original["path"].as_str().unwrap()));
+            assert!(validate_canvas_operations_operation(
+                &parse(extra_segment).unwrap(),
+                &contract
+            )
+            .is_err());
+            for case in CanvasOperationsCase::ALL {
+                let mut changed = parse(original.clone()).unwrap();
+                if changed.canvas_operations_behavior_case != Some(case) {
+                    changed.canvas_operations_behavior_case = Some(case);
+                    assert!(validate_canvas_operations_operation(&changed, &contract).is_err());
+                }
+            }
+            for field in [
+                "note_max_length",
+                "post_query_filter_window",
+                "actor_priority",
+            ] {
+                let mut changed = contract.clone();
+                changed["behavior"][field] = Value::Null;
+                assert!(validate_canvas_operations_operation(
+                    &parse(original.clone()).unwrap(),
+                    &changed
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["routes"]
+                .as_array_mut()
+                .unwrap()
+                .push(contract["routes"][0].clone());
+            assert!(validate_canvas_operations_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn initiation_coverage_rejects_malformed_or_multiple_behavior_selectors() {
@@ -1567,8 +1785,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 65);
-        assert_eq!(summary.remaining_http, 66);
+        assert_eq!(summary.native_http, 73);
+        assert_eq!(summary.remaining_http, 58);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }

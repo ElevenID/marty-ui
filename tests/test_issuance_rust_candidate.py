@@ -306,11 +306,28 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     canvas_management_operations = {
         route["operation"] for route in canvas_management["scope"]["routes"]
     }
+    canvas_operations_cases = {
+        "enqueue_canvas_application_sync_route": "enqueue",
+        "list_canvas_sync_jobs_route": "jobs",
+        "get_canvas_sync_job_route": "job",
+        "retry_canvas_sync_job_route": "retry",
+        "resolve_canvas_sync_job_route": "resolve_job",
+        "list_canvas_award_candidates_route": "candidates",
+        "list_evidence_policy_reviews_route": "reviews",
+        "resolve_evidence_policy_review_route": "resolve_review",
+    }
+    operations_bytes = text("contracts/issuance-canvas-operations.json").encode()
+    assert hashlib.sha256(operations_bytes).hexdigest() == (
+        "73f4ac04e2158f9b84ca69fdfeff74191434d4739cb4252ca0daf98aa3b69120"
+    )
+    operations_contract = json.loads(operations_bytes)
+    assert len(coverage["native_http"]) == 73
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
         | canvas_management_operations
+        | set(canvas_operations_cases)
         | {
             "didcomm_deliver",
             "initiate_issuance",
@@ -457,6 +474,21 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 for route in canvas_oauth["scope"]["routes"]
             )
             continue
+        if operation in canvas_operations_cases:
+            assert coverage_entry["canvas_operations_behavior_case"] == canvas_operations_cases[operation]
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and operations_contract["route_prefix"] + route["path"] == coverage_entry["path"]
+                for route in operations_contract["routes"]
+            )
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                and route["router"] == "canvas_operations_router"
+                for route in surface["http"]["routes"]
+            )
+            continue
         if operation in canvas_management_operations:
             assert coverage_entry["canvas_management_behavior_case"] == operation
             assert any(
@@ -502,7 +534,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 66,
+        "http": 58,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
         "literal_environment_variables": 56,

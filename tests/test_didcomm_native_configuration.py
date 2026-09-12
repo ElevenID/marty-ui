@@ -21,6 +21,7 @@ def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
     for name in (
         "ISSUANCE_OFFER_TTL_MINUTES",
         "VCDM_RELATED_RESOURCE_URLS",
+        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
         "UNIVERSAL_RESOLVER_URL",
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         "DIDCOMM_ALLOW_PRIVATE_IPS",

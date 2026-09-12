@@ -5704,7 +5704,7 @@ mod tests {
             let calls = recorder.0.lock().unwrap();
             assert_eq!(calls.len(), 1);
             let (service, forwarded) = &calls[0];
-            assert_eq!(service, issuance_native::LEGACY_SERVICE);
+            assert_eq!(service, issuance_native::NATIVE_SERVICE);
             assert_eq!(
                 forwarded.path,
                 "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve"

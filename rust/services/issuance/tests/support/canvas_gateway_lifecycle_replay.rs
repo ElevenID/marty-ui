@@ -1,6 +1,6 @@
-//! Candidate gateway -> actual issuance main -> real HTTP publication and mirror.
+//! Embedded native gateway -> actual issuance main -> real HTTP publication and mirror.
 //! Reuses the existing process/dependency owner and its fifteen lifecycle cases.
-//! Identity ports are controlled; production route selection is unchanged. This
+//! Identity ports are controlled; production route selection is used unchanged. This
 //! does not equate cancellation of an HTTP client with cancellation of a handler.
 
 use std::sync::{

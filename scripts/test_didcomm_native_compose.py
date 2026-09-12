@@ -145,7 +145,10 @@ def assert_bindings(model, compose_command):
                         "ISSUANCE_SERVICE_URL",
                         "GRPC_SERVICE_TOKEN",
                     ),
-                    "issuance": ("VCDM_RELATED_RESOURCE_URLS", "GRPC_SERVICE_TOKEN"),
+                    "issuance": (
+                        "VCDM_RELATED_RESOURCE_URLS", "GRPC_SERVICE_TOKEN",
+                        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+                    ),
                 }.items()
             },
         }
@@ -180,6 +183,10 @@ def assert_bindings(model, compose_command):
         default_model = render()
         default = default_model["services"]["issuance-native"]
         environment = default["environment"]
+        assert environment["CANVAS_CREDENTIALS_STATUS_SYNC_URL"] == ""
+        assert default_model["services"]["issuance"]["environment"][
+            "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
+        ] == ""
         assert environment["VCDM_RELATED_RESOURCE_URLS"] == ""
         assert (
             default_model["services"]["issuance"]["environment"][
@@ -244,6 +251,13 @@ def assert_bindings(model, compose_command):
                 == configured["issuance"]["environment"]["VCDM_RELATED_RESOURCE_URLS"]
                 == resources
             )
+        for status_url in ("", "https://canvas-mirror.example/status?mode=synthetic"):
+            configured = render({"CANVAS_CREDENTIALS_STATUS_SYNC_URL": status_url})["services"]
+            assert configured["issuance-native"]["environment"][
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
+            ] == configured["issuance"]["environment"][
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
+            ] == status_url
         for minutes in ("0", "-5"):
             configured = render({"ISSUANCE_OFFER_TTL_MINUTES": minutes})
             assert (
@@ -287,6 +301,7 @@ def run(compose_command=None):
     for name in (
         "ISSUANCE_OFFER_TTL_MINUTES",
         "VCDM_RELATED_RESOURCE_URLS",
+        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
         "UNIVERSAL_RESOLVER_URL",
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         "DIDCOMM_ALLOW_PRIVATE_IPS",
