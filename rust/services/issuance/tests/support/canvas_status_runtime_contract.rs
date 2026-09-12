@@ -356,6 +356,10 @@ impl ReviewCapabilities {
                 "revoke_delivered",
                 "mirror_failure",
                 "publication_failure",
+                "pending_delivery",
+                "failed_delivery",
+                "wallet_delivery",
+                "no_delivery",
             ],
         }
     }
@@ -561,10 +565,34 @@ async fn review_cases(
         sqlx::query("DELETE FROM issuance_service.evidence_policy_reviews WHERE id='review-lifecycle' AND organization_id='org-review'").execute(pool).await.unwrap();
         insert_review(pool, "review-lifecycle").await;
         sqlx::query("UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review' AND organization_id='org-review'").execute(pool).await.unwrap();
-        sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,last_error=NULL WHERE id='delivery-provider' AND organization_id='org-review'")
+        sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,last_error=NULL,status='delivered',delivery_target='canvas_credentials' WHERE id='delivery-provider' AND organization_id='org-review'")
             .bind(json!({"canvas_program_binding_id":"binding-review","unrelated_marker":44})).execute(pool).await.unwrap();
+        let no_mirror = matches!(
+            name,
+            "no_delivery" | "pending_delivery" | "failed_delivery" | "wallet_delivery"
+        );
+        if no_mirror {
+            assert_eq!(
+                expected["lifecycle_calls"],
+                json!([{"action":"suspend","claim_active":true,"credential_id":"credential-review","credential_status":"active","delivery_id":null,"port":"publication","reason":"  synthetic reason  "}])
+            );
+            let selection = review_delivery_precondition(case);
+            if let Some((target, status)) = selection {
+                // Selection comes from the original scenario's INSERT, not the
+                // observed output. The existing runtime IDs/metadata stay intact.
+                assert_eq!(sqlx::query("UPDATE issuance_service.credential_delivery_records SET status=$1,delivery_target=$2 WHERE id='delivery-provider' AND organization_id='org-review'")
+                    .bind(status).bind(target)
+                    .execute(pool).await.unwrap().rows_affected(), 1);
+            } else {
+                assert!(expected["snapshot"]["deliveries"].is_null());
+                // Exact owned fixture only; this case runs last, so no broad
+                // corpus DELETE or fabricated replacement row is required.
+                assert_eq!(sqlx::query("DELETE FROM issuance_service.credential_delivery_records WHERE id='delivery-provider' AND organization_id='org-review'").execute(pool).await.unwrap().rows_affected(), 1);
+            }
+        }
         let credential_before = credential_row(pool).await;
-        let delivery_before = delivery_row(pool).await;
+        let delivery_before = review_delivery_row(pool).await;
+        let secret_before: Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM issuance_service.organization_integration_secrets s WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
         let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'").fetch_one(pool).await.unwrap();
         *state.response_override.lock().unwrap() =
             (name == "mirror_failure").then(|| refusal.clone());
@@ -646,7 +674,7 @@ async fn review_cases(
             let held_calls = state.calls.lock().unwrap().clone();
             assert_eq!(held_calls.len(), 1);
             assert_eq!(credential_row(pool).await, credential_before);
-            assert_eq!(delivery_row(pool).await, delivery_before);
+            assert_eq!(review_delivery_row(pool).await, delivery_before);
             let (status, content_type, body) = requests.request(case).await;
             let concurrent = frozen["observations"]
                 .as_array()
@@ -714,7 +742,7 @@ async fn review_cases(
                 );
             }
         }
-        let delivery = delivery_row(pool).await;
+        let delivery = review_delivery_row(pool).await;
         let calls = state.calls.lock().unwrap().clone();
         assert_eq!(calls[0]["port"], "publication");
         assert_eq!(calls[0]["action"], action);
@@ -753,81 +781,90 @@ async fn review_cases(
             );
             continue;
         }
-        for (key, value) in delivery_before.as_object().unwrap() {
-            if !["metadata", "last_error", "updated_at", "canvas_account_id"]
-                .contains(&key.as_str())
-            {
-                assert_eq!(&delivery[key], value, "{name} preserves delivery {key}");
-            }
-        }
-        assert_eq!(delivery["canvas_account_id"], "account");
-        assert_eq!(delivery["metadata"]["unrelated_marker"], 44);
-        assert_eq!(
-            delivery["metadata"]["canvas_program_binding_id"],
-            "binding-review"
-        );
-        assert_eq!(
-            delivery["metadata"]["canvas_platform_id"],
-            "platform-review"
-        );
-        assert_eq!(delivery["metadata"]["status_sync_attempts"], 1);
-        assert_eq!(delivery["metadata"]["last_status_sync_action"], action);
-        assert_eq!(
-            delivery["metadata"]["last_synced_credential_status"],
-            snapshot["credential"]["status"]
-        );
-        if name == "mirror_failure" {
-            assert_eq!(delivery["last_error"], refusal_expected["error"]);
+        if no_mirror {
+            assert_eq!(calls.len(), 1, "{name}: publication only; no mirror HTTP");
             assert_eq!(
-                delivery["metadata"]["last_status_sync_error"],
-                refusal_expected["error"]
+                delivery, delivery_before,
+                "{name}: preserve the full optional delivery row"
             );
-            assert!(delivery["metadata"]["status_sync_response"].is_null());
-            chrono::DateTime::parse_from_rfc3339(
-                delivery["metadata"]["last_status_sync_error_at"]
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap();
+            assert_eq!(sqlx::query_scalar::<_, Value>("SELECT to_jsonb(s) FROM issuance_service.organization_integration_secrets s WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap(), secret_before, "{name}: no tenant-secret usage or other mutation");
         } else {
-            assert!(delivery["last_error"].is_null());
-            assert!(delivery["metadata"]["last_status_sync_error"].is_null());
+            for (key, value) in delivery_before.as_object().unwrap() {
+                if !["metadata", "last_error", "updated_at", "canvas_account_id"]
+                    .contains(&key.as_str())
+                {
+                    assert_eq!(&delivery[key], value, "{name} preserves delivery {key}");
+                }
+            }
+            assert_eq!(delivery["canvas_account_id"], "account");
+            assert_eq!(delivery["metadata"]["unrelated_marker"], 44);
             assert_eq!(
-                delivery["metadata"]["status_sync_response"],
-                json!({"accepted":true})
+                delivery["metadata"]["canvas_program_binding_id"],
+                "binding-review"
             );
             assert_eq!(
-                delivery["metadata"]["status_sync_request_id"],
-                "synthetic-runtime-request"
+                delivery["metadata"]["canvas_platform_id"],
+                "platform-review"
             );
+            assert_eq!(delivery["metadata"]["status_sync_attempts"], 1);
+            assert_eq!(delivery["metadata"]["last_status_sync_action"], action);
+            assert_eq!(
+                delivery["metadata"]["last_synced_credential_status"],
+                snapshot["credential"]["status"]
+            );
+            if name == "mirror_failure" {
+                assert_eq!(delivery["last_error"], refusal_expected["error"]);
+                assert_eq!(
+                    delivery["metadata"]["last_status_sync_error"],
+                    refusal_expected["error"]
+                );
+                assert!(delivery["metadata"]["status_sync_response"].is_null());
+                chrono::DateTime::parse_from_rfc3339(
+                    delivery["metadata"]["last_status_sync_error_at"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+            } else {
+                assert!(delivery["last_error"].is_null());
+                assert!(delivery["metadata"]["last_status_sync_error"].is_null());
+                assert_eq!(
+                    delivery["metadata"]["status_sync_response"],
+                    json!({"accepted":true})
+                );
+                assert_eq!(
+                    delivery["metadata"]["status_sync_request_id"],
+                    "synthetic-runtime-request"
+                );
+            }
+            assert_eq!(calls.len(), 2, "one publication and one actual HTTP mirror");
+            assert_eq!(calls[1]["port"], "mirror");
+            assert_eq!(
+                calls[1]["persisted_status"],
+                snapshot["credential"]["status"]
+            );
+            assert_eq!(
+                calls[1]["body"]["credential"]["status"],
+                snapshot["credential"]["status"]
+            );
+            assert_eq!(calls[1]["body"]["lifecycle_action"], action);
+            assert_eq!(
+                calls[1]["body"]["credential"]["reason"],
+                case["body"]["note"]
+            );
+            assert_eq!(
+                calls[1]["authorization"],
+                "Bearer synthetic-runtime-tenant-token"
+            );
+            if !capabilities.real_http_publication() {
+                assert_eq!(
+                    *state.events.lock().unwrap(),
+                    [snapshot["credential"]["status"].as_str().unwrap()]
+                );
+            }
+            let used: bool = sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
+            assert!(used);
         }
-        assert_eq!(calls.len(), 2, "one publication and one actual HTTP mirror");
-        assert_eq!(calls[1]["port"], "mirror");
-        assert_eq!(
-            calls[1]["persisted_status"],
-            snapshot["credential"]["status"]
-        );
-        assert_eq!(
-            calls[1]["body"]["credential"]["status"],
-            snapshot["credential"]["status"]
-        );
-        assert_eq!(calls[1]["body"]["lifecycle_action"], action);
-        assert_eq!(
-            calls[1]["body"]["credential"]["reason"],
-            case["body"]["note"]
-        );
-        assert_eq!(
-            calls[1]["authorization"],
-            "Bearer synthetic-runtime-tenant-token"
-        );
-        if !capabilities.real_http_publication() {
-            assert_eq!(
-                *state.events.lock().unwrap(),
-                [snapshot["credential"]["status"].as_str().unwrap()]
-            );
-        }
-        let used: bool = sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
-        assert!(used);
         // Retain raw review/event rows too: a duplicate must not refresh a
         // timestamp, append a resolution event, or emit a lifecycle event.
         let duplicate_preserved_sql = "SELECT jsonb_build_object('reviews',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM issuance_service.evidence_policy_reviews r),'events',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM issuance_service.issuance_events e))";
@@ -862,7 +899,7 @@ async fn review_cases(
             duplicate_preserved
         );
         assert_eq!(credential_row(pool).await, credential_after);
-        assert_eq!(delivery_row(pool).await, delivery);
+        assert_eq!(review_delivery_row(pool).await, delivery);
         assert_eq!(
             sqlx::query_scalar::<_, Value>(preserved_sql)
                 .fetch_one(pool)
@@ -871,6 +908,38 @@ async fn review_cases(
             preserved
         );
     }
+}
+
+/// Closed mapping verified against the original frozen setup SQL. Inspect only:
+/// its broad DELETE is never executed against the shared owned runtime fixture.
+fn review_delivery_precondition(case: &Value) -> Option<(&'static str, &'static str)> {
+    let selection = match case["name"].as_str().unwrap() {
+        "no_delivery" => None,
+        "pending_delivery" => Some(("canvas_credentials", "pending")),
+        "failed_delivery" => Some(("canvas_credentials", "failed")),
+        "wallet_delivery" => Some(("wallet", "delivered")),
+        _ => panic!("unreviewed delivery precondition"),
+    };
+    let setup: Vec<_> = case["sql"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|sql| sql.as_str().unwrap())
+        .filter(|sql| sql.contains("issuance_service.credential_delivery_records"))
+        .collect();
+    assert_eq!(
+        setup[0],
+        "DELETE FROM issuance_service.credential_delivery_records"
+    );
+    assert_eq!(setup.len(), if selection.is_some() { 2 } else { 1 });
+    if let Some((target, status)) = selection {
+        let insert = format!("INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','{target}','mirror','{status}',");
+        assert!(
+            setup[1].starts_with(&insert),
+            "frozen delivery setup changed"
+        );
+    }
+    selection
 }
 
 pub async fn run_unicode(pool: &PgPool) {
@@ -1193,6 +1262,14 @@ async fn delivery_row(pool: &PgPool) -> marty_issuance_service::owned_json_value
     sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE id='delivery-provider'").fetch_one(pool).await.unwrap()
 }
 
+// Only review lifecycle cases permit a deliberately absent owned delivery.
+// Other runtime gates retain their required-row helper and its strict failure.
+async fn review_delivery_row(
+    pool: &PgPool,
+) -> marty_issuance_service::owned_json_value::OwnedJsonValue {
+    sqlx::query_scalar("SELECT COALESCE((SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE id='delivery-provider' AND organization_id='org-review'),'null'::jsonb)").fetch_one(pool).await.unwrap()
+}
+
 fn normalized(
     value: impl Into<marty_issuance_service::owned_json_value::OwnedJsonValue>,
     url: &str,
@@ -1384,7 +1461,7 @@ pub(super) type ReviewTransportPorts = (
 
 /// Reuse the real main-process/dependency owner with a new request boundary.
 /// The factory is invoked only after the exact owned process becomes healthy.
-/// Its ports cannot opt out of the four real-publication cases, claim-hold,
+/// Its ports cannot opt out of the eight real-publication cases, claim-hold,
 /// token/body checks, raw persistence/duplicate checks or owned cleanup.
 pub(super) async fn run_review_operations_main_with_transport<F>(
     pool: &PgPool,
@@ -1636,6 +1713,48 @@ mod review_transport_tests {
     use super::*;
 
     #[test]
+    fn delivery_preconditions_are_bound_to_original_setup_not_outcomes() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-lifecycle-scenarios.json"
+        ))
+        .unwrap();
+        for (name, selection) in [
+            ("no_delivery", None),
+            ("pending_delivery", Some(("canvas_credentials", "pending"))),
+            ("failed_delivery", Some(("canvas_credentials", "failed"))),
+            ("wallet_delivery", Some(("wallet", "delivered"))),
+        ] {
+            let case = scenarios["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            assert_eq!(review_delivery_precondition(case), selection);
+            let mut changed = case.clone();
+            changed["sql"].as_array_mut().unwrap().push(json!(
+                "INSERT INTO issuance_service.credential_delivery_records unexpected"
+            ));
+            assert!(std::panic::catch_unwind(|| review_delivery_precondition(&changed)).is_err());
+            if selection.is_some() {
+                let mut changed = case.clone();
+                for sql in changed["sql"].as_array_mut().unwrap() {
+                    if sql
+                        .as_str()
+                        .unwrap()
+                        .starts_with("INSERT INTO issuance_service.credential_delivery_records")
+                    {
+                        *sql = json!(sql.as_str().unwrap().replace("'mirror'", "'changed-mode'"));
+                    }
+                }
+                assert!(
+                    std::panic::catch_unwind(|| review_delivery_precondition(&changed)).is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn publisher_capabilities_keep_all_real_process_cases() {
         assert_eq!(
             ReviewCapabilities::RealHttpPublisher.cases(),
@@ -1643,7 +1762,11 @@ mod review_transport_tests {
                 "suspend_delivered",
                 "revoke_delivered",
                 "mirror_failure",
-                "publication_failure"
+                "publication_failure",
+                "pending_delivery",
+                "failed_delivery",
+                "wallet_delivery",
+                "no_delivery"
             ]
         );
         assert!(ReviewCapabilities::RealHttpPublisher.real_http_publication());

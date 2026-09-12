@@ -1,5 +1,5 @@
 //! Candidate gateway -> actual issuance main -> real HTTP publication and mirror.
-//! Reuses the existing process/dependency owner and its four lifecycle cases.
+//! Reuses the existing process/dependency owner and its eight lifecycle cases.
 //! Identity ports are controlled; production route selection is unchanged. This
 //! does not equate cancellation of an HTTP client with cancellation of a handler.
 
@@ -163,7 +163,8 @@ impl ReviewResponseExpectations for GatewayExpectations {
                         assert_direct(frozen, 503, json!("Revocation service unavailable"));
                         mip_expected(503, "service_error", "Revocation service unavailable", None)
                     }
-                    "suspend_delivered" | "revoke_delivered" | "mirror_failure" => {
+                    "suspend_delivered" | "revoke_delivered" | "mirror_failure" | "no_delivery"
+                    | "pending_delivery" | "failed_delivery" | "wallet_delivery" => {
                         assert_eq!(frozen["status"], 200);
                         assert_eq!(frozen["content_type"], "application/json");
                         // The shared fixture alone substitutes expected actor
@@ -212,13 +213,14 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     let transport = retained
         .get()
         .expect("gateway transport created after readiness");
-    assert_eq!(transport.requests.load(Ordering::SeqCst), 10);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 18);
     assert_eq!(transport.denied.load(Ordering::SeqCst), 1);
     assert_eq!(transport.foreign.load(Ordering::SeqCst), 1);
     // Suspend: foreign + outcome + held competitor + duplicate; revoke/mirror:
     // outcome + duplicate each; publication failure: outcome only. Invalid
-    // session is the tenth request and must never reach either upstream.
-    assert_eq!(transport.http.counts(), (9, 0));
+    // session must never reach either upstream. Four non-mirroring delivery
+    // cases add one outcome and one duplicate each, with no legacy selection.
+    assert_eq!(transport.http.counts(), (17, 0));
 }
 
 #[cfg(test)]
@@ -259,6 +261,10 @@ mod tests {
             "revoke_delivered",
             "mirror_failure",
             "publication_failure",
+            "no_delivery",
+            "pending_delivery",
+            "failed_delivery",
+            "wallet_delivery",
         ] {
             let mut expected = frozen["observations"]
                 .as_array()
