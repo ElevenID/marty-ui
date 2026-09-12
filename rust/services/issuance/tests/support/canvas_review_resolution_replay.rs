@@ -1,5 +1,6 @@
 //! All46 actual HTTP/state cases on corrected official schema. External
 //! lifecycle effects are controlled exactly as in the published oracle.
+use super::canvas_base_gateway_recovery::{GatewayCase, GatewayEndpoint};
 use super::canvas_operations_read_replay::{
     fixtures, generated_ids, insert_review, request_case, runtime_router, seed, timestamps,
 };
@@ -63,7 +64,12 @@ fn response(value: (u16, String, Value), aliases: &mut BTreeMap<String, String>)
 
 pub async fn replay(pool: &PgPool, expected: &Value) {
     let [shared, scenarios, _] = fixtures();
-    replay_cases(pool, shared, scenarios, expected).await;
+    replay_cases(pool, shared, scenarios, expected, false).await;
+}
+
+pub async fn replay_gateway(pool: &PgPool, expected: &Value) {
+    let [shared, scenarios, _] = fixtures();
+    replay_cases(pool, shared, scenarios, expected, true).await;
 }
 
 pub async fn replay_inputs(pool: &PgPool, expected: &Value) {
@@ -74,7 +80,7 @@ pub async fn replay_inputs(pool: &PgPool, expected: &Value) {
         ))
         .unwrap()
     });
-    replay_cases(pool, &fixtures()[0], scenarios, expected).await;
+    replay_cases(pool, &fixtures()[0], scenarios, expected, false).await;
 }
 
 async fn replay_cases(
@@ -82,6 +88,7 @@ async fn replay_cases(
     shared: &'static Value,
     scenarios: &'static Value,
     expected: &Value,
+    gateway: bool,
 ) {
     seed(pool).await;
     let preserved_sql = shared["preserved_rows_sql"].as_str().unwrap();
@@ -97,6 +104,8 @@ async fn replay_cases(
         release: Notify::new(),
     });
     let mut aliases = BTreeMap::new();
+    let mut gateway_cases = Vec::new();
+    let mut manual_actors = std::collections::BTreeSet::new();
     let cases = scenarios["cases"].as_array().unwrap();
     assert_eq!(
         expected["observations"].as_array().unwrap().len(),
@@ -130,16 +139,60 @@ async fn replay_cases(
                 )
                 .with_review_operations(Some(lifecycle.clone())),
         );
+        let selected = gateway.then(|| GatewayCase::from_case(case)).flatten();
+        let endpoint = if let Some(selected) = selected {
+            gateway_cases.push(selected);
+            Some(GatewayEndpoint::start(router.clone(), case).await)
+        } else {
+            None
+        };
+        let mut expected = expected.clone();
+        if selected.is_some() && expected["status"] == 200 {
+            assert!(expected["body"]["resolved_by"].is_null());
+            expected["body"]["resolved_by"] = json!("actor-primary");
+            manual_actors.insert(case["prepare_review"].as_str().unwrap().to_owned());
+        }
+        for review in expected["snapshot"]["reviews"].as_array_mut().unwrap() {
+            if manual_actors.contains(review["id"].as_str().unwrap()) {
+                assert!(matches!(
+                    review["action"].as_str(),
+                    Some("suspend" | "revoke")
+                ));
+                assert!(review["actor"].is_null());
+                review["actor"] = json!("actor-primary");
+            }
+        }
+        let send = |competing| {
+            let endpoint = &endpoint;
+            let router = &router;
+            let expected = &expected;
+            async move {
+                if let Some(endpoint) = endpoint {
+                    endpoint
+                        .request(
+                            case,
+                            if competing {
+                                &expected["competing_response"]
+                            } else {
+                                expected
+                            },
+                        )
+                        .await
+                } else {
+                    request_case(router, case).await
+                }
+            }
+        };
         let (primary, competing) = if case["concurrent"] == true {
-            let (primary, competing) = tokio::join!(request_case(&router, case), async {
+            let (primary, competing) = tokio::join!(send(false), async {
                 lifecycle.entered.notified().await;
-                let result = request_case(&router, case).await;
+                let result = send(true).await;
                 lifecycle.release.notify_one();
                 result
             });
             (primary, Some(competing))
         } else {
-            (request_case(&router, case).await, None)
+            (send(false).await, None)
         };
         let mut record = response(primary, &mut aliases);
         record["name"] = case["name"].clone();
@@ -153,11 +206,7 @@ async fn replay_cases(
         if let Some(competing) = competing {
             record["competing_response"] = response(competing, &mut aliases);
         }
-        assert_eq!(
-            record, *expected,
-            "full operations parity: {}",
-            case["name"]
-        );
+        assert_eq!(record, expected, "full operations parity: {}", case["name"]);
         let current: Value = sqlx::query_scalar(preserved_sql)
             .fetch_one(pool)
             .await
@@ -165,6 +214,19 @@ async fn replay_cases(
         assert_eq!(
             current, preserved,
             "controlled lifecycle must not mutate credential/transaction rows"
+        );
+        if let Some(endpoint) = endpoint {
+            endpoint
+                .close(if case["concurrent"] == true { 2 } else { 1 })
+                .await;
+        }
+    }
+    if gateway {
+        assert_eq!(gateway_cases, GatewayCase::ALL);
+        assert_eq!(
+            cases.len(),
+            46,
+            "preserve all original setup/follow-up cases"
         );
     }
 }
