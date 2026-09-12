@@ -31,7 +31,7 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
-Current remaining Canvas work is six base gateway cases, nine full lifecycle
+Current remaining Canvas work is six base gateway cases, three full lifecycle
 cases, production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
@@ -39,6 +39,13 @@ in source; source selection is not deployment acceptance. All eight Canvas
 operations still retain legacy gateway ownership. The
 [current Canvas audit](rust-migrations/canvas-worker-cutover-readiness.md#current-remaining-work-audit)
 supersedes historical pending-failure and unimplemented-launch statements.
+
+Reviewed Canvas source `bd8882c5d` locally qualifies fourteen of seventeen
+lifecycle cases through both gateway and actual-main HTTP, with all frozen
+expectations retained. The remaining lifecycle cases are cancellation at
+publication, cancellation at mirror, and concurrency at publication. This local
+follow-up is not included in hosted `84665d26d`; CI `34708271140` is running on
+that reviewed health/RPC batch without interruption.
 
 PR #814 remains draft and not deployed. Reviewed batch `f60aefc74` is pushed;
 CI `34706838536` has passed security scanning and release-contract tests, with

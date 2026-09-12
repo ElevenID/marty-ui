@@ -11,12 +11,12 @@ qualify the newer local integration's exact head or establish deployment.
 - Base gateway corpus: 46 names, 40 represented in the shared fixture, six still
   absent: `review_suspend`, `review_revoke`, `review_failed`,
   `review_recovered_failure`, `review_recovered_success`, `review_concurrent`.
-- Full lifecycle corpus: 17 cases, eight selected by the actual HTTP publisher
+- Full lifecycle corpus: 17 cases, fourteen selected by the actual HTTP publisher
   fixture (`suspend_delivered`, `revoke_delivered`, `mirror_failure`,
   `publication_failure`, `no_delivery`, `pending_delivery`, `failed_delivery`,
-  `wallet_delivery`). Nine remain: `mirror_gate_disabled`, `binding_missing`,
-  `binding_disabled`, `platform_disabled`, `suspend_revoked`, `revoke_revoked`,
-  `cancel_at_publication`, `cancel_at_mirror`, `concurrent_at_publication`.
+  `wallet_delivery`, `mirror_gate_disabled`, `binding_missing`,
+  `binding_disabled`, `platform_disabled`, `suspend_revoked`, `revoke_revoked`).
+  Three remain: `cancel_at_publication`, `cancel_at_mirror`, `concurrent_at_publication`.
   A held competing 409 is not the complete frozen concurrent case. Supplementary
   75 operations-input, 45 review-input and 28 enqueue-input observations are
   direct corpora, not automatically gateway-qualified.
@@ -63,7 +63,13 @@ three (4.29s), seven pure guards and strict Clippy (3.00s) passed. All six
 final-run containers were independently absent. Nullable delivery snapshots
 preserve lossless `OwnedJsonValue`; no runtime behavior or route ownership changed.
 This is local source qualification, not hosted-head or deployment acceptance.
-Next are remaining lifecycle preconditions and manual-review/recovery cases. Actual cancellation
+The six precondition/revoked cases are now locally qualified from reviewed
+`bd8882c5d`: gateway fourteen (5.86s), actual-main fourteen (5.43s), controlled
+three (4.26s), eight boundary tests and strict Clippy (0.86s) passed. All six
+owned containers were independently absent. Original metadata and expectations
+are unchanged; lossless review snapshots preserve actual claim/release changes,
+and per-case delivery identifiers are restored. No runtime/routes changed.
+Next are remaining cancellation/concurrency and manual-review/recovery cases. Actual cancellation
 and concurrency evidence remains required for those named outcomes.
 
 ## Historical checkpoints (not current blocker status)
