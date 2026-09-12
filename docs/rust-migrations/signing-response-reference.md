@@ -85,6 +85,16 @@ implementation.
 
 ## Required next review
 
+The controlled caller observations must not override an existing outer privacy
+boundary. Native JWKS (`CanvasLtiToolSigningHttpError`) and deep-linking signing
+failures deliberately return the fixed JSON 503, with explicit no-private-detail
+regressions in `canvas_lti_tool_signing_behavior.rs` and
+`canvas_lti_deep_linking_behavior.rs`. Preserve those masks during shared adapter
+adoption, even when an inner lossless diagnostic could not be serialized. This
+is an explicit distinction from the controlled Python class wrapper, not a claim
+that the two complete route graphs have identical error projections. Qualify
+unmasked credential and proof-policy boundaries separately.
+
 Keep lossless JsonTree/PythonText through selection, formatting, and truncation.
 The existing Rust `IssuerUnavailable(String)`/`SigningUnavailable(String)` and
 LTI stringification boundaries cannot represent a raw surrogate; agree the
