@@ -31,6 +31,15 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+Credentials [PR #275](https://github.com/ElevenID/marty-credentials/pull/275)
+merged through the protected queue at `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
+Protected main and the merged tree were independently verified; the tree is
+identical to reviewed `c97f9a06`. Exact-head and expanded cross-platform queue
+checks passed. This retires only the unused decrypt/unpack Python adapters and
+their startup requirements, with historical-reference CI isolation repaired.
+It does not remove active authcrypt requirements, fix KMS, qualify release
+artifacts or deploy anything. Post-merge validation is a separate running gate.
+
 Latest local selection is `300b92e9d`, integrating reviewed `b15560e28`: all eight
 Canvas operations now use the unchanged embedded native gateway route table.
 Coverage is **73 native / 58 remaining / 131 total**. Beta forwards the existing
