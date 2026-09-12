@@ -38,7 +38,8 @@ identical to reviewed `c97f9a06`. Exact-head and expanded cross-platform queue
 checks passed. This retires only the unused decrypt/unpack Python adapters and
 their startup requirements, with historical-reference CI isolation repaired.
 It does not remove active authcrypt requirements, fix KMS, qualify release
-artifacts or deploy anything. Post-merge validation is a separate running gate.
+artifacts or deploy anything. Post-merge CI `34711362030` subsequently passed on
+that exact main commit; organization, license, CodeQL and policy checks also passed.
 
 Latest local selection is `300b92e9d`, integrating reviewed `b15560e28`: all eight
 Canvas operations now use the unchanged embedded native gateway route table.
