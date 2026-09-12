@@ -58,10 +58,22 @@ suite: **3,044 passed, three skipped in 203.89s**, using Python 3.12 and an isol
 temporary directory. This does not relabel the separate service or hosted suites.
 Retirement audit also found a remaining beta DIDComm caller: the legacy credential
 renewal route invokes initiation internally. Native post-issuance renewal
-finalization exists, but renewal admission still needs a frozen behavioral
-reference and migration. Supported standalone URL aliases and shared Canvas
+finalization exists, but renewal admission still needs migration. Its frozen
+reference is now integrated at `63ab016e0`: 31 cases and 22 complete interned
+states, with an independently reproduced exact live replay and 53 combined
+reference guards passing. The documented late-linkage and refused-delivery
+findings require explicit treatment in the native target; the oracle is unchanged.
+See [renewal evidence and remaining work](rust-migrations/credential-renewal-retirement.md).
+Supported standalone URL aliases and shared Canvas
 service callers remain separate deletion gates; the native worker itself is
 already wired in source.
+
+Shared native signing-response adoption is integrated locally at `d7cd8b1a7`
+after independent maintainer review, 485 Rust tests, strict Clippy, package
+formatting and nine reference guards passed. This preserves caller-specific
+privacy and typed error handling; it changes no Core/KMS pins, SQL, routes or
+deployment configuration. See [qualification and limits](rust-migrations/signing-response-adoption.md).
+These local results do not replace exact-head hosted CI or beta acceptance.
 
 Latest local initiation selection is `845de6a62`: exact native POST initiation,
 unchanged public rewrite/authentication, 65 native plus 66 remaining operations
