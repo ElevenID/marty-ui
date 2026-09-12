@@ -822,7 +822,7 @@ pub enum NativeInitiationDidcommDeliveryError {
     #[error("issuance transaction was not found")]
     TransactionNotFound,
     #[error("issuance transaction is not retryable for DIDComm delivery")]
-    InvalidTransactionState,
+    InvalidTransactionState(CredentialTransactionStatus),
     #[error("DIDComm delivery prerequisites are unavailable")]
     DidcommUnavailable,
     /// Closed prerequisite reason; never carries remote bodies or exception text.
@@ -992,7 +992,9 @@ impl NativeInitiationDidcommDelivery {
             transaction.status,
             CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
         ) {
-            return Err(NativeInitiationDidcommDeliveryError::InvalidTransactionState);
+            return Err(
+                NativeInitiationDidcommDeliveryError::InvalidTransactionState(transaction.status),
+            );
         }
         let policy = didcomm_format_policy(transaction)
             .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
@@ -2692,6 +2694,149 @@ mod tests {
                 assert!(!retry_order.contains(&"build"));
                 assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn ineligible_states_match_captured_python_without_downstream_effects() {
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/didcomm-direct-state-python-reference.json"
+        ))
+        .unwrap();
+        let cases = frozen["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 5);
+        for case in cases {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut tx = transaction();
+            tx.status =
+                CredentialTransactionStatus::try_from(case["state"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                delivery.deliver_native(&tx, "did:example:holder").await,
+                Err(NativeInitiationDidcommDeliveryError::InvalidTransactionState(tx.status))
+            );
+            assert_eq!(case["delivery_calls"], 0);
+            // The existing transport dispatch is read-only when no delivery exists.
+            assert_eq!(repository.lookups.load(Ordering::SeqCst), 1);
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert!(repository.delivery.lock().unwrap().is_none());
+            assert_eq!(
+                *repository.transport_claim.lock().unwrap(),
+                HarnessTransportClaimState::Idle
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn eligible_states_continue_through_delivery_after_state_parity() {
+        for state in [
+            CredentialTransactionStatus::Pending,
+            CredentialTransactionStatus::Authorized,
+        ] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut tx = transaction();
+            tx.status = state;
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:holder")
+                    .await
+                    .unwrap()
+                    .status,
+                NativeDidcommDeliveryStatus::Delivered
+            );
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                order
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|stage| **stage == "transport")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn durable_delivery_dispatch_precedes_ineligible_transaction_state() {
+        for state in [
+            CredentialTransactionStatus::Issued,
+            CredentialTransactionStatus::Signing,
+            CredentialTransactionStatus::Failed,
+            CredentialTransactionStatus::Expired,
+            CredentialTransactionStatus::Revoked,
+        ] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut tx = transaction();
+            tx.status = state;
+            *repository.delivery.lock().unwrap() = Some(InitiationDidcommDeliveryState::Pending(
+                Box::new(staged_pending_delivery()),
+            ));
+            for (claim_state, expected) in [
+                (
+                    HarnessTransportClaimState::Claimed {
+                        delivery_id: HARNESS_DELIVERY_ID.to_owned(),
+                        attempt_id: "existing-attempt".to_owned(),
+                    },
+                    NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
+                ),
+                (
+                    HarnessTransportClaimState::OutcomeUnknown,
+                    NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown,
+                ),
+            ] {
+                *repository.transport_claim.lock().unwrap() = claim_state;
+                assert_eq!(
+                    delivery.deliver_native(&tx, "did:example:holder").await,
+                    Err(expected)
+                );
+                assert!(order.lock().unwrap().is_empty());
+            }
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:another-holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::InvalidRequest)
+            );
+            assert!(order.lock().unwrap().is_empty());
+
+            let mut pending = staged_pending_delivery();
+            pending.transported = true;
+            *repository.delivery.lock().unwrap() =
+                Some(InitiationDidcommDeliveryState::Pending(Box::new(pending)));
+            let recovered = delivery
+                .deliver_native(&tx, "did:example:holder")
+                .await
+                .unwrap();
+            assert_eq!(recovered.status, NativeDidcommDeliveryStatus::Delivered);
+            assert_eq!(*order.lock().unwrap(), ["after-didcomm"]);
+            order.lock().unwrap().clear();
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:holder")
+                    .await
+                    .unwrap(),
+                recovered
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
         }
     }
 

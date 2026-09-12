@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use axum::{body::Body, http::Request};
 use marty_issuance_service::{
+    credential::CredentialTransactionStatus,
     http::router_with_didcomm_delivery,
     initiation_didcomm::{
         NativeDidcommDeliveryStatus, NativeDidcommError, NativeInitiationDidcommDeliveryError,
@@ -173,6 +174,34 @@ async fn direct_didcomm_trusted_tenant_matches_captured_python_before_delivery()
         // No invocation of this port also means no downstream repository lookup
         // is possible. Positive repository/crypto behavior is a separate gate.
         assert_eq!(case["lookup_calls"], case["delivery_calls"]);
+    }
+}
+
+#[tokio::test]
+async fn direct_didcomm_ineligible_states_match_captured_python_responses() {
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/didcomm-direct-state-python-reference.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        frozen["schema"],
+        "marty.didcomm-direct-state-python-reference/v1"
+    );
+    let cases = frozen["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 5);
+    let input = contract()["valid_request"].clone();
+    for case in cases {
+        let state = CredentialTransactionStatus::try_from(case["state"].as_str().unwrap()).unwrap();
+        let response =
+            error_app(NativeInitiationDidcommDeliveryError::InvalidTransactionState(state))
+                .oneshot(request(input.clone(), Some("test-api-key")))
+                .await
+                .unwrap();
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            case["status"].as_u64().unwrap()
+        );
+        assert_eq!(body(response).await, case["body"]);
     }
 }
 

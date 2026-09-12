@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    credential::CredentialTransactionStatus,
     initiation_didcomm::{
         NativeDidcommError, NativeInitiationDidcommDelivery, NativeInitiationDidcommDeliveryError,
         NativeInitiationDidcommDeliveryReceipt,
@@ -169,10 +170,34 @@ impl InitiationDidcommHttpError {
             Self::Delivery(NativeInitiationDidcommDeliveryError::TransactionNotFound) => {
                 (StatusCode::NOT_FOUND, "Issuance transaction not found")
             }
-            Self::Delivery(
-                NativeInitiationDidcommDeliveryError::InvalidTransactionState
-                | NativeInitiationDidcommDeliveryError::ConcurrentDelivery,
-            ) => (
+            Self::Delivery(NativeInitiationDidcommDeliveryError::InvalidTransactionState(
+                state,
+            )) => {
+                match state {
+                    CredentialTransactionStatus::Issued => {
+                        (StatusCode::CONFLICT, "Credential already issued")
+                    }
+                    CredentialTransactionStatus::Signing => {
+                        (StatusCode::BAD_REQUEST, "Transaction in signing state")
+                    }
+                    CredentialTransactionStatus::Failed => {
+                        (StatusCode::BAD_REQUEST, "Transaction in failed state")
+                    }
+                    CredentialTransactionStatus::Expired => {
+                        (StatusCode::BAD_REQUEST, "Transaction in expired state")
+                    }
+                    CredentialTransactionStatus::Revoked => {
+                        (StatusCode::BAD_REQUEST, "Transaction in revoked state")
+                    }
+                    // The native eligibility check never rejects these states.
+                    CredentialTransactionStatus::Pending
+                    | CredentialTransactionStatus::Authorized => (
+                        StatusCode::CONFLICT,
+                        "Issuance transaction is not available for DIDComm delivery",
+                    ),
+                }
+            }
+            Self::Delivery(NativeInitiationDidcommDeliveryError::ConcurrentDelivery) => (
                 StatusCode::CONFLICT,
                 "Issuance transaction is not available for DIDComm delivery",
             ),
