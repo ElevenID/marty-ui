@@ -1,5 +1,5 @@
 //! Candidate gateway -> actual issuance main -> real HTTP publication and mirror.
-//! Reuses the existing process/dependency owner and its fourteen lifecycle cases.
+//! Reuses the existing process/dependency owner and its fifteen lifecycle cases.
 //! Identity ports are controlled; production route selection is unchanged. This
 //! does not equate cancellation of an HTTP client with cancellation of a handler.
 
@@ -173,6 +173,7 @@ impl ReviewResponseExpectations for GatewayExpectations {
                         mip_expected(400, "service_error", detail, None)
                     }
                     "suspend_delivered"
+                    | "concurrent_at_publication"
                     | "revoke_delivered"
                     | "mirror_failure"
                     | "no_delivery"
@@ -231,7 +232,7 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     let transport = retained
         .get()
         .expect("gateway transport created after readiness");
-    assert_eq!(transport.requests.load(Ordering::SeqCst), 28);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 31);
     assert_eq!(transport.denied.load(Ordering::SeqCst), 1);
     assert_eq!(transport.foreign.load(Ordering::SeqCst), 1);
     // Suspend: foreign + outcome + held competitor + duplicate; revoke/mirror:
@@ -240,7 +241,8 @@ pub async fn run(pool: &PgPool, database_url: &str) {
     // cases add one outcome and one duplicate each, with no legacy selection.
     // Four configured-target skips add success+duplicate; two already-revoked
     // rejections add one request each and do not resolve their reviews.
-    assert_eq!(transport.http.counts(), (27, 0));
+    // Full concurrent-publication adds its own outcome, held competitor and duplicate.
+    assert_eq!(transport.http.counts(), (30, 0));
 }
 
 #[cfg(test)]
@@ -278,6 +280,7 @@ mod tests {
         .unwrap();
         for name in [
             "suspend_delivered",
+            "concurrent_at_publication",
             "revoke_delivered",
             "mirror_failure",
             "publication_failure",

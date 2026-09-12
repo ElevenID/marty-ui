@@ -244,6 +244,7 @@ pub async fn run_review_operations(pool: &PgPool) {
     let RuntimeFixture {
         state,
         service,
+        url,
         stop,
         server,
         _cleanup,
@@ -258,6 +259,7 @@ pub async fn run_review_operations(pool: &PgPool) {
         &state,
         &ReviewRequests::direct(DirectReviewRequests::Router(router)),
         ReviewCapabilities::ControlledPublisher,
+        &url,
     )
     .await;
     let _ = stop.send(());
@@ -365,6 +367,7 @@ impl ReviewCapabilities {
                 "pending_delivery",
                 "failed_delivery",
                 "wallet_delivery",
+                "concurrent_at_publication",
                 "no_delivery",
             ],
         }
@@ -513,6 +516,7 @@ async fn review_cases(
     state: &Arc<RuntimeState>,
     requests: &ReviewRequests,
     capabilities: ReviewCapabilities,
+    mirror_url: &str,
 ) {
     use super::canvas_operations_read_replay::{insert_review, timestamps};
 
@@ -571,6 +575,7 @@ async fn review_cases(
             .find(|case| case["name"] == name)
             .unwrap();
         let action = case["body"]["action"].as_str().unwrap();
+        let concurrent = name == "concurrent_at_publication";
         let special = ReviewEffect::for_case(name);
         let rejected = special == Some(ReviewEffect::Revoked);
         sqlx::query("UPDATE issuance_service.canvas_program_bindings SET enabled=true,canvas_credentials=$1 WHERE id='binding-review' AND organization_id='org-review'")
@@ -585,6 +590,13 @@ async fn review_cases(
             .bind(initial_delivery["external_issuer_id"].as_str())
             .bind(initial_delivery["canvas_account_id"].as_str())
             .execute(pool).await.unwrap();
+        if concurrent {
+            let metadata = concurrent_publication_metadata(case);
+            // The existing runtime row aliases delivery-review. Restore every
+            // frozen selection input, without executing the corpus-wide DELETE.
+            sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,delivery_mode='mirror',canvas_account_id=NULL,external_credential_id=NULL,external_issuer_id=NULL WHERE id='delivery-provider' AND organization_id='org-review'")
+                .bind(metadata).execute(pool).await.unwrap();
+        }
         if let Some(effect) = special {
             let metadata = effect.original_metadata(case);
             sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$1,canvas_account_id=NULL,external_credential_id=NULL,external_issuer_id=NULL WHERE id='delivery-provider' AND organization_id='org-review'")
@@ -692,10 +704,12 @@ async fn review_cases(
         }
 
         let (status, content_type, mut body) = if capabilities.real_http_publication()
-            && name == "suspend_delivered"
+            && (name == "suspend_delivered" || concurrent)
         {
-            // Exercise the existing concurrent-at-publication contract through
-            // the actual main binary, not merely a post-resolution duplicate.
+            // Retain the original held-suspend control and execute the full
+            // named concurrent scenario with its own frozen setup and outcome.
+            // The spawned future is an HTTP client: abort-on-failure cleanup
+            // does not claim cancellation of the actual main's request task.
             state.publication_hold.store(true, Ordering::SeqCst);
             let first_requests = requests.clone();
             let first_case = case.clone();
@@ -892,7 +906,11 @@ async fn review_cases(
                 }
             }
             assert_eq!(delivery["canvas_account_id"], "account");
-            assert_eq!(delivery["metadata"]["unrelated_marker"], 44);
+            if concurrent {
+                assert_eq!(delivery["metadata"]["preserved"], "synthetic-marker");
+            } else {
+                assert_eq!(delivery["metadata"]["unrelated_marker"], 44);
+            }
             assert_eq!(
                 delivery["metadata"]["canvas_program_binding_id"],
                 "binding-review"
@@ -901,7 +919,10 @@ async fn review_cases(
                 delivery["metadata"]["canvas_platform_id"],
                 "platform-review"
             );
-            assert_eq!(delivery["metadata"]["status_sync_attempts"], 1);
+            assert_eq!(
+                delivery["metadata"]["status_sync_attempts"],
+                if concurrent { 3 } else { 1 }
+            );
             assert_eq!(delivery["metadata"]["last_status_sync_action"], action);
             assert_eq!(
                 delivery["metadata"]["last_synced_credential_status"],
@@ -959,6 +980,31 @@ async fn review_cases(
             }
             let used: bool = sqlx::query_scalar("SELECT last_used_at IS NOT NULL FROM issuance_service.organization_integration_secrets WHERE id='runtime-secret' AND organization_id='org-review'").fetch_one(pool).await.unwrap();
             assert!(used);
+            if concurrent {
+                let mut actual =
+                    marty_issuance_service::owned_json_value::OwnedJsonValue::copy(&delivery);
+                timestamps(&mut actual);
+                assert_eq!(*actual, concurrent_http_delivery(expected, mirror_url));
+                assert_eq!(
+                    calls[1]["body"]["metadata"]["delivery_record_id"],
+                    "delivery-provider"
+                );
+                assert_eq!(calls[1]["body"]["credential"]["id"], "credential-review");
+                // Publication/mirror observers independently checked the live
+                // claim at each port. Only the known runtime delivery alias is
+                // adapted in this complete frozen call-order comparison.
+                assert_eq!(
+                    json!([
+                        {"port":calls[0]["port"],"action":calls[0]["action"],
+                        "credential_id":calls[0]["body"]["credential_id"],"credential_status":calls[0]["status"],
+                        "reason":calls[0]["body"]["reason"],"delivery_id":null,"claim_active":true},
+                        {"port":calls[1]["port"],"action":calls[1]["body"]["lifecycle_action"],
+                        "credential_id":calls[1]["body"]["credential"]["id"],"credential_status":calls[1]["persisted_status"],
+                        "reason":calls[1]["body"]["credential"]["reason"],"delivery_id":"delivery-review","claim_active":true}
+                    ]),
+                    expected["lifecycle_calls"]
+                );
+            }
         }
         // Retain raw review/event rows too: a duplicate must not refresh a
         // timestamp, append a resolution event, or emit a lifecycle event.
@@ -1041,17 +1087,7 @@ impl ReviewEffect {
 
     fn original_metadata(self, case: &Value) -> Value {
         let setup = case["sql"].as_array().unwrap();
-        let inserts: Vec<_> = setup
-            .iter()
-            .map(|sql| sql.as_str().unwrap())
-            .filter(|sql| {
-                sql.starts_with("INSERT INTO issuance_service.credential_delivery_records")
-            })
-            .collect();
-        assert_eq!(inserts.len(), 1);
-        let metadata = inserts[0].strip_prefix("INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','").unwrap()
-            .strip_suffix("','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')").unwrap();
-        let metadata: Value = serde_json::from_str(metadata).unwrap();
+        let metadata = original_delivery_metadata(case);
         assert_eq!(
             metadata,
             json!({"deployment_profile_id":"synthetic-profile","canvas_feature_flags":{"enable_canvas_mirror_ops":self != Self::MirrorGate},"canvas_program_binding_id":if self == Self::BindingMissing { "missing" } else { "binding-review" },"preserved":"synthetic-marker","status_sync_attempts":2})
@@ -1068,6 +1104,66 @@ impl ReviewEffect {
         }
         metadata
     }
+}
+
+fn original_delivery_metadata(case: &Value) -> Value {
+    let inserts: Vec<_> = case["sql"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|sql| sql.as_str().unwrap())
+        .filter(|sql| sql.starts_with("INSERT INTO issuance_service.credential_delivery_records"))
+        .collect();
+    assert_eq!(inserts.len(), 1);
+    let metadata = inserts[0].strip_prefix("INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata,created_at,updated_at) VALUES ('delivery-review','credential-review','transaction-review','org-review','canvas_credentials','mirror','delivered','").unwrap()
+        .strip_suffix("','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')").unwrap();
+    serde_json::from_str(metadata).unwrap()
+}
+
+fn concurrent_publication_metadata(case: &Value) -> Value {
+    assert_eq!(case["name"], "concurrent_at_publication");
+    assert_eq!(case["concurrent"], true);
+    assert!(case.get("cancel_at").is_none());
+    assert_eq!(
+        case["body"],
+        json!({"action":"suspend","note":"  synthetic reason  "})
+    );
+    let setup = case["sql"].as_array().unwrap();
+    assert_eq!(setup.len(), 5);
+    assert_eq!(&setup[..4], [
+        "DELETE FROM issuance_service.credential_delivery_records",
+        "UPDATE issuance_service.issued_credentials SET status='active',revoked=false,revoked_at=NULL,revocation_reason=NULL,status_updated_at='2026-01-01T00:00:00Z' WHERE id='credential-review'",
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true WHERE id='binding-review'",
+        "UPDATE issuance_service.canvas_platforms SET enabled=true WHERE id='platform-review'",
+    ]);
+    let metadata = original_delivery_metadata(case);
+    assert_eq!(
+        metadata,
+        json!({"deployment_profile_id":"synthetic-profile","canvas_feature_flags":{"enable_canvas_mirror_ops":true},"canvas_program_binding_id":"binding-review","preserved":"synthetic-marker","status_sync_attempts":2})
+    );
+    metadata
+}
+
+fn concurrent_http_delivery(expected: &Value, mirror_url: &str) -> Value {
+    assert_eq!(expected["name"], "concurrent_at_publication");
+    assert_eq!(
+        expected["snapshot"]["deliveries"].as_array().unwrap().len(),
+        1
+    );
+    let mut delivery = expected["snapshot"]["deliveries"][0].clone();
+    assert_eq!(delivery["id"], "delivery-review");
+    delivery["id"] = json!("delivery-provider");
+    let metadata = delivery["metadata"].as_object_mut().unwrap();
+    assert_eq!(metadata.remove("provider_status"), Some(json!("suspended")));
+    // Expected-only adaptation from the already reviewed bridge HTTP fixture:
+    // no actual response, database row or runtime diagnostic enters this port.
+    // CanvasLifecycleDelivery::target also hydrates the fixture's configured
+    // binding token reference before calling the real tenant-vault provider.
+    metadata.extend(json!({"canvas_credentials":{"api_token_secret_id":"org_secret://org-review/runtime-secret"},
+        "status_sync_url":mirror_url,"status_sync_http_status":200,
+        "status_sync_request_id":"synthetic-runtime-request","status_sync_response":{"accepted":true},
+        "status_synced_at":"$timestamp"}).as_object().unwrap().clone());
+    delivery
 }
 
 /// Closed mapping verified against the original frozen setup SQL. Inspect only:
@@ -1621,7 +1717,7 @@ pub(super) type ReviewTransportPorts = (
 
 /// Reuse the real main-process/dependency owner with a new request boundary.
 /// The factory is invoked only after the exact owned process becomes healthy.
-/// Its ports cannot opt out of the fourteen real-lifecycle cases, claim-hold,
+/// Its ports cannot opt out of the fifteen real-lifecycle cases, claim-hold,
 /// token/body checks, raw persistence/duplicate checks or owned cleanup.
 pub(super) async fn run_review_operations_main_with_transport<F>(
     pool: &PgPool,
@@ -1703,6 +1799,7 @@ pub(super) async fn run_review_operations_main_with_transport<F>(
             expectations,
         },
         ReviewCapabilities::RealHttpPublisher,
+        &url,
     )
     .await;
     assert!(child.0.try_wait().unwrap().is_none());
@@ -1873,6 +1970,81 @@ mod review_transport_tests {
     use super::*;
 
     #[test]
+    fn concurrent_setup_and_bridge_projection_are_frozen_and_expected_only() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-lifecycle-scenarios.json"
+        ))
+        .unwrap();
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-review-lifecycle-oracle.json"
+        ))
+        .unwrap();
+        let case = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "concurrent_at_publication")
+            .unwrap();
+        let expected = frozen["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "concurrent_at_publication")
+            .unwrap();
+        assert_eq!(
+            concurrent_publication_metadata(case)["status_sync_attempts"],
+            2
+        );
+        for (field, value) in [
+            ("concurrent", json!(false)),
+            ("cancel_at", json!("publication")),
+        ] {
+            let mut changed = case.clone();
+            changed[field] = value;
+            assert!(
+                std::panic::catch_unwind(|| concurrent_publication_metadata(&changed)).is_err()
+            );
+        }
+        let mut changed = case.clone();
+        changed["sql"][4] = json!(changed["sql"][4]
+            .as_str()
+            .unwrap()
+            .replace("\"status_sync_attempts\":2", "\"status_sync_attempts\":0"));
+        assert!(std::panic::catch_unwind(|| concurrent_publication_metadata(&changed)).is_err());
+        let retained = expected.clone();
+        let projected = concurrent_http_delivery(expected, "http://127.0.0.1:12345/status");
+        assert_eq!(*expected, retained);
+        assert_eq!(projected["id"], "delivery-provider");
+        assert_eq!(projected["metadata"]["status_sync_attempts"], 3);
+        assert_eq!(projected["metadata"]["preserved"], "synthetic-marker");
+        assert_eq!(projected["metadata"]["status_sync_http_status"], 200);
+        assert_eq!(
+            projected["metadata"]["canvas_credentials"],
+            json!({"api_token_secret_id":"org_secret://org-review/runtime-secret"})
+        );
+        assert_eq!(
+            projected["metadata"]["status_sync_url"],
+            "http://127.0.0.1:12345/status"
+        );
+        assert_eq!(
+            projected["metadata"]["status_sync_response"],
+            json!({"accepted":true})
+        );
+        assert_eq!(
+            projected["metadata"]["status_sync_request_id"],
+            "synthetic-runtime-request"
+        );
+        assert_eq!(projected["metadata"]["status_synced_at"], "$timestamp");
+        let mut changed = expected.clone();
+        changed["snapshot"]["deliveries"][0]["metadata"]["provider_status"] = json!("revoked");
+        assert!(std::panic::catch_unwind(|| concurrent_http_delivery(
+            &changed,
+            "http://127.0.0.1:12345/status"
+        ))
+        .is_err());
+    }
+
+    #[test]
     fn configured_skip_preconditions_preserve_original_metadata_and_setup() {
         let scenarios: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-review-lifecycle-scenarios.json"
@@ -1977,6 +2149,7 @@ mod review_transport_tests {
                 "pending_delivery",
                 "failed_delivery",
                 "wallet_delivery",
+                "concurrent_at_publication",
                 "no_delivery"
             ]
         );
