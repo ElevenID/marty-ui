@@ -123,9 +123,10 @@ this is not packaged gateway or Flow acceptance. Holder fallback, genuine
 existing-reservation recovery and initiation gateway selection remain open.
 See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
-The final combined native tree passed 377 issuance unit tests, eight HTTP tests,
-the configured nine-case composition plus five support controls, strict package
-Clippy and formatting across all 19 workspace packages.
+The latest combined native tree `0d50538d2` passed 383 issuance library tests,
+three initiation and six direct HTTP tests, and ten configured target tests
+(47.55 seconds). Strict package Clippy and formatting across all 19 workspace
+packages passed; all six exact-owned test containers were verified absent.
 Production and beta were not changed by these tests.
 
 ### Previous qualification snapshot — 2026-09-08
