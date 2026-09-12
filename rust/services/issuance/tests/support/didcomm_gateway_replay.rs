@@ -280,13 +280,13 @@ impl UpstreamClient for CountedHttp {
     }
 }
 
-struct OwnedHttp {
-    port: u16,
+pub(super) struct OwnedHttp {
+    pub(super) port: u16,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 impl OwnedHttp {
-    async fn start(router: Router) -> Self {
+    pub(super) async fn start(router: Router) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -303,7 +303,7 @@ impl OwnedHttp {
             task,
         }
     }
-    async fn close(mut self) {
+    pub(super) async fn close(mut self) {
         self.stop.take().unwrap().send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(5), &mut self.task)
             .await

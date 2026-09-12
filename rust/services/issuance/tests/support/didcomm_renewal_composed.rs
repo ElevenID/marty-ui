@@ -15,6 +15,13 @@ use marty_issuance_service::{
 
 use super::*;
 
+#[path = "didcomm_renewal_canvas.rs"]
+mod canvas;
+
+pub(super) async fn run_canvas(pool: &PgPool) {
+    canvas::run(pool).await;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Scenario {
     Automatic,
@@ -244,7 +251,7 @@ fn assert_captured_message(
     message.id
 }
 
-async fn run_case(pool: &PgPool, authenticated: bool, scenario: Scenario) {
+async fn run_case(pool: &PgPool, authenticated: bool, scenario: Scenario, gateway: bool) {
     let id = format!(
         "renewal-composed-{}-{scenario:?}",
         if authenticated { "auth" } else { "anon" }
@@ -276,11 +283,40 @@ async fn run_case(pool: &PgPool, authenticated: bool, scenario: Scenario) {
         Some(API_KEY),
         admission.clone(),
     ));
+    let mut gateway = if gateway {
+        let missing = super::super::renewal_gateway_replay::GatewayFixture::start(
+            router.clone(),
+            ORGANIZATION,
+            API_KEY,
+            &format!("absent-{source}"),
+        )
+        .await;
+        missing
+            .assert_missing_owner_uses_native_source_check()
+            .await;
+        missing.close().await;
+        let fixture = super::super::renewal_gateway_replay::GatewayFixture::start(
+            router.clone(),
+            ORGANIZATION,
+            API_KEY,
+            &source,
+        )
+        .await;
+        fixture.assert_selection_and_denials().await;
+        Some(fixture)
+    } else {
+        None
+    };
     let direct = DirectEndpoint {
         router: direct_router(graph.delivery.clone()),
         gateway: false,
     };
-    let request = renewal_response(&router, &source);
+    let request = async {
+        match &gateway {
+            Some(gateway) => gateway.renew().await,
+            None => renewal_response(&router, &source).await,
+        }
+    };
     let (status, response) = if matches!(scenario, Scenario::Automatic | Scenario::Refused) {
         complete_after_prelinks(request, pool, &graph, &id, &source, &source_before).await
     } else {
@@ -494,11 +530,19 @@ async fn run_case(pool: &PgPool, authenticated: bool, scenario: Scenario) {
             1
         }
     );
+    if let Some(fixture) = gateway.as_mut() {
+        assert_eq!(fixture.counts(), (1, 1));
+        assert_eq!(fixture.owner_count(), 4);
+        fixture.assert_unreachable_without_legacy_fallback().await;
+    }
+    if let Some(fixture) = gateway {
+        fixture.close().await;
+    }
     graph.peers.close().await;
     graph.wallet.close_verified();
 }
 
-pub(super) async fn run(pool: &PgPool) {
+pub(super) async fn run(pool: &PgPool, gateway: bool) {
     for authenticated in [false, true] {
         for scenario in [
             Scenario::Automatic,
@@ -506,7 +550,7 @@ pub(super) async fn run(pool: &PgPool) {
             Scenario::MissingHolder,
             Scenario::OrdinaryThenDirect,
         ] {
-            run_case(pool, authenticated, scenario).await;
+            run_case(pool, authenticated, scenario, gateway).await;
         }
     }
 }

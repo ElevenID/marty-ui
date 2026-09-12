@@ -70,13 +70,16 @@ impl RenewalRepository for Harness {
         application: Option<&str>,
     ) -> Result<CredentialTransaction, RenewalRepositoryError> {
         self.record("bind");
-        assert_eq!(
-            transaction.renewal_of_credential_id.as_deref(),
-            Some(source.id.as_str())
-        );
-        assert_eq!(transaction.application_id.as_deref(), application);
         assert_eq!(self.reserved.lock().unwrap().as_ref(), Some(transaction));
-        Ok(transaction.clone())
+        let mut bound = transaction.clone();
+        assert!(
+            bound.renewal_of_credential_id.is_none()
+                || bound.renewal_of_credential_id.as_deref() == Some(source.id.as_str())
+        );
+        bound.renewal_of_credential_id = Some(source.id.clone());
+        bound.application_id = application.map(str::to_owned);
+        *self.reserved.lock().unwrap() = Some(bound.clone());
+        Ok(bound)
     }
 }
 
@@ -106,14 +109,8 @@ impl InitiationRepository for Harness {
         transaction: &CredentialTransaction,
     ) -> Result<InitiationReservation, InitiationRepositoryError> {
         self.record("reserve");
-        assert_eq!(
-            transaction.renewal_of_credential_id.as_deref(),
-            Some("synthetic-source-credential")
-        );
-        assert_eq!(
-            transaction.application_id.as_deref(),
-            Some("synthetic-application")
-        );
+        assert!(transaction.renewal_of_credential_id.is_none());
+        assert!(transaction.application_id.is_none());
         *self.reserved.lock().unwrap() = Some(transaction.clone());
         Ok(InitiationReservation {
             transaction: transaction.clone(),
@@ -213,10 +210,8 @@ impl IssuerContextResolver for Harness {
         _: bool,
     ) -> Result<IssuerContext, CredentialIssuanceError> {
         self.record("issuer");
-        assert_eq!(
-            transaction.renewal_of_credential_id.as_deref(),
-            Some("synthetic-source-credential")
-        );
+        assert!(transaction.renewal_of_credential_id.is_none());
+        assert!(transaction.application_id.is_none());
         Ok(IssuerContext {
             issuer_profile_id: "synthetic-issuer-profile".into(),
             issuer_did: "did:example:renewal-issuer".into(),

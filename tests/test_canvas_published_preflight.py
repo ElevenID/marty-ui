@@ -51,6 +51,22 @@ RENEWAL_GATES = [
         "didcomm_renewal_http_composes_real_delivery_and_renewal_links",
         "didcomm_composed_delivery::run_renewal_http",
     ),
+    (
+        "renewal_fresh_packaged_main_delivers_both_encryption_modes",
+        "renewal_fresh_main::run",
+    ),
+    (
+        "renewal_packaged_main_recovers_historical_keyed_offer",
+        "renewal_main_replay::run",
+    ),
+    (
+        "didcomm_renewal_gateway_selects_native_with_required_owner_read",
+        "didcomm_composed_delivery::run_renewal_gateway",
+    ),
+    (
+        "didcomm_renewal_canvas_preserves_real_association_and_delivery_phases",
+        "didcomm_composed_delivery::run_renewal_canvas",
+    ),
 ]
 
 

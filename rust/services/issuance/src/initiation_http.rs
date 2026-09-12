@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 
 use crate::{
     initiation::{
-        InitiationDependencyError, InitiationRenewalContext, InitiationRepositoryError,
-        InitiationRequest, InitiationReservation, InitiationService, InitiationServiceError,
+        InitiationDependencyError, InitiationRepositoryError, InitiationRequest,
+        InitiationReservation, InitiationService, InitiationServiceError,
     },
     initiation_response::{
         InitiationOfferProjectionError, InitiationOfferProjector, InitiationOfferResponse,
@@ -69,7 +69,7 @@ impl InitiationHttpService {
         headers: &HeaderMap,
         request: &InitiationRequest,
     ) -> Result<InitiationOfferResponse, InitiationHttpError> {
-        let reservation = self.reserve_authorized(headers, request, None).await?;
+        let reservation = self.reserve_authorized(headers, request).await?;
         self.project_reserved(reservation, request).await
     }
 
@@ -77,11 +77,10 @@ impl InitiationHttpService {
         &self,
         headers: &HeaderMap,
         request: &InitiationRequest,
-        renewal: Option<&InitiationRenewalContext>,
     ) -> Result<InitiationReservation, InitiationHttpError> {
         reject_direct_signing_headers(headers)?;
         self.initiation
-            .initiate_with_renewal(request, header(headers, "Idempotency-Key"), renewal)
+            .initiate(request, header(headers, "Idempotency-Key"))
             .await
             .map_err(Into::into)
     }

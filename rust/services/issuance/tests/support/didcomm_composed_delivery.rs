@@ -85,15 +85,16 @@ impl IssuerContextResolver for ControlledIssuer {
     ) -> Result<IssuerContext, CredentialIssuanceError> {
         assert_eq!(transaction.organization_id, ORGANIZATION);
         assert_eq!(format, "dc+sd-jwt");
+        let public_jwk = json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(ed25519_dalek::SigningKey::from_bytes(&[11;32]).verifying_key().to_bytes())});
         Ok(IssuerContext {
             issuer_profile_id: "didcomm-profile".into(),
             issuer_did: ISSUER.into(),
             signing_service_id: "controlled-signing-port".into(),
             algorithm: "EdDSA".into(),
             verification_method_id: Some(format!("{ISSUER}#signing-1")),
-            public_jwk: None,
+            public_jwk: Some(public_jwk.clone()),
             certificate_chain: vec![],
-            raw_context: json!({}),
+            raw_context: json!({"organization_id":ORGANIZATION,"issuer_did":ISSUER,"algorithm":"EdDSA","verification_method_id":format!("{ISSUER}#signing-1"),"key_purpose":"vc_jwt_issuer","public_jwk":public_jwk,"issuer_profile":{"status":"active"},"service":{"algorithm":"EdDSA"}}),
         })
     }
 }
@@ -646,12 +647,27 @@ struct DeliveryGraph {
     delivery: Arc<NativeInitiationDidcommDelivery>,
 }
 impl DeliveryGraph {
+    async fn start_canvas(pool: &PgPool, authenticated: bool, fault: Option<Fault>) -> Self {
+        Self::start_with_canvas(pool, authenticated, fault, None, false, true).await
+    }
+
     async fn start(
         pool: &PgPool,
         authenticated: bool,
         fault: Option<Fault>,
         recovery: Option<Recovery>,
         hold_signing: bool,
+    ) -> Self {
+        Self::start_with_canvas(pool, authenticated, fault, recovery, hold_signing, false).await
+    }
+
+    async fn start_with_canvas(
+        pool: &PgPool,
+        authenticated: bool,
+        fault: Option<Fault>,
+        recovery: Option<Recovery>,
+        hold_signing: bool,
+        canvas: bool,
     ) -> Self {
         let wallet = WalletFixture::start(if fault == Some(Fault::HttpRefused) {
             503
@@ -716,8 +732,12 @@ impl DeliveryGraph {
             Some(SERVICE_TOKEN),
             Duration::from_secs(5),
             CanvasGuardConfig {
-                enabled: false,
-                pilot_organizations: BTreeSet::new(),
+                enabled: canvas,
+                pilot_organizations: if canvas {
+                    BTreeSet::from([ORGANIZATION.to_owned()])
+                } else {
+                    BTreeSet::new()
+                },
                 evidence_max_age: Duration::from_secs(900),
                 readiness_max_age: Duration::from_secs(900),
             },
@@ -1738,6 +1758,14 @@ pub(super) async fn run_renewal_http(database_url: &str) {
     run_mode(database_url, Gate::Renewal).await;
 }
 
+pub(super) async fn run_renewal_gateway(database_url: &str) {
+    run_mode(database_url, Gate::RenewalGateway).await;
+}
+
+pub(super) async fn run_renewal_canvas(database_url: &str) {
+    run_mode(database_url, Gate::RenewalCanvas).await;
+}
+
 pub(super) async fn run_historical_http(database_url: &str) {
     run_mode(database_url, Gate::Historical).await;
 }
@@ -1751,6 +1779,8 @@ enum Gate {
     FreshGrpc,
     Historical,
     Renewal,
+    RenewalGateway,
+    RenewalCanvas,
 }
 
 async fn run_mode(database_url: &str, gate: Gate) {
@@ -1771,8 +1801,12 @@ async fn run_mode(database_url: &str, gate: Gate) {
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(120), async {
-        if gate == Gate::Renewal {
-            renewal::run(&pool).await;
+        if gate == Gate::RenewalCanvas {
+            renewal::run_canvas(&pool).await;
+            return;
+        }
+        if matches!(gate, Gate::Renewal | Gate::RenewalGateway) {
+            renewal::run(&pool, gate == Gate::RenewalGateway).await;
             return;
         }
         if gate == Gate::Historical {

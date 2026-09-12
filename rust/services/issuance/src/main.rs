@@ -77,6 +77,7 @@ use marty_issuance_service::{
     credential_management_http::CredentialManagementHttpService,
     credential_management_postgres::PostgresCredentialManagementRepository,
     credential_postgres::PostgresCredentialRepository,
+    credential_renewal::CredentialRenewalService,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
@@ -474,6 +475,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
     )?);
+    let initiation_clock = Arc::new(SystemInitiationClock);
     let initiation = InitiationService::new(
         InitiationPorts {
             repository: credential_repository.clone(),
@@ -491,7 +493,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )?),
             issuer_resolver: issuer_resolver.clone(),
             seeds: Arc::new(SecureInitiationSeedGenerator),
-            clock: Arc::new(SystemInitiationClock),
+            clock: initiation_clock.clone(),
         },
         config.issuer_base_url.clone(),
     )?
@@ -502,6 +504,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         initiation.clone(),
         initiation_projector.clone(),
         config.issuance_api_key.as_deref(),
+    );
+    let renewal = CredentialRenewalService::new(
+        credential_repository.clone(),
+        initiation_http.clone(),
+        config.issuance_api_key.as_deref(),
+        initiation_clock,
     );
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
@@ -580,7 +588,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 credential,
                 initiation_http,
                 didcomm_http,
-            ),
+            )
+            .with_renewal(renewal),
             credential_management_http,
             CanvasServices::new(
                 canvas_oauth,

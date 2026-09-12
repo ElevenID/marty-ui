@@ -459,7 +459,7 @@ fn optional_text(value: Option<&Value>) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn has_canvas_marker(canvas: &Map<String, Value>) -> bool {
+pub(crate) fn has_canvas_marker(canvas: &Map<String, Value>) -> bool {
     [
         "canvas_platform_id",
         "canvas_program_binding_id",

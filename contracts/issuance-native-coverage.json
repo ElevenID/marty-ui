@@ -78,7 +78,22 @@
     "commit": "4b6ab986f65a9300c1755fde0c8d377eab89057f",
     "sha256": "4895c90c2b0185edb6de60cab94e89c9d3416505a4dde1b0ea94b191602ab262"
   },
+  "renewal_behavior_contract": {
+    "path": "contracts/credential-renewal-python-reference.json",
+    "sha256": "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f",
+    "intentional_native_corrections": [
+      "RENEWAL-001:links-before-delivery",
+      "RENEWAL-002:pending-uri-on-unsent-delivery",
+      "RENEWAL-003:atomic-canvas-successor-association"
+    ]
+  },
   "native_http": [
+    {
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/renew",
+      "operation": "renew_issued_credential",
+      "renewal_behavior_contract": true
+    },
     {
       "method": "POST",
       "path": "/v1/issuance/initiate",
@@ -540,7 +555,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 58,
+    "http": 57,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,

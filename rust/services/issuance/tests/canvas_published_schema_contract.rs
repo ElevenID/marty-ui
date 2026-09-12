@@ -2,8 +2,69 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "support/renewal_reference_fixture.rs"]
+mod renewal_reference_fixture;
+
 #[path = "support/renewal_binding_postgres.rs"]
 mod renewal_binding_postgres;
+#[path = "support/renewal_fresh_main.rs"]
+mod renewal_fresh_main;
+#[path = "support/renewal_gateway_replay.rs"]
+mod renewal_gateway_replay;
+#[path = "support/renewal_main_replay.rs"]
+mod renewal_main_replay;
+
+#[tokio::test]
+async fn didcomm_renewal_canvas_preserves_real_association_and_delivery_phases() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Canvas renewal requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_renewal_canvas(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
+async fn renewal_fresh_packaged_main_delivers_both_encryption_modes() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Fresh renewal packaged main requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    renewal_fresh_main::run(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
+async fn renewal_packaged_main_recovers_historical_keyed_offer() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renewal packaged main requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    renewal_main_replay::run(&owned.url).await;
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
+async fn didcomm_renewal_gateway_selects_native_with_required_owner_read() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renewal gateway requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_renewal_gateway(&owned.url).await;
+    owned.close_verified().unwrap();
+}
 
 #[tokio::test]
 async fn renewal_postgres_binding_and_same_successor_recovery_are_fenced() {

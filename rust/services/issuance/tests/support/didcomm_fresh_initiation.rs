@@ -75,6 +75,7 @@ impl Scenario {
 pub(super) struct Admission {
     id: String,
     scenario: Scenario,
+    template: Option<InitiationTemplate>,
     pub(super) seeds: AtomicUsize,
 }
 
@@ -103,6 +104,9 @@ impl InitiationTemplateResolver for Admission {
             "recovery precedes template lookup"
         );
         assert_eq!(id, "didcomm-template");
+        if let Some(template) = &self.template {
+            return Ok(template.clone());
+        }
         let mut wallets = transaction(&self.id).wallet_configs;
         if self.scenario == Scenario::OrdinaryWallet {
             wallets.clear();
@@ -208,9 +212,21 @@ pub(super) fn services(
     id: &str,
     scenario: Scenario,
 ) -> (InitiationService, InitiationOfferProjector, Arc<Admission>) {
+    services_with_template(repository, delivery, issuer, id, scenario, None)
+}
+
+pub(super) fn services_with_template(
+    repository: Arc<PostgresCredentialRepository>,
+    delivery: Arc<NativeInitiationDidcommDelivery>,
+    issuer: Arc<ControlledIssuer>,
+    id: &str,
+    scenario: Scenario,
+    template: Option<InitiationTemplate>,
+) -> (InitiationService, InitiationOfferProjector, Arc<Admission>) {
     let admission = Arc::new(Admission {
         id: id.into(),
         scenario,
+        template,
         seeds: AtomicUsize::new(0),
     });
     let service = InitiationService::new(

@@ -154,8 +154,8 @@ Qualification completed for the candidate admission and repository scope:
   two concurrent distinct successors through publication; two external attempts
   are observed but only one atomic database successor wins. This is **not** an
   at-most-once external publication guarantee or an actual wallet-send test.
-  This gate has no Canvas application fixture and does not qualify application
-  or evidence drift effects. The credential-and-delivery rejection case does
+  That candidate checkpoint had no Canvas application fixture and did not qualify
+  application or evidence drift effects. The credential-and-delivery rejection case does
   not independently isolate delivery-only exclusion: the published delivery
   schema requires a credential foreign key.
 - `didcomm_renewal_http_composes_real_delivery_and_renewal_links`: eight cases
@@ -178,27 +178,107 @@ Qualification completed for the candidate admission and repository scope:
   guards pass. These results do not authorize Python deletion or establish
   packaged-main/gateway renewal routing.
 
-## Remaining activation work
+## Renewal activation and Canvas association qualification
 
-Activation review found an additional application-binding gate. A real Canvas
-application remains bound to its source issuance transaction, while trusted early
-renewal linkage makes the existing pre-signing guard inspect it against the new
-transaction. The guard requires an approved application and an exact transaction
-binding (`canvas_issuance_guard.rs`, `binding_transaction_matches`). The current
-composed fixture carries an application ID but has no corresponding application
-row, so its passing result does not qualify this path.
+Activation review identified a real Canvas dependency not covered by the first
+candidate's application-ID-only fixtures: the existing guard requires an approved
+application bound to the successor transaction. Its application and award-candidate
+credential pointers also retain the source credential until materialization.
+This independently confirmed blocker was recorded in integration checkpoint
+`fe222abb2`; the immutable Python oracle remains unchanged.
 
-Do not bypass the guard or clear the application ID. Qualify a conditional,
-atomic source-to-successor application rebind that preserves approval state and
-source history, permits exact successor recovery, and rejects cross-tenant,
-stale-binding and competing-successor changes without partial association writes.
-Record its governed behavior separately from the immutable Python oracle and
-exercise real application, template, platform, binding and evidence rows before
-activation. Existing evidence-freshness and signing-readiness checks must remain.
+`RENEWAL-003` is the explicit native correction under qualification. Ordinary
+admission reserves an unlinked pending transaction with the same request/hash;
+the renewal repository then atomically writes trusted source/application links
+and conditionally advances an actual Canvas-marked application's current
+transaction from its verified source to that successor. Exact successor replay
+is permitted; foreign, unapproved, stale, or competing associations cannot be
+overwritten. A rejected bind may leave an **unlinked pending reservation**, not
+zero database writes. Source/application associations must remain unchanged.
+Generic applications and nonexistent historical application IDs retain their
+existing behavior, without newly imposed Canvas approval rules.
 
-Wire the same candidate owner into the complete native HTTP service and qualify
-the exact gateway operation. Select
-only renewal after review; do not substitute another delivery graph or switch
-sibling operations. Delete remaining Python owners only after the
-supported consumer/profile audit is closed. No Core or KMS redesign is part of
-this migration slice.
+The credential finalizer permits application/award-candidate credential pointers
+to advance from source to successor only through persisted exact renewal lineage
+and successor application binding. It does not erase source credentials, clear
+history, reset approval, or bypass evidence/signing readiness. Qualification must
+use real application, template, platform, binding, evidence and candidate rows.
+
+These phase distinctions are intentional: stale evidence is rejected by the
+existing guard **after** binding, so a pending reservation/application transaction
+association may remain while source/current credential/candidate pointers are
+unchanged and no signing/publication occurs. Refused transport happens **after**
+materialization: prepared successor application/candidate credential pointers
+may exist, while the source stays active and no issuance event, revocation or
+drift projection occurs. Neither outcome authorizes an automatic resend.
+
+The activation source wires the same repository, clock, and initiation owner
+into packaged main and selects only `POST /v1/issued-credentials/{credential_id}/renew`.
+The typed coverage selector is exclusive, frozen-reference-hashed, and names all
+three intentional corrections; totals become 74 native, 57 remaining, 131 total.
+The gateway continues its required authenticated legacy **owner GET**; renewal
+POST itself is native, and an unavailable native owner does not fall back.
+Sibling paths and methods remain unchanged.
+
+Focused runtime evidence now includes:
+
+- `renewal_fresh_packaged_main_delivers_both_encryption_modes`: actual packaged
+  binary, PostgreSQL, HTTPS wallet and Core, with healthy named organization,
+  template, profile, resolver and synthetic remote Ed25519 signer peers. Both
+  modes validate all six public fields, decrypted attachment, issuer signature,
+  and the exact `given_name` disclosure bound by its digest to signed `_sd`.
+  This is not a real KMS, Canvas application, or deployment proof.
+- `renewal_packaged_main_recovers_historical_keyed_offer`: actual main recovers
+  explicitly seeded historical keyed ordinary rows before issuer/expiry work,
+  with exact offers/conflicts/auth/tenant responses and unchanged scoped tables.
+  Its organization peer deliberately returns 503 to qualify the existing
+  best-effort organization lookup rule; fresh-main separately uses healthy peers.
+- `didcomm_renewal_gateway_selects_native_with_required_owner_read`: the existing
+  eight-case delivery graph through embedded native selection, all six projected
+  public fields, missing/invalid key and foreign tenant, owner 503 fail-closed,
+  owner 404 followed by real native source-not-found, and no legacy POST fallback.
+- `didcomm_renewal_canvas_preserves_real_association_and_delivery_phases`: twelve
+  both-mode cases use actual application/template/platform/binding/evidence/head/
+  candidate rows and the unchanged native readiness guard. Automatic success,
+  refused transport, ordinary then direct delivery, and stale evidence preserve
+  the phase boundaries above. Two valid but conflicting candidate associations
+  (another application or binding) reject atomic materialization without wallet
+  transport, drift, revocation or pointer changes; restoring only the controlled
+  association permits retry. Complete application rows retain all fields except
+  exact successor transaction/credential and the existing issued timestamp update.
+  Named admission/signing ports and historical source rows remain controlled.
+- The existing PostgreSQL binding gate now also proves actual Canvas conditional
+  binding, rollback of conflicting links, exact replay, competing-successor
+  exclusion, and unchanged generic non-Canvas application behavior. An additional
+  ordinary finalization matrix preserves absent/blank historical renewal links
+  while rejecting different meaningful source identities; no meaningful ID bytes
+  are trimmed to force equality. These seeded repository cases do not themselves
+  qualify delivery or evidence drift; the composed gate does.
+
+Final local activation qualification passes 109 gateway library tests, 402
+issuance library tests, three renewal HTTP tests (29 frozen scenarios), three
+initiation HTTP tests, and twelve general HTTP tests. The combined configured
+DIDComm target passes 19 tests; the final renewal-only target passes all eight
+tests, including the six owned-database gates and two pure guards. Both existing
+`credential_postgres_contract` tests also pass against a separate disposable
+`*_test` database, including the now-explicit original renewal transaction history.
+Strict gateway/issuance library-and-test Clippy and all 19 workspace package
+formatting checks pass. The reference helper is registered once and reused by
+all three PostgreSQL/main harnesses. The immutable oracle and Core pin are unchanged.
+
+Repository-local coverage/reference guards pass 31 tests. The complete CI
+preflight guard suite passes 123 tests; after mechanical formatting, its 36
+renewal-specific guards pass again. Mandatory registration requires all six named
+renewal gates and rejects missing, duplicate, ignored, or disconnected bodies.
+All 73 exact recorded disposable fixture container IDs from this activation
+qualification, including failed fixture attempts, are independently confirmed
+absent. Temporary database contents were intentionally discarded; no deployment
+database or operator configuration was used.
+
+The existing tenant-scoped absent-candidate/no-projection behavior is unchanged;
+the new candidate conflict evidence covers another application or binding, not a
+newly imposed failure rule for an absent or foreign-tenant candidate ID.
+
+Delete remaining Python owners only after the supported consumer/profile audit
+is closed. No Python feature deletion, Core/KMS redesign, production deployment,
+or broad sibling-service switch is part of this activation slice.

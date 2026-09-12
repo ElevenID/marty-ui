@@ -33,8 +33,10 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
-#[path = "renewal_reference_fixture.rs"]
-mod reference;
+use super::renewal_reference_fixture as reference;
+
+#[path = "renewal_canvas_binding.rs"]
+mod canvas;
 
 const ENDPOINT: &str = "https://synthetic-wallet.example/renewal";
 const MESSAGE: &str = "synthetic-renewal-message";
@@ -630,6 +632,7 @@ pub(super) async fn run(database_url: &str) {
         organization: format!("renewal-pg-{}", Uuid::new_v4()),
     };
     binding_cases(&fixture).await;
+    canvas::run(&fixture).await;
     let publisher = Publisher::start().await;
     finalizer_cases(&fixture, &publisher).await;
     publisher.assert_no_unexpected_requests();

@@ -69,6 +69,7 @@ use crate::{
         CredentialLifecycleAction, CredentialManagementError, CredentialStatusView,
     },
     credential_management_http::{CredentialManagementHttpError, CredentialManagementHttpService},
+    credential_renewal::CredentialRenewalService,
     initiation::InitiationRequest,
     initiation_didcomm_http::{
         DidcommDeliverRequest, InitiationDidcommHttpError, InitiationDidcommHttpService,
@@ -119,6 +120,7 @@ pub struct IssuanceServices {
     credential: CredentialIssuanceService,
     initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
+    renewal: Option<CredentialRenewalService>,
     credential_management: CredentialManagementHttpService,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
@@ -132,6 +134,7 @@ pub struct IssuanceCoreServices {
     credential: CredentialIssuanceService,
     initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
+    renewal: Option<CredentialRenewalService>,
 }
 
 impl IssuanceCoreServices {
@@ -153,7 +156,15 @@ impl IssuanceCoreServices {
             credential,
             initiation,
             didcomm_delivery,
+            renewal: None,
         }
+    }
+
+    /// Compose the shared renewal owner without changing other service routes.
+    #[must_use]
+    pub fn with_renewal(mut self, renewal: CredentialRenewalService) -> Self {
+        self.renewal = Some(renewal);
+        self
     }
 }
 
@@ -274,6 +285,7 @@ impl IssuanceServices {
             credential: core.credential,
             initiation: core.initiation,
             didcomm_delivery: core.didcomm_delivery,
+            renewal: core.renewal,
             credential_management,
             canvas,
             token_rate_limiter,
@@ -290,6 +302,7 @@ struct OptionalServices {
     credential: Option<CredentialIssuanceService>,
     initiation: Option<InitiationHttpService>,
     didcomm_delivery: Option<InitiationDidcommHttpService>,
+    renewal: Option<CredentialRenewalService>,
     credential_management: Option<CredentialManagementHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
@@ -374,6 +387,7 @@ pub fn router_with_all_services(
             credential: Some(services.credential),
             initiation: Some(services.initiation),
             didcomm_delivery: Some(services.didcomm_delivery),
+            renewal: services.renewal,
             credential_management: Some(services.credential_management),
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
@@ -1072,6 +1086,11 @@ fn router_with_optional_services(
     });
     let api = if let Some(operations) = services.canvas_operations {
         api.merge(crate::canvas_operations::candidate_router(operations))
+    } else {
+        api
+    };
+    let api = if let Some(renewal) = services.renewal {
+        api.merge(crate::credential_renewal::router(renewal))
     } else {
         api
     };

@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use crate::{
     credential::CredentialTransaction,
-    initiation::{InitiationClock, InitiationRenewalContext, InitiationRequest},
+    initiation::{InitiationClock, InitiationRequest},
     initiation_http::{InitiationHttpError, InitiationHttpService},
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
@@ -142,20 +142,16 @@ impl CredentialRenewalService {
             .await?
             .ok_or(RenewalError::SourceTransactionMissing)?;
         let request = renewal_request(&source, &source_tx, self.clock.now())?;
-        let context = InitiationRenewalContext {
-            source_credential_id: source.id.clone(),
-            application_id: source_tx.application_id.clone(),
-        };
         let mut reservation = self
             .initiation
-            .reserve_authorized(headers, &request, Some(&context))
+            .reserve_authorized(headers, &request)
             .await?;
         reservation.transaction = self
             .repository
             .bind_reservation(
                 &reservation.transaction,
                 &source,
-                context.application_id.as_deref(),
+                source_tx.application_id.as_deref(),
             )
             .await?;
         let offer = self

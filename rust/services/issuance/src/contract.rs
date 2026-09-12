@@ -32,6 +32,8 @@ const CREDENTIAL_LIFECYCLE: &[u8] =
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
 const DIDCOMM: &[u8] =
     include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
+const RENEWAL_REFERENCE: &[u8] =
+    include_bytes!("../../../../contracts/credential-renewal-python-reference.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -56,6 +58,7 @@ struct Coverage {
     canvas_management_behavior_contract: Upstream,
     credential_lifecycle_behavior_contract: Upstream,
     initiation_behavior_contract: Upstream,
+    renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
     platform_additive_http: Vec<PlatformOperation>,
@@ -70,6 +73,13 @@ struct Upstream {
     path: String,
     commit: String,
     sha256: String,
+}
+
+#[derive(Deserialize)]
+struct RenewalBehaviorContract {
+    path: String,
+    sha256: String,
+    intentional_native_corrections: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -95,6 +105,8 @@ struct HttpOperation {
     didcomm_behavior_contract: bool,
     #[serde(default)]
     initiation_behavior_contract: bool,
+    #[serde(default)]
+    renewal_behavior_contract: bool,
     #[serde(default)]
     canvas_lti_behavior_case: Option<String>,
     #[serde(default)]
@@ -183,6 +195,7 @@ impl HttpOperation {
             + usize::from(self.credential_behavior_contract)
             + usize::from(self.didcomm_behavior_contract)
             + usize::from(self.initiation_behavior_contract)
+            + usize::from(self.renewal_behavior_contract)
             + usize::from(self.canvas_lti_behavior_case.is_some())
             + usize::from(self.canvas_oauth_behavior_case.is_some())
             + usize::from(self.canvas_management_behavior_case.is_some())
@@ -925,6 +938,26 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_credential_contract = false;
     let mut native_didcomm_contract = false;
     let mut native_initiation_contract = false;
+    let mut native_renewal_contract = false;
+    require(
+        coverage.renewal_behavior_contract.path
+            == "contracts/credential-renewal-python-reference.json"
+            && coverage.renewal_behavior_contract.sha256
+                == "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f"
+            && format!("{:x}", Sha256::digest(canonical_lf(RENEWAL_REFERENCE)))
+                == coverage.renewal_behavior_contract.sha256
+            && coverage
+                .renewal_behavior_contract
+                .intentional_native_corrections
+                == [
+                    "RENEWAL-001:links-before-delivery",
+                    "RENEWAL-002:pending-uri-on-unsent-delivery",
+                    "RENEWAL-003:atomic-canvas-successor-association",
+                ],
+        "renewal reference or governed native corrections changed",
+    )?;
+    let renewal_reference: Value = serde_json::from_slice(RENEWAL_REFERENCE)
+        .map_err(|error| contract_error("invalid renewal reference", error))?;
     let mut native_canvas_lti_cases = BTreeSet::new();
     let mut native_canvas_oauth_cases = BTreeSet::new();
     let mut native_canvas_management_cases = BTreeSet::new();
@@ -1074,6 +1107,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
             )?;
+        } else if operation.renewal_behavior_contract {
+            require(
+                !native_renewal_contract,
+                "duplicate native renewal contract",
+            )?;
+            validate_renewal_operation(operation, &renewal_reference)?;
+            native_renewal_contract = true;
         } else if operation.initiation_behavior_contract {
             require(
                 !native_initiation_contract,
@@ -1303,6 +1343,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_initiation_contract,
         "native initiation endpoint behavior coverage is incomplete",
     )?;
+    require(
+        native_renewal_contract,
+        "native renewal contract is missing",
+    )?;
     for operation in &coverage.platform_additive_http {
         require(
             operation.owner == "mmf-runtime",
@@ -1442,6 +1486,40 @@ fn validate_canvas_operations_operation(
     )
 }
 
+fn validate_renewal_operation(operation: &HttpOperation, contract: &Value) -> Result<(), MmfError> {
+    require(
+        operation.renewal_behavior_contract
+            && operation.behavior_selector_count() == 1
+            && operation.operation == "renew_issued_credential"
+            && operation.method == "POST"
+            && operation.path == "/v1/issued-credentials/{credential_id}/renew"
+            && contract["schema"] == "marty.credential-renewal-python-reference/v1"
+            && contract["reference"]["source_commit"] == "87eae30788924921a42848425d315e2f33f7ae41"
+            && contract["reference"]["source_blobs"]
+                ["services/issuance/infrastructure/api/routes.py"]
+                == "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a"
+            && contract["cases"].as_array().is_some_and(|cases| {
+                cases.len() == 31
+                    && [
+                        ("missing-key", 401),
+                        ("missing-tenant", 403),
+                        ("foreign-tenant", 404),
+                        ("anoncrypt-keyed-rejection", 422),
+                        ("authcrypt-keyed-rejection", 422),
+                        ("anoncrypt-mixed-keyed-rejection", 422),
+                        ("authcrypt-mixed-keyed-rejection", 422),
+                    ]
+                    .iter()
+                    .all(|(name, status)| {
+                        cases.iter().any(|case| {
+                            case["case"] == *name && case["responses"][0]["status"] == *status
+                        })
+                    })
+            }),
+        "native renewal operation diverges from its exact governed contract",
+    )
+}
+
 fn validate_initiation_operation(
     operation: &HttpOperation,
     contract: &Value,
@@ -1529,9 +1607,10 @@ mod tests {
 
     use super::{
         canonical_lf, validate_canvas_operations_operation, validate_didcomm_operation,
-        validate_embedded_contract, validate_initiation_operation, CanvasOperationsCase, Coverage,
-        HttpOperation, CANVAS_LTI, CANVAS_MANAGEMENT, CANVAS_OPERATIONS, COVERAGE,
-        CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, DIDCOMM, INITIATION,
+        validate_embedded_contract, validate_initiation_operation, validate_renewal_operation,
+        CanvasOperationsCase, Coverage, HttpOperation, CANVAS_LTI, CANVAS_MANAGEMENT,
+        CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, RENEWAL_REFERENCE,
     };
 
     #[test]
@@ -1626,6 +1705,68 @@ mod tests {
                 &duplicate
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn renewal_coverage_is_exact_and_rejects_missing_malformed_or_multiple_selectors() {
+        let entry = serde_json::json!({
+            "method":"POST", "path":"/v1/issued-credentials/{credential_id}/renew",
+            "operation":"renew_issued_credential", "renewal_behavior_contract":true
+        });
+        let contract: Value = serde_json::from_slice(RENEWAL_REFERENCE).unwrap();
+        let parse = |value| serde_json::from_value::<HttpOperation>(value);
+        validate_renewal_operation(&parse(entry.clone()).unwrap(), &contract).unwrap();
+        for malformed in [Value::Null, serde_json::json!("true"), serde_json::json!(1)] {
+            let mut changed = entry.clone();
+            changed["renewal_behavior_contract"] = malformed;
+            assert!(parse(changed).is_err());
+        }
+        for (field, value) in [
+            ("renewal_behavior_contract", serde_json::json!(false)),
+            ("initiation_behavior_contract", serde_json::json!(true)),
+            ("didcomm_behavior_contract", serde_json::json!(true)),
+            ("method", serde_json::json!("GET")),
+            ("operation", serde_json::json!("revoke_issued_credential")),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}"),
+            ),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}/revoke"),
+            ),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}/renew/extra"),
+            ),
+        ] {
+            let mut changed = entry.clone();
+            changed[field] = value;
+            assert!(validate_renewal_operation(&parse(changed).unwrap(), &contract).is_err());
+        }
+        let mut missing = entry.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("renewal_behavior_contract");
+        assert!(validate_renewal_operation(&parse(missing).unwrap(), &contract).is_err());
+        for name in [
+            "missing-key",
+            "missing-tenant",
+            "foreign-tenant",
+            "anoncrypt-keyed-rejection",
+            "authcrypt-mixed-keyed-rejection",
+        ] {
+            let mut changed = contract.clone();
+            let case = changed["cases"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|case| case["case"] == name)
+                .unwrap();
+            case["responses"][0]["status"] = serde_json::json!(200);
+            assert!(validate_renewal_operation(&parse(entry.clone()).unwrap(), &changed).is_err());
         }
     }
 
@@ -1785,8 +1926,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 73);
-        assert_eq!(summary.remaining_http, 58);
+        assert_eq!(summary.native_http, 74);
+        assert_eq!(summary.remaining_http, 57);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }
