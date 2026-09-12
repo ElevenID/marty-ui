@@ -590,6 +590,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback: test'"
         in published
     )

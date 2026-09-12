@@ -100,6 +100,19 @@ target tests in 47.61 seconds, with strict Clippy in 6.44 seconds. All eight
 exact-owned containers across those runs were verified absent. Genuine keyed
 admission recovery and the initiation gateway/Flow consumers remain separate.
 
+Reviewed source `214531581` (integration `fb6d266c8`) now executes ordinary-wallet
+keyed HTTP creation, exact recovery and changed-request conflict through the real
+PostgreSQL lookup. It asserts the frozen request/key hashes, complete response,
+unchanged durable row and zero additional template/clock/seed/issuer work. Recovery
+precedes changed negative/oversized TTL configuration. The exact new gate passed
+in 3.38 seconds; the author's eleven configured target tests passed in 50.67 seconds
+and strict Clippy in 27.45 seconds. Two earlier combined invocations failed existing
+wallet startup because Python/OpenSSL fixture configuration was incomplete; the
+correct environment passed without weakening source assertions. All 26 exact-owned
+containers across those runs were verified absent. This ordinary-wallet gate
+deliberately panics if DIDComm delivery is requested: historical keyed DIDComm
+delivery/recovery remains to qualify with the actual shared delivery graph.
+
 ## One native delivery owner, multiple consumers
 
 | Reachable Credentials Python path | Native owner | Required evidence |
@@ -283,12 +296,11 @@ Neither snapshot projection nor isolated rejection is full admission evidence.
 Existing peer0/abbreviated-peer2 defects are documented canonical follow-ups,
 not demonstrated migration regressions; working full peer2 has old/new evidence.
 
-1. Complete genuine existing-reservation admission recovery beyond the fresh HTTP
-   success/fallback/failure, mixed keyed rejection and offer-expiry evidence above.
-   Direct/projector replay is not a substitute for executing the actual admission
-   recovery lookup. Preserve ordinary-wallet keyed success/recovery/conflict and
-   qualify explicitly historical keyed DIDComm snapshots without weakening fresh
-   DIDComm rejection.
+1. Qualify explicitly historical keyed DIDComm admission snapshots with actual
+   delivery/recovery without weakening fresh DIDComm rejection. Ordinary-wallet
+   keyed success/recovery/conflict is qualified above; direct/projector repetition
+   is not a substitute for executing DIDComm admission recovery. Keep actual
+   persisted Issued+Delivered state distinct from a stale in-memory Failed snapshot.
 2. Retain the direct gateway gate and qualify the initiation route with a legacy
    trap before selecting it. Preserve management-key injection, trusted tenant and
    error projection. Qualify Flow/gRPC separately against its governed push target.

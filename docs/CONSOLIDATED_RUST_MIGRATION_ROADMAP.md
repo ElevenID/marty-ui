@@ -125,7 +125,11 @@ responses, refused-wallet/no-resend behavior and mixed keyed rejection through
 the same fresh HTTP graph. Its nine unkeyed cases and two keyed controls passed
 with all existing native/gateway regressions (ten configured target tests,
 47.61 seconds), strict Clippy and verified container cleanup. Genuine
-existing-reservation admission recovery and initiation gateway selection remain open.
+ordinary-wallet keyed admission recovery now passes in reviewed source `214531581`
+(integration `fb6d266c8`): actual PostgreSQL lookup, exact frozen hashes, complete
+response/row equality and conflict rejection across changed TTLs, with no repeated
+template/clock/seed/issuer work. Its eleven configured tests and strict Clippy pass.
+Historical keyed DIDComm admission recovery and initiation gateway selection remain open.
 See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
 KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
 The latest combined native tree `0d50538d2` passed 383 issuance library tests,

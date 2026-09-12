@@ -117,6 +117,7 @@ fi
 "${executables[0]}" --list | grep -Fx 'status_runtime_composes_review_resolution_with_configured_http: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_native_composes_crypto_https_and_published_durability: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'
+"${executables[0]}" --list | grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallback: test'
 "${executables[0]}" --list | grep -Fx 'didcomm_transport_reloads_valid_ca_bundles_without_disabling_tls: test'
 "${executables[0]}" --list | grep -Fx 'status_main_process_resolves_reviews_with_real_http_publication_and_mirror: test'
