@@ -586,6 +586,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
+        "grep -Fx 'canvas_base_review_gateway_matches_corrected_published_schema: test'"
+        in published
+    )
+    assert (
         "grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'"
         in published
     )

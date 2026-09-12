@@ -8,9 +8,17 @@ Service Tests job successfully in run `34701797735`; the overall run failed only
 the separately repaired security and release-contract checks. This does not
 qualify the newer local integration's exact head or establish deployment.
 
-- Base gateway corpus: 46 names, 40 represented in the shared fixture, six still
-  absent: `review_suspend`, `review_revoke`, `review_failed`,
-  `review_recovered_failure`, `review_recovered_success`, `review_concurrent`.
+- Base gateway corpus: all 46 names are now locally represented. Reviewed
+  `ab6568a19`, integrated as `2789ad0da`, closes `review_suspend`, `review_revoke`,
+  `review_failed`, `review_recovered_failure`, `review_recovered_success` and
+  `review_concurrent`. The new replay preserves exact original order: 37 direct
+  setup cases, six through actual gateway/native HTTP, then three direct cases.
+  It reuses the frozen controlled lifecycle, not real-main publication. Native
+  responses and public MMF error projections are independently asserted against
+  the corrected recovery oracle, with complete snapshots and protected rows.
+  Five combined targets passed (23.84s), including retained direct 46-case and
+  45-input corpora; strict Clippy (7.06s), formatting and all sixteen owned
+  container-absence checks passed. No runtime, oracle or route change occurred.
 - Full lifecycle corpus: 17 cases, fourteen selected by the actual HTTP publisher
   fixture (`suspend_delivered`, `revoke_delivered`, `mirror_failure`,
   `publication_failure`, `no_delivery`, `pending_delivery`, `failed_delivery`,
@@ -21,7 +29,7 @@ qualify the newer local integration's exact head or establish deployment.
   75 operations-input, 45 review-input and 28 enqueue-input observations are
   direct corpora, not automatically gateway-qualified.
 - All eight Canvas operations still remain outside the native HTTP allow-list.
-  Preserve their legacy ownership until the remaining gateway cases pass.
+  Preserve their legacy ownership until remaining lifecycle and adoption gates pass.
 - Signing diagnostics remain a real adoption gap: `signing_error_detail.rs` is
   imported by its test target, not the production library/adapters. Its 45 helper
   plus six remote-operation observations need scoped production adoption and

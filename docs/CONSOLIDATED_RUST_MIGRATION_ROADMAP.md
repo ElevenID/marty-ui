@@ -39,7 +39,13 @@ native RPC target and related-resource configuration are also locally integrated
 physical-document HTTP and standalone consumer profiles remain preserved.
 These follow-ups are not yet in the running hosted `84665d26d` batch.
 
-Current remaining Canvas work is six base gateway cases, three full lifecycle
+All 46 base Canvas gateway case names are locally qualified, including six
+manual/recovery cases integrated as `2789ad0da`. The latter reuse the original
+controlled lifecycle with independent native/public response checks; this is
+not additional real-main publication evidence. Retained direct/input corpora,
+strict Clippy and owned-container cleanup passed.
+
+Current remaining Canvas work is three full lifecycle
 cases, production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
 worker launch wiring and Kubernetes HMAC configuration are already implemented
