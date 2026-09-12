@@ -2779,12 +2779,21 @@ mod tests {
                     NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown,
                 ),
             ] {
-                *repository.transport_claim.lock().unwrap() = claim_state;
+                *repository.transport_claim.lock().unwrap() = claim_state.clone();
                 assert_eq!(
                     delivery.deliver_native(&tx, "did:example:holder").await,
                     Err(expected)
                 );
                 assert!(order.lock().unwrap().is_empty());
+                assert_eq!(*repository.transport_claim.lock().unwrap(), claim_state);
+                let Some(InitiationDidcommDeliveryState::Pending(after)) =
+                    repository.delivery.lock().unwrap().clone()
+                else {
+                    panic!("fenced delivery must remain pending")
+                };
+                let before = staged_pending_delivery();
+                assert_eq!(after.delivery, before.delivery);
+                assert_eq!(after.transported, before.transported);
             }
             assert_eq!(
                 delivery
@@ -2795,6 +2804,17 @@ mod tests {
             assert!(order.lock().unwrap().is_empty());
 
             let mut pending = staged_pending_delivery();
+            assert_eq!(
+                *repository.transport_claim.lock().unwrap(),
+                HarnessTransportClaimState::OutcomeUnknown
+            );
+            let Some(InitiationDidcommDeliveryState::Pending(after)) =
+                repository.delivery.lock().unwrap().clone()
+            else {
+                panic!("wrong-holder delivery must remain pending")
+            };
+            assert_eq!(after.delivery, pending.delivery);
+            assert_eq!(after.transported, pending.transported);
             pending.transported = true;
             *repository.delivery.lock().unwrap() =
                 Some(InitiationDidcommDeliveryState::Pending(Box::new(pending)));
@@ -2815,6 +2835,17 @@ mod tests {
             assert!(order.lock().unwrap().is_empty());
             assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
             assert_eq!(repository.releases.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                delivery
+                    .deliver_native(&tx, "did:example:another-holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::InvalidRequest)
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert!(matches!(
+                *repository.delivery.lock().unwrap(),
+                Some(InitiationDidcommDeliveryState::Delivered(_))
+            ));
         }
     }
 
