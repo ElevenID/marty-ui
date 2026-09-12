@@ -1,6 +1,9 @@
 //! Offline reference capture, not a qualification gate or deployment command.
 //! Reuses the exact-owned disposable published-image/database fixture.
 #[allow(dead_code)]
+#[path = "../tests/support/bounded_fixture_command.rs"]
+mod bounded_fixture_command;
+#[allow(dead_code)]
 #[path = "../tests/support/canvas_published_database.rs"]
 mod canvas_published_database;
 
