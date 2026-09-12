@@ -43,7 +43,7 @@ that exact main commit; organization, license, CodeQL and policy checks also pas
 
 The eight-operation selection checkpoint is `300b92e9d`, integrating reviewed `b15560e28`: all eight
 Canvas operations now use the unchanged embedded native gateway route table.
-Coverage is **73 native / 58 remaining / 131 total**. Beta forwards the existing
+Coverage at that checkpoint was **73 native / 58 remaining / 131 total**. Beta forwards the existing
 status-sync URL expression to preserve configured review mirroring; unset,
 empty and custom synthetic Compose controls passed. Gateway 109 library plus
 three smoke tests, issuance 386 library tests, all twelve configured database
@@ -59,8 +59,8 @@ temporary directory. This does not relabel the separate service or hosted suites
 Retirement audit also found a remaining beta DIDComm caller: the legacy credential
 renewal route invokes initiation internally. Native renewal admission and shared
 delivery are now implemented and qualified as a candidate. Packaged-service
-and gateway activation have passing focused tests in the separate author worktree,
-but final regression qualification and integration remain pending. Its frozen
+and gateway activation are now integrated locally at `3253f8a76` after final
+regression qualification; hosted landing and deployment remain pending. Its frozen
 reference is now integrated at `63ab016e0`: 31 cases and 22 complete interned
 states, with an independently reproduced exact live replay and 53 combined
 reference guards passing. The documented late-linkage and refused-delivery
@@ -109,16 +109,20 @@ separate work; forwarding alone does not prove it. The consumer retirement
 checklist now records concrete base, self-host, Flow and Envoy cutover batches
 and their required runtime gates, not completed deployment claims.
 
-Renewal activation's separate author worktree now passes fresh packaged-main
-delivery in both encryption modes, historical keyed recovery, embedded gateway
-selection and real Canvas association tests. The strengthened Canvas test covers
-12 both-mode cases. Four new executable test registrations are mandatory in CI;
-the full shell-preflight suite passed 123 tests. Final combined Rust/PostgreSQL
-regressions and strict Clippy remain underway. Review identified an uncovered
-historical blank-versus-absent lineage compatibility case in finalization; its
-correction and regression tests are required before activation can be committed.
-The integrated coverage count remains 73/58/131 until that reviewed activation
-lands; no active Python renewal or encryption feature has been removed.
+Renewal activation `48e4f33b0` is integrated locally as `3253f8a76`, selecting
+**74 native / 57 remaining / 131 total**. Fresh packaged-main delivery in both
+encryption modes, historical keyed recovery, embedded gateway selection and real
+Canvas association tests pass. The Canvas test covers 12 both-mode cases. Final
+qualification includes 109 gateway and 402 issuance library tests, 18 HTTP tests,
+19 configured DIDComm tests, eight renewal tests, two dedicated PostgreSQL tests,
+strict Clippy and 19-package formatting. All 73 recorded disposable container IDs
+from the author's qualification are independently absent.
+Four new executable test registrations are mandatory in CI; its shell-preflight
+suite passed 123 tests. The historical blank-versus-absent lineage review finding
+is corrected and tested without rewriting meaningful IDs. Root verified the
+integrated production files match the reviewed source; 178 focused integrated
+guards passed. Exact-head hosted CI, merge and beta acceptance remain required;
+no active Python renewal or encryption feature has been removed.
 
 The integrated `424e25ba5` tree passed the full repository `tests/` suite:
 **3,080 passed, three skipped in 200.78s**. This includes the fixed synthetic
