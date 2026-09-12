@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-08
+**Last updated:** 2026-09-12
 
 ## Objective
 
@@ -29,7 +29,39 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-08
+## Current execution snapshot — 2026-09-12
+
+PR #814 remains draft and not deployed. Exact hosted `aa33eff6f` passed its
+configured runtime gate: 189 published-schema tests, zero failures, two explicit
+capture ignores, plus all four preflights. The formerly failing lease-expiry case
+passed in preflight and the full run; that does not establish the old intermittent
+cause is fixed. Runtime, images, browser and other listed jobs passed. The only
+direct CI failure was eleven formatting hunks in one shared helper; reviewed
+format-only repair `c2cc53e15` is integrated locally. Lint/package stages after
+formatting still need a new exact-head run, and no merge is claimed.
+
+DIDComm source `40b06fcc8`, integrated as `9b4a8b67a`, preserves five freshly
+captured Python state errors without moving eligibility ahead of durable
+replay/recovery. Its 375 issuance unit tests, six direct HTTP tests, two initiation
+HTTP tests and strict Clippy passed. Shared synthetic DID documents were extracted
+only after executed byte comparison; commit `536a3ee8d` retains immutable hashes.
+
+The separate composed branch has now executed nine real native delivery cases
+against owned published-schema PostgreSQL and loopback HTTPS: four anon/auth ×
+direct/projector successes, two wallet-503 cases, two untrusted-TLS cases and one
+wrong authcrypt sender key. It checks canonical decryption, linkage across status
+allocation/signing/persistence, durable outcomes and no-resend replay. Signing,
+issuer context and DID/status peers remain controlled; automatic cases are
+projector tests, not fresh initiation HTTP/admission. Concurrent ownership,
+post-transport recovery faults, gateway routing, consumer/image selection and
+safe Python retirement remain open. See the [current DIDComm gates](rust-migrations/didcomm-consumer-cutover-readiness.md).
+KMS corrections remain explicitly deferred in Credentials `DIDCOMM-KMS-001`.
+The final combined native tree passed 377 issuance unit tests, eight HTTP tests,
+the configured nine-case composition plus five support controls, strict package
+Clippy and formatting across all 19 workspace packages.
+Production and beta were not changed by these tests.
+
+### Previous qualification snapshot — 2026-09-08
 
 Latest local integration `4d8b5728b` includes qualified oversized-note gateway
 parity from `574cb4895`: 42 native forwards, zero candidate legacy forwards,

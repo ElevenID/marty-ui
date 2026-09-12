@@ -1,6 +1,6 @@
 # DIDComm Rust consumer cutover readiness
 
-Status, 2026-09-08: reconciliation and qualification in progress. No DIDComm
+Status, 2026-09-12: reconciliation and qualification in progress. No DIDComm
 consumer cutover or reachable Python deletion is established by this document.
 Production is unchanged. This is a migration of observable behavior into the
 existing native owner, not a second cryptographic implementation.
@@ -58,31 +58,56 @@ Preserve native pending-failure URI and no-resend safeguards while reconciling
 their public contract explicitly. Do not restore duplicate sends to match a
 legacy observation.
 
-Direct unsupported-state response specificity remains to be reconciled without
-placing an eligibility rejection before native delivered replay or
-projection-only recovery. Missing/foreign transaction responses must not require
+Direct unsupported-state response specificity is repaired by reviewed source
+`40b06fcc8` (integration `9b4a8b67a`). Five freshly executed unchanged Python
+observations preserve issued/409 and signing, failed, expired, revoked/400 with
+their exact public details. The native owner carries the closed status from its
+existing post-dispatch eligibility check; delivered replay, projection recovery,
+busy, unknown and holder-binding failures keep precedence. Qualification passed
+375 issuance library tests, six direct HTTP tests, two initiation HTTP tests and
+strict package Clippy. The reproducible capture verifies the original route blob.
+Missing/foreign transaction responses must not require
 an unscoped lookup. Peer method 0 and abbreviated peer service encoding remain
 unqualified, distinct from the tested peer2 full service representation.
 
 ## Gates before Python retirement
 
-The next missing proof is composition, not a new cryptographic kernel. Existing
+Composition now has a configured local gate, not a new cryptographic kernel. Existing
 `credential_postgres_contract.rs` exercises real repository/lifecycle durability
 with literal credential/JWE strings. The test named `didcomm_delivery_atomicity`
 uses an in-memory legacy repository to prove zero sends without durable claims;
 it is not PostgreSQL atomicity evidence. HTTP contract tests use controlled
 delivery ports, and crypto roundtrips are separately qualified.
 
-Reuse the owned `PublishedDatabase` and published migrations for four composed
-cases: anoncrypt/authcrypt crossed with direct/automatic delivery. Share the
-actual native repository, lifecycle, envelope, endpoint validator and HTTPS
-transport owner, then decrypt the captured POST through canonical Core. Check
-complete responses, durable transaction/delivery/audit state and one-send replay.
-Signing/control-plane fixtures may remain controlled but must be labeled.
-Reuse the existing loopback-certificate helper with an explicit test CA; add a
-bounded wallet POST fixture without globally changing the worker fixture's
-GET/DELETE-only contract. Negative gates include wrong sender, untrusted TLS,
-concurrent ownership and post-transport recovery. None requires a KMS redesign.
+`didcomm_native_composes_crypto_https_and_published_durability` passed nine
+configured cases using the owned `PublishedDatabase` and actual published
+migrations: four anoncrypt/authcrypt × direct/automatic successes, two wallet
+HTTP-503 cases, two untrusted-TLS cases and one mismatched authcrypt sender key.
+It composes the real native repository, lifecycle, envelope, endpoint validator
+and HTTPS transport. Captured success and HTTP-503 envelopes decrypt through
+canonical Core. Positive gates check complete public responses, protocol and
+attachment fields, allocated/signed/persisted credential linkage, durable
+delivery/audit metadata and equal whole-row JSON after both entrypoint replays.
+HTTP-503 and TLS failures retain durable uncertainty with no repeat POST,
+allocation or signing; a wrong sender key leaves all seeded state unchanged and
+performs no allocation, signing or POST, including automatic retries.
+
+Signing, issuer context and the local DID/status peers are explicitly controlled;
+this is not an independent wallet, frozen Python composition, packaged-process
+or gateway cutover proof. Automatic cases call the real projector with a controlled
+reservation; they do not qualify fresh automatic initiation HTTP/admission replay.
+The bounded Python wallet fixture reuses the existing
+certificate helper without changing the worker fixture's GET/DELETE contract.
+Its 38 real TLS/framing/deadline tests passed; the root combined wallet and CI
+registration suite passed 204 tests. Rust startup now verifies canonical ownership
+without passing Windows verbatim paths to OpenSSL; a real subprocess/TLS control
+covers the startup failure found during composition. The nine-case gate and five
+support controls passed together in 6.58 seconds after strengthening review gaps.
+The combined state-parity/composition tree then passed all 377 issuance unit
+tests, six direct HTTP tests, two initiation HTTP tests and strict package Clippy
+with all test targets. All 19 workspace packages passed the formatting check.
+Actual composed concurrent ownership and post-transport projection-recovery
+faults remain to qualify. None requires a KMS redesign.
 
 1. Qualify direct and automatic delivery through the shared actual native owner,
    including whole response fields, true crypto, durable finalization, failure,
