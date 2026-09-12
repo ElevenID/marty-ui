@@ -1,10 +1,37 @@
 # DIDComm Rust consumer cutover readiness
 
-Status, 2026-09-12: direct-route native source selection is locally qualified;
-automatic initiation and Flow consumer migration remain in progress. No deployed
+Status, 2026-09-12: direct-route and automatic-initiation native HTTP selection
+are locally qualified; beta Flow initiation RPC selection is configured. No deployed
 DIDComm cutover or reachable Python deletion is established by this document.
 Production is unchanged. This is a migration of observable behavior into the
 existing native owner, not a second cryptographic implementation.
+
+## Latest initiation selection checkpoint
+
+Reviewed `cbbc4a030`, integrated as `845de6a62`, selects exact
+`POST /v1/issuance/initiate` through the existing native coverage owner. The
+public gateway still rewrites `POST /v1/issuance` to that route with unchanged
+authentication and privacy projection. Both direct and initiation gateway
+fixtures now use embedded native selection without candidate rewriting; only
+the negative legacy controls change an owner. Sibling paths/methods remain
+unchanged. Coverage is 65 native plus 66 remaining, preserving the frozen 131.
+The pinned initiation contract and all dependency pins are unchanged.
+
+Qualified: 108 gateway library and three executable tests; 385 issuance library
+tests; twelve HTTP/health, three initiation HTTP and six direct-delivery tests;
+sixteen configured DIDComm tests (92.48s); strict gateway/issuance Clippy (44.41s);
+117 Python guards and nineteen package-format checks. The pre-existing Redis
+test is explicitly ignored locally and remains a separate configured CI gate.
+Windows rejected the all-workspace formatter's command length; per-package
+checks passed without rerunning successful tests. All sixteen owned containers
+were independently absent. These are local results, not new hosted acceptance.
+
+Beta configuration `d36479a79` preserves the legacy related-resource allowlist
+and control-plane bindings, and selects only Flow's initiation gRPC target;
+physical-document HTTP remains legacy. Standalone base/self-host/Kubernetes
+consumer profiles still prevent deleting reachable Python delivery code. KMS
+corrections remain deferred; compatible artifacts and aggregate beta acceptance
+are still required.
 
 ## Explicit scope
 

@@ -31,6 +31,14 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+Latest local initiation selection is `845de6a62`: exact native POST initiation,
+unchanged public rewrite/authentication, 65 native plus 66 remaining operations
+from the frozen 131. Full gateway/issuance and sixteen composed DIDComm tests,
+strict Clippy, 117 Python guards and package formatting passed. Beta Flow's
+native RPC target and related-resource configuration are also locally integrated;
+physical-document HTTP and standalone consumer profiles remain preserved.
+These follow-ups are not yet in the running hosted `84665d26d` batch.
+
 Current remaining Canvas work is six base gateway cases, three full lifecycle
 cases, production adoption/transport qualification of the 51-observation signing
 diagnostic helper, compatible artifacts and effective consumer acceptance. Native
