@@ -31,6 +31,18 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+At local `869c9702f`, full Python regression passed **3,705 tests, three
+skipped** in 227.60 seconds. This includes the shared verified selfhost fixture,
+the 123-observation URL-template reference and both corrections to pushed
+`ea3b65ae8`: diagnostic module formatting (`d13d31b70`) and the narrowly scoped
+failure-log upload exception (`ad2c0ea20`). All 21 workspace package formatting
+checks pass; the shared fixture independently passed 22 Rust tests and 37
+Python guards. CI `34730553492` still tests the older pushed checkpoint and is
+running its isolated database suites; its formatting and release-contract job
+failures are addressed locally, not yet requalified on a new hosted head.
+Publication, shared formatter and packaged-service sidecar implementations
+remain in separate unlanded worktrees; none is complete or deployed.
+
 Latest local review checkpoint: `a51f800a3` includes bounded failed-child
 diagnostics (`0e1577fe4`) and the selfhost extracted raw-configuration gate.
 Independent integrated qualification passed all 21 Rust packager tests from a
