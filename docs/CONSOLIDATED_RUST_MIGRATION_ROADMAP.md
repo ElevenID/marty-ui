@@ -31,6 +31,17 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+At local `ae30c9423`, the separately reviewed publication boundary reference
+adds 13 pinned-Python observations: eight datetime, two provider-held
+cancellation and three response-shape cases. Independent integrated verification
+passed all 43 reference guards and replayed the original 64 HTTP / four
+cancellation / nine loop / four configuration cases, the unchanged 51 adapter
+cases and all 13 new cases. See
+[`canvas-publication-boundary-reference.md`](rust-migrations/canvas-publication-boundary-reference.md).
+This freezes the required behavior; it does not qualify the unfinished Rust
+publication candidate. Filesystem rotation remains a separate outstanding gate.
+The full-suite result below predates this additive reference commit.
+
 At local `869c9702f`, full Python regression passed **3,705 tests, three
 skipped** in 227.60 seconds. This includes the shared verified selfhost fixture,
 the 123-observation URL-template reference and both corrections to pushed
@@ -43,7 +54,7 @@ failures are addressed locally, not yet requalified on a new hosted head.
 Publication, shared formatter and packaged-service sidecar implementations
 remain in separate unlanded worktrees; none is complete or deployed.
 
-Latest local review checkpoint: `a51f800a3` includes bounded failed-child
+Earlier local review checkpoint: `a51f800a3` includes bounded failed-child
 diagnostics (`0e1577fe4`) and the selfhost extracted raw-configuration gate.
 Independent integrated qualification passed all 21 Rust packager tests from a
 fresh target, 34 selfhost wiring guards and 74 runtime/CI diagnostic guards.
