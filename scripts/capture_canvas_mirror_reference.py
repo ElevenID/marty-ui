@@ -96,6 +96,8 @@ OPERATIONS = (
 )
 REFERENCE = ROOT / "contracts/canvas-mirror-python-reference.json"
 SCENARIOS = ROOT / "contracts/canvas-mirror-scenarios.json"
+ADAPTER_SCENARIOS = ROOT / "contracts/canvas-mirror-adapter-scenarios.json"
+ADAPTER_REFERENCE = ROOT / "contracts/canvas-mirror-adapter-reference.json"
 ENVIRONMENT = {
     "ISSUANCE_API_KEY": "synthetic-mirror-management",
     "ISSUER_BASE_URL": "https://issuer.example",
@@ -154,7 +156,7 @@ def verify_sources(sources):
             raise ValueError(f"Untrusted observation source: {name}")
 
 
-def bounded_observation_child(sources, *, audit=False):
+def bounded_observation_child(sources, *, audit=False, adapter_reference=False):
     """One owned child, no subprocess descendants; capped pipe drains + deadline.
 
     Source Git reads precede this observation-phase bound. A child that swallows
@@ -189,6 +191,8 @@ def bounded_observation_child(sources, *, audit=False):
     arguments = [sys.executable, str(Path(__file__).resolve()), "--worker"]
     if audit:
         arguments.append("--audit")
+    if adapter_reference:
+        arguments.append("--adapter-reference")
     # A pre-populated owned regular file avoids an unbounded pipe write to a
     # child that never reads stdin. It is unlinked by this context on every path.
     with tempfile.TemporaryFile(dir=ROOT) as source_input:
@@ -249,6 +253,8 @@ def bounded_observation_child(sources, *, audit=False):
         if result.get("schema") != (
             "marty.canvas-mirror-source-audit/v1"
             if audit
+            else "marty.canvas-mirror-adapter-reference/v1"
+            if adapter_reference
             else "marty.canvas-mirror-python-reference/v1"
         ):
             raise ValueError("Unexpected observation schema")
@@ -491,7 +497,11 @@ def intern_snapshots(observed):
         snapshots.setdefault(digest, value)
         return {"snapshot_sha256": digest}
 
-    for case in [*observed["http"], *observed["provider_cancellation"]]:
+    for case in [
+        *observed["http"],
+        *observed["provider_cancellation"],
+        *observed.get("adapter", []),
+    ]:
         case["before"] = intern(case["before"])
         case["after"] = intern(case["after"])
         for call in case["trace"]:
@@ -583,6 +593,52 @@ async def prepare(loader, case):
         else None,
         metadata=metadata,
     )
+    if case.get("entrypoint") == "direct_adapter":
+        # Explicit provider inputs normally supplied by the route's target
+        # hydration. The original adapter is called unchanged, not the route.
+        record.metadata["canvas_credentials"] = provider
+        for name, owner, allowed in (
+            (
+                "transaction",
+                tx,
+                {
+                    "id",
+                    "organization_id",
+                    "claims",
+                    "issuer_did_override",
+                    "credential_payload_format",
+                    "applicant_id",
+                    "subject_did",
+                },
+            ),
+            (
+                "credential",
+                credential,
+                {
+                    "id",
+                    "organization_id",
+                    "transaction_id",
+                    "issuer_did",
+                    "expires_at",
+                    "status_list_entries",
+                    "applicant_id",
+                    "subject_did",
+                },
+            ),
+            ("platform", platform, {"organization_id", "canvas_account_id"}),
+            (
+                "delivery",
+                record,
+                {"organization_id", "credential_id", "transaction_id", "metadata"},
+            ),
+        ):
+            changes = case.get("inputs", {}).get(name, {})
+            if set(changes) - allowed:
+                raise ValueError(f"Unsupported adapter input field: {name}")
+            for key, value in changes.items():
+                if key == "expires_at" and value is not None:
+                    value = datetime.fromisoformat(value)
+                setattr(owner, key, copy.deepcopy(value))
     if case.get("omit") != "transaction":
         await repo.save_transaction(tx)
     if case.get("omit") != "credential":
@@ -725,9 +781,11 @@ async def observe_http(loader, routes, case):
             )
         return httpx.Response(
             case.get("provider_status", 201),
-            content=body,
+            content=body.encode(case["provider_encoding"])
+            if "provider_encoding" in case
+            else body,
             headers={
-                "content-type": "application/json",
+                "content-type": case.get("provider_content_type", "application/json"),
                 "x-request-id": "synthetic-request-1",
             },
         )
@@ -771,6 +829,9 @@ async def observe_http(loader, routes, case):
         if "webhook_status" in case
         else {}
     )
+    env.update(case.get("env", {}))
+    if any(key.endswith("_FILE") for key in env):
+        raise ValueError("Adapter vectors may not select filesystem secrets")
     responses = []
     with (
         recorded_logs(routes.logger, trace),
@@ -782,7 +843,71 @@ async def observe_http(loader, routes, case):
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=True),
             base_url="https://capture.example",
         ) as transport:
-            if case.get("cancel_provider"):
+            if case.get("entrypoint") == "direct_adapter":
+                adapter = loader.modules[
+                    "issuance.infrastructure.adapters.canvas_credentials_adapter"
+                ]
+
+                async def secret(organization, identifier):
+                    trace.append(
+                        {
+                            "kind": "secret",
+                            "organization": organization,
+                            "identifier": identifier,
+                        }
+                    )
+                    if case.get("secret_failure"):
+                        raise RuntimeError("synthetic secret lookup failure")
+                    return case.get("secrets", {}).get(identifier)
+
+                for _ in range(case.get("repeat", 1)):
+                    try:
+                        result = await asyncio.wait_for(
+                            adapter.publish_canvas_credential_mirror(
+                                credential=next(iter(repo._credentials.values())),
+                                transaction=next(iter(repo._transactions.values())),
+                                platform=next(iter(repo._canvas_platforms.values())),
+                                delivery_record=next(
+                                    iter(repo._delivery_records.values())
+                                ),
+                                secret_resolver=secret,
+                            ),
+                            timeout=2,
+                        )
+                    except Exception as error:
+                        require_clean_capture()
+                        expected = case.get("expected_exception")
+                        # Infrastructure, source binding, timeout and arbitrary
+                        # failures cannot silently become accepted observations.
+                        if (
+                            expected
+                            not in {"RuntimeError", "UnicodeDecodeError", "LookupError"}
+                            or type(error).__name__ != expected
+                        ):
+                            raise
+                        responses.append(
+                            {"exception": type(error).__name__, "detail": str(error)}
+                        )
+                    else:
+                        if case.get("expected_exception"):
+                            raise AssertionError(
+                                "Expected adapter failure did not occur"
+                            )
+                        # The original model may retain non-finite Python JSON
+                        # values and unpaired surrogates. Preserve its complete
+                        # JSON text inside a strict outer JSON string, without
+                        # converting those values or claiming ASGI rendering.
+                        responses.append(
+                            {
+                                "result_encoding": "python-json-text",
+                                "result_json": json.dumps(
+                                    serial(result),
+                                    ensure_ascii=True,
+                                    separators=(",", ":"),
+                                ),
+                            }
+                        )
+            elif case.get("cancel_provider"):
                 if case.get("entrypoint") == "automation_loop":
                     action = routes.run_canvas_mirror_automation_loop(
                         lambda: repo,
@@ -827,7 +952,7 @@ async def observe_http(loader, routes, case):
         "id": case["id"],
         "entrypoint": case.get("entrypoint", "ASGI"),
         "request": None
-        if case.get("entrypoint") == "automation_loop"
+        if case.get("entrypoint") in {"automation_loop", "direct_adapter"}
         else {"method": method, "path": path, "query": query, "headers": headers},
         "before": before,
         "responses": responses,
@@ -1014,7 +1139,7 @@ async def verify_infrastructure_controls(loader, routes):
     return ["missing-global-fatal", "caught-unowned-origin-fatal"]
 
 
-def observe_sources(sources, *, audit=False):
+def observe_sources(sources, *, audit=False, adapter_reference=False):
     verify_sources(sources)
     with patch.dict(os.environ, ENVIRONMENT, clear=True):
         loader = PinnedDefinitions(sources)
@@ -1046,23 +1171,62 @@ def observe_sources(sources, *, audit=False):
             for module in loader.modules.values():
                 if getattr(module, "datetime", None) is datetime:
                     module.datetime = FixedDatetime
-            scenarios = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+            scenario_path = ADAPTER_SCENARIOS if adapter_reference else SCENARIOS
+            scenarios = json.loads(scenario_path.read_text(encoding="utf-8"))
             controls = asyncio.run(verify_infrastructure_controls(loader, routes))
-            observed = asyncio.run(observe(loader, routes, scenarios))
+            if adapter_reference:
+
+                async def adapter_observations():
+                    loader.validate_bindings()
+                    VIOLATIONS.clear()
+                    results = []
+                    with (
+                        patch.object(socket.socket, "connect", denied_network),
+                        patch.object(socket.socket, "connect_ex", denied_network),
+                        patch.object(socket, "create_connection", denied_network),
+                    ):
+                        for case in scenarios["adapter"]:
+                            counter = iter(range(1, 10000))
+                            with patch.object(
+                                uuid, "uuid4", lambda: uuid.UUID(int=next(counter))
+                            ):
+                                results.append(
+                                    await observe_http(
+                                        loader,
+                                        routes,
+                                        {
+                                            **case,
+                                            "operation": "publish",
+                                            "entrypoint": "direct_adapter",
+                                        },
+                                    )
+                                )
+                    require_clean_capture()
+                    return intern_snapshots(
+                        {"http": [], "provider_cancellation": [], "adapter": results}
+                    )
+
+                observed = asyncio.run(adapter_observations())
+            else:
+                observed = asyncio.run(observe(loader, routes, scenarios))
             return {
-                "schema": "marty.canvas-mirror-python-reference/v1",
+                "schema": "marty.canvas-mirror-adapter-reference/v1"
+                if adapter_reference
+                else "marty.canvas-mirror-python-reference/v1",
                 "source_commit": REVISION,
                 "sources": SOURCES,
                 "selected_definitions": loader.selected,
                 "scenarios_sha256": hashlib.sha256(
-                    canonical_json_bytes(SCENARIOS.read_bytes())
+                    canonical_json_bytes(scenario_path.read_bytes())
                 ).hexdigest(),
                 "infrastructure_controls": controls,
                 "dependencies": {
                     name: importlib.metadata.version(name)
                     for name in ("fastapi", "pydantic", "httpx")
                 },
-                "boundary": "Pinned ASGI routes/models; frozen memory repository; controlled HTTP transport and clock; loop batch ports controlled; no PG/gateway/TLS/deployed proof",
+                "boundary": "Pinned publication adapter and models; original seed helpers with explicit inputs; controlled HTTP/org-secret lookup and clock; no ASGI/PG/filesystem/TLS/deployed proof"
+                if adapter_reference
+                else "Pinned ASGI routes/models; frozen memory repository; controlled HTTP transport and clock; loop batch ports controlled; no PG/gateway/TLS/deployed proof",
                 **observed,
             }
         finally:
@@ -1073,6 +1237,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("credentials_checkout", type=Path, nargs="?")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--adapter-reference", action="store_true")
     parser.add_argument(
         "--audit", action="store_true", help="Validate pinned AST closure only"
     )
@@ -1090,22 +1255,36 @@ def main():
     args = parser.parse_args()
     if args.worker:
         # No Git or child process is launched in the observation child.
-        result = observe_sources(json.load(sys.stdin), audit=args.audit)
+        result = observe_sources(
+            json.load(sys.stdin),
+            audit=args.audit,
+            adapter_reference=args.adapter_reference,
+        )
         print(json.dumps(result, ensure_ascii=True, indent=2, sort_keys=True))
         return
     if args.credentials_checkout is None:
         parser.error("credentials_checkout is required")
     if args.check and (args.audit or args.summary or args.compact):
         parser.error("--check cannot be combined with display/audit modes")
+    if args.adapter_reference and (args.audit or args.summary):
+        parser.error("--adapter-reference cannot be combined with audit/summary")
     encoded, result = bounded_observation_child(
-        read_sources(args.credentials_checkout), audit=args.audit
+        read_sources(args.credentials_checkout),
+        audit=args.audit,
+        adapter_reference=args.adapter_reference,
     )
     if args.check:
-        if canonical_json_bytes(REFERENCE.read_bytes()).decode("utf-8") != encoded:
+        reference_path = ADAPTER_REFERENCE if args.adapter_reference else REFERENCE
+        if canonical_json_bytes(reference_path.read_bytes()).decode("utf-8") != encoded:
             raise ValueError("Frozen Canvas mirror observations differ")
-        print(
-            f"Canvas mirror reference PASS: {len(result['http'])} HTTP, {len(result['provider_cancellation'])} provider cancellations, {len(result['loop'])} loop, {len(result['configuration'])} configuration cases"
-        )
+        if args.adapter_reference:
+            print(
+                f"Canvas mirror adapter reference PASS: {len(result['adapter'])} cases"
+            )
+        else:
+            print(
+                f"Canvas mirror reference PASS: {len(result['http'])} HTTP, {len(result['provider_cancellation'])} provider cancellations, {len(result['loop'])} loop, {len(result['configuration'])} configuration cases"
+            )
     elif args.summary and not args.audit:
         print(
             json.dumps(

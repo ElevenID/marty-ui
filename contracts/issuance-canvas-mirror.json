@@ -14,6 +14,16 @@
     "sha256": "cb9571814cfe0b5e202833d6a30fc6fd75cbf45f476c770cad8ce5d09c8123c5"
   },
   "capture": "scripts/capture_canvas_mirror_reference.py",
+  "adapter_reference": {
+    "path": "contracts/canvas-mirror-adapter-reference.json",
+    "sha256": "5dd9b218c43a0bae8190853f98e458e6ca1bfea2141fdbfcf8de14f0a77b2a1b"
+  },
+  "adapter_scenarios": {
+    "path": "contracts/canvas-mirror-adapter-scenarios.json",
+    "sha256": "bbc909c8d69ead7b9185273d2085bfc3cc59613ee6bdda1a5fccbd8a7571baee"
+  },
+  "adapter_observations": 51,
+  "adapter_result_encoding": "python-json-text",
   "mandatory_artifact_guards": "tests/test_canvas_mirror_reference.py",
   "routes": [
     {"method":"POST","path":"/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish","operation":"publish_issued_credential_canvas_mirror","source_line":6190},

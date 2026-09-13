@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,192 @@ def test_canonical_json_identity_has_no_other_normalization(capture):
     assert capture.canonical_json_bytes(b"{\r}") == b"{\r}"
     with pytest.raises(UnicodeDecodeError):
         capture.canonical_json_bytes(b"\xff")
+
+
+@pytest.fixture
+def adapter_artifact():
+    def reject_nonfinite(value):
+        raise ValueError(f"Nonstandard outer JSON constant: {value}")
+
+    return json.loads(
+        (ROOT / "contracts/canvas-mirror-adapter-reference.json").read_text(
+            encoding="utf-8"
+        ),
+        parse_constant=reject_nonfinite,
+    )
+
+
+def test_adapter_artifact_hashes_and_closed_source(capture, adapter_artifact):
+    contract = json.loads(CONTRACT.read_text())
+    owners = {key: contract[f"adapter_{key}"] for key in ("reference", "scenarios")}
+    assert_artifact_files(owners, lambda path: (ROOT / path).read_bytes(), capture)
+    assert_artifact_files(
+        owners,
+        lambda path: capture.canonical_json_bytes((ROOT / path).read_bytes()).replace(
+            b"\n", b"\r\n"
+        ),
+        capture,
+    )
+    scenarios = json.loads(
+        (ROOT / owners["scenarios"]["path"]).read_text(encoding="utf-8")
+    )
+    assert adapter_artifact["schema"] == "marty.canvas-mirror-adapter-reference/v1"
+    assert (
+        adapter_artifact["source_commit"]
+        == scenarios["source_commit"]
+        == capture.REVISION
+    )
+    assert adapter_artifact["sources"] == {
+        key: list(value) for key, value in capture.SOURCES.items()
+    }
+    assert adapter_artifact["scenarios_sha256"] == owners["scenarios"]["sha256"]
+    assert [case["id"] for case in adapter_artifact["adapter"]] == [
+        case["id"] for case in scenarios["adapter"]
+    ]
+    assert len(adapter_artifact["adapter"]) == contract["adapter_observations"] == 51
+    assert (
+        "publish_canvas_credential_mirror"
+        in adapter_artifact["selected_definitions"][
+            "issuance.infrastructure.adapters.canvas_credentials_adapter"
+        ]
+    )
+    assert contract["adapter_result_encoding"] == "python-json-text"
+
+
+@pytest.mark.parametrize("owner", ["reference", "scenarios"])
+def test_adapter_content_mutation_is_rejected(capture, owner):
+    contract = json.loads(CONTRACT.read_text())
+    owners = {key: contract[f"adapter_{key}"] for key in ("reference", "scenarios")}
+    path = owners[owner]["path"]
+    original = (ROOT / path).read_bytes()
+    changed = original.replace(b"bridge_base", b"changed_base", 1)
+    assert original != changed
+    with pytest.raises(AssertionError):
+        assert_artifact_files(
+            owners,
+            lambda current: (
+                changed if current == path else (ROOT / current).read_bytes()
+            ),
+            capture,
+        )
+
+
+def test_adapter_observations_preserve_input_state_and_owned_effects(adapter_artifact):
+    snapshots = adapter_artifact["snapshots"]
+    referenced = set()
+    for case in adapter_artifact["adapter"]:
+        assert case["entrypoint"] == "direct_adapter"
+        assert case["request"] is None
+        assert case["before"] == case["after"]
+        referenced.add(case["before"]["snapshot_sha256"])
+        assert all(call["kind"] != "repository" for call in case["trace"])
+        if case["id"].startswith("ownership_"):
+            assert case["trace"] == []
+            assert case["responses"] == [
+                {
+                    "exception": "RuntimeError",
+                    "detail": "Canvas delivery resources are unavailable",
+                }
+            ]
+    assert referenced == set(snapshots)
+    for digest, value in snapshots.items():
+        assert (
+            hashlib.sha256(
+                json.dumps(
+                    value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            == digest
+        )
+
+
+def test_adapter_portable_gate_precedes_aggregate_ownership(adapter_artifact):
+    case = next(
+        case
+        for case in adapter_artifact["adapter"]
+        if case["id"] == "portable_foreign_organization"
+    )
+    assert case["trace"] == []
+    assert case["responses"] == [
+        {
+            "exception": "RuntimeError",
+            "detail": "Portable Canvas delivery is not enabled for this organization",
+        }
+    ]
+
+
+def test_adapter_result_text_preserves_numeric_nan_string_and_surrogate(
+    adapter_artifact,
+):
+    cases = {case["id"]: case for case in adapter_artifact["adapter"]}
+
+    def result(name):
+        response = cases[name]["responses"][0]
+        assert response["result_encoding"] == "python-json-text"
+        return json.loads(response["result_json"])
+
+    finite = result("bridge_response_scalar_id")
+    assert finite["external_credential_id"] == "17"
+    assert finite["metadata"]["publish_response"]["id"] == 17
+    numeric = result("bridge_response_nonfinite_id")
+    assert numeric["external_credential_id"] == "nan"
+    assert math.isnan(numeric["metadata"]["publish_response"]["id"])
+    text = result("bridge_response_string_nan_id")
+    assert (
+        text["external_credential_id"]
+        == text["metadata"]["publish_response"]["id"]
+        == "NaN"
+    )
+    surrogate = result("bridge_response_surrogate_id")
+    assert (
+        surrogate["external_credential_id"]
+        == surrogate["metadata"]["publish_response"]["id"]
+        == "\ud800"
+    )
+    assert (
+        "\\ud800"
+        in cases["bridge_response_surrogate_id"]["responses"][0]["result_json"]
+    )
+    assert result("bridge_utf16_json")["external_credential_id"] == "encoded-id"
+
+
+def test_adapter_delivery_secret_policy_is_not_validation_policy(adapter_artifact):
+    cases = {case["id"]: case for case in adapter_artifact["adapter"]}
+    ordered = cases["secret_ordered_sources"]["trace"]
+    assert [call for call in ordered if call["kind"] == "secret"] == [
+        {"kind": "secret", "organization": "org-1", "identifier": "empty"},
+        {"kind": "secret", "organization": "org-1", "identifier": "selected"},
+    ]
+    for name, case in cases.items():
+        if name.startswith("secret_alias_"):
+            assert case["trace"][0] == {
+                "kind": "secret",
+                "organization": "org-1",
+                "identifier": "selected-secret",
+            }
+            assert (
+                next(call for call in case["trace"] if call["kind"] == "http")[
+                    "headers"
+                ]["authorization"]
+                == "Bearer synthetic-selected-token"
+            )
+    fallback = next(
+        call
+        for call in cases["secret_operator_fallback"]["trace"]
+        if call["kind"] == "http"
+    )
+    assert fallback["headers"]["authorization"] == "Bearer synthetic-provider-token"
+    sanitized = json.loads(
+        next(
+            call
+            for call in cases["bridge_metadata_sanitization"]["trace"]
+            if call["kind"] == "http"
+        )["body"]
+    )["metadata"]
+    assert sanitized == {
+        "canvas_credentials": {"issuer_id": "metadata-issuer"},
+        "public_custom": {"value": "kept"},
+    }
 
 
 @pytest.mark.parametrize("mutation", ["route", "auth", "loop", "case", "source"])
