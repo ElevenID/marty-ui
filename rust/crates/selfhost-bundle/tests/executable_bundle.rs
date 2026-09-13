@@ -8,6 +8,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[path = "support/resolved_selfhost_runtime.rs"]
+mod resolved_selfhost_runtime;
+
 // Independent filesystem inventory: None denotes a directory, including empty
 // directories and the root. Do not reuse the implementation's ownership marker.
 fn inventory(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
@@ -367,6 +370,8 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
     marty_selfhost_bundle::transform::validate_strict(&rendered).unwrap();
     assert_contained_references(&extracted, &rendered);
     assert_operator_bind_paths(&repo, &extracted);
+    resolved_selfhost_runtime::qualify(&repo, &extracted);
+    assert_eq!(inventory(&extracted), inventory(&output));
     // Rejected replacement cannot destroy a prior package or overwrite its ZIP.
     let retry = command()
         .arg("--repo-root")
