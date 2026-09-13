@@ -1,0 +1,810 @@
+{
+  "observations": [
+    {
+      "id": "assertion-default",
+      "operation": "assertion",
+      "url": "https://api.example/v2/badgeclasses/badge%20%2F%E9%9B%AA%25/assertions"
+    },
+    {
+      "id": "assertion-empty",
+      "operation": "assertion",
+      "url": "https://api.example/v2/badgeclasses/badge%20%2F%E9%9B%AA%25/assertions"
+    },
+    {
+      "id": "assertion-whitespace",
+      "operation": "assertion",
+      "url": "https://api.example/v2/badgeclasses/badge%20%2F%E9%9B%AA%25/assertions"
+    },
+    {
+      "id": "assertion-raw-base-trailing-slash",
+      "operation": "assertion",
+      "url": "https://api.example//v2/badgeclasses/badge%20%2F%E9%9B%AA%25/assertions"
+    },
+    {
+      "id": "assertion-all-fields",
+      "operation": "assertion",
+      "url": "https://api.example/badgeclasses/badge%20%2F%E9%9B%AA%25/issuer%20%2F%C3%A9%25"
+    },
+    {
+      "id": "assertion-trim-template",
+      "operation": "assertion",
+      "url": "/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "assertion-literal-escaped",
+      "operation": "assertion",
+      "url": "/{literal}/{}"
+    },
+    {
+      "id": "assertion-repeat",
+      "operation": "assertion",
+      "url": "/badge%20%2F%E9%9B%AA%25/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "assertion-index",
+      "operation": "assertion",
+      "url": "/b/a"
+    },
+    {
+      "id": "assertion-unicode-index",
+      "operation": "assertion",
+      "url": "/\u96ea"
+    },
+    {
+      "id": "assertion-deterministic-attribute",
+      "operation": "assertion",
+      "url": "/str"
+    },
+    {
+      "id": "assertion-string-conversion",
+      "operation": "assertion",
+      "url": "/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "assertion-repr-conversion",
+      "operation": "assertion",
+      "url": "/\"\u00e9'\\\\\\n\""
+    },
+    {
+      "id": "assertion-ascii-conversion",
+      "operation": "assertion",
+      "url": "/'\\xe9\\u96ea'"
+    },
+    {
+      "id": "assertion-width",
+      "operation": "assertion",
+      "url": "/         badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "assertion-fill-center",
+      "operation": "assertion",
+      "url": "/\u96ea\u96ea\u96ea\u96eabadge%20%2F%E9%9B%AA%25\u96ea\u96ea\u96ea\u96ea\u96ea"
+    },
+    {
+      "id": "assertion-precision",
+      "operation": "assertion",
+      "url": "/badge%2"
+    },
+    {
+      "id": "assertion-nested-width",
+      "operation": "assertion",
+      "url": "/         badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "assertion-no-recursive-replace",
+      "operation": "assertion",
+      "url": "/{badgeclass_id}/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "error": {
+        "message": "Single '{' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "assertion-unmatched-open",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Single '}' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "assertion-unmatched-close",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "assertion-missing-name",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "assertion-position",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "assertion-automatic-position",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier q",
+        "type": "ValueError"
+      },
+      "id": "assertion-invalid-conversion",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "assertion-invalid-string-spec",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "'str' object has no attribute 'missing'",
+        "type": "AttributeError"
+      },
+      "id": "assertion-missing-attribute",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "string index out of range",
+        "type": "IndexError"
+      },
+      "id": "assertion-missing-index",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "assertion-noninteger-index",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "assertion-negative-index",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "assertion-nested-recursion",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "assertion-oversized-width-syntax",
+      "operation": "assertion"
+    },
+    {
+      "id": "assertion-surrogate-base",
+      "operation": "assertion",
+      "url": "/\ud800"
+    },
+    {
+      "error": {
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed",
+        "type": "UnicodeEncodeError"
+      },
+      "id": "assertion-surrogate-quoted",
+      "operation": "assertion"
+    },
+    {
+      "id": "assertion-url-quote-reserved",
+      "operation": "assertion",
+      "url": "https://api.example/v2/scope%20%2F%3F/a%2Fb%3Fc%23d%25%20e%2B%21~_.-%C3%A9/assertions"
+    },
+    {
+      "id": "assertion-issuer-default",
+      "operation": "assertion",
+      "url": "https://api.example/v2/issuers/issuer%20%2F%C3%A9%25/assertions"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "type": "RuntimeError"
+      },
+      "id": "assertion-issuer-missing",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "type": "RuntimeError"
+      },
+      "id": "assertion-issuer-empty",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "type": "RuntimeError"
+      },
+      "id": "assertion-badge-missing",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "type": "RuntimeError"
+      },
+      "id": "assertion-badge-empty",
+      "operation": "assertion"
+    },
+    {
+      "error": {
+        "message": "quote_from_bytes() expected bytes",
+        "type": "TypeError"
+      },
+      "id": "assertion-missing-ids-template",
+      "operation": "assertion"
+    },
+    {
+      "id": "assertion-non-issuer-scope",
+      "operation": "assertion",
+      "url": "https://api.example/v2/ISSUERS/badge%20%2F%E9%9B%AA%25/assertions"
+    },
+    {
+      "error": {
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed",
+        "type": "UnicodeEncodeError"
+      },
+      "id": "assertion-quote-before-unused-format",
+      "operation": "assertion"
+    },
+    {
+      "id": "validation-default",
+      "operation": "validation",
+      "url": "https://api.example/v2/badgeclasses/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-empty",
+      "operation": "validation",
+      "url": "https://api.example/v2/badgeclasses/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-whitespace",
+      "operation": "validation",
+      "url": "https://api.example/v2/badgeclasses/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-raw-base-trailing-slash",
+      "operation": "validation",
+      "url": "https://api.example//v2/badgeclasses/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-all-fields",
+      "operation": "validation",
+      "url": "https://api.example/badgeclasses/badge%20%2F%E9%9B%AA%25/issuer%20%2F%C3%A9%25"
+    },
+    {
+      "id": "validation-trim-template",
+      "operation": "validation",
+      "url": "/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-literal-escaped",
+      "operation": "validation",
+      "url": "/{literal}/{}"
+    },
+    {
+      "id": "validation-repeat",
+      "operation": "validation",
+      "url": "/badge%20%2F%E9%9B%AA%25/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-index",
+      "operation": "validation",
+      "url": "/b/a"
+    },
+    {
+      "id": "validation-unicode-index",
+      "operation": "validation",
+      "url": "/\u96ea"
+    },
+    {
+      "id": "validation-deterministic-attribute",
+      "operation": "validation",
+      "url": "/str"
+    },
+    {
+      "id": "validation-string-conversion",
+      "operation": "validation",
+      "url": "/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-repr-conversion",
+      "operation": "validation",
+      "url": "/\"\u00e9'\\\\\\n\""
+    },
+    {
+      "id": "validation-ascii-conversion",
+      "operation": "validation",
+      "url": "/'\\xe9\\u96ea'"
+    },
+    {
+      "id": "validation-width",
+      "operation": "validation",
+      "url": "/         badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-fill-center",
+      "operation": "validation",
+      "url": "/\u96ea\u96ea\u96ea\u96eabadge%20%2F%E9%9B%AA%25\u96ea\u96ea\u96ea\u96ea\u96ea"
+    },
+    {
+      "id": "validation-precision",
+      "operation": "validation",
+      "url": "/badge%2"
+    },
+    {
+      "id": "validation-nested-width",
+      "operation": "validation",
+      "url": "/         badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "validation-no-recursive-replace",
+      "operation": "validation",
+      "url": "/{badgeclass_id}/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "error": {
+        "message": "Single '{' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "validation-unmatched-open",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Single '}' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "validation-unmatched-close",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "validation-missing-name",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "validation-position",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "validation-automatic-position",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier q",
+        "type": "ValueError"
+      },
+      "id": "validation-invalid-conversion",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "validation-invalid-string-spec",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "'str' object has no attribute 'missing'",
+        "type": "AttributeError"
+      },
+      "id": "validation-missing-attribute",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "string index out of range",
+        "type": "IndexError"
+      },
+      "id": "validation-missing-index",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "validation-noninteger-index",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "validation-negative-index",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "validation-nested-recursion",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "validation-oversized-width-syntax",
+      "operation": "validation"
+    },
+    {
+      "id": "validation-surrogate-base",
+      "operation": "validation",
+      "url": "/\ud800"
+    },
+    {
+      "error": {
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed",
+        "type": "UnicodeEncodeError"
+      },
+      "id": "validation-surrogate-quoted",
+      "operation": "validation"
+    },
+    {
+      "id": "validation-url-quote-reserved",
+      "operation": "validation",
+      "url": "https://api.example/v2/scope%20%2F%3F/a%2Fb%3Fc%23d%25%20e%2B%21~_.-%C3%A9"
+    },
+    {
+      "id": "validation-issuer-default",
+      "operation": "validation",
+      "url": "https://api.example/v2/issuers/issuer%20%2F%C3%A9%25"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "type": "RuntimeError"
+      },
+      "id": "validation-issuer-missing",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'",
+        "type": "RuntimeError"
+      },
+      "id": "validation-issuer-empty",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_BADGECLASS_ID is required for Canvas Credentials validation",
+        "type": "RuntimeError"
+      },
+      "id": "validation-badge-missing",
+      "operation": "validation"
+    },
+    {
+      "error": {
+        "message": "CANVAS_CREDENTIALS_BADGECLASS_ID is required for Canvas Credentials validation",
+        "type": "RuntimeError"
+      },
+      "id": "validation-badge-empty",
+      "operation": "validation"
+    },
+    {
+      "id": "validation-missing-ids-template",
+      "operation": "validation",
+      "url": "//"
+    },
+    {
+      "id": "validation-non-issuer-scope",
+      "operation": "validation",
+      "url": "https://api.example/v2/ISSUERS/badge%20%2F%E9%9B%AA%25"
+    },
+    {
+      "error": {
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed",
+        "type": "UnicodeEncodeError"
+      },
+      "id": "validation-quote-before-unused-format",
+      "operation": "validation"
+    },
+    {
+      "id": "revoke-default",
+      "operation": "revoke",
+      "url": "https://api.example/v2/assertions/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-empty",
+      "operation": "revoke",
+      "url": "https://api.example/v2/assertions/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-whitespace",
+      "operation": "revoke",
+      "url": "https://api.example/v2/assertions/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-raw-base-trailing-slash",
+      "operation": "revoke",
+      "url": "https://api.example//v2/assertions/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-all-fields",
+      "operation": "revoke",
+      "url": "https://api.example/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-trim-template",
+      "operation": "revoke",
+      "url": "/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-literal-escaped",
+      "operation": "revoke",
+      "url": "/{literal}/{}"
+    },
+    {
+      "id": "revoke-repeat",
+      "operation": "revoke",
+      "url": "/award%20%2F%E9%9B%AA%25/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-index",
+      "operation": "revoke",
+      "url": "/a/w"
+    },
+    {
+      "id": "revoke-unicode-index",
+      "operation": "revoke",
+      "url": "/\u96ea"
+    },
+    {
+      "id": "revoke-deterministic-attribute",
+      "operation": "revoke",
+      "url": "/str"
+    },
+    {
+      "id": "revoke-string-conversion",
+      "operation": "revoke",
+      "url": "/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-repr-conversion",
+      "operation": "revoke",
+      "url": "/\"\u00e9'\\\\\\n\""
+    },
+    {
+      "id": "revoke-ascii-conversion",
+      "operation": "revoke",
+      "url": "/'\\xe9\\u96ea'"
+    },
+    {
+      "id": "revoke-width",
+      "operation": "revoke",
+      "url": "/         award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-fill-center",
+      "operation": "revoke",
+      "url": "/\u96ea\u96ea\u96ea\u96eaaward%20%2F%E9%9B%AA%25\u96ea\u96ea\u96ea\u96ea\u96ea"
+    },
+    {
+      "id": "revoke-precision",
+      "operation": "revoke",
+      "url": "/award%2"
+    },
+    {
+      "id": "revoke-nested-width",
+      "operation": "revoke",
+      "url": "/         award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "id": "revoke-no-recursive-replace",
+      "operation": "revoke",
+      "url": "/{external_credential_id}/award%20%2F%E9%9B%AA%25"
+    },
+    {
+      "error": {
+        "message": "Single '{' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "revoke-unmatched-open",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Single '}' encountered in format string",
+        "type": "ValueError"
+      },
+      "id": "revoke-unmatched-close",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "'missing'",
+        "type": "KeyError"
+      },
+      "id": "revoke-missing-name",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "revoke-position",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Replacement index 0 out of range for positional args tuple",
+        "type": "IndexError"
+      },
+      "id": "revoke-automatic-position",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Unknown conversion specifier q",
+        "type": "ValueError"
+      },
+      "id": "revoke-invalid-conversion",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Unknown format code 'd' for object of type 'str'",
+        "type": "ValueError"
+      },
+      "id": "revoke-invalid-string-spec",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "'str' object has no attribute 'missing'",
+        "type": "AttributeError"
+      },
+      "id": "revoke-missing-attribute",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "string index out of range",
+        "type": "IndexError"
+      },
+      "id": "revoke-missing-index",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "revoke-noninteger-index",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "string indices must be integers, not 'str'",
+        "type": "TypeError"
+      },
+      "id": "revoke-negative-index",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Max string recursion exceeded",
+        "type": "ValueError"
+      },
+      "id": "revoke-nested-recursion",
+      "operation": "revoke"
+    },
+    {
+      "error": {
+        "message": "Too many decimal digits in format string",
+        "type": "ValueError"
+      },
+      "id": "revoke-oversized-width-syntax",
+      "operation": "revoke"
+    },
+    {
+      "id": "revoke-surrogate-base",
+      "operation": "revoke",
+      "url": "/\ud800"
+    },
+    {
+      "error": {
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed",
+        "type": "UnicodeEncodeError"
+      },
+      "id": "revoke-surrogate-quoted",
+      "operation": "revoke"
+    },
+    {
+      "id": "revoke-url-quote-reserved",
+      "operation": "revoke",
+      "url": "https://api.example/v2/assertions/a%2Fb%3Fc%23d%25%20e%2B%21~_.-%C3%A9"
+    },
+    {
+      "id": "revoke-empty-id",
+      "operation": "revoke",
+      "url": "https://api.example/v2/assertions/"
+    },
+    {
+      "error": {
+        "message": "'utf-8' codec can't encode character '\\ud800' in position 0: surrogates not allowed",
+        "type": "UnicodeEncodeError"
+      },
+      "id": "revoke-quote-before-unused-format",
+      "operation": "revoke"
+    }
+  ],
+  "scenario_sha256": "ed71d0bcc3c86c90523079814510871b401ae683199df54c413c01aab925b606",
+  "schema": "marty.canvas-url-template-reference/v1",
+  "selected_definitions": {
+    "issuance.domain.entities": [
+      "Any",
+      "CredentialDeliveryRecord",
+      "CredentialDeliveryStatus",
+      "DeliveryTarget",
+      "Enum",
+      "dataclass",
+      "datetime",
+      "field",
+      "timezone",
+      "uuid"
+    ],
+    "issuance.infrastructure.adapters.canvas_credentials_adapter": [
+      "CredentialDeliveryRecord",
+      "_badgr_assertion_url",
+      "_badgr_revoke_url",
+      "_badgr_validation_url",
+      "os",
+      "quote"
+    ]
+  },
+  "source_blobs": {
+    "issuance.domain.entities": "1b5e2eba90c1ec13c1a38135f4da92813f1d1073",
+    "issuance.infrastructure.adapters.canvas_credentials_adapter": "c86671e2b2ab5bb8a72de78a9bdadb0f340a5ec8"
+  },
+  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa"
+}
