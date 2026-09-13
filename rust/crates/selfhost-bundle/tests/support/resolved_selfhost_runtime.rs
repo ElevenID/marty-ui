@@ -633,7 +633,42 @@ fn normalize_model(mut model: Value, root: &Path) -> Result<Value> {
     Ok(model)
 }
 
-pub(super) fn qualify(repo: &Path, extracted: &Path) {
+/// Owns original Compose representation and its independently checked view.
+/// Only the original representation can be handed back to Compose for creation.
+pub(super) struct PreparedCompose {
+    owned: tempfile::TempDir,
+    source_root: PathBuf,
+    source_hashes: BTreeMap<String, String>,
+    raw_model: Value,
+    raw_hash: String,
+    model: ClosedSelfhostModel,
+    pub(super) secret_directory: PathBuf,
+}
+impl PreparedCompose {
+    pub(super) fn raw_model(&self) -> &Value {
+        self.verify_sources();
+        &self.raw_model
+    }
+    pub(super) fn directory(&self) -> &Path {
+        self.owned.path()
+    }
+    pub(super) fn verify_sources(&self) {
+        assert_eq!(
+            self.source_hashes,
+            hashes(&self.source_root),
+            "Source identities retained throughout rendering"
+        );
+        assert_eq!(
+            self.raw_hash,
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&self.raw_model).unwrap())
+            )
+        );
+    }
+}
+
+pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     let source_hashes = hashes(repo);
     let source: serde_yaml::Value = serde_yaml::from_slice(&bounded_file(
         &repo.join("docker-compose.selfhost.prod.yml"),
@@ -725,17 +760,21 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
         args.extend(["config".into(), "--format".into(), "json".into()]);
         let result =
             marty_selfhost_bundle::process::compose(root, &args, executable.as_ref()).unwrap();
-        let model = serde_json::from_str(&result).unwrap();
-        normalize_model(model, root).unwrap()
+        serde_json::from_str::<Value>(&result).unwrap()
     };
-    let expected = render(
+    let expected = normalize_model(
+        render(
+            repo,
+            &[
+                "docker-compose.selfhost.prod.yml",
+                "docker-compose.selfhost.bundle.override.yml",
+            ],
+        ),
         repo,
-        &[
-            "docker-compose.selfhost.prod.yml",
-            "docker-compose.selfhost.bundle.override.yml",
-        ],
-    );
-    let actual = render(extracted, &["docker-compose.yml"]);
+    )
+    .unwrap();
+    let raw_model = render(extracted, &["docker-compose.yml"]);
+    let actual = normalize_model(raw_model.clone(), extracted).unwrap();
     if expected != actual {
         for (section, value) in expected.as_object().unwrap() {
             if actual.get(section) == Some(value) {
@@ -754,6 +793,32 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
         }
     }
     let model = ClosedSelfhostModel::from_rendered(&expected, actual, &secret_directory).unwrap();
+    let raw_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&raw_model).unwrap())
+    );
+    PreparedCompose {
+        owned,
+        source_root: repo.to_owned(),
+        source_hashes,
+        raw_model,
+        raw_hash,
+        model,
+        secret_directory,
+    }
+}
+
+pub(super) fn qualify(repo: &Path, extracted: &Path) {
+    let prepared = prepare(repo, extracted);
+    let model = &prepared.model;
+    let expected = model.full_model.clone();
+    let secret_directory = &prepared.secret_directory;
+    // Exercise the raw handoff, without normalizing it into process environment.
+    assert!(prepared.directory().is_dir());
+    assert_eq!(
+        prepared.raw_model()["services"]["issuance-native"]["environment"]["DATABASE_URL_TEMPLATE"],
+        DATABASE_TEMPLATE
+    );
     let endpoints = OwnedEndpoints(
         ROLES
             .iter()
@@ -828,14 +893,10 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
         mapped.environments["gateway"]["SIGNING_KEYS_SERVICE_URL"],
         format!("http://127.0.0.1:{}", endpoints.port(Role::SigningHttp))
     );
-    negative_controls(&model, &expected, &secret_directory, &endpoints);
+    negative_controls(model, &expected, secret_directory, &endpoints);
+    prepared.verify_sources();
     assert_eq!(
-        source_hashes,
-        hashes(repo),
-        "Source identities retained throughout rendering"
-    );
-    assert_eq!(
-        fs::read_dir(&secret_directory).unwrap().count(),
+        fs::read_dir(secret_directory).unwrap().count(),
         0,
         "No secret material loaded or generated"
     );

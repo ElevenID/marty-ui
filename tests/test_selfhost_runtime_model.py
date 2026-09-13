@@ -7,6 +7,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
+SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
 ADAPTER = "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
 NAME = (
     "actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references"
@@ -37,22 +38,25 @@ def assert_connected(reader):
         in source
     )
     assert body.count("resolved_selfhost_runtime::qualify(&repo, &extracted);") == 1
-    assert body.index("ZipArchive::new") < body.index(
+    assert body.index("ExtractedBundle::create(&repo, command())") < body.index(
         "resolved_selfhost_runtime::qualify"
     )
-    assert body.index(
-        "assert_contained_references(&extracted, &rendered)"
-    ) < body.index("resolved_selfhost_runtime::qualify")
+    shared = reader(SHARED)
+    assert "ZipArchive::new" in shared
+    assert "assert_contained_references(&extracted, &rendered)" in shared
     adapter = reader(ADAPTER)
     for required in [
         "marty_selfhost_bundle::process::compose",
         "ClosedSelfhostModel::from_rendered(&expected, actual, &secret_directory)",
-        "negative_controls(&model, &expected, &secret_directory, &endpoints)",
+        "negative_controls(model, &expected, secret_directory, &endpoints)",
+        "let prepared = prepare(repo, extracted)",
+        "normalize_model(raw_model.clone(), extracted)",
+        "prepared.verify_sources()",
         "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
         "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be",
         '"docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"',
         '&["docker-compose.yml"]',
-        "source_hashes, hashes(repo)",
+        "self.source_hashes, hashes(&self.source_root)",
     ]:
         assert compact(required) in compact(adapter)
     workflow = reader(".github/workflows/ci.yml")
@@ -98,7 +102,7 @@ def test_disconnected_or_weakened_runtime_model_gate_refuses(fault):
         if name == ADAPTER:
             for key, original in {
                 "fake-render": "marty_selfhost_bundle::process::compose",
-                "no-negatives": "negative_controls(&model, &expected, &secret_directory, &endpoints)",
+                "no-negatives": "negative_controls(model, &expected, secret_directory, &endpoints)",
                 "no-source": '"docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"',
                 "no-extracted": '&["docker-compose.yml"]',
                 "pin": "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be",

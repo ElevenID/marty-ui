@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAPTURE = ROOT / "scripts/capture_selfhost_bundle_reference.py"
 ARTIFACT = ROOT / "contracts/selfhost-bundle-python-reference.json"
 SOURCE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
+SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
 NAME = (
     "actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references"
 )
@@ -143,19 +144,32 @@ def assert_connections(read):
     attrs, body = matches[0]
     assert attrs.strip() == "#[test]"
     assert "package-selfhost-bundle" in executable
+    assert (
+        '#[path = "support/extracted_bundle.rs"]\nmod extracted_bundle;' in executable
+    )
+    assert body.count("ExtractedBundle::create(&repo, command())") == 1
+    assert "fixture.verify_unchanged()" in body
+    assert "assert_operator_bind_paths(&repo, &extracted)" in body
+    helper = read(SHARED)
+    assert "inventory(&self.extracted), self.verified_inventory" in helper
+    assert "inventory(&self.output), self.verified_inventory" in helper
+    assert "#[test]\nfn jointly_mutated_verified_bundle_is_refused()" in helper
+    shared = helper.split("pub(super) fn create", 1)[1].split(
+        "pub(super) fn directory", 1
+    )[0]
     for required in [
         "ZipArchive::new",
         'extraction.join("customer-bundle")',
         "process::compose",
         "validate_strict",
-        "assert_descriptor_inventory(&repo, &output)",
+        "assert_descriptor_inventory(repo, &output)",
         "assert_contained_references(&extracted, &rendered)",
-        "assert_operator_bind_paths(&repo, &extracted)",
         "inventory(&output)",
         "inventory(&extracted)",
     ]:
-        assert required in body
+        assert required in shared
     assert "return" not in body
+    assert "return" not in shared
     assert '"crates/selfhost-bundle"' in read("rust/Cargo.toml")
     assert "cargo test --locked --workspace" in read(".github/workflows/ci.yml")
     assert "contracts/selfhost-bundle-python-reference.json" in read(
@@ -185,6 +199,9 @@ def test_actual_bundle_gate_runs_in_required_workspace_ci():
         "no-inventory",
         "no-containment",
         "no-operator-binds",
+        "shared-disconnected",
+        "shared-module",
+        "shared-baseline",
         "workspace",
         "make",
     ],
@@ -199,24 +216,35 @@ def test_disabled_or_shallow_bundle_gate_is_rejected(fault):
                 return source.replace(f"fn {NAME}", f"#[cfg(any())]\nfn {NAME}")
             if fault == "missing":
                 return source.replace(f"fn {NAME}", "fn missing")
+            if fault == "shared-disconnected":
+                return source.replace(
+                    "ExtractedBundle::create(&repo, command())", "absent()"
+                )
+            if fault == "shared-module":
+                return source.replace("mod extracted_bundle;", "")
+            if fault == "no-operator-binds":
+                return source.replace(
+                    "assert_operator_bind_paths(&repo, &extracted)",
+                    "absent(&repo, &extracted)",
+                )
+        if relative == SHARED:
+            if fault == "shared-baseline":
+                return source.replace(
+                    "self.verified_inventory", "inventory(&self.output)"
+                )
             if fault == "no-zip":
                 return source.replace("ZipArchive::new", "FakeArchive::new")
             if fault == "no-render":
                 return source.replace("process::compose", "process::fake")
             if fault == "no-inventory":
                 return source.replace(
-                    "assert_descriptor_inventory(&repo, &output)",
-                    "fake_inventory(&repo, &output)",
+                    "assert_descriptor_inventory(repo, &output)",
+                    "fake_inventory(repo, &output)",
                 )
             if fault == "no-containment":
                 return source.replace(
                     "assert_contained_references(&extracted, &rendered)",
                     "fake_references(&extracted, &rendered)",
-                )
-            if fault == "no-operator-binds":
-                return source.replace(
-                    "assert_operator_bind_paths(&repo, &extracted)",
-                    "absent(&repo, &extracted)",
                 )
         if fault == "workspace" and relative == "rust/Cargo.toml":
             return source.replace('"crates/selfhost-bundle"', '"absent"')
