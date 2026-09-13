@@ -31,6 +31,22 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+At local `9e7f178a5`, the shared named-string formatter is integrated under
+`cfg(test)` only. Independent same-source Rust qualification passed five tests
+covering all 777 differential cases, 88 eligible URL-template cases and 18
+absent-attribute messages; strict Clippy and package formatting passed on the
+reviewed author checkpoint. Integrated verification passed 47 Python guards
+and both exact formatter/inventory replays. A fresh, integration-only target is
+building the complete issuance library tests; no result is claimed yet.
+Deterministic object metadata, governed nondeterministic representations and
+all three actual URL-builder adoption gates remain unfinished. No production
+caller selects this formatter.
+
+The publication boundary reference is now 15 cases at `1d9a7ca1c`: two appended
+timezone-free datetime observations preserve all prior 13 cases and snapshots.
+Independent integrated verification passed all 43 guards and exact 15-case
+replay. Rust timestamp payload parity remains a separate implementation gate.
+
 At local `ae30c9423`, the separately reviewed publication boundary reference
 adds 13 pinned-Python observations: eight datetime, two provider-held
 cancellation and three response-shape cases. Independent integrated verification
