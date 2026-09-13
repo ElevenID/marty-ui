@@ -833,6 +833,43 @@ def test_canvas_lti_https_gate_requires_real_linux_parent_test() -> None:
     )
 
 
+def _assert_no_rust_executable_transfer(steps) -> None:
+    # Failure logs are diagnostic evidence, not transfers of compiled tests.
+    # The dedicated diagnostic contract separately validates the full step.
+    uploads = []
+    for step in steps:
+        action = step.get("uses", "")
+        assert not action.startswith("actions/download-artifact@")
+        if action.startswith("actions/upload-artifact@"):
+            uploads.append(step)
+            assert step.get("name") == "Preserve synthetic runtime failure diagnostics"
+            assert step.get("with", {}).get("path") == (
+                "${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*"
+            )
+    assert len(uploads) == 1
+
+
+@pytest.mark.parametrize("fault", ["binary", "broad", "extra", "download"])
+def test_rust_executable_transfer_guard_rejects_non_diagnostic_artifacts(fault):
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    upload = next(
+        step
+        for step in steps
+        if step.get("name") == "Preserve synthetic runtime failure diagnostics"
+    )
+    if fault == "binary":
+        upload["with"]["path"] = "rust/target/debug/*"
+    elif fault == "broad":
+        upload["with"]["path"] = "${{ runner.temp }}/**"
+    elif fault == "extra":
+        steps.append(dict(upload))
+    else:
+        steps.append({"uses": "actions/download-artifact@unexpected"})
+    with pytest.raises(AssertionError):
+        _assert_no_rust_executable_transfer(steps)
+
+
 def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> None:
     source, document = _workflow(CI_PATH)
     rust_job = document["jobs"]["test-rust-services"]
@@ -849,9 +886,7 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     assert "run-rust-db-contracts.sh" in orchestrator
     assert "test-rust-db-contracts" not in document["jobs"]
     assert "rust-db-test-bundle" not in source
-    assert "actions/upload-artifact" not in "\n".join(
-        str(step) for step in rust_job["steps"]
-    )
+    _assert_no_rust_executable_transfer(rust_job["steps"])
     for group in ("workspace", "verification", "gateway"):
         assert f"rust-{group}.status" in source
     assert "target/debug/flow-postgres-contract --test-threads=1" in source
