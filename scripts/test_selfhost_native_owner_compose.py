@@ -82,6 +82,32 @@ def assert_input_inventory():
     ]
 
 
+def assert_signing_binding(model):
+    """Source-derived dependency proof, not a socket/readiness assertion."""
+    services = model["services"]
+    gateway = services["gateway"]["environment"]
+    signer_port = services["signing-keys"]["environment"]["SIGNING_KEYS_SERVICE_PORT"]
+    target = f"http://signing-keys:{signer_port}"
+    assert gateway.get("SIGNING_KEYS_SERVICE_URL") == target
+    assert "signing-keys" in gateway["GATEWAY_REQUIRED_READY_SERVICES"].split(",")
+    native = services["issuance-native"]["environment"]
+    assert (
+        native["SIGNING_KEYS_INTERNAL_URL"]
+        == "http://gateway:8000/internal/signing-keys"
+    )
+    assert (
+        native["SIGNING_KEYS_INTERNAL_API_KEY_FILE"]
+        == gateway["SIGNING_KEYS_INTERNAL_API_KEY_FILE"]
+        == services["signing-keys"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY_FILE"]
+    )
+    config = (ROOT / "rust/services/gateway/src/config.rs").read_text()
+    defaults = re.findall(
+        r'"signing-keys",\s*"SIGNING_KEYS_SERVICE_URL",\s*"([^"]+)"', config
+    )
+    assert defaults == [f"http://localhost:{signer_port}"]
+    assert target != defaults[0], "Separate container must not use loopback fallback"
+
+
 def assert_models(before, after):
     preserved = deepcopy(after)
     native = GATE["native_dispatcher_model"](
@@ -89,6 +115,12 @@ def assert_models(before, after):
     )
     shared = preserved.pop("x-issuance-application-env")
     gateway = preserved["services"]["gateway"]
+    # Governed repair: the native signer and readiness need the separate owner,
+    # whereas the unchanged frozen model omitted it and fell back to localhost.
+    assert (
+        gateway["environment"].pop("SIGNING_KEYS_SERVICE_URL")
+        == "http://signing-keys:8017"
+    )
     assert (
         gateway["environment"].pop("ISSUANCE_NATIVE_SERVICE_URL")
         == "http://issuance-native:8005"
@@ -197,7 +229,9 @@ def interpolated_models():
             ),
         ):
             values = {**inputs, **overrides}
-            assert_models(render(FROZEN, values), render(GATE["BASE"], values))
+            after = render(GATE["BASE"], values)
+            assert_models(render(FROZEN, values), after)
+            assert_signing_binding(after)
             print(f"PASS: self-host {mode} interpolated whole model")
         for name in sorted(required):
             for value in (None, ""):
@@ -228,6 +262,7 @@ def run():
     before = GATE["render"](FROZEN)
     after = GATE["render"](GATE["BASE"])
     assert_models(before, after)
+    assert_signing_binding(after)
     interpolated_models()
     print(
         "PASS: frozen full self-host model and closed native additions (configuration only)"

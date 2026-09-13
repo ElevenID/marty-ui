@@ -76,7 +76,8 @@ The independent frozen baseline is the original self-host file at `98e78b8d0`,
 Git blob `7bff1a842865b9101516d839c10bb645a50089c3`. Its normalized SHA-256 is
 `5c643478422ecb9f71bb9bd3133af55805e91b184bd8f3c84852fafd418905f8`.
 `scripts/test_selfhost_native_owner_compose.py` compares the entire rendered
-model with only the new anchor/service and three gateway additions allowed.
+model with only the new anchor/service, original three gateway additions and
+the separately governed signing-target repair below allowed.
 Native expectations derive from the frozen owner's environment and secrets,
 not from the new source. Pure mutation tests are explicitly not a Compose emulator.
 
@@ -92,3 +93,21 @@ review, actual generated/extracted bundle rendering, packaged secret-loader/main
 failure cases and database access, gateway/signing/wallet behavior for selected
 routes, and exact-head CI. Config rendering alone proves none of those runtime
 claims. Preserve the legacy service and its features until all consumer gates pass.
+
+## Separate-container signing target repair
+
+The self-host gateway now explicitly binds `SIGNING_KEYS_SERVICE_URL` to
+`http://signing-keys:8017`. Previously the omitted setting selected the Rust
+gateway default `http://localhost:8017`, although signing is a distinct service.
+Native issuance already calls the gateway's `/internal/signing-keys` route and
+the unchanged gateway readiness roster already requires signing-keys. The
+existing shared API-key file identity is unchanged.
+
+The frozen pre-native model remains immutable. Its whole-model comparator allows
+exactly this additional gateway field and rejects missing, loopback and wrong
+owner targets. Source-derived checks tie the URL to the actual signer port,
+native proxy URL, readiness roster and existing key bindings. These checks and
+the full synthetic Compose matrix are configuration evidence only: they do not
+prove signing/provider capability, non-root secret readability, packaged startup,
+workload TLS, release-image provenance or deployment readiness. KMS remains out
+of scope.

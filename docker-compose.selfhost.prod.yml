@@ -306,6 +306,7 @@ services:
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}

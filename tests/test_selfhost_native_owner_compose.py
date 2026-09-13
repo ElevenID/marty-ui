@@ -65,6 +65,7 @@ def models():
     after["services"]["gateway"]["environment"].update(
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
         GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
+        SIGNING_KEYS_SERVICE_URL="http://signing-keys:8017",
     )
     after["services"]["gateway"]["depends_on"]["issuance-native"] = {
         "condition": "service_healthy",
@@ -205,3 +206,41 @@ def test_ci_runs_preservation_gate_unconditionally():
             "run": "python3 scripts/test_selfhost_native_owner_compose.py",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "target", [None, "http://localhost:8017", "http://issuance-native:8017"]
+)
+def test_signing_binding_missing_loopback_and_wrong_owner_are_rejected(models, target):
+    before, after = models
+    gateway = after["services"]["gateway"]["environment"]
+    if target is None:
+        gateway.pop("SIGNING_KEYS_SERVICE_URL")
+    else:
+        gateway["SIGNING_KEYS_SERVICE_URL"] = target
+    with pytest.raises((AssertionError, KeyError)):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://signing-keys:8017",
+        None,
+        "http://localhost:8017",
+        "http://issuance-native:8017",
+    ],
+)
+def test_signing_dependency_is_derived_from_actual_source_owners(target):
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    gateway = model["services"]["gateway"]["environment"]
+    assert gateway["SIGNING_KEYS_SERVICE_URL"] == "http://signing-keys:8017"
+    if target is None:
+        gateway.pop("SIGNING_KEYS_SERVICE_URL")
+    else:
+        gateway["SIGNING_KEYS_SERVICE_URL"] = target
+    if target == "http://signing-keys:8017":
+        GATE["assert_signing_binding"](model)
+    else:
+        with pytest.raises(AssertionError):
+            GATE["assert_signing_binding"](model)
