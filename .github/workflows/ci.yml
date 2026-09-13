@@ -742,10 +742,28 @@ jobs:
         env:
           FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
         run: target/debug/flow-postgres-contract --test-threads=1
+      - name: Prepare owned runtime failure diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          diagnostics="$RUNNER_TEMP/marty-owned-runtime-diagnostics"
+          mkdir -m 700 "$diagnostics"
+          owner="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+          (set -o noclobber; printf '%s' "$owner" > "$diagnostics/.owner")
+          printf 'MARTY_RUNTIME_DIAGNOSTICS=%s\n' "$diagnostics" >> "$GITHUB_ENV"
+          printf 'MARTY_RUNTIME_DIAGNOSTICS_OWNER=%s\n' "$owner" >> "$GITHUB_ENV"
       - name: Run isolated database contract suites concurrently
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py
+      - name: Preserve synthetic runtime failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: owned-runtime-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Test native Canvas operation timeout TLS parity
         working-directory: rust
         run: |

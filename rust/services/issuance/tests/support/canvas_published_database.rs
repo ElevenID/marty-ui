@@ -1,7 +1,11 @@
 //! Exact-owned disposable Docker database; no deployment URL is accepted.
 
 use serde_json::Value;
-use std::{path::Path, process::Command, time::Duration};
+use std::{
+    path::Path,
+    process::{Command, Output},
+    time::Duration,
+};
 use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
@@ -32,12 +36,25 @@ pub(super) fn docker(arguments: &[&str]) -> Result<String, String> {
 }
 
 pub(super) fn docker_with_timeout(arguments: &[&str], timeout: Duration) -> Result<String, String> {
-    use super::bounded_fixture_command::{run, CommandFailure};
     let limit = if arguments.first() == Some(&"logs") {
         64 * 1024 * 1024
     } else {
         8 * 1024 * 1024
     };
+    let output = docker_output_with_timeout(arguments, timeout, limit)?;
+    String::from_utf8(output.stdout)
+        .map(|s| s.trim().to_owned())
+        .map_err(|_| "Docker returned invalid UTF-8".to_owned())
+}
+
+/// Preserve both bounded streams for exact-owned diagnostic consumers only.
+/// Existing string callers retain their original stdout/UTF-8 projection.
+pub(super) fn docker_output_with_timeout(
+    arguments: &[&str],
+    timeout: Duration,
+    limit: u64,
+) -> Result<Output, String> {
+    use super::bounded_fixture_command::{run, CommandFailure};
     let output =
         run(Command::new("docker").args(arguments), None, timeout, limit).map_err(|error| {
             match error {
@@ -53,9 +70,7 @@ pub(super) fn docker_with_timeout(arguments: &[&str], timeout: Duration) -> Resu
             arguments.first().copied().unwrap_or("command")
         ));
     }
-    String::from_utf8(output.stdout)
-        .map(|s| s.trim().to_owned())
-        .map_err(|_| "Docker returned invalid UTF-8".to_owned())
+    Ok(output)
 }
 
 pub(super) fn inspect(id: &str) -> Result<Value, String> {

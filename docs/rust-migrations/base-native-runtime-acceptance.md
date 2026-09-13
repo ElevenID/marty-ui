@@ -37,3 +37,18 @@ The inner gate uses the same native graph, not a replacement router or signing i
 The final isolated gateway gate has **not yet passed**. Windows native-only evidence is not equivalent to it. CI requires both exact service artifacts, the same pinned renderer, connected parent/child registrations and successful outer completion; missing artifacts or incompatible host execution must not be accepted as qualification. The same pinned renderer path is exported for the separately integrated self-host bundle acceptance tests. The clean source checkpoint may be submitted for exact-head Linux CI, but is not a completed gateway acceptance or permission to merge or deploy before that gate passes.
 
 Mounted source-built executable acceptance is not proof of authenticated released OCI-image provenance, Compose service-network deployment, self-host secret-loader behavior, or aggregate beta acceptance. Those remain their separately governed release/deployment boundaries. KMS-only DIDComm corrections remain out of scope; neither mode is removed.
+## Failed isolated-child diagnostics
+
+CI now preserves bounded stdout **and stderr** from failed exact-owned base,
+Envoy, and Kubernetes child containers in a dedicated synthetic-output artifact
+(three-day retention). Raw output is not printed in console errors; only that
+fresh directory is uploaded, with no checkout, operator configuration, or
+environment dump. Successful children create no diagnostic files.
+
+This path uses the existing bounded subprocess/deadline helper with a stricter
+2 MiB cap per stream (other Docker consumers retain their existing limits).
+Oversize output is an error, never a passing or truncated acceptance result.
+Capture/deadline failures can occur before output is available and therefore do
+not promise an artifact. Artifact write failures remain errors alongside the
+original child failure, and exact-owned container cleanup still runs. This is
+diagnostic infrastructure, not evidence that the pending Linux child gate passed.

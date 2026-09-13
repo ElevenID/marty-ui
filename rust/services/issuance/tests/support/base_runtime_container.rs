@@ -5,7 +5,8 @@
 use super::{
     base_runtime_redis::OwnedRedis,
     canvas_published_database::{
-        docker, docker_with_timeout, inspect, inspect_with_timeout, PublishedDatabase,
+        docker, docker_output_with_timeout, docker_with_timeout, inspect, inspect_with_timeout,
+        PublishedDatabase,
     },
 };
 use serde_json::Value;
@@ -531,6 +532,8 @@ fn executable_path() -> Result<PathBuf, String> {
 }
 
 async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
+    // Validate optional CI-owned output storage before creating any container.
+    let diagnostics = super::runtime_failure_diagnostics::Diagnostics::from_environment()?;
     let label = format!("{LABEL}={}", container.scope);
     let renderer_env = format!("MARTY_BASE_COMPOSE_BINARY={}", container.renderer);
     let mounts: Vec<_> = container
@@ -602,14 +605,23 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         let state = inspect_with_timeout(&id, deadline.saturating_duration_since(Instant::now()))?;
         container.checked(&state, &id)?;
         if state["State"]["Running"] == false {
-            // Do not echo child logs or panic contents: only its closed completion
-            // sentinel and successful exit qualify the inner assertions.
-            return completed(
+            // Docker logs routes container stderr separately. Preserve both
+            // bounded streams in failure artifacts, never in console errors.
+            let output = docker_output_with_timeout(
+                &["logs", &id],
+                deadline.saturating_duration_since(Instant::now()),
+                super::runtime_failure_diagnostics::STREAM_LIMIT,
+            )?;
+            let result = std::str::from_utf8(&output.stdout)
+                .map_err(|_| "Docker returned invalid UTF-8".to_owned())
+                .and_then(|stdout| completed(&state, stdout.trim()));
+            return super::runtime_failure_diagnostics::record_failure(
+                result,
+                diagnostics.as_ref(),
+                &id,
                 &state,
-                &docker_with_timeout(
-                    &["logs", &id],
-                    deadline.saturating_duration_since(Instant::now()),
-                )?,
+                &output.stdout,
+                &output.stderr,
             );
         }
         require(

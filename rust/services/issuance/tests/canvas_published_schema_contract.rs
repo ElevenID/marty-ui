@@ -9,6 +9,8 @@ mod renewal_reference_fixture;
 mod base_runtime_canvas;
 #[path = "support/base_runtime_container.rs"]
 mod base_runtime_container;
+#[path = "support/runtime_failure_diagnostics.rs"]
+mod runtime_failure_diagnostics;
 #[path = "support/base_runtime_didcomm.rs"]
 mod base_runtime_didcomm;
 #[path = "support/base_runtime_gateway.rs"]
