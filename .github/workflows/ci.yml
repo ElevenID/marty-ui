@@ -377,11 +377,17 @@ jobs:
           # services and the immutable published worker's own environment.
           "$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install \
             --disable-pip-version-check --only-binary=:all: --no-deps \
-            SQLAlchemy==2.0.52 greenlet==3.4.0 typing_extensions==4.15.0
+            SQLAlchemy==2.0.52 greenlet==3.4.0 typing_extensions==4.15.0 PyYAML==6.0.3
           "$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE" <<'PY'
           from pathlib import Path
           import sys
           assert sys.version_info[:2] == (3, 12)
+          # Rendered base/Flow fixtures use this same selected interpreter.
+          import yaml
+          assert yaml.__version__ == "6.0.3"
+          assert yaml.safe_load("services: {issuance-native: {command: []}}") == {
+              "services": {"issuance-native": {"command": []}}
+          }
           root = Path(sys.argv[1])
           sys.path.insert(0, str(root / "scripts"))
           import test_canvas_worker_body_timeout_https as controller

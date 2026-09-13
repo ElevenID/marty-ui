@@ -1,6 +1,7 @@
 """Exercise the CI dependency lane without installing packages or opening a DB."""
 
 import importlib.util
+import copy
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,12 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 STEP = "Prepare isolated Canvas worker harness dependencies"
-PINS = ("SQLAlchemy==2.0.52", "greenlet==3.4.0", "typing_extensions==4.15.0")
+PINS = (
+    "SQLAlchemy==2.0.52",
+    "greenlet==3.4.0",
+    "typing_extensions==4.15.0",
+    "PyYAML==6.0.3",
+)
 
 
 def workflow_steps():
@@ -31,11 +37,32 @@ def smoke_source():
     return source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
 
 
-def test_dependency_setup_precedes_compile_and_all_native_preflights():
-    steps = workflow_steps()
+def assert_dependency_setup(steps):
     names = [step.get("name") for step in steps]
+    assert names.count(STEP) == 1
     setup = names.index(STEP)
+    assert "if" not in steps[setup] and "continue-on-error" not in steps[setup]
     assert setup < names.index("Compile reusable Rust test executables")
+    rendered = names.index("Prepare required rendered base executable acceptance")
+    assert (
+        setup
+        < rendered
+        < names.index("Run isolated database contract suites concurrently")
+    )
+    assert '"$(command -v python3)"' in steps[rendered]["run"]
+    source = steps[setup]["run"]
+    install = '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install'
+    smoke = '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE"'
+    publish = (
+        '''printf '%s\\n' "$RUNNER_TEMP/canvas-worker-harness/bin" >> "$GITHUB_PATH"'''
+    )
+    assert source.index(install) < source.index(smoke) < source.index(publish)
+    assert "PyYAML==6.0.3" in source[source.index(install) : source.index(smoke)]
+    assert "import yaml" in source[source.index(smoke) : source.index(publish)]
+    assert 'assert yaml.__version__ == "6.0.3"' in source
+    assert (
+        'assert yaml.safe_load("services: {issuance-native: {command: []}}")' in source
+    )
     preflights = [
         index
         for index, step in enumerate(steps)
@@ -51,6 +78,54 @@ def test_dependency_setup_precedes_compile_and_all_native_preflights():
     assert len(interpreter) == 1
     assert interpreter[0]["with"]["python-version"] == "3.12"
     assert steps[setup]["shell"] == "bash"
+
+
+def test_dependency_setup_precedes_compile_and_all_native_preflights():
+    assert_dependency_setup(workflow_steps())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "late",
+        "optional",
+        "conditional",
+        "duplicate",
+        "pin",
+        "interpreter",
+        "import",
+        "yaml_parse",
+    ],
+)
+def test_renderer_dependency_guard_rejects_missing_or_ineffective_setup(mutation):
+    steps = copy.deepcopy(workflow_steps())
+    setup = next(step for step in steps if step.get("name") == STEP)
+    if mutation == "missing":
+        steps.remove(setup)
+    elif mutation == "late":
+        steps.remove(setup)
+        steps.append(setup)
+    elif mutation == "optional":
+        setup["continue-on-error"] = True
+    elif mutation == "conditional":
+        setup["if"] = "false"
+    elif mutation == "duplicate":
+        steps.append(copy.deepcopy(setup))
+    elif mutation == "pin":
+        setup["run"] = setup["run"].replace("PyYAML==6.0.3", "")
+    elif mutation == "interpreter":
+        setup["run"] = setup["run"].replace(
+            '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip', "python3 -m pip"
+        )
+    elif mutation == "import":
+        setup["run"] = setup["run"].replace("import yaml", "")
+    else:
+        setup["run"] = setup["run"].replace(
+            "assert yaml.safe_load", "assert disabled.safe_load"
+        )
+    with pytest.raises((AssertionError, ValueError)):
+        assert_dependency_setup(steps)
 
 
 @pytest.fixture
@@ -170,7 +245,7 @@ def test_actual_isolated_smoke_imports_real_dependencies_and_frozen_controller()
     # already provisioned for repository tests, without global/PYTHONPATH import
     # inheritance or fake modules. No provider run, DB driver, or Docker call.
     dependency_roots = set()
-    for name in ("sqlalchemy", "greenlet", "typing_extensions"):
+    for name in ("sqlalchemy", "greenlet", "typing_extensions", "yaml"):
         spec = importlib.util.find_spec(name)
         assert spec is not None and spec.origin is not None
         path = Path(spec.origin)
