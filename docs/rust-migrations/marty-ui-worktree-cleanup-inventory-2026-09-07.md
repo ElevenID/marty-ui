@@ -367,3 +367,31 @@ whether the remaining branches contain unintegrated work. A patch-equivalence
 audit is underway; integration-only equivalence must not be labeled as landed
 on protected main. No branch, worktree, ignored recording, or release artifact
 was deleted during this refresh.
+
+### Early author branches: integration-only equivalence
+
+Read-only patch comparison against integration `91e556512` found no unmatched
+commits for the following ten branches. Paired range comparisons were identical;
+the body-replay branch was already an ancestor. Their landing patches are **not**
+patch-contained in protected main `f5c4da685f`; none is yet a protected-main-safe
+cleanup candidate.
+
+| Branch suffix | Author commit(s) → integrated commit(s) |
+| --- | --- |
+| canvas-worker-native-body-replay-v1 | `8df5df68f` → ancestor |
+| canvas-worker-native-consumer-cutover-v1 | `ab6810f74` → `0e33a36aa`; `48ce216ae` → `910245c0d`; `72fd6638b` → `d498747d9` |
+| canvas-gateway-lifecycle-adapter-v1 | `0220aeea1` → `0a0ae6df7` |
+| webhook-helper-retirement-v1 | `31e7ebd7c` → `d5f16228e` |
+| canvas-gateway-state-parity-v1 | `724122012` → `718a72776` |
+| canvas-gateway-auth-parity-v1 | `42ae6825f` → `1cce2d3c4` |
+| didcomm-policy-parity-v1 | `4078295ad` → `3d8b53b07` |
+| didcomm-trusted-tenant-parity-v1 | `b65a371e9` → `3aba9e122` |
+| didcomm-authcrypt-parity-v1 | `cd6324a76` → `4fa4c3b5c`, plus the policy pair above |
+| didcomm-resolver-parity-v1 | `af858864a` → `a6100933b` |
+
+Later integrated changes to shared files must be preserved; equivalence does not
+authorize restoring older snapshots. Two older gateway read/trusted-actor
+branches differ only in import ordering (`3de5e0211` → `9b31fedaa`) and remain
+outside automatic exact-patch cleanup. Inaccessible ignored pytest-cache entries
+in the two oldest worktrees still require a scoped ownership inventory. Recheck
+all references and owner/process/artifact conditions after protected landing.
