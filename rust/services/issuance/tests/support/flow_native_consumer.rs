@@ -35,6 +35,13 @@ mod physical;
 #[path = "flow_rendered_selection.rs"]
 mod rendered;
 
+#[path = "flow_public_startup.rs"]
+mod public_startup;
+
+pub(super) async fn run_public_startup(database_url: &str, redis_url: &str) {
+    public_startup::run(database_url, redis_url).await;
+}
+
 pub(super) async fn run_rendered(database_url: &str) {
     rendered::run(database_url).await;
 }
@@ -236,16 +243,7 @@ fn assert_request(observation: &Observation, instance: &FlowInstanceRecord, atte
     );
 }
 
-fn assert_prepared(
-    original: &FlowInstanceRecord,
-    prepared: &PreparedInstanceStart,
-    result: &IssuanceInitiationResult,
-    attempt: u32,
-    seed_index: usize,
-    timestamp: DateTime<Utc>,
-) {
-    let artifact = prepared.artifact.as_ref().unwrap();
-    uuid::Uuid::parse_str(&artifact.id).unwrap();
+fn assert_native_result(result: &IssuanceInitiationResult, seed_index: usize) -> String {
     let uri = result.credential_offer_uri.clone().unwrap();
     let parsed = url::Url::parse(&uri).unwrap();
     assert_eq!(parsed.scheme(), "openid-credential-offer");
@@ -275,6 +273,20 @@ fn assert_prepared(
             status: "pending".into(),
         }
     );
+    uri
+}
+
+fn assert_prepared(
+    original: &FlowInstanceRecord,
+    prepared: &PreparedInstanceStart,
+    result: &IssuanceInitiationResult,
+    attempt: u32,
+    seed_index: usize,
+    timestamp: DateTime<Utc>,
+) {
+    let artifact = prepared.artifact.as_ref().unwrap();
+    uuid::Uuid::parse_str(&artifact.id).unwrap();
+    let uri = assert_native_result(result, seed_index);
     assert_eq!(
         artifact,
         &FlowArtifactRecord {
@@ -302,6 +314,9 @@ fn assert_prepared(
         .unwrap();
     uuid::Uuid::parse_str(message_id).unwrap();
     let mut expected = original.clone();
+    if attempt > 1 {
+        expected.updated_at = timestamp;
+    }
     let context = expected.context.as_object_mut().unwrap();
     for (key, value) in [
         ("oid4vci_artifact_id", json!(artifact.id)),
@@ -526,8 +541,7 @@ pub(super) async fn run(database_url: &str) {
 
     ports.recovery_only.store(false, Ordering::SeqCst);
     let later = now() + Duration::minutes(1);
-    let mut retry_input = created.instance.clone();
-    retry_input.updated_at = later;
+    let retry_input = created.instance.clone();
     let retry = prepare_oid4vci_retry(
         &providers,
         &definition,

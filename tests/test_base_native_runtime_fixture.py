@@ -223,6 +223,7 @@ def runtime_ci(workflow):
         "bash scripts/ci/install-compose-renderer.sh",
         "test -x rust/target/debug/marty-issuance-service",
         "test -x rust/target/debug/marty-gateway",
+        "test -x rust/target/debug/marty-flow",
         "docker pull redis:7-alpine",
         'printf \'MARTY_BASE_COMPOSE_BINARY=%s\\n\' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"',
         'printf \'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\\n\' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"',
@@ -243,6 +244,7 @@ def runtime_ci(workflow):
         "conditional",
         "renderer",
         "gateway",
+        "flow",
         "bundle_renderer",
     ],
 )
@@ -270,6 +272,10 @@ def test_runtime_ci_requires_renderer_and_exact_executable_artifacts(fault):
     elif fault == "gateway":
         step["run"] = step["run"].replace(
             "test -x rust/target/debug/marty-gateway", "true"
+        )
+    elif fault == "flow":
+        step["run"] = step["run"].replace(
+            "test -x rust/target/debug/marty-flow", "true"
         )
     elif fault == "bundle_renderer":
         step["run"] = step["run"].replace(

@@ -52,6 +52,10 @@ pub(super) async fn run_flow_consumer(database_url: &str) {
     flow_consumer::run(database_url).await;
 }
 
+pub(super) async fn run_flow_public_startup(database_url: &str, redis_url: &str) {
+    flow_consumer::run_public_startup(database_url, redis_url).await;
+}
+
 pub(super) async fn run_flow_rendered(database_url: &str) {
     flow_consumer::run_rendered(database_url).await;
 }

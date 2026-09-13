@@ -316,6 +316,21 @@ async fn flow_rendered_provider_child() {
 }
 
 #[tokio::test]
+async fn flow_actual_main_boots_rendered_base_and_preserves_public_admission() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Actual Flow startup requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
+    didcomm_admission_recovery::run_flow_public_startup(&owned.url, redis.url()).await;
+    redis.close_verified().unwrap();
+    owned.close_verified().unwrap();
+}
+
+#[tokio::test]
 async fn flow_rendered_settings_select_native_rpc_and_preserve_legacy_http() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Rendered Flow selection requires the exact-owned published schema gate");

@@ -247,6 +247,8 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
             ["pre-authorized_code"],
         "pre-auth-1"
     );
+    let retry_at = now() + chrono::Duration::microseconds(1);
+    let original_timestamp = prepared.instance.updated_at;
     let retry = prepare_oid4vci_retry(
         &FlowProviderRegistry {
             credential_template: Some(Arc::new(Templates {
@@ -258,12 +260,18 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
         &definition,
         prepared.instance.clone(),
         "https://issuer.example",
-        now(),
+        retry_at,
         2,
     )
     .await
     .unwrap();
-    assert_eq!(retry.artifact.unwrap().attempt_number, 2);
+    assert_eq!(prepared.instance.updated_at, original_timestamp);
+    assert_eq!(retry.instance.updated_at, retry_at);
+    assert!(retry.instance.updated_at > original_timestamp);
+    assert_eq!(retry.instance.created_at, prepared.instance.created_at);
+    let retry_artifact = retry.artifact.unwrap();
+    assert_eq!(retry_artifact.attempt_number, 2);
+    assert_eq!(retry_artifact.created_at, retry_at);
     let requests = issuance.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert_eq!(

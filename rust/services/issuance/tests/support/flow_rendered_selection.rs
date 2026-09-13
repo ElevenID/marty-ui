@@ -34,11 +34,13 @@ const FILES: &[&str] = &[
     "ca.pem",
     "server.key",
     "loader.sh",
+    "flow.stdout",
+    "flow.stderr",
 ];
 
-struct Directory(PathBuf);
+pub(super) struct Directory(pub(super) PathBuf);
 impl Directory {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         // Verify canonical ownership without passing Windows verbatim paths
         // to Git OpenSSL, matching the existing owned wallet fixture.
         let root = std::env::temp_dir();
@@ -53,7 +55,7 @@ impl Directory {
         );
         owned
     }
-    fn close(self) {
+    pub(super) fn close(self) {
         self.remove().unwrap();
         assert!(!self.0.exists());
     }
@@ -80,7 +82,7 @@ impl Drop for Directory {
     }
 }
 
-fn root() -> PathBuf {
+pub(super) fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()
@@ -98,7 +100,7 @@ fn capture(command: &mut Command, input: Option<&[u8]>) -> Vec<u8> {
     output.stdout
 }
 
-fn render(spec: &Value) -> Value {
+pub(super) fn render(spec: &Value) -> Value {
     let mut command = Command::new(
         std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON").expect("explicit Python fixture required"),
     );

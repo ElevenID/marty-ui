@@ -445,6 +445,7 @@ jobs:
           bash scripts/ci/install-compose-renderer.sh
           test -x rust/target/debug/marty-issuance-service
           test -x rust/target/debug/marty-gateway
+          test -x rust/target/debug/marty-flow
           docker pull redis:7-alpine
           # Resolve the actual source Dockerfile build to a local immutable ID.
           # This is runtime identity evidence, not release provenance.
