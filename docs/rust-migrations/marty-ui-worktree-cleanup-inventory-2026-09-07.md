@@ -350,3 +350,20 @@ environment values were opened.
 Recommended order: finish the parent-owned PR #814 gates; obtain the crypto
 owner's main-divergence handoff; review historical checkpoint activity/artifact
 retention; then resolve remaining cached-ref and dependency PR questions.
+
+## Refreshed tracked-work inventory (2026-09-12)
+
+At integration `91e556512cab019ca0d88dfbce3989a6c45981f2`, read-only status checks
+covered all 73 registered `marty-ui` worktrees. Only the actively owned
+`test/kubernetes-resolved-runtime-v1` worktree had tracked/untracked changes;
+all other worktrees were Git-clean. This does not inventory ignored artifacts
+or supersede the retention checks above.
+
+There are 71 local branches. None was ancestry-contained in protected main
+`f5c4da685f5723a7614649c883bfaa540dd153f1`, whose live GitHub SHA matched the
+cached remote reference. Four were ancestry-contained in the integration head.
+Because author commits have been cherry-picked, ancestry alone cannot establish
+whether the remaining branches contain unintegrated work. A patch-equivalence
+audit is underway; integration-only equivalence must not be labeled as landed
+on protected main. No branch, worktree, ignored recording, or release artifact
+was deleted during this refresh.
