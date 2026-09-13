@@ -4,13 +4,20 @@ Source audit: UI `79b2e3645`, Credentials protected main `ddd6b4e4383fe1000e3255
 This is a source inventory, not deployed configuration or acceptance evidence.
 DIDComm KMS corrections remain deferred. Production is unchanged.
 
-Current integration checkpoint: UI `5461a0251`. The original audit and proposed
+Current integration checkpoint: UI `2455701b8`. The original audit and proposed
 batches below are historical requirements, not a claim that their configuration
 work is still absent. Base and self-host native owners and the Rust self-host
 packager are integrated; Flow base opt-in/self-host selection has rendered
 loader/provider-factory qualification. Kubernetes configuration is integrated at
 `97ff18e48`, with model and closed deployment-command tests, not cluster
-acceptance. Envoy and actual Flow-main acceptance remain separate active work.
+acceptance. Envoy routing is integrated at `b26eb71c8`, with actual-image
+validation and local configuration/contract tests; its complete Linux business
+gate remains pending. Flow actual-main acceptance and the QR retry timestamp fix
+are integrated at `cff3a4aa1`; combined Windows actual-main, retained PostgreSQL,
+rendered-selection and process-cleanup gates passed at `854844bb591`. These are
+not release-image, gateway JWT, callback-delivery or self-host TLS acceptance.
+Kubernetes signing/auth dependencies are integrated at `fc64b0026`; the resolved
+runtime adapter is still under qualification. No new deployment is claimed.
 See the [current roadmap](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md) and each
 linked qualification record for the precise evidence and remaining runtime gates.
 
