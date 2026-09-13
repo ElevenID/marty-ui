@@ -46,7 +46,10 @@ Image builds also passed, but the run subsequently completed with failure;
 the isolated database step recorded 230 passed, three failed and two ignored.
 Two failures are confirmed missing `PyYAML` in the selected Python harness
 interpreter; the third gateway-composition failure remains under investigation.
-The CI dependency repair is in progress. This run does not
+The reviewed CI dependency repair is integrated locally at `f13ab749c`: the
+selected isolated interpreter now installs and smoke-tests pinned PyYAML before
+native preflights; 16 integrated dependency guards passed. Bounded failed-child
+diagnostics are being added for the unresolved third failure. This run does not
 include the newer local integrations below. No fresh-head merge qualification
 or deployment is claimed.
 
@@ -63,6 +66,12 @@ configuration observations**. These are local proofs, not deployed acceptance.
 Selfhost full resolved-runtime qualification and additive Canvas publication
 adapter vectors continue in separate worktrees. No Python feature was deleted
 by these repairs, and DIDComm KMS redesign remains deferred.
+
+At unchanged integration `5e68101b2`, the full Python regression passed
+**3,634 tests, three skipped** in 217.73 seconds. All **21 Rust selfhost
+packager tests** also passed independently, including actual CLI/extracted
+Compose rendering. These results precede the CI dependency repair and do not
+substitute for fresh hosted qualification of the next pushed candidate.
 
 Reviewed Kubernetes native-owner configuration is integrated locally at
 `97ff18e48` (author `cc695ee84`). The final author checkpoint passed 30 Rust
