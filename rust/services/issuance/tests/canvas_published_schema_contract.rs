@@ -35,6 +35,71 @@ mod renewal_fresh_main;
 mod renewal_gateway_replay;
 #[path = "support/renewal_main_replay.rs"]
 mod renewal_main_replay;
+#[path = "support/resolved_kubernetes_runtime.rs"]
+mod resolved_kubernetes_runtime;
+#[path = "support/resolved_runtime.rs"]
+mod resolved_runtime;
+
+#[tokio::test]
+async fn kubernetes_profile_gateway_composition_isolated() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Kubernetes resolved executable composition requires the owned Linux gate");
+        return;
+    }
+    assert_eq!(
+        std::env::consts::OS,
+        "linux",
+        "Kubernetes gateway acceptance requires Linux artifacts"
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
+        .await
+        .unwrap();
+    let result = base_runtime_container::run_kubernetes(&owned, &redis).await;
+    let result = base_runtime_container::retain_failure(result, redis.close_verified());
+    base_runtime_container::retain_failure(result, owned.close_verified()).unwrap();
+}
+
+#[tokio::test]
+async fn kubernetes_profile_gateway_composition_child() {
+    if std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() != Ok("1") {
+        eprintln!("Kubernetes inner test requires the owned prepared-model namespace");
+        return;
+    }
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref(),
+        Ok("1")
+    );
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    renewal_fresh_main::run_kubernetes(
+        "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
+        "redis://127.0.0.1:6379",
+        true,
+    )
+    .await;
+    println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
+}
+
+#[tokio::test]
+async fn kubernetes_resolved_native_profile_delivers_both_encryption_modes() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Kubernetes native-only profile requires configured owned fixtures");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
+    renewal_fresh_main::run_kubernetes(&owned.url, redis.url(), false).await;
+    let result = redis.close_verified();
+    base_runtime_container::retain_failure(result, owned.close_verified()).unwrap();
+}
 
 #[tokio::test]
 async fn base_profile_envoy_composition_isolated() {

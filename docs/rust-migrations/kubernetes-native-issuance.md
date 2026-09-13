@@ -253,7 +253,9 @@ Initial runner failures were resolved before the final evidence: explicit Rust
 normalizes only CRLF to its declared UTF-8/LF representation; the established
 `marty_common` test dependency path was restored; and the exact consumer inventory
 now includes the approved gateway auth target. No runtime/frozen behavior was
-relaxed. The resolved executable Kubernetes adapter remains pending.
+relaxed. The test-only [resolved executable adapter](kubernetes-native-runtime-acceptance.md)
+now has native-only evidence; full Linux gateway and real cluster/release
+acceptance remain explicitly outstanding.
 
 Still required: final integrated hosted tests, authenticated image provenance,
 resolved Kubernetes configuration/runtime acceptance (both DIDComm modes,

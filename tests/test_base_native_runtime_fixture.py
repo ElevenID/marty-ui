@@ -130,12 +130,18 @@ def test_fixture_overlay_is_addresses_and_paths_not_new_service_graph(spec):
 
 
 def test_native_launch_has_no_post_render_smoke_overrides():
-    text = (
+    renderer = (
         ROOT / "rust/services/issuance/tests/support/rendered_base_process.rs"
     ).read_text()
+    text = (
+        ROOT / "rust/services/issuance/tests/support/resolved_runtime.rs"
+    ).read_text()
     assert re.search(r"\.env_clear\(\)\s*\.envs\(environment\)", text)
-    assert "isolated_smoke_command" not in text
-    assert "MARTY_BASE_COMPOSE_BINARY" in text
+    assert "isolated_smoke_command" not in text + renderer
+    assert "MARTY_BASE_COMPOSE_BINARY" in renderer
+    assert "native_environment: self.native_environment" in renderer
+    assert "gateway_environment: self.gateway_environment" in renderer
+    assert "Isolation::Base" in renderer
     assert "Some(system_root)" in text
     assert '"required exact test binary is built"' in text
 

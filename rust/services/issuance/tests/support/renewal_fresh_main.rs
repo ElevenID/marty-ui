@@ -52,16 +52,38 @@ pub(super) async fn run_envoy(database_url: &str, redis_url: &str) {
     run_with_profile(database_url, Some(redis_url), Ingress::Envoy).await;
 }
 
+pub(super) async fn run_kubernetes(database_url: &str, redis_url: &str, gateway: bool) {
+    run_with_profile(
+        database_url,
+        Some(redis_url),
+        if gateway {
+            Ingress::KubernetesGateway
+        } else {
+            Ingress::KubernetesDirect
+        },
+    )
+    .await;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Ingress {
     Direct,
     Gateway,
     Envoy,
+    KubernetesDirect,
+    KubernetesGateway,
 }
 
 async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingress: Ingress) {
-    let gateway = ingress != Ingress::Direct;
+    let gateway = matches!(
+        ingress,
+        Ingress::Gateway | Ingress::Envoy | Ingress::KubernetesGateway
+    );
     let envoy = ingress == Ingress::Envoy;
+    let kubernetes = matches!(
+        ingress,
+        Ingress::KubernetesDirect | Ingress::KubernetesGateway
+    );
     use super::{
         didcomm_test_fixtures::authcrypt_parties_with_ids,
         didcomm_wallet_fixture::WalletFixture,
@@ -252,7 +274,12 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             });
             // Native-only stage reserves but does not launch the gateway. The
             // final composed gate supplies its actual legacy peer and binary.
-            let model = super::rendered_base_process::RenderedBase::render(&spec);
+            let model = if kubernetes {
+                super::resolved_kubernetes_runtime::render(&spec)
+                    .expect("actual composed Kubernetes model and closed reference resolution")
+            } else {
+                super::rendered_base_process::RenderedBase::render(&spec).resolved()
+            };
             let command = model.native_command();
             rendered_model = Some(model);
             command

@@ -23,6 +23,7 @@ const LABEL: &str = "com.elevenid.test.base-native-container";
 const SENTINEL: &str = "MARTY_BASE_COMPOSITION_COMPLETE_V1";
 const CHILD: &str = "base_profile_gateway_composition_child";
 const ENVOY_CHILD: &str = "base_profile_envoy_composition_child";
+const KUBERNETES_CHILD: &str = "kubernetes_profile_gateway_composition_child";
 const COMPOSE_SHA256: &str = "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be";
 const ASSETS: &[&str] = &[
     "docker-compose.base.yml",
@@ -120,7 +121,16 @@ fn executable(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn checked_assets(root: &Path, assets: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    let expected: BTreeSet<_> = ASSETS.iter().map(|asset| root.join(asset)).collect();
+    checked_asset_set(
+        ASSETS.iter().map(|asset| root.join(asset)).collect(),
+        assets,
+    )
+}
+
+fn checked_asset_set(
+    expected: BTreeSet<PathBuf>,
+    assets: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
     let supplied: BTreeSet<_> = assets.iter().cloned().collect();
     require(
         supplied.len() == assets.len() && supplied == expected,
@@ -152,6 +162,20 @@ pub(super) fn source_assets() -> Result<Vec<PathBuf>, String> {
     checked_assets(&root, &paths)
 }
 
+pub(super) fn kubernetes_source_assets() -> Result<Vec<PathBuf>, String> {
+    let root = source_root()?;
+    let assets: Vec<_> = super::resolved_kubernetes_runtime::SOURCE_FILES
+        .iter()
+        .copied()
+        .chain([
+            "scripts/didcomm_wallet_fixture.py",
+            "scripts/test_canvas_lti_https.py",
+        ])
+        .map(|asset| root.join(asset))
+        .collect();
+    checked_asset_set(assets.iter().cloned().collect(), &assets)
+}
+
 struct OwnedContainer {
     scope: String,
     network: String,
@@ -162,6 +186,7 @@ struct OwnedContainer {
     id: Option<String>,
     creation_attempted: bool,
     child: &'static str,
+    prepared: Option<(String, String)>,
 }
 
 impl OwnedContainer {
@@ -234,6 +259,35 @@ impl OwnedContainer {
                 "Base runtime child configuration differs",
             )?;
         }
+        for (name, expected) in [
+            (
+                "MARTY_KUBERNETES_RUNTIME_CHILD",
+                self.prepared.as_ref().map(|_| "1"),
+            ),
+            (
+                "MARTY_KUBERNETES_PREPARED_MODEL",
+                self.prepared.as_ref().map(|v| v.0.as_str()),
+            ),
+            (
+                "MARTY_KUBERNETES_PREPARED_SHA256",
+                self.prepared.as_ref().map(|v| v.1.as_str()),
+            ),
+        ] {
+            let prefix = format!("{name}=");
+            let found: Vec<_> = env
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|v| v.strip_prefix(&prefix))
+                .collect();
+            require(
+                found == expected.into_iter().collect::<Vec<_>>(),
+                "Kubernetes child identity differs",
+            )?;
+        }
+        require(
+            (self.child == KUBERNETES_CHILD) == self.prepared.is_some(),
+            "Kubernetes prepared model/profile differs",
+        )?;
         Ok(())
     }
 
@@ -303,6 +357,13 @@ pub(super) async fn run_envoy(
     run_child(owned, redis, assets, ENVOY_CHILD).await
 }
 
+pub(super) async fn run_kubernetes(
+    owned: &PublishedDatabase,
+    redis: &OwnedRedis,
+) -> Result<(), String> {
+    run_child(owned, redis, &kubernetes_source_assets()?, KUBERNETES_CHILD).await
+}
+
 pub(super) fn retain_failure(
     result: Result<(), String>,
     verification: Result<(), String>,
@@ -320,7 +381,7 @@ async fn run_child(
     child: &'static str,
 ) -> Result<(), String> {
     require(
-        matches!(child, CHILD | ENVOY_CHILD),
+        matches!(child, CHILD | ENVOY_CHILD | KUBERNETES_CHILD),
         "Unrecognized owned base child",
     )?;
     require(
@@ -348,7 +409,22 @@ async fn run_child(
         digest(&renderer)? == COMPOSE_SHA256,
         "Pinned Compose renderer identity differs",
     )?;
-    let mut paths = checked_assets(&root, assets)?;
+    let mut paths = if child == KUBERNETES_CHILD {
+        checked_asset_set(kubernetes_source_assets()?.into_iter().collect(), assets)?
+    } else {
+        checked_assets(&root, assets)?
+    };
+    let mut prepared = if child == KUBERNETES_CHILD {
+        Some(
+            super::resolved_kubernetes_runtime::PreparedArtifact::create()
+                .map_err(str::to_owned)?,
+        )
+    } else {
+        None
+    };
+    if let Some(prepared) = &prepared {
+        paths.push(regular_file(&prepared.path)?);
+    }
     paths.extend([test_executable.clone(), issuance, gateway, renderer.clone()]);
     let mut hashes = BTreeMap::new();
     for path in paths {
@@ -391,6 +467,9 @@ async fn run_child(
         id: None,
         creation_attempted: false,
         child,
+        prepared: prepared
+            .as_ref()
+            .map(|v| (v.path.to_str().unwrap().to_owned(), v.hash.clone())),
     };
     // All Linux executable, renderer, asset and image preconditions above are
     // checked before creating the optional sidecar. The separate image-only
@@ -420,10 +499,14 @@ async fn run_child(
         PublishedDatabase::borrowed_url(&descriptor)?;
         redis.verify_published_namespace(owned)
     })();
-    retain_failure(
+    let result = retain_failure(
         retain_failure(retain_failure(result, cleanup), envoy_cleanup),
         verification,
-    )
+    );
+    let cleanup = prepared
+        .as_mut()
+        .map_or(Ok(()), |v| v.close().map_err(str::to_owned));
+    retain_failure(result, cleanup)
 }
 
 #[test]
@@ -480,6 +563,19 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         "--env",
         "PYTHONDONTWRITEBYTECODE=1",
     ];
+    let prepared_env: Vec<_> = container
+        .prepared
+        .as_ref()
+        .map_or_else(Vec::new, |(path, hash)| {
+            vec![
+                "MARTY_KUBERNETES_RUNTIME_CHILD=1".to_owned(),
+                format!("MARTY_KUBERNETES_PREPARED_MODEL={path}"),
+                format!("MARTY_KUBERNETES_PREPARED_SHA256={hash}"),
+            ]
+        });
+    for variable in &prepared_env {
+        arguments.extend(["--env", variable]);
+    }
     for mount in &mounts {
         arguments.extend(["--mount", mount]);
     }
@@ -542,6 +638,7 @@ mod tests {
             mounts: BTreeSet::from(["/synthetic/test".into(), "/synthetic/compose".into()]),
             id: None,
             creation_attempted: false,
+            prepared: None,
         };
         let info = json!({
             "Id":id,"Config":{"Labels":{LABEL:container.scope},"Image":container.image,
@@ -579,6 +676,52 @@ mod tests {
             *changed.pointer_mut(pointer).unwrap() = value;
             assert!(container.checked(&changed, &id).is_err(), "{pointer}");
         }
+        container.child = KUBERNETES_CHILD;
+        container.prepared = Some(("/synthetic/prepared.json".into(), "a".repeat(64)));
+        container.mounts.insert("/synthetic/prepared.json".into());
+        let mut kubernetes = info.clone();
+        kubernetes["Config"]["Cmd"][0] = json!(KUBERNETES_CHILD);
+        kubernetes["Config"]["Env"].as_array_mut().unwrap().extend([
+            json!("MARTY_KUBERNETES_RUNTIME_CHILD=1"),
+            json!("MARTY_KUBERNETES_PREPARED_MODEL=/synthetic/prepared.json"),
+            json!(format!(
+                "MARTY_KUBERNETES_PREPARED_SHA256={}",
+                "a".repeat(64)
+            )),
+        ]);
+        kubernetes["Mounts"].as_array_mut().unwrap().push(json!({"Type":"bind","Source":"/synthetic/prepared.json","Destination":"/synthetic/prepared.json","RW":false}));
+        container.checked(&kubernetes, &id).unwrap();
+        for fault in [
+            "missing-marker",
+            "wrong-hash",
+            "duplicate-model",
+            "writable-model",
+            "wrong-child",
+        ] {
+            let mut changed = kubernetes.clone();
+            match fault {
+                "missing-marker" => {
+                    changed["Config"]["Env"].as_array_mut().unwrap().remove(5);
+                }
+                "wrong-hash" => {
+                    changed["Config"]["Env"][7] = json!(format!(
+                        "MARTY_KUBERNETES_PREPARED_SHA256={}",
+                        "b".repeat(64)
+                    ))
+                }
+                "duplicate-model" => {
+                    let duplicate = changed["Config"]["Env"][6].clone();
+                    changed["Config"]["Env"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(duplicate);
+                }
+                "writable-model" => changed["Mounts"][2]["RW"] = json!(true),
+                "wrong-child" => changed["Config"]["Cmd"][0] = json!(CHILD),
+                _ => unreachable!(),
+            }
+            assert!(container.checked(&changed, &id).is_err(), "{fault}");
+        }
         // Never exercise Drop against synthetic identities from a pure test.
         container.creation_attempted = false;
     }
@@ -602,5 +745,6 @@ mod tests {
         }
         assert_eq!(ASSETS.len(), 18);
         assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 18);
+        assert_eq!(kubernetes_source_assets().unwrap().len(), 7);
     }
 }

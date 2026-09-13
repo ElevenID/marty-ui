@@ -19,7 +19,7 @@ use super::{
     didcomm_gateway_replay::OwnedHttp,
     issuance_named_peers::{API_KEY, CLIENT_KEY, ORGANIZATION, TOKEN},
     issuance_process::{bounded_http_client, wait_for_health_with_client},
-    rendered_base_process::RenderedBase,
+    resolved_runtime::ResolvedRuntime,
 };
 
 #[derive(Clone)]
@@ -138,7 +138,7 @@ pub(super) struct GatewayFixture {
 }
 
 impl GatewayFixture {
-    pub(super) async fn start(model: &RenderedBase, port: u16) -> Self {
+    pub(super) async fn start(model: &ResolvedRuntime, port: u16) -> Self {
         let child = model
             .gateway_command()
             .spawn()
