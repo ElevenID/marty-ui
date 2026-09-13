@@ -1,0 +1,40 @@
+{
+  "selection_limits": {
+    "ciphertexts_unchanged": true,
+    "connection_count": 509,
+    "connection_rows_unchanged": true,
+    "http_request_count": 0,
+    "issued_rows_unchanged": true,
+    "lease_acquisition_count": 0,
+    "name": "selection_limits",
+    "repository_source_sha256": "34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb",
+    "schema": "marty.canvas-worker-oauth-revocation-selection-oracle/v1",
+    "selections": [
+      {
+        "count": 1,
+        "limit": 0,
+        "ordered_ids_sha256": "b5418a430cdf0cea79105f951d27bf1760dc12b18cc085448d5ca66fef1a360e"
+      },
+      {
+        "count": 499,
+        "limit": 499,
+        "ordered_ids_sha256": "e43a0ae7d2af23bb8218226c0b103373ff563cf0c93f687a306e33df751cc1df"
+      },
+      {
+        "count": 500,
+        "limit": 500,
+        "ordered_ids_sha256": "ac1e8d549afc7656a6997a01a985f05afeab4822bb0fa32dd609553f45eedadb"
+      },
+      {
+        "count": 500,
+        "limit": 501,
+        "ordered_ids_sha256": "ac1e8d549afc7656a6997a01a985f05afeab4822bb0fa32dd609553f45eedadb"
+      },
+      {
+        "count": 500,
+        "limit": 2147483648,
+        "ordered_ids_sha256": "ac1e8d549afc7656a6997a01a985f05afeab4822bb0fa32dd609553f45eedadb"
+      }
+    ]
+  }
+}

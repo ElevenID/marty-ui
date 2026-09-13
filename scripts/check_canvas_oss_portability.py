@@ -33,7 +33,7 @@ ALLOWED_BOOTSTRAP_COMMANDS = [
 REQUIRED_BETA_RUNTIME_IMAGES = {
     "gateway": ("marty-gateway", "gateway"),
     "issuance": ("marty-issuance", "issuance"),
-    "canvas-sync-worker": ("marty-canvas-sync-worker", "issuance"),
+    "canvas-sync-worker": ("marty-canvas-sync-worker", "canvas-sync-worker"),
 }
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -500,10 +500,8 @@ def validate_runtime_binding(manifest_path: Path, context_path: Path, expected_s
         _require(bool(IMAGE_DIGEST_RE.fullmatch(image_id)), f"{container} image ID is invalid")
         _require(marker_images.get(service) == image_id, f"{container} image does not match the services release marker")
         _require(record.get("status") == "running", f"{container} was not running when deployment evidence was captured")
-    _require(
-        marker_images.get("issuance") == marker_images.get("canvas-sync-worker"),
-        "Canvas sync worker must reuse the coordinated issuance image",
-    )
+    # The native worker has its own coordinated local build. Its exact running
+    # image must match its own release marker above, not the retained Python API.
 
 
 def _validate_observations(catalog: dict[str, Any], observations: dict[str, Any], mode: str) -> list[dict[str, str]]:

@@ -129,6 +129,12 @@ services:
     environment:
       SERVICE_NAME: issuance
 
+  canvas-sync-worker:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: canvas_sync_worker
+
   revocation-profile:
     <<: *service-image
     build: !reset null

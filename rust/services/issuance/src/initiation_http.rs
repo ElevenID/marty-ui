@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 
 use crate::{
     initiation::{
-        InitiationDependencyError, InitiationRepositoryError, InitiationRequest, InitiationService,
-        InitiationServiceError,
+        InitiationDependencyError, InitiationRepositoryError, InitiationRequest,
+        InitiationReservation, InitiationService, InitiationServiceError,
     },
     initiation_response::{
         InitiationOfferProjectionError, InitiationOfferProjector, InitiationOfferResponse,
@@ -69,11 +69,27 @@ impl InitiationHttpService {
         headers: &HeaderMap,
         request: &InitiationRequest,
     ) -> Result<InitiationOfferResponse, InitiationHttpError> {
+        let reservation = self.reserve_authorized(headers, request).await?;
+        self.project_reserved(reservation, request).await
+    }
+
+    pub(crate) async fn reserve_authorized(
+        &self,
+        headers: &HeaderMap,
+        request: &InitiationRequest,
+    ) -> Result<InitiationReservation, InitiationHttpError> {
         reject_direct_signing_headers(headers)?;
-        let reservation = self
-            .initiation
+        self.initiation
             .initiate(request, header(headers, "Idempotency-Key"))
-            .await?;
+            .await
+            .map_err(Into::into)
+    }
+
+    pub(crate) async fn project_reserved(
+        &self,
+        reservation: InitiationReservation,
+        request: &InitiationRequest,
+    ) -> Result<InitiationOfferResponse, InitiationHttpError> {
         self.projector
             .project(reservation, request)
             .await
@@ -136,6 +152,7 @@ impl InitiationHttpError {
 
 fn service_failure(error: &InitiationServiceError) -> InitiationHttpFailure {
     match error {
+        InitiationServiceError::OfferExpiryOutOfRange => failure(500, error.to_string()),
         InitiationServiceError::Request(error) => failure(422, error.to_string()),
         InitiationServiceError::Repository(InitiationRepositoryError::IdempotencyConflict) => {
             failure(409, error.to_string())

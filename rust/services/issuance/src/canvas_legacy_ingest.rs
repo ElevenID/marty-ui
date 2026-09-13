@@ -1837,7 +1837,7 @@ fn response_from_stored(
         .map_err(|_| CanvasLegacyIngestError::MalformedStoredResponse)
 }
 
-fn timestamp_string(now: DateTime<Utc>) -> String {
+pub(crate) fn timestamp_string(now: DateTime<Utc>) -> String {
     let micros = now.nanosecond() / 1_000;
     let truncated = now.with_nanosecond(micros * 1_000).unwrap_or(now);
     truncated.to_rfc3339_opts(

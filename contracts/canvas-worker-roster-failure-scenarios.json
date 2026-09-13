@@ -1,0 +1,59 @@
+{
+  "schema": "marty.canvas-worker-roster-failure-scenarios/v1",
+  "reference_scenario": "canvas-worker-rest-scenarios.json",
+  "retry_scenario": "canvas-worker-retry-scenarios.json",
+  "scope": "Fresh official-schema database per case; exact synthetic target, queued job and OAuth configuration before worker startup. Real HTTPS and real worker outcomes, without changing a running job, clock, lease or constraint. Failure preserves issued rows, ciphertext and the pre-existing roster cursor. Full mixed-roster candidate lifecycle remains separate.",
+  "seed": [
+    "UPDATE issuance_service.canvas_evidence_sync_targets SET target_type='background_roster',application_id=NULL,metadata='{\"roster_cursor\":1,\"synthetic_marker\":\"preserve\"}' WHERE id='target-review'",
+    "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at) VALUES ('worker-roster-failure-job','org-review','target-review','queued',0,8,'2026-09-01T00:00:00Z','{}','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')"
+  ],
+  "target_sql": "SELECT jsonb_build_object('enabled',enabled,'config_version',config_version,'metadata',metadata::jsonb-'worker_heartbeat_at','heartbeat_timestamp_present',(metadata->>'worker_heartbeat_at')::timestamptz<=clock_timestamp(),'last_success_present',last_succeeded_at IS NOT NULL,'candidate_count',(SELECT count(*) FROM issuance_service.canvas_award_candidates)) FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'",
+  "cases": [
+    {
+      "name": "roster_oauth_unavailable",
+      "code": "canvas_roster_oauth_unavailable",
+      "retryable": true,
+      "expected_requests": 0,
+      "status": 500,
+      "body": {},
+      "seed": ["UPDATE issuance_service.canvas_oauth_connections SET status='reauthorization_required',reauthorization_required=true WHERE id='worker-rest-connection'"]
+    },
+    {
+      "name": "nrps_context_unavailable",
+      "code": "canvas_nrps_roster_unavailable",
+      "retryable": true,
+      "expected_requests": 0,
+      "status": 500,
+      "body": {},
+      "seed": ["UPDATE issuance_service.canvas_program_bindings SET evidence_requirements='[{\"requirement_id\":\"ags\",\"source\":\"ags_result\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"42\",\"line_item_url\":\"https://canvas.example.edu/api/lti/courses/42/line_items/5\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]' WHERE id='binding-review'"]
+    },
+    {
+      "name": "roster_collection_too_large",
+      "code": "canvas_roster_collection_too_large",
+      "retryable": false,
+      "expected_requests": 1,
+      "status": 200,
+      "body": [{"id": "11"}, {"id": "12"}, {"id": "13"}],
+      "environment": {"CANVAS_BACKGROUND_ROSTER_BATCH_SIZE": "1", "CANVAS_BACKGROUND_ROSTER_MAX_SIZE": "2"},
+      "seed": []
+    },
+    {
+      "name": "roster_authoritative_read_failed",
+      "code": "canvas_authoritative_read_failed",
+      "retryable": true,
+      "expected_requests": 1,
+      "status": 200,
+      "body": {"unexpected": "synthetic-non-collection"},
+      "seed": []
+    },
+    {
+      "name": "roster_http_status_failed",
+      "code": "canvas_sync_unexpected_error",
+      "retryable": true,
+      "expected_requests": 1,
+      "status": 503,
+      "body": {"error": "synthetic-provider-unavailable"},
+      "seed": []
+    }
+  ]
+}

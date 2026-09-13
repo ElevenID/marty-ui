@@ -149,7 +149,7 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
                AND (revoke_retry_at IS NULL OR revoke_retry_at <= clock_timestamp())
                AND (refresh_lease_owner IS NULL OR refresh_lease_expires_at IS NULL
                     OR refresh_lease_expires_at <= clock_timestamp())
-             ORDER BY revoke_retry_at ASC NULLS FIRST
+             ORDER BY revoke_retry_at ASC NULLS LAST
              LIMIT $1",
         )
         .bind(i64::try_from(limit.clamp(1, 500)).map_err(|_| repository_failure())?)

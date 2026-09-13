@@ -1,0 +1,89 @@
+{
+  "schema": "marty.didcomm-policy-python-reference/v1",
+  "reference": {
+    "repository": "ElevenID/marty-credentials",
+    "source_commit": "9bd2747f040f203188529758ec38f0a5dce5ac5f",
+    "source_path": "services/issuance/application/rust_integration.py",
+    "source_blob": "d04c283c279fc9f6d020d25627bad990a49100ee",
+    "function": "_load_didcomm_issuer_encryption_policy",
+    "capture": "Executed unchanged parser with deployment policy path and in-memory UTF-8 file bytes; synthetic inputs only. Accepted modes and Python diagnostics are captured; native error classification is an explicit adapter projection, not captured Python output.",
+    "scope": "Policy acceptance only, not DID syntax validation, encryption, wallet delivery, or KMS qualification. Unicode length is Unicode scalar count, not UTF-8 byte count.",
+    "repeated_issuer_recipe": "Active issuer is prefix concatenated with scalar repeated repeat times. Policy is an object with version 1 and issuers containing exactly that active issuer mapped to mode anoncrypt; serialize as UTF-8 JSON. Duplicate-member literal JSON must never be normalized before parsing."
+  },
+  "cases": [
+    {
+      "name": "canonical-authcrypt",
+      "input": {
+        "kind": "literal",
+        "active_issuer": "did:web:issuer.example",
+        "json": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"authcrypt\",\"sender_x25519_private_key\":\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk\"}}}"
+      },
+      "expected": {"accepted": true, "mode": "authcrypt"}
+    },
+    {
+      "name": "duplicate-mode",
+      "input": {
+        "kind": "literal",
+        "active_issuer": "did:web:issuer.example",
+        "json": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"anoncrypt\",\"mode\":\"authcrypt\"}}}"
+      },
+      "expected": {"accepted": false, "python_error": "DIDComm encryption policy contains a duplicate JSON member", "native_error": "EncryptionPolicyUnavailable"}
+    },
+    {
+      "name": "boolean-version",
+      "input": {
+        "kind": "literal",
+        "active_issuer": "did:web:issuer.example",
+        "json": "{\"version\":true,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"anoncrypt\"}}}"
+      },
+      "expected": {"accepted": false, "python_error": "DIDComm encryption policy version is unsupported", "native_error": "EncryptionPolicyUnavailable"}
+    },
+    {
+      "name": "padded-invalid-synthetic-key",
+      "input": {
+        "kind": "literal",
+        "active_issuer": "did:web:issuer.example",
+        "json": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"authcrypt\",\"sender_x25519_private_key\":\"AA==\"}}}"
+      },
+      "expected": {"accepted": false, "python_error": "DIDComm authcrypt private key must be canonical unpadded base64url", "native_error": "EncryptionPolicyUnavailable"}
+    },
+    {
+      "name": "unknown-entry-field",
+      "input": {
+        "kind": "literal",
+        "active_issuer": "did:web:issuer.example",
+        "json": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"anoncrypt\",\"unexpected\":true}}}"
+      },
+      "expected": {"accepted": false, "python_error": "DIDComm encryption policy entry has invalid fields or mode", "native_error": "EncryptionPolicyUnavailable"}
+    },
+    {
+      "name": "cross-issuer-key-reuse",
+      "input": {
+        "kind": "literal",
+        "active_issuer": "did:web:issuer.example",
+        "json": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"authcrypt\",\"sender_x25519_private_key\":\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk\"},\"did:web:other.example\":{\"mode\":\"authcrypt\",\"sender_x25519_private_key\":\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk\"}}}"
+      },
+      "expected": {"accepted": false, "python_error": "DIDComm authcrypt private keys must not be reused across issuers", "native_error": "EncryptionPolicyUnavailable"}
+    },
+    {
+      "name": "ascii-issuer-2048-characters",
+      "input": {"kind": "repeated-issuer", "prefix": "did:", "scalar": "a", "repeat": 2044},
+      "expected": {"accepted": true, "mode": "anoncrypt"}
+    },
+    {
+      "name": "ascii-issuer-2049-characters",
+      "input": {"kind": "repeated-issuer", "prefix": "did:", "scalar": "a", "repeat": 2045},
+      "expected": {"accepted": false, "python_error": "DIDComm encryption policy contains an invalid issuer DID", "native_error": "EncryptionPolicyUnavailable"}
+    },
+    {
+      "name": "unicode-issuer-2048-characters",
+      "input": {"kind": "repeated-issuer", "prefix": "did:", "scalar": "\u00e9", "repeat": 2044},
+      "expected": {"accepted": true, "mode": "anoncrypt"}
+    },
+    {
+      "name": "unicode-issuer-2049-characters",
+      "input": {"kind": "repeated-issuer", "prefix": "did:", "scalar": "\u00e9", "repeat": 2045},
+      "expected": {"accepted": false, "python_error": "DIDComm encryption policy contains an invalid issuer DID", "native_error": "EncryptionPolicyUnavailable"}
+    }
+  ]
+}

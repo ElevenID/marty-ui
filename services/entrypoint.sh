@@ -4,6 +4,9 @@ set -e
 
 if [ -r /app/load-secrets-env.sh ]; then
 	. /app/load-secrets-env.sh
+elif [ -r /usr/local/bin/load-secrets-env.sh ]; then
+	# Dedicated CI images retain their existing public helper location.
+	. /usr/local/bin/load-secrets-env.sh
 fi
 
 # Compose historically used both hyphenated and underscored service names.
@@ -82,6 +85,11 @@ fi
 if [ "$MODULE_NAME" = "issuance_native" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-issuance-service
+fi
+
+if [ "$MODULE_NAME" = "canvas_sync_worker" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-canvas-sync-worker
 fi
 
 if [ "$MODULE_NAME" = "deployment_profile" ]; then

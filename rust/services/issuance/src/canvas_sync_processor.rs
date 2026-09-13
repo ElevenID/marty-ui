@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
+use mmf_config::numeric_config::PythonConfigInteger;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -20,6 +21,7 @@ use crate::{
     canvas_sync_worker::{
         canvas_sync_result, CanvasSyncProcessingError, CanvasSyncProcessor, CanvasSyncResult,
         CanvasSyncTarget, CanvasSyncTargetType, CanvasSyncWorkerConfig,
+        UnexpectedCanvasSyncFailure,
     },
 };
 
@@ -119,10 +121,36 @@ pub enum CanvasProviderReadError {
     RosterOAuthUnavailable,
     NrpsRosterUnavailable,
     RosterCollectionTooLarge,
+    RosterHttpStatusFailure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanvasProviderRunScope {
+    Application,
+    BackgroundRoster,
+}
+
+impl CanvasProviderRunScope {
+    pub fn from_target_type(target_type: CanvasSyncTargetType) -> Option<Self> {
+        match target_type {
+            CanvasSyncTargetType::LearnerApplication | CanvasSyncTargetType::IssuedDrift => {
+                Some(Self::Application)
+            }
+            CanvasSyncTargetType::BackgroundRoster => Some(Self::BackgroundRoster),
+            CanvasSyncTargetType::AwardCandidate => None,
+        }
+    }
 }
 
 #[async_trait]
 pub trait CanvasAuthoritativeProvider: Send + Sync {
+    /// Start one processor invocation. Stateful providers must return fresh
+    /// run-local state; a shared provider must never retain another job's tokens.
+    fn for_run(
+        self: Arc<Self>,
+        scope: CanvasProviderRunScope,
+    ) -> Arc<dyn CanvasAuthoritativeProvider>;
+
     async fn read_requirement(
         &self,
         resources: &CanvasSyncResources,
@@ -221,22 +249,79 @@ pub trait CanvasSyncProcessorRepository: Send + Sync {
     ) -> Result<(), CanvasSyncProcessingError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanvasRosterBounds {
+    batch_size: usize,
+    limit: usize,
+}
+
+impl CanvasRosterBounds {
+    const MAX_BATCH_SIZE: usize = 2_000;
+    const MAX_ROSTER_SIZE: usize = 10_000;
+
+    fn new(batch_size: usize, limit: usize) -> Self {
+        let batch_size = batch_size.clamp(1, Self::MAX_BATCH_SIZE);
+        Self {
+            batch_size,
+            limit: limit.clamp(batch_size, Self::MAX_ROSTER_SIZE),
+        }
+    }
+
+    /// Parse without requiring a roster job to exist. Callers retain an error
+    /// until roster processing; unrelated application work must remain available.
+    pub fn from_values(
+        batch: Option<&str>,
+        limit: Option<&str>,
+    ) -> Result<Self, CanvasSyncProcessingError> {
+        fn bounded(
+            value: Option<&str>,
+            default: u64,
+            minimum: usize,
+            maximum: u64,
+        ) -> Result<usize, CanvasSyncProcessingError> {
+            let value = match value {
+                None => PythonConfigInteger::from(default),
+                Some(value) => value.parse::<PythonConfigInteger>().map_err(|_| {
+                    CanvasSyncProcessingError::terminal(
+                        "canvas_roster_configuration_invalid",
+                        "Canvas roster bounds are invalid",
+                    )
+                })?,
+            };
+            let value = value.max((minimum as u64).into()).min(maximum.into());
+            Ok(
+                usize::try_from(value.to_u64().expect("bounded roster integer fits u64"))
+                    .expect("roster bound at most 10000 fits usize"),
+            )
+        }
+        let batch_size = bounded(batch, 500, 1, Self::MAX_BATCH_SIZE as u64)?;
+        let limit = bounded(limit, 5_000, batch_size, Self::MAX_ROSTER_SIZE as u64)?;
+        Ok(Self { batch_size, limit })
+    }
+}
+
 #[derive(Clone)]
 pub struct NativeCanvasSyncProcessor {
     repository: Arc<dyn CanvasSyncProcessorRepository>,
     provider: Arc<dyn CanvasAuthoritativeProvider>,
     config: CanvasSyncWorkerConfig,
-    roster_batch_size: usize,
-    roster_limit: usize,
+    roster_configuration: Result<CanvasRosterBounds, CanvasSyncProcessingError>,
 }
 
 impl std::fmt::Debug for NativeCanvasSyncProcessor {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("NativeCanvasSyncProcessor")
-            .field("roster_batch_size", &self.roster_batch_size)
-            .field("roster_limit", &self.roster_limit)
-            .finish_non_exhaustive()
+        let mut debug = formatter.debug_struct("NativeCanvasSyncProcessor");
+        match &self.roster_configuration {
+            Ok(bounds) => {
+                debug
+                    .field("roster_batch_size", &bounds.batch_size)
+                    .field("roster_limit", &bounds.limit);
+            }
+            Err(error) => {
+                debug.field("roster_configuration_error", &error.code);
+            }
+        }
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -249,13 +334,26 @@ impl NativeCanvasSyncProcessor {
         roster_batch_size: usize,
         roster_limit: usize,
     ) -> Self {
-        let roster_batch_size = roster_batch_size.clamp(1, 2_000);
+        Self::new_with_roster_configuration(
+            repository,
+            provider,
+            config,
+            Ok(CanvasRosterBounds::new(roster_batch_size, roster_limit)),
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_roster_configuration(
+        repository: Arc<dyn CanvasSyncProcessorRepository>,
+        provider: Arc<dyn CanvasAuthoritativeProvider>,
+        config: CanvasSyncWorkerConfig,
+        roster_configuration: Result<CanvasRosterBounds, CanvasSyncProcessingError>,
+    ) -> Self {
         Self {
             repository,
             provider,
             config,
-            roster_batch_size,
-            roster_limit: roster_limit.clamp(roster_batch_size, 10_000),
+            roster_configuration,
         }
     }
 
@@ -337,6 +435,9 @@ impl NativeCanvasSyncProcessor {
                     continue;
                 }
                 Err(CanvasProviderReadError::Unavailable) => continue,
+                Err(error @ CanvasProviderReadError::RosterHttpStatusFailure) => {
+                    return Err(provider_processing_error(error));
+                }
                 Err(CanvasProviderReadError::InvalidConfiguration) => {
                     return Err(CanvasSyncProcessingError::terminal(
                         "canvas_requirements_invalid",
@@ -394,28 +495,21 @@ impl NativeCanvasSyncProcessor {
             .patch_platform_validation(target, resources, validation_error)
             .await?
         {
-            return Err(CanvasSyncProcessingError::retryable(
-                "canvas_platform_reconfigured",
-                "Canvas platform configuration changed during synchronization",
-            ));
+            return Err(platform_reconfigured());
         }
         if !self
             .repository
             .patch_application_sync(target, resources, &checked, policy_allowed)
             .await?
         {
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_application_unavailable",
-                "Canvas application became unavailable during synchronization",
-            ));
+            return Err(application_unavailable());
         }
         if let Some(retry_after_seconds) = retry_after {
-            return Err(CanvasSyncProcessingError {
-                code: "canvas_rate_limited",
-                summary: "Canvas rate limited one or more authoritative evidence reads",
-                retryable: true,
-                retry_after_seconds: Some(retry_after_seconds),
-            });
+            return Err(CanvasSyncProcessingError::retryable(
+                "canvas_rate_limited",
+                "Canvas rate limited one or more authoritative evidence reads",
+            )
+            .with_retry_after(retry_after_seconds));
         }
         if checked.is_empty() {
             return Err(CanvasSyncProcessingError::retryable(
@@ -449,6 +543,7 @@ impl NativeCanvasSyncProcessor {
         resources: &CanvasSyncResources,
     ) -> Result<Map<String, Value>, CanvasSyncProcessingError> {
         let requirements = requirements(resources)?;
+        let bounds = self.roster_configuration.as_ref().map_err(Clone::clone)?;
         let has_rest = requirements
             .iter()
             .any(|item| text(item.get("source")) == "canvas_rest");
@@ -458,7 +553,7 @@ impl NativeCanvasSyncProcessor {
         let mixed = has_rest && has_ags;
         let roster = self
             .provider
-            .roster(target, resources, &requirements, self.roster_limit)
+            .roster(target, resources, &requirements, bounds.limit)
             .await
             .map_err(provider_processing_error)?;
         let preloaded_observations = roster.preloaded_observations.clone();
@@ -505,7 +600,7 @@ impl NativeCanvasSyncProcessor {
         let batch = inputs
             .iter()
             .skip(cursor)
-            .take(self.roster_batch_size)
+            .take(bounds.batch_size)
             .cloned()
             .collect::<Vec<_>>();
         let existing = self
@@ -513,7 +608,7 @@ impl NativeCanvasSyncProcessor {
             .existing_candidates(
                 &target.organization_id,
                 &resources.binding_id(),
-                self.roster_limit,
+                bounds.limit,
             )
             .await?
             .into_iter()
@@ -608,12 +703,11 @@ impl NativeCanvasSyncProcessor {
                     Err(CanvasProviderReadError::RateLimited {
                         retry_after_seconds,
                     }) => {
-                        return Err(CanvasSyncProcessingError {
-                            code: "canvas_rate_limited",
-                            summary: "Canvas background evidence could not be read",
-                            retryable: true,
-                            retry_after_seconds: Some(retry_after_seconds),
-                        });
+                        return Err(CanvasSyncProcessingError::retryable(
+                            "canvas_rate_limited",
+                            "Canvas background evidence could not be read",
+                        )
+                        .with_retry_after(retry_after_seconds));
                     }
                     Err(_) => {} // Preserve the current observation head.
                 }
@@ -686,6 +780,12 @@ impl CanvasSyncProcessor for NativeCanvasSyncProcessor {
         }
         let scoped = Self {
             repository: self.repository.clone().for_lease(lease.clone()),
+            provider: match CanvasProviderRunScope::from_target_type(target.target_type) {
+                Some(scope) => self.provider.clone().for_run(scope),
+                // Preserve process_fields' rollout-before-unsupported ordering.
+                // Unsupported targets never execute provider reads or create a run.
+                None => self.provider.clone(),
+            },
             ..self.clone()
         };
         canvas_sync_result(scoped.process_fields(target).await?)
@@ -759,6 +859,20 @@ fn requirements(resources: &CanvasSyncResources) -> Result<Vec<Value>, CanvasSyn
     })
 }
 
+pub(crate) fn platform_reconfigured() -> CanvasSyncProcessingError {
+    CanvasSyncProcessingError::retryable(
+        "canvas_platform_reconfigured",
+        "Canvas platform configuration changed during synchronization",
+    )
+}
+
+pub(crate) fn application_unavailable() -> CanvasSyncProcessingError {
+    CanvasSyncProcessingError::terminal(
+        "canvas_application_unavailable",
+        "Canvas application became unavailable during synchronization",
+    )
+}
+
 fn resources_unavailable() -> CanvasSyncProcessingError {
     CanvasSyncProcessingError::terminal(
         "canvas_sync_resources_unavailable",
@@ -770,12 +884,11 @@ fn provider_processing_error(error: CanvasProviderReadError) -> CanvasSyncProces
     match error {
         CanvasProviderReadError::RateLimited {
             retry_after_seconds,
-        } => CanvasSyncProcessingError {
-            code: "canvas_rate_limited",
-            summary: "Canvas background evidence could not be read",
-            retryable: true,
-            retry_after_seconds: Some(retry_after_seconds),
-        },
+        } => CanvasSyncProcessingError::retryable(
+            "canvas_rate_limited",
+            "Canvas background evidence could not be read",
+        )
+        .with_retry_after(retry_after_seconds),
         CanvasProviderReadError::InvalidConfiguration => CanvasSyncProcessingError::terminal(
             "canvas_requirements_invalid",
             "Canvas evidence requirements are invalid",
@@ -794,7 +907,10 @@ fn provider_processing_error(error: CanvasProviderReadError) -> CanvasSyncProces
         ),
         CanvasProviderReadError::RosterCollectionTooLarge => CanvasSyncProcessingError::terminal(
             "canvas_roster_collection_too_large",
-            "Canvas roster collection exceeds the configured bound",
+            "Canvas roster exceeds the configured complete-read limit",
+        ),
+        CanvasProviderReadError::RosterHttpStatusFailure => CanvasSyncProcessingError::unexpected(
+            UnexpectedCanvasSyncFailure::ProviderHttpException,
         ),
         CanvasProviderReadError::Unavailable | CanvasProviderReadError::ReauthorizationRequired => {
             CanvasSyncProcessingError::retryable(
@@ -943,6 +1059,117 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn roster_bounds_use_lossless_integer_grammar_and_clamp_before_conversion() {
+        assert_eq!(
+            CanvasRosterBounds::from_values(None, None).unwrap(),
+            CanvasRosterBounds::new(500, 5000)
+        );
+        for (batch, limit, expected) in [
+            ("0", "-9", (1, 1)),
+            ("+1_000", "9", (1000, 1000)),
+            ("\u{a0}+٢_٠٠٠\u{a0}", "１００００", (2000, 10000)),
+            (
+                "999999999999999999999999999999",
+                "999999999999999999999999999999",
+                (2000, 10000),
+            ),
+            (
+                "-999999999999999999999999999999",
+                "-999999999999999999999999999999",
+                (1, 1),
+            ),
+        ] {
+            let actual = CanvasRosterBounds::from_values(Some(batch), Some(limit)).unwrap();
+            assert_eq!((actual.batch_size, actual.limit), expected);
+        }
+        let maximum_digits = "9".repeat(4300);
+        assert_eq!(
+            CanvasRosterBounds::from_values(Some(&maximum_digits), Some(&maximum_digits)).unwrap(),
+            CanvasRosterBounds::new(2000, 10000)
+        );
+        for invalid in [
+            "",
+            " ",
+            "synthetic-invalid-bound",
+            "1__0",
+            "1.5",
+            "1e3",
+            &"9".repeat(4301),
+        ] {
+            for (batch, limit) in [(Some(invalid), None), (None, Some(invalid))] {
+                let error = CanvasRosterBounds::from_values(batch, limit).unwrap_err();
+                assert_eq!(
+                    error,
+                    CanvasSyncProcessingError::terminal(
+                        "canvas_roster_configuration_invalid",
+                        "Canvas roster bounds are invalid"
+                    )
+                );
+                assert!(!format!("{error:?}").contains("synthetic-invalid-bound"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn roster_configuration_error_is_deferred_without_disabling_application_work() {
+        let repository = Arc::new(SimulatorRepository {
+            resources: simulator_resources(vec![requirement(
+                "assignment",
+                "canvas_rest",
+                "canvas.assignment_score",
+                json!({"course_id":"1","activity_id":"2"}),
+                json!({"min_score_percent":70}),
+            )]),
+            facts: Mutex::new(Vec::new()),
+            candidates: Mutex::new(BTreeMap::new()),
+            observations: Mutex::new(BTreeMap::new()),
+            cursor: Mutex::new(None),
+            disabled: Mutex::new(false),
+        });
+        let processor = NativeCanvasSyncProcessor::new_with_roster_configuration(
+            repository.clone(),
+            Arc::new(SimulatorProvider),
+            enabled_config(),
+            CanvasRosterBounds::from_values(Some("synthetic-invalid-bound"), None),
+        );
+        let error = run_simulated(&processor, target(CanvasSyncTargetType::BackgroundRoster))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "canvas_roster_configuration_invalid");
+        assert_eq!(error.summary, "Canvas roster bounds are invalid");
+        assert!(!error.retryable);
+        assert!(repository.facts.lock().unwrap().is_empty());
+        assert!(repository.candidates.lock().unwrap().is_empty());
+        for kind in [
+            CanvasSyncTargetType::LearnerApplication,
+            CanvasSyncTargetType::IssuedDrift,
+        ] {
+            let result = run_simulated(&processor, target(kind)).await.unwrap();
+            assert_eq!(
+                result.get("requirements_checked").map(|value| value.get()),
+                Some("1")
+            );
+        }
+        assert_eq!(
+            run_simulated(&processor, target(CanvasSyncTargetType::AwardCandidate))
+                .await
+                .unwrap_err()
+                .code,
+            "canvas_sync_target_type_unsupported"
+        );
+        let mut closed = processor;
+        closed.config.portable_enabled = false;
+        assert_eq!(
+            run_simulated(&closed, target(CanvasSyncTargetType::BackgroundRoster))
+                .await
+                .unwrap()
+                .get("no_change")
+                .map(|value| value.get()),
+            Some("true")
+        );
+    }
 
     #[test]
     fn candidate_ags_projection_preserves_full_learner_and_rest_observations() {
@@ -1166,6 +1393,13 @@ mod tests {
 
     #[async_trait]
     impl CanvasAuthoritativeProvider for SimulatorProvider {
+        fn for_run(
+            self: Arc<Self>,
+            _scope: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
         async fn read_requirement(
             &self,
             _: &CanvasSyncResources,
@@ -1315,6 +1549,192 @@ mod tests {
             portable_enabled: true,
             pilot_organizations: ["org-1".to_owned()].into_iter().collect(),
         }
+    }
+
+    #[derive(Default)]
+    struct RunCountingProvider {
+        runs: Arc<std::sync::atomic::AtomicUsize>,
+        calls: Arc<Mutex<Vec<usize>>>,
+        scoped_calls: Arc<Mutex<Vec<ScopedProviderCall>>>,
+        run_id: Option<usize>,
+        run_scope: Option<CanvasProviderRunScope>,
+    }
+
+    type ScopedProviderCall = (usize, CanvasProviderRunScope, &'static str);
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for RunCountingProvider {
+        fn for_run(
+            self: Arc<Self>,
+            scope: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            let run_id = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.scoped_calls
+                .lock()
+                .unwrap()
+                .push((run_id, scope, "start"));
+            Arc::new(Self {
+                runs: self.runs.clone(),
+                calls: self.calls.clone(),
+                scoped_calls: self.scoped_calls.clone(),
+                run_id: Some(run_id),
+                run_scope: Some(scope),
+            })
+        }
+
+        async fn read_requirement(
+            &self,
+            resources: &CanvasSyncResources,
+            requirement: &Value,
+            canvas_user_id: Option<&str>,
+            lti_subject: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            self.scoped_calls.lock().unwrap().push((
+                self.run_id.expect("read must use the run provider"),
+                self.run_scope.expect("read must retain the run scope"),
+                "read",
+            ));
+            self.calls.lock().unwrap().push(
+                self.run_id
+                    .expect("processor must use the returned run provider"),
+            );
+            SimulatorProvider
+                .read_requirement(resources, requirement, canvas_user_id, lti_subject)
+                .await
+        }
+
+        async fn roster(
+            &self,
+            target: &CanvasSyncTarget,
+            resources: &CanvasSyncResources,
+            requirements: &[Value],
+            limit: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            self.scoped_calls.lock().unwrap().push((
+                self.run_id.expect("roster must use the run provider"),
+                self.run_scope.expect("roster must retain the run scope"),
+                "roster",
+            ));
+            assert!(
+                self.run_id.is_some(),
+                "roster must also use the run provider"
+            );
+            SimulatorProvider
+                .roster(target, resources, requirements, limit)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn processor_scopes_trait_object_provider_once_per_valid_invocation() {
+        let repository = Arc::new(SimulatorRepository {
+            resources: simulator_resources(vec![requirement(
+                "assignment",
+                "canvas_rest",
+                "canvas.assignment_score",
+                json!({"course_id":"1","activity_id":"2"}),
+                json!({"min_score_percent":70}),
+            )]),
+            facts: Mutex::new(Vec::new()),
+            candidates: Mutex::new(BTreeMap::new()),
+            observations: Mutex::new(BTreeMap::new()),
+            cursor: Mutex::new(None),
+            disabled: Mutex::new(false),
+        });
+        let provider = Arc::new(RunCountingProvider::default());
+        let processor = NativeCanvasSyncProcessor::new(
+            repository,
+            provider.clone(),
+            enabled_config(),
+            500,
+            5000,
+        );
+        let (first, concurrent) = tokio::join!(
+            run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication)),
+            run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication))
+        );
+        for result in [first, concurrent] {
+            assert_eq!(
+                result
+                    .unwrap()
+                    .get("requirements_checked")
+                    .map(|value| value.get().to_owned()),
+                Some("1".to_owned())
+            );
+        }
+        let invalid_lease = CanvasSyncLease {
+            job_id: "synthetic-job".into(),
+            organization_id: "wrong-tenant".into(),
+            target_id: "target-1".into(),
+            worker_id: "sim".into(),
+            attempt_count: 1,
+        };
+        assert_eq!(
+            processor
+                .process(
+                    &target(CanvasSyncTargetType::LearnerApplication),
+                    &invalid_lease
+                )
+                .await
+                .unwrap_err(),
+            lease_lost()
+        );
+        assert_eq!(provider.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let mut calls = provider.calls.lock().unwrap().clone();
+        calls.sort_unstable();
+        assert_eq!(calls, vec![0, 1]);
+
+        run_simulated(&processor, target(CanvasSyncTargetType::IssuedDrift))
+            .await
+            .unwrap();
+        run_simulated(&processor, target(CanvasSyncTargetType::BackgroundRoster))
+            .await
+            .unwrap();
+        let scoped_calls = provider.scoped_calls.lock().unwrap().clone();
+        for run_id in 0..3 {
+            assert_eq!(
+                scoped_calls
+                    .iter()
+                    .filter(|entry| entry.0 == run_id)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![
+                    (run_id, CanvasProviderRunScope::Application, "start"),
+                    (run_id, CanvasProviderRunScope::Application, "read"),
+                ],
+            );
+        }
+        // Even with application resources present, collection and BOTH roster
+        // candidate evidence reads retain the explicitly selected roster scope.
+        assert_eq!(
+            scoped_calls
+                .iter()
+                .filter(|entry| entry.0 == 3)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![
+                (3, CanvasProviderRunScope::BackgroundRoster, "start"),
+                (3, CanvasProviderRunScope::BackgroundRoster, "roster"),
+                (3, CanvasProviderRunScope::BackgroundRoster, "read"),
+                (3, CanvasProviderRunScope::BackgroundRoster, "read"),
+            ],
+        );
+        assert_eq!(
+            run_simulated(&processor, target(CanvasSyncTargetType::AwardCandidate))
+                .await
+                .unwrap_err()
+                .code,
+            "canvas_sync_target_type_unsupported",
+        );
+        let mut closed = processor.clone();
+        closed.config.portable_enabled = false;
+        assert!(
+            run_simulated(&closed, target(CanvasSyncTargetType::AwardCandidate))
+                .await
+                .is_ok()
+        );
+        assert_eq!(provider.runs.load(std::sync::atomic::Ordering::SeqCst), 4);
+        assert_eq!(*provider.scoped_calls.lock().unwrap(), scoped_calls);
     }
 
     #[tokio::test]
@@ -1480,6 +1900,42 @@ mod tests {
         );
         assert!(*repository.disabled.lock().unwrap());
         assert!(repository.facts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn roster_failure_summaries_match_published_process() {
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-roster-failure-oracle.json"
+        ))
+        .unwrap();
+        for (name, provider) in [
+            (
+                "roster_oauth_unavailable",
+                CanvasProviderReadError::RosterOAuthUnavailable,
+            ),
+            (
+                "nrps_context_unavailable",
+                CanvasProviderReadError::NrpsRosterUnavailable,
+            ),
+            (
+                "roster_collection_too_large",
+                CanvasProviderReadError::RosterCollectionTooLarge,
+            ),
+            (
+                "roster_authoritative_read_failed",
+                CanvasProviderReadError::Unavailable,
+            ),
+            (
+                "roster_http_status_failed",
+                CanvasProviderReadError::RosterHttpStatusFailure,
+            ),
+        ] {
+            let actual = provider_processing_error(provider);
+            let job = &reference[name]["observations"][0]["jobs"][0];
+            assert_eq!(actual.code, job["last_error_code"], "{name}");
+            assert_eq!(actual.summary, job["last_error_summary"], "{name}");
+            assert_eq!(actual.retryable, job["status"] == "retry", "{name}");
+        }
     }
 
     #[test]

@@ -500,6 +500,7 @@ fn issuance_response(value: InitiationOfferResponse) -> IssuanceResponse {
 
 fn initiation_status(error: InitiationServiceError) -> Status {
     match error {
+        InitiationServiceError::OfferExpiryOutOfRange => Status::internal(error.to_string()),
         InitiationServiceError::Request(_) => Status::invalid_argument(error.to_string()),
         InitiationServiceError::Repository(InitiationRepositoryError::IdempotencyConflict) => {
             Status::already_exists(error.to_string())
@@ -754,6 +755,10 @@ fn credential_status(error: CredentialIssuanceError) -> Status {
         Error::IssuerUnavailable(_)
         | Error::SigningUnavailable(_)
         | Error::LifecycleUnavailable(_) => Status::unavailable(error.to_string()),
+        Error::SigningResponse(cause) => match cause.credential_detail() {
+            Some(detail) => Status::unavailable(detail),
+            None => Status::internal("Internal Server Error"),
+        },
         Error::NonceRepositoryUnavailable
         | Error::RepositoryUnavailable
         | Error::BuilderChangedCredentialId
@@ -814,14 +819,53 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
         | CredentialManagementError::NotSuspended => Status::failed_precondition(error.to_string()),
         CredentialManagementError::RepositoryUnavailable(_)
         | CredentialManagementError::PublicationUnavailable(_)
-        | CredentialManagementError::CanvasRetryUnavailable(_) => {
-            Status::internal(error.to_string())
-        }
+        | CredentialManagementError::CanvasRetryUnavailable(_)
+        | CredentialManagementError::CanvasTextEncoding => Status::internal(error.to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn remote_diagnostics_use_the_exact_existing_grpc_prefix_not_display() {
+        use crate::signing_error_detail::SigningOperation;
+        use crate::signing_http_response::tests::Peer;
+        for operation in [
+            SigningOperation::Context,
+            SigningOperation::Resolve,
+            SigningOperation::Sign,
+        ] {
+            for body in [
+                br#"{"detail":"synthetic-private-diagnostic"}"#.as_slice(),
+                br#"{"detail":"\ud800"}"#.as_slice(),
+                br#"{"detail":"\u0000"}"#.as_slice(),
+            ] {
+                let (peer, cause) = Peer::failure_for(body, operation).await;
+                let expected = cause.scalar_detail().map(|detail| {
+                    if operation == SigningOperation::Sign {
+                        CredentialIssuanceError::SigningUnavailable(detail.into())
+                    } else {
+                        CredentialIssuanceError::IssuerUnavailable(detail.into())
+                    }
+                    .to_string()
+                });
+                let status = credential_status(CredentialIssuanceError::SigningResponse(cause));
+                assert_eq!(
+                    status.code(),
+                    if expected.is_some() {
+                        tonic::Code::Unavailable
+                    } else {
+                        tonic::Code::Internal
+                    }
+                );
+                assert_eq!(
+                    status.message(),
+                    expected.as_deref().unwrap_or("Internal Server Error")
+                );
+                peer.close().await;
+            }
+        }
+    }
     use std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -899,7 +943,7 @@ mod tests {
             _credential: &ManagedCredential,
             action: CredentialLifecycleAction,
             _reason: Option<&str>,
-        ) -> Result<(), CredentialManagementPortError> {
+        ) -> Result<(), crate::credential_management::CanvasLifecycleSyncError> {
             self.calls
                 .lock()
                 .expect("calls")
@@ -1204,6 +1248,7 @@ mod tests {
                 ["offer_created".to_owned()],
             ));
         let (initiation, projector, stored) = initiation_platform();
+        let initiation = initiation.with_offer_ttl_minutes(45_i64.into());
         let service = candidate.with_initiation(initiation, projector);
         let request = InitiateIssuanceRequest {
             organization_id: "org-a".into(),
@@ -1240,6 +1285,11 @@ mod tests {
             .expect("committed transaction");
         assert_eq!(stored.claims["profile"], json!({"level":2}));
         assert_eq!(stored.claims["roles"], json!(["member"]));
+        assert_eq!(
+            stored.expires_at - stored.created_at,
+            chrono::Duration::minutes(45)
+        );
+        assert_eq!(response.expires_at, stored.expires_at.to_rfc3339());
         let event = events.recv().await.expect("offer-created event");
         assert_eq!(event.event_type, "offer_created");
         assert_eq!(event.transaction_id, response.id);
@@ -1275,6 +1325,16 @@ mod tests {
         .err()
         .expect("legacy and nested claims are mutually exclusive");
         assert_eq!(conflict.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn initiation_expiry_overflow_is_a_sanitized_internal_grpc_failure() {
+        let status = initiation_status(InitiationServiceError::OfferExpiryOutOfRange);
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(
+            status.message(),
+            "credential offer expiry is outside the supported calendar range"
+        );
     }
 
     #[tokio::test]

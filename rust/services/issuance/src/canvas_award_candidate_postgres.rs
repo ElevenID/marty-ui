@@ -70,7 +70,7 @@ const LIST_CURRENT_OBSERVATIONS: &str = "SELECT id, requirement_id, assertion,
     WHERE organization_id = $1 AND candidate_id = $2 AND is_current = true
     ORDER BY requirement_id";
 
-const LOCK_APPLICATION: &str = "SELECT jsonb_build_object(
+pub(crate) const LOCK_APPLICATION: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id,
         'application_template_id', application_template_id,
         'integration_context', integration_context, 'status', status,
@@ -781,7 +781,7 @@ async fn load_policy_set(
     .map_err(repository_error)
 }
 
-async fn insert_event(
+pub(crate) async fn insert_event(
     database: &mut Transaction<'_, Postgres>,
     application_id: &str,
     event_type: &str,

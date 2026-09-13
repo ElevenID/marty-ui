@@ -79,6 +79,94 @@ mod tests {
     use super::*;
 
     #[test]
+    fn canvas_operations_select_only_the_eight_exact_methods_and_paths() {
+        for (method, suffix) in [
+            (HttpMethod::Post, "/applications/app-1/canvas-sync"),
+            (HttpMethod::Get, "/canvas-sync-jobs"),
+            (HttpMethod::Get, "/canvas-sync-jobs/job-1"),
+            (HttpMethod::Post, "/canvas-sync-jobs/job-1/retry"),
+            (HttpMethod::Post, "/canvas-sync-jobs/job-1/resolve"),
+            (HttpMethod::Get, "/canvas-award-candidates"),
+            (HttpMethod::Get, "/evidence-policy-reviews"),
+            (
+                HttpMethod::Post,
+                "/evidence-policy-reviews/review-1/resolve",
+            ),
+        ] {
+            let path = format!("/v1/integrations/canvas{suffix}");
+            assert_eq!(upstream_service(method, &path), NATIVE_SERVICE);
+            let other = if method == HttpMethod::Post {
+                HttpMethod::Get
+            } else {
+                HttpMethod::Post
+            };
+            assert_eq!(upstream_service(other, &path), LEGACY_SERVICE);
+            assert_eq!(upstream_service(HttpMethod::Delete, &path), LEGACY_SERVICE);
+            // A list's single child can intentionally be the selected job route.
+            // Two extra segments must never match any operation.
+            assert_eq!(
+                upstream_service(method, &format!("{path}/extra/extra")),
+                LEGACY_SERVICE
+            );
+        }
+    }
+
+    #[test]
+    fn didcomm_and_initiation_are_native_without_selecting_sibling_paths() {
+        assert_eq!(
+            upstream_service(HttpMethod::Post, "/v1/issuance/didcomm/deliver"),
+            NATIVE_SERVICE
+        );
+        assert_eq!(
+            upstream_service(HttpMethod::Post, "/v1/issuance/initiate"),
+            NATIVE_SERVICE
+        );
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/issuance/didcomm/deliver"),
+            (HttpMethod::Post, "/v1/issuance/didcomm/deliver/extra"),
+            (HttpMethod::Post, "/v1/issuance/didcomm"),
+            (HttpMethod::Get, "/v1/issuance/initiate"),
+            (HttpMethod::Post, "/v1/issuance/initiate/extra"),
+            (HttpMethod::Post, "/v1/issuance"),
+        ] {
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+    }
+
+    #[test]
+    fn every_frozen_canvas_operation_uses_native_routing() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-canvas-operations.json"
+        ))
+        .unwrap();
+        let routes = contract["routes"].as_array().unwrap();
+        assert_eq!(routes.len(), 8);
+        for route in routes {
+            let method: HttpMethod = serde_json::from_value(route["method"].clone()).unwrap();
+            let path = format!(
+                "{}{}",
+                contract["route_prefix"].as_str().unwrap(),
+                route["path"].as_str().unwrap()
+            )
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    "synthetic"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+            assert_eq!(
+                upstream_service(method, &path),
+                NATIVE_SERVICE,
+                "{method:?} {path}"
+            );
+        }
+    }
+
+    #[test]
     fn every_frozen_canvas_management_route_is_native() {
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-canvas-management.json"

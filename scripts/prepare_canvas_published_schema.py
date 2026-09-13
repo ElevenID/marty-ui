@@ -10,13 +10,59 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
+import sys
 import traceback
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
 
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
+
+
+def safe_timing_diagnostics(failure):
+    # Do not import a new oracle while handling unrelated failures. The deadline
+    # branch already loaded this exact class through its normal named import.
+    owner = sys.modules.get("run_canvas_worker_deadline_oracle")
+    expected_type = getattr(owner, "DeadlineClockDisagreement", None)
+    if expected_type is None or type(failure) is not expected_type:
+        return None
+    values = failure.__dict__.get("timing_diagnostics")
+    fields = {
+        "database_elapsed_seconds",
+        "monotonic_lower_seconds",
+        "monotonic_upper_seconds",
+    }
+    if type(values) is not dict or set(values) != fields:
+        return None
+    if not all(
+        type(value) in (int, float) and abs(value) <= 300 and math.isfinite(value)
+        for value in values.values()
+    ):
+        return None
+    # These are relative seconds; lower/upper already contain the unchanged
+    # agreement tolerance. Never return exception args, messages, rows or notes.
+    return dict(values)
+
+
+def failure_report(failure):
+    report = {
+        "status": "failed",
+        "error_class": type(failure).__name__,
+        "frames": [
+            {
+                "file": Path(frame.filename).name,
+                "line": frame.lineno,
+                "function": frame.name,
+            }
+            for frame in traceback.extract_tb(failure.__traceback__)[-5:]
+        ],
+    }
+    timing = safe_timing_diagnostics(failure)
+    if timing is not None:
+        report["timing_diagnostics"] = timing
+    return report
 
 
 def prepare():
@@ -31,6 +77,24 @@ def prepare():
     ).hexdigest()
     if worker_hash != fixture["observed_source_sha256"]:
         raise RuntimeError("Published worker provenance mismatch")
+    expected_revisions = fixture["migration_revisions"]
+    overlay = None
+    if os.environ.get("MARTY_CANVAS_REVIEW_RECOVERY_SCHEMA") == "1":
+        overlay = json.loads(
+            Path(
+                "/verification/contracts/canvas-review-recovery-migration.json"
+            ).read_text()
+        )
+        source = Path("/app") / overlay["source"]
+        normalized = source.read_text(encoding="utf-8").encode()
+        if hashlib.sha256(normalized).hexdigest() != overlay["sha256"]:
+            raise RuntimeError("Official review recovery migration hash mismatch")
+        git_blob = b"blob " + str(len(normalized)).encode() + b"\0" + normalized
+        if hashlib.sha1(git_blob, usedforsecurity=False).hexdigest() != overlay["blob"]:
+            raise RuntimeError("Official review recovery migration blob mismatch")
+        if expected_revisions != [overlay["parent"]]:
+            raise RuntimeError("Official review recovery migration parent mismatch")
+        expected_revisions = [overlay["revision"]]
     os.environ["DATABASE_URL"] = DATABASE
     engine = create_engine(DATABASE, hide_parameters=True)
     try:
@@ -58,7 +122,7 @@ def prepare():
                     text("SELECT version_num FROM issuance_service.alembic_version")
                 ).scalars()
             )
-        if revisions != fixture["migration_revisions"]:
+        if revisions != expected_revisions:
             raise RuntimeError("Published migration head mismatch")
         report = {
             "status": "passed",
@@ -66,7 +130,273 @@ def prepare():
             "worker_sha256": worker_hash,
             "organization_dependency": "synthetic-minimal",
         }
+        if overlay is not None:
+            report["review_recovery_overlay"] = overlay
+        dispatch_case = os.environ.get("MARTY_CANVAS_WORKER_DISPATCH_CASE")
+        timeout_case = os.environ.get("MARTY_CANVAS_WORKER_TIMEOUT_CASE")
+        body_timeout_case = os.environ.get("MARTY_CANVAS_WORKER_BODY_TIMEOUT_CASE")
+        lease_expiry_case = os.environ.get("MARTY_CANVAS_WORKER_LEASE_EXPIRY_CASE")
+        if lease_expiry_case is not None:
+            from run_canvas_worker_lease_expiry_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_lease_expiry"] = run(lease_expiry_case)
+        if body_timeout_case is not None:
+            from run_canvas_worker_body_timeout_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_body_timeout"] = run(body_timeout_case)
+        if timeout_case is not None:
+            from run_canvas_worker_timeout_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_timeout"] = run(timeout_case)
+        deadline_case = os.environ.get("MARTY_CANVAS_WORKER_DEADLINE_CASE")
+        if deadline_case is not None:
+            from run_canvas_worker_deadline_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_deadline"] = run(deadline_case)
+        if dispatch_case is not None:
+            from run_canvas_worker_dispatch_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_dispatch"] = run(dispatch_case)
+        provider_signal = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_SIGNAL")
+        mixed_roster_case = os.environ.get("MARTY_CANVAS_WORKER_MIXED_ROSTER_CASE")
+        if mixed_roster_case is not None:
+            from run_canvas_worker_mixed_roster_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_mixed_roster"] = run(mixed_roster_case)
+        resources_unavailable_case = os.environ.get(
+            "MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE"
+        )
+        if resources_unavailable_case is not None:
+            from run_canvas_worker_resources_unavailable_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_resources_unavailable"] = run(resources_unavailable_case)
+        resource_race_case = os.environ.get("MARTY_CANVAS_WORKER_RESOURCE_RACE_CASE")
+        if resource_race_case is not None:
+            from run_canvas_worker_resource_race_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_resource_race"] = run(resource_race_case)
+        roster_failure_case = os.environ.get("MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE")
+        if roster_failure_case is not None:
+            from run_canvas_worker_roster_failure_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_roster_failure"] = run(roster_failure_case)
+        validation_case = os.environ.get("MARTY_CANVAS_WORKER_VALIDATION_CASE")
+        if validation_case is not None:
+            from run_canvas_worker_validation_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_validation"] = run(validation_case)
+        retry_after_case = os.environ.get("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE")
+        revocation_case = os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE")
+        revocation_fence_case = os.environ.get(
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_FENCE_CASE"
+        )
+        revocation_patch_case = os.environ.get(
+            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_PATCH_CASE"
+        )
+        revocation_inputs = [
+            (name, kind)
+            for name, kind in [
+                (revocation_case, "oauth-revocation"),
+                (revocation_fence_case, "oauth-revocation-fence"),
+                (revocation_patch_case, "oauth-revocation-patch"),
+                (
+                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SECRETS_CASE"),
+                    "oauth-revocation-secrets",
+                ),
+                (
+                    os.environ.get(
+                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE"
+                    ),
+                    "oauth-revocation-counters",
+                ),
+                (
+                    os.environ.get(
+                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SELECTION_CASE"
+                    ),
+                    "oauth-revocation-selection",
+                ),
+                (
+                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_LEASE_CASE"),
+                    "oauth-revocation-lease",
+                ),
+                (
+                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_QUEUE_CASE"),
+                    "oauth-revocation-queue",
+                ),
+                (
+                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_BACKOFF_CASE"),
+                    "oauth-revocation-backoff",
+                ),
+                (
+                    os.environ.get(
+                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_RETRY_AFTER_CASE"
+                    ),
+                    "oauth-revocation-retry-after",
+                ),
+            ]
+            if name is not None
+        ]
+        assert len(revocation_inputs) <= 1
+        if revocation_inputs:
+            from run_canvas_worker_oauth_revocation_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_oauth_revocation"] = run(*revocation_inputs[0])
+        if retry_after_case is not None:
+            from run_canvas_worker_retry_after_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_retry_after"] = run(retry_after_case)
+        if provider_signal is not None:
+            if provider_signal not in {"SIGINT", "SIGTERM", "SIGKILL"}:
+                raise ValueError("Unsupported owned worker signal")
+            from run_canvas_worker_provider_signals_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_provider_signals"] = run(provider_signal)
+        recovery_case = os.environ.get("MARTY_CANVAS_WORKER_PROVIDER_RECOVERY")
+        if recovery_case is not None:
+            if recovery_case not in {"renewal", "recovery"}:
+                raise ValueError("Unsupported owned worker recovery case")
+            from run_canvas_worker_provider_recovery_oracle import run
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["worker_provider_recovery"] = run(recovery_case)
+        if os.environ.get("MARTY_CANVAS_REVIEW_LIFECYCLE_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["review_lifecycle"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_operations_oracle.py"
+                )["run"]("canvas-review-lifecycle-scenarios.json")
+        if os.environ.get("MARTY_CANVAS_REVIEW_INPUT_ORACLE") == "1":
+            import runpy
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                report["review_inputs"] = runpy.run_path(
+                    "/verification/scripts/run_canvas_operations_oracle.py"
+                )["run"]("canvas-review-input-scenarios.json")
         for flag, name, key in [
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_RECOVERY_FIRST_ORACLE",
+                "worker_provider_recovery_first",
+                "worker_provider_recovery_first",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_COMPLETION_ORACLE",
+                "worker_provider_completion",
+                "worker_provider_completion",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_RECLAIMERS_RETRY_ORACLE",
+                "worker_reclaimers_retry",
+                "worker_reclaimers_retry",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_RECLAIMERS_ORACLE",
+                "worker_reclaimers",
+                "worker_reclaimers",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_CONCURRENT_ORACLE",
+                "worker_concurrent",
+                "worker_concurrent",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_FINAL_ORACLE",
+                "worker_provider_final",
+                "worker_provider_final",
+            ),
+            (
+                "MARTY_CANVAS_WORKER_PROVIDER_GENERATION_ORACLE",
+                "worker_provider_generation",
+                "worker_provider_generation",
+            ),
+            ("MARTY_CANVAS_WORKER_RETRY_ORACLE", "worker_retry", "worker_retry"),
+            ("MARTY_CANVAS_WORKER_FACTS_ORACLE", "worker_facts", "worker_facts"),
+            ("MARTY_CANVAS_WORKER_REST_ORACLE", "worker_rest", "worker_rest"),
+            ("MARTY_CANVAS_WORKER_STARTUP_ORACLE", "worker_startup", "worker_startup"),
+            ("MARTY_CANVAS_JSON_DEPTH_ORACLE", "json_depth", "json_depth"),
+            ("MARTY_CANVAS_JSON_CONSUMER_ORACLE", "json_consumer", "json_consumer"),
+            ("MARTY_CANVAS_UTF7_CONSUMER_ORACLE", "utf7_consumer", "utf7_consumer"),
+            (
+                "MARTY_CANVAS_VALIDATION_BOUNDARY_ORACLE",
+                "validation_boundary",
+                "validation_boundary",
+            ),
+            (
+                "MARTY_CANVAS_TIMEOUT_CONSUMER_ORACLE",
+                "timeout_consumer",
+                "timeout_consumer",
+            ),
+            (
+                "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE",
+                "provider_configuration",
+                "provider_configuration",
+            ),
+            (
+                "MARTY_CANVAS_STATUS_PROVIDER_ORACLE",
+                "status_provider",
+                "status_provider",
+            ),
             ("MARTY_CANVAS_ENQUEUE_INPUT_ORACLE", "enqueue_input", "enqueue_inputs"),
             ("MARTY_CANVAS_OPERATIONS_ORACLE", "operations", "operations"),
             (
@@ -103,20 +433,5 @@ if __name__ == "__main__":
         print(json.dumps(prepare(), sort_keys=True))
     except BaseException as failure:
         # Never echo database parameters, SQL values, or exception messages.
-        print(
-            json.dumps(
-                {
-                    "status": "failed",
-                    "error_class": type(failure).__name__,
-                    "frames": [
-                        {
-                            "file": Path(frame.filename).name,
-                            "line": frame.lineno,
-                            "function": frame.name,
-                        }
-                        for frame in traceback.extract_tb(failure.__traceback__)[-5:]
-                    ],
-                }
-            )
-        )
+        print(json.dumps(failure_report(failure), allow_nan=False))
         raise SystemExit(1) from None

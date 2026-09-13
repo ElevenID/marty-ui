@@ -158,7 +158,7 @@ build-wheels: ## Build native Rust wheels for local Python development (optional
 
 package-selfhost-bundle: ## Stage the image-based open-source self-host bundle in dist/selfhost-bundle
 	@echo "$(BLUE)Staging open-source self-host bundle...$(NC)"
-	@python scripts/package-selfhost-bundle.py
+	@cargo +1.95.0 run --manifest-path rust/Cargo.toml -p marty-selfhost-bundle --bin package-selfhost-bundle --locked -- --repo-root . $(SELFHOST_BUNDLE_ARGS)
 	@echo "$(GREEN)✓ Open-source self-host bundle staged$(NC)"
 
 deploy-catalog-validate: ## Validate deployment metadata catalogs, stacks, and bundles

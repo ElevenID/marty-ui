@@ -7,6 +7,7 @@
   "assets": [
     "docker-compose.selfhost.prod.yml",
     "docker-compose.selfhost.bundle.override.yml",
+    "docker-compose.service.issuance-native-runtime.yml",
     ".env.selfhost.production.example",
     "SELFHOST_BUNDLE.md",
     "docker/init-databases.sh",

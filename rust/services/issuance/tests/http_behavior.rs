@@ -49,13 +49,115 @@ async fn response_body(response: axum::response::Response) -> Vec<u8> {
         .to_vec()
 }
 
-#[tokio::test]
-async fn native_health_preserves_the_legacy_body_and_mmf_readiness() {
-    let coverage: Value = serde_json::from_str(include_str!(
+fn native_coverage() -> Value {
+    serde_json::from_str(include_str!(
         "../../../../contracts/issuance-native-coverage.json"
     ))
-    .expect("coverage");
-    let expected = &coverage["native_http"][0]["response"];
+    .expect("coverage")
+}
+
+fn health_response(coverage: &Value) -> Result<(u16, &Value), &'static str> {
+    let routes = coverage
+        .get("native_http")
+        .and_then(Value::as_array)
+        .ok_or("native HTTP coverage must be an array")?;
+    let mut matches = routes.iter().filter(|route| {
+        route.get("method").and_then(Value::as_str) == Some("GET")
+            && route.get("path").and_then(Value::as_str) == Some("/health")
+    });
+    let route = matches.next().ok_or("GET /health coverage is missing")?;
+    if matches.next().is_some() {
+        return Err("GET /health coverage must be unique");
+    }
+    let response = route
+        .get("response")
+        .and_then(Value::as_object)
+        .ok_or("GET /health response must be an object")?;
+    let status = response
+        .get("status_code")
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| (100..=599).contains(value))
+        .ok_or("GET /health status_code must be an HTTP status integer")?;
+    let body = response
+        .get("body")
+        .filter(|body| body.is_object())
+        .ok_or("GET /health body must be an object")?;
+    Ok((status, body))
+}
+
+#[test]
+fn health_contract_selection_is_order_independent_and_method_specific() {
+    let coverage = native_coverage();
+    let expected = health_response(&coverage).expect("health contract");
+    let mut reordered = coverage.clone();
+    let routes = reordered["native_http"].as_array_mut().unwrap();
+    routes.reverse();
+    routes.insert(0, serde_json::json!({"method":"POST", "path":"/health"}));
+    routes.insert(
+        0,
+        serde_json::json!({"method":"GET", "path":"/health/other"}),
+    );
+    assert_eq!(health_response(&reordered).unwrap(), expected);
+}
+
+#[test]
+fn health_contract_rejects_missing_or_duplicate_routes() {
+    let mut coverage = native_coverage();
+    let routes = coverage["native_http"].as_array_mut().unwrap();
+    let index = routes
+        .iter()
+        .position(|route| route["method"] == "GET" && route["path"] == "/health")
+        .unwrap();
+    let health = routes.remove(index);
+    assert_eq!(
+        health_response(&coverage),
+        Err("GET /health coverage is missing")
+    );
+    coverage["native_http"]
+        .as_array_mut()
+        .unwrap()
+        .extend([health.clone(), health]);
+    assert_eq!(
+        health_response(&coverage),
+        Err("GET /health coverage must be unique")
+    );
+}
+
+#[test]
+fn health_contract_rejects_missing_or_malformed_response_fields() {
+    for response in [
+        Value::Null,
+        serde_json::json!({}),
+        serde_json::json!({"status_code":null,"body":{}}),
+        serde_json::json!({"status_code":"200","body":{}}),
+        serde_json::json!({"status_code":-1,"body":{}}),
+        serde_json::json!({"status_code":99,"body":{}}),
+        serde_json::json!({"status_code":600,"body":{}}),
+        serde_json::json!({"status_code":65536,"body":{}}),
+        serde_json::json!({"status_code":200}),
+        serde_json::json!({"status_code":200,"body":null}),
+        serde_json::json!({"status_code":200,"body":[]}),
+    ] {
+        let coverage = serde_json::json!({"native_http":[
+            {"method":"GET","path":"/health","response":response}
+        ]});
+        assert!(health_response(&coverage).is_err());
+    }
+    for coverage in [
+        serde_json::json!({}),
+        serde_json::json!({"native_http":null}),
+        serde_json::json!({"native_http":{}}),
+        serde_json::json!({"native_http":[{"method":"GET","path":"/health"}]}),
+    ] {
+        assert!(health_response(&coverage).is_err());
+    }
+}
+
+#[tokio::test]
+async fn native_health_preserves_the_legacy_body_and_mmf_readiness() {
+    let coverage = native_coverage();
+    let (expected_status, expected_body) = health_response(&coverage).expect("health contract");
     let config =
         IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).expect("config");
     let runtime = IssuanceRuntime::new(&config).expect("runtime");
@@ -73,8 +175,8 @@ async fn native_health_preserves_the_legacy_body_and_mmf_readiness() {
         )
         .await
         .expect("response");
-    assert_eq!(health.status().as_u16(), expected["status_code"]);
-    assert_eq!(json_body(health).await, expected["body"]);
+    assert_eq!(health.status().as_u16(), expected_status);
+    assert_eq!(&json_body(health).await, expected_body);
 
     let not_ready = app
         .clone()
@@ -884,7 +986,7 @@ impl CredentialManagementRepository for CredentialLifecycleHarness {
         _credential: &ManagedCredential,
         action: CredentialLifecycleAction,
         _reason: Option<&str>,
-    ) -> Result<(), CredentialManagementPortError> {
+    ) -> Result<(), marty_issuance_service::credential_management::CanvasLifecycleSyncError> {
         self.calls
             .lock()
             .expect("lifecycle calls")

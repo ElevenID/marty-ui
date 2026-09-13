@@ -6,6 +6,8 @@
 !proto/**
 !contracts/
 !contracts/**
+!services/
+!services/entrypoint.sh
 !scripts/
 !scripts/load-secrets-env.sh
 !scripts/ci/

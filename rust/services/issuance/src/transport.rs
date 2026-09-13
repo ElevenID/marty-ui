@@ -10,6 +10,17 @@ use uuid::Uuid;
 
 const ALLOWED_METHODS: &str = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT";
 
+#[derive(Clone)]
+struct UnhandledHttpFailure;
+
+/// Match the outer Python error stack: unhandled failures bypass inner request
+/// ID and CORS middleware. A response extension cannot be supplied by a client.
+pub(crate) fn unhandled_http_failure() -> Response {
+    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
+    response.extensions_mut().insert(UnhandledHttpFailure);
+    response
+}
+
 #[derive(Clone, Debug)]
 pub struct TransportPolicy {
     allowed_origins: Arc<BTreeSet<String>>,
@@ -56,6 +67,13 @@ pub async fn legacy_transport(
         (true, Some(origin)) => preflight_response(&policy, &request, origin),
         _ => {
             let mut response = next.run(request).await;
+            if response
+                .extensions()
+                .get::<UnhandledHttpFailure>()
+                .is_some()
+            {
+                return response;
+            }
             if let Some(origin) = origin.as_ref().filter(|origin| policy.allows(origin)) {
                 add_simple_cors_headers(response.headers_mut(), origin);
             }

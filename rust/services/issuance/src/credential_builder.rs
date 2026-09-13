@@ -464,24 +464,20 @@ impl DidSigner for HttpDidSigner {
             .send()
             .await
             .map_err(|error| signing_error(format!("DID-mediated signing failed: {error}")))?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(signing_error(
-                "Internal signing API rejected the service API key",
-            ));
-        }
-        let status = response.status();
-        if !status.is_success() {
-            let detail = response.text().await.unwrap_or_default();
-            return Err(signing_error(format!(
-                "DID-mediated signing failed (HTTP {status}): {}",
-                detail.chars().take(500).collect::<String>()
-            )));
-        }
-        let body: SignResponseBody = response.json().await.map_err(|error| {
-            signing_error(format!(
-                "DID-mediated signer returned invalid JSON: {error}"
-            ))
-        })?;
+        let operation = crate::signing_error_detail::SigningOperation::Sign;
+        let response = match crate::signing_http_response::classify(response, operation)
+            .await
+            .map_err(CredentialIssuanceError::SigningResponse)?
+        {
+            crate::signing_http_response::SigningHttpResponse::Continue(response) => response,
+            crate::signing_http_response::SigningHttpResponse::NotFound => {
+                unreachable!("signing 404 is an error")
+            }
+        };
+        let body: SignResponseBody =
+            crate::signing_http_response::success_json(response, operation)
+                .await
+                .map_err(CredentialIssuanceError::SigningResponse)?;
         if body.ok != Some(true) {
             return Err(signing_error(
                 "DID-mediated signer returned an invalid response",

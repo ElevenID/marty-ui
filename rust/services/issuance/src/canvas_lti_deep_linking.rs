@@ -152,6 +152,8 @@ pub enum CanvasLtiDeepLinkingError {
     NonceGenerationFailed,
     #[error("Canvas LTI tool signing is unavailable: {0}")]
     SigningUnavailable(String),
+    #[error("{0}")]
+    RemoteSigningResponse(crate::SigningResponseFailure),
     #[error("Canvas Deep Linking is temporarily unavailable")]
     RepositoryUnavailable,
     #[error("Canvas platform or program binding changed before Deep Linking response persistence")]
@@ -754,5 +756,10 @@ fn session_error(error: CanvasLtiExperienceSessionError) -> CanvasLtiDeepLinking
 }
 
 fn signing_error(error: CanvasLtiToolSigningError) -> CanvasLtiDeepLinkingError {
-    CanvasLtiDeepLinkingError::SigningUnavailable(error.to_string())
+    match error {
+        CanvasLtiToolSigningError::RemoteResponse(cause) => {
+            CanvasLtiDeepLinkingError::RemoteSigningResponse(cause)
+        }
+        error => CanvasLtiDeepLinkingError::SigningUnavailable(error.to_string()),
+    }
 }

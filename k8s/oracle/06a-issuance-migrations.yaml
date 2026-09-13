@@ -28,7 +28,7 @@ spec:
             'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 3; done']
       containers:
         - name: issuance-migrations
-          image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
+          image: ${MARTY_ISSUANCE_IMAGE}
           imagePullPolicy: Always
           command: ['python', 'manage_migrations.py', 'upgrade']
           envFrom:

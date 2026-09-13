@@ -1,5 +1,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
+#[cfg(test)]
+#[path = "token_rate_limit_http_tests.rs"]
+mod token_rate_limit_http_tests;
+
 use axum::{
     body::to_bytes,
     extract::{ConnectInfo, FromRequest, Path, RawForm, RawQuery, Request, State},
@@ -63,11 +67,13 @@ use crate::{
     canvas_oauth::{
         CanvasOAuthCallbackRequest, CanvasOAuthError, CanvasOAuthService, CanvasOAuthStartRequest,
     },
+    canvas_operations::CanvasOperationsService,
     credential::{CredentialIssuanceError, CredentialIssuanceService, CredentialRequest},
     credential_management::{
         CredentialLifecycleAction, CredentialManagementError, CredentialStatusView,
     },
     credential_management_http::{CredentialManagementHttpError, CredentialManagementHttpService},
+    credential_renewal::CredentialRenewalService,
     initiation::InitiationRequest,
     initiation_didcomm_http::{
         DidcommDeliverRequest, InitiationDidcommHttpError, InitiationDidcommHttpService,
@@ -118,6 +124,7 @@ pub struct IssuanceServices {
     credential: CredentialIssuanceService,
     initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
+    renewal: Option<CredentialRenewalService>,
     credential_management: CredentialManagementHttpService,
     canvas: CanvasServices,
     token_rate_limiter: TokenRateLimiter,
@@ -131,6 +138,7 @@ pub struct IssuanceCoreServices {
     credential: CredentialIssuanceService,
     initiation: InitiationHttpService,
     didcomm_delivery: InitiationDidcommHttpService,
+    renewal: Option<CredentialRenewalService>,
 }
 
 impl IssuanceCoreServices {
@@ -152,7 +160,15 @@ impl IssuanceCoreServices {
             credential,
             initiation,
             didcomm_delivery,
+            renewal: None,
         }
+    }
+
+    /// Compose the shared renewal owner without changing other service routes.
+    #[must_use]
+    pub fn with_renewal(mut self, renewal: CredentialRenewalService) -> Self {
+        self.renewal = Some(renewal);
+        self
     }
 }
 
@@ -162,6 +178,7 @@ pub struct CanvasServices {
     management: CanvasPlatformManagementHttpService,
     legacy_ingest: CanvasLegacyIngestService,
     lti: CanvasLtiServices,
+    operations: Option<CanvasOperationsService>,
 }
 
 impl CanvasServices {
@@ -177,7 +194,15 @@ impl CanvasServices {
             management,
             legacy_ingest,
             lti,
+            operations: None,
         }
+    }
+
+    /// Opt in to native operations composition without changing gateway routing.
+    #[must_use]
+    pub fn with_operations(mut self, operations: CanvasOperationsService) -> Self {
+        self.operations = Some(operations);
+        self
     }
 }
 
@@ -264,6 +289,7 @@ impl IssuanceServices {
             credential: core.credential,
             initiation: core.initiation,
             didcomm_delivery: core.didcomm_delivery,
+            renewal: core.renewal,
             credential_management,
             canvas,
             token_rate_limiter,
@@ -280,6 +306,7 @@ struct OptionalServices {
     credential: Option<CredentialIssuanceService>,
     initiation: Option<InitiationHttpService>,
     didcomm_delivery: Option<InitiationDidcommHttpService>,
+    renewal: Option<CredentialRenewalService>,
     credential_management: Option<CredentialManagementHttpService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
@@ -294,6 +321,7 @@ struct OptionalServices {
     canvas_oauth: Option<CanvasOAuthService>,
     canvas_management: Option<CanvasPlatformManagementHttpService>,
     canvas_legacy_ingest: Option<CanvasLegacyIngestService>,
+    canvas_operations: Option<CanvasOperationsService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -363,10 +391,12 @@ pub fn router_with_all_services(
             credential: Some(services.credential),
             initiation: Some(services.initiation),
             didcomm_delivery: Some(services.didcomm_delivery),
+            renewal: services.renewal,
             credential_management: Some(services.credential_management),
             canvas_oauth: Some(services.canvas.oauth),
             canvas_management: Some(services.canvas.management),
             canvas_legacy_ingest: Some(services.canvas.legacy_ingest),
+            canvas_operations: services.canvas.operations,
             canvas_lti_login: Some(services.canvas.lti.login),
             canvas_lti_launch: Some(services.canvas.lti.launch),
             canvas_lti_experience: Some(services.canvas.lti.experience),
@@ -552,6 +582,25 @@ pub fn router_with_canvas_management(
         transport,
         OptionalServices {
             canvas_management: Some(canvas_management),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+/// Exercise the same operations composition and transport layer as the full
+/// service. Existing minimal routers remain unchanged unless explicitly opted in.
+pub fn router_with_canvas_operations(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    operations: CanvasOperationsService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_operations: Some(operations),
             ..OptionalServices::default()
         },
     )
@@ -1039,6 +1088,16 @@ fn router_with_optional_services(
         canvas_lti_evidence_sync: services.canvas_lti_evidence_sync,
         canvas_lti_tool_signer: services.canvas_lti_tool_signer,
     });
+    let api = if let Some(operations) = services.canvas_operations {
+        api.merge(crate::canvas_operations::candidate_router(operations))
+    } else {
+        api
+    };
+    let api = if let Some(renewal) = services.renewal {
+        api.merge(crate::credential_renewal::router(renewal))
+    } else {
+        api
+    };
     system
         .merge(api)
         .layer(middleware::from_fn_with_state(transport, legacy_transport))
@@ -1435,16 +1494,18 @@ async fn validate_canvas_credentials_provider(
     State(state): State<IssuanceState>,
     headers: HeaderMap,
     request: Request,
-) -> Result<
-    Json<crate::canvas_credentials_validation::CanvasCredentialsValidationResult>,
-    CanvasManagementHttpError,
-> {
+) -> Result<Response, CanvasManagementHttpError> {
     let request: CanvasCredentialsValidationRequest =
         parse_canvas_credentials_validation_request(request).await?;
-    canvas_management(&state)?
+    let result = canvas_management(&state)?
         .validate_canvas_credentials_provider(&headers, request)
-        .await
-        .map(Json)
+        .await?;
+    // Rendering belongs after the provider has returned its lossless result.
+    // Match the published app's plain 500 without exposing serializer internals.
+    Ok(match serde_json::to_vec(&result) {
+        Ok(body) => ([("content-type", "application/json")], body).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+    })
 }
 
 async fn list_canvas_integration_secrets(
@@ -2311,11 +2372,12 @@ async fn deliver_didcomm_credential(
     if let Err(error) = service.authorize(request.headers()) {
         return error.into_response();
     }
+    let headers = request.headers().clone();
     let Json(input) = match Json::<DidcommDeliverRequest>::from_request(request, &state).await {
         Ok(input) => input,
         Err(rejection) => return rejection.into_response(),
     };
-    match service.deliver_authorized(&input).await {
+    match service.deliver_authorized(&headers, &input).await {
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }
@@ -2335,15 +2397,17 @@ async fn token_rate_limit_middleware(
         .map_or("unknown".to_owned(), |ConnectInfo(address)| {
             address.ip().to_string()
         });
-    if limiter.check(&client) {
-        return next.run(request).await;
+    match limiter.check_request(&client) {
+        Ok(true) => return next.run(request).await,
+        Ok(false) => {}
+        Err(_) => return crate::transport::unhandled_http_failure(),
     }
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
         Json(json!({"detail": "Rate limit exceeded"})),
     )
         .into_response();
-    if let Ok(value) = HeaderValue::from_str(&limiter.retry_after_seconds().to_string()) {
+    if let Ok(value) = HeaderValue::from_str(limiter.retry_after_header()) {
         response
             .headers_mut()
             .insert(http_header::RETRY_AFTER, value);
@@ -2628,6 +2692,10 @@ impl IntoResponse for CanvasLtiToolSigningHttpError {
             .into_response()
     }
 }
+
+#[cfg(test)]
+#[path = "signing_http_projection_tests.rs"]
+mod signing_http_projection_tests;
 
 enum CanvasLtiExperienceExchangeHttpError {
     Service(CanvasLtiExperienceExchangeError),
@@ -3008,7 +3076,7 @@ impl IntoResponse for CanvasLtiDeepLinkingHttpError {
                 | Error::SigningClaimsInvalid
                 | Error::ConfigurationDrift),
             ) => (StatusCode::CONFLICT, Json(json!({"detail": error.to_string()}))).into_response(),
-            Self::Service(Error::NonceGenerationFailed | Error::SigningUnavailable(_)) => {
+            Self::Service(Error::NonceGenerationFailed | Error::SigningUnavailable(_) | Error::RemoteSigningResponse(_)) => {
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})),
@@ -3375,6 +3443,13 @@ impl IntoResponse for CredentialIssuanceHttpError {
             | Error::LifecycleUnavailable(detail) => {
                 (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": detail}))
             }
+            Error::SigningResponse(cause) => {
+                let Some(detail) = cause.scalar_detail() else {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                        .into_response();
+                };
+                (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": detail}))
+            }
             Error::RevocationProfileRequired => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({"detail": "The Credential Template has no Revocation Profile."}),
@@ -3464,6 +3539,10 @@ impl IntoResponse for CredentialManagementHttpError {
                     StatusCode::SERVICE_UNAVAILABLE,
                     "Canvas lifecycle retry could not be recorded",
                 ),
+                CredentialManagementError::CanvasTextEncoding => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                        .into_response()
+                }
             },
         };
         (status, Json(json!({"detail": detail}))).into_response()
@@ -3572,6 +3651,10 @@ impl IntoResponse for TokenExchangeHttpError {
 impl IntoResponse for TenantDiscoveryHttpError {
     fn into_response(self) -> Response {
         let (status, detail) = match self.0 {
+            TenantDiscoveryError::ProofPolicyResponseInvalid => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                    .into_response();
+            }
             TenantDiscoveryError::ProofPolicyUnavailable | TenantDiscoveryError::IncompletePlan => {
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -3634,7 +3717,7 @@ impl IntoResponse for CanvasLegacyIngestHttpError {
     }
 }
 
-struct TransactionReadHttpError(TransactionReadError);
+pub(crate) struct TransactionReadHttpError(TransactionReadError);
 
 impl From<TransactionReadError> for TransactionReadHttpError {
     fn from(value: TransactionReadError) -> Self {

@@ -39,7 +39,15 @@ def test_both_modes_pin_the_actual_runtime_before_schema_rehearsal() -> None:
     assert build < pin < rehearsal < maintenance
     assert "$verificationMigrationImage = $env:MARTY_SERVICES_IMAGE" in script
     assert "--format '{{.Id}}'" in script
-    assert "image: $verificationMigrationImage" in script
+    assert (
+        "Set-BetaApplicationVerificationImage -Plan $applicationImagePlan -ImageId $verificationMigrationImage"
+        in script
+    )
+    assert (
+        "$verificationImageLines = @(ConvertTo-BetaApplicationImageLines -Plan"
+        in script
+    )
+    assert '-Content (($verificationImageLines -join "`n") + "`n")' in script
     assert "$script:ComposeFiles += $verificationImageOverride" in script
     assert script.count('Write-Step "Build marker-bearing application images"') == 1
     assert script.index("if ($PlanOnly)") < build

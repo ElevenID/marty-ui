@@ -1,0 +1,282 @@
+{
+  "schema": "marty.selfhost-bundle-path-reference/v1",
+  "packager_source_blob": "77c04ba60f7a31432d210526f50e136f6bde0545",
+  "python": "3.12.10",
+  "stdlib_sources": {
+    "pathlib.py": "cd1557dedcaa1be0459cd59760c5ebac83a3e412e0e1b5bc0b1a82a19563a090",
+    "ntpath.py": "e62526627fe0129120e452f99b05b84965a57451e5ad8d29f0d5f3276cc2c489",
+    "posixpath.py": "4a50991174a61362a0d612b86d05230b05c7ae282291733e32c87699168c857b"
+  },
+  "scope": "Actual pathlib.Path.expanduser with real Windows/POSIX flavour state, cleared synthetic environment and controlled read-only pwd results; no resolve, account lookup or filesystem writes.",
+  "cases": [
+    {
+      "platform": "windows",
+      "name": "current",
+      "input": "~/bundle",
+      "environment": {
+        "USERPROFILE": "C:/Users/current",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "expanded": "C:\\Users\\current\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "named-current",
+      "input": "~current/bundle",
+      "environment": {
+        "USERPROFILE": "C:/custom/profile",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "expanded": "C:\\custom\\profile\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "named-sibling",
+      "input": "~other/bundle",
+      "environment": {
+        "USERPROFILE": "C:/Users/current",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "expanded": "C:\\Users\\other\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "named-mismatch",
+      "input": "~other/bundle",
+      "environment": {
+        "USERPROFILE": "C:/custom/profile",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "error": "RuntimeError",
+      "message": "Could not determine home directory."
+    },
+    {
+      "platform": "windows",
+      "name": "named-no-username",
+      "input": "~other/bundle",
+      "environment": {
+        "USERPROFILE": "C:/Users/current"
+      },
+      "accounts": {},
+      "error": "RuntimeError",
+      "message": "Could not determine home directory."
+    },
+    {
+      "platform": "windows",
+      "name": "homepath-only",
+      "input": "~/bundle",
+      "environment": {
+        "HOMEPATH": "C:/Users/current"
+      },
+      "accounts": {},
+      "expanded": "C:\\Users\\current\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "drive-homepath",
+      "input": "~/bundle",
+      "environment": {
+        "HOMEDRIVE": "C:",
+        "HOMEPATH": "\\Users\\current"
+      },
+      "accounts": {},
+      "expanded": "C:\\Users\\current\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "profile-precedence",
+      "input": "~/bundle",
+      "environment": {
+        "USERPROFILE": "C:/profile",
+        "HOMEPATH": "C:/ignored"
+      },
+      "accounts": {},
+      "expanded": "C:\\profile\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "empty-profile",
+      "input": "~/bundle",
+      "environment": {
+        "USERPROFILE": ""
+      },
+      "accounts": {},
+      "expanded": "bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "missing-home",
+      "input": "~/bundle",
+      "environment": {},
+      "accounts": {},
+      "error": "RuntimeError",
+      "message": "Could not determine home directory."
+    },
+    {
+      "platform": "windows",
+      "name": "ordinary",
+      "input": "./bundle",
+      "environment": {},
+      "accounts": {},
+      "expanded": "bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "retained-traversal",
+      "input": "~/../outside",
+      "environment": {
+        "USERPROFILE": "C:/Users/current"
+      },
+      "accounts": {},
+      "expanded": "C:\\Users\\current\\..\\outside"
+    },
+    {
+      "platform": "windows",
+      "name": "named-empty-profile-current",
+      "input": "~current/bundle",
+      "environment": {
+        "USERPROFILE": "",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "expanded": "bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "named-empty-profile-empty-username",
+      "input": "~other/bundle",
+      "environment": {
+        "USERPROFILE": "",
+        "USERNAME": ""
+      },
+      "accounts": {},
+      "expanded": "other\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "named-profile-trailing-separator",
+      "input": "~other/bundle",
+      "environment": {
+        "USERPROFILE": "C:/Users/current/",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "error": "RuntimeError",
+      "message": "Could not determine home directory."
+    },
+    {
+      "platform": "windows",
+      "name": "dot-named",
+      "input": "./~other/bundle",
+      "environment": {
+        "USERPROFILE": "C:/Users/current",
+        "USERNAME": "current"
+      },
+      "accounts": {},
+      "expanded": "C:\\Users\\other\\bundle"
+    },
+    {
+      "platform": "windows",
+      "name": "rooted-homepath-keeps-drive",
+      "input": "~/bundle",
+      "environment": {
+        "HOMEDRIVE": "D:/ignored",
+        "HOMEPATH": "\\Users\\current"
+      },
+      "accounts": {},
+      "expanded": "D:\\Users\\current\\bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "home",
+      "input": "~/bundle",
+      "environment": {
+        "HOME": "/homes/current"
+      },
+      "accounts": {},
+      "expanded": "/homes/current/bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "empty-home",
+      "input": "~/bundle",
+      "environment": {
+        "HOME": ""
+      },
+      "accounts": {},
+      "expanded": "/bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "uid-home",
+      "input": "~/bundle",
+      "environment": {},
+      "accounts": {
+        "uid": "/accounts/current"
+      },
+      "expanded": "/accounts/current/bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "missing-uid",
+      "input": "~/bundle",
+      "environment": {},
+      "accounts": {},
+      "error": "RuntimeError",
+      "message": "Could not determine home directory."
+    },
+    {
+      "platform": "posix",
+      "name": "named",
+      "input": "~other/bundle",
+      "environment": {
+        "HOME": "/ignored"
+      },
+      "accounts": {
+        "other": "/accounts/other"
+      },
+      "expanded": "/accounts/other/bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "named-trailing-slash",
+      "input": "~other/bundle",
+      "environment": {},
+      "accounts": {
+        "other": "/accounts/other///"
+      },
+      "expanded": "/accounts/other/bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "named-missing",
+      "input": "~absent/bundle",
+      "environment": {},
+      "accounts": {},
+      "error": "RuntimeError",
+      "message": "Could not determine home directory."
+    },
+    {
+      "platform": "posix",
+      "name": "ordinary",
+      "input": "./bundle",
+      "environment": {},
+      "accounts": {},
+      "expanded": "bundle"
+    },
+    {
+      "platform": "posix",
+      "name": "retained-traversal",
+      "input": "~/../outside",
+      "environment": {
+        "HOME": "/homes/current"
+      },
+      "accounts": {},
+      "expanded": "/homes/current/../outside"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# Explicitly add after the native issuance profile. The default base remains legacy.
+# Render with the Rust render-envoy-native-issuance CLI first; absence fails closed.
+services:
+  envoy:
+    volumes:
+      - type: bind
+        source: ${MARTY_ENVOY_NATIVE_CONFIG:?Render and select the qualified native Envoy configuration}
+        target: /etc/envoy/envoy.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      issuance-native:
+        condition: service_healthy

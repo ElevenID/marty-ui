@@ -1,0 +1,12 @@
+{
+  "schema": "marty.canvas-worker-image-startup-scenarios/v1",
+  "startup_scenarios": "canvas-worker-startup-scenarios.json",
+  "startup_reference": "canvas-worker-startup-oracle.json",
+  "schema_reference": "canvas-worker-consumer-range-oracle.json",
+  "modes": [
+    {"name": "direct", "service": "canvas-sync-worker", "key_source": "direct", "database_source": "direct"},
+    {"name": "files_template", "service": "canvas_sync_worker", "key_source": "file", "database_source": "template"},
+    {"name": "selected_environment", "service": "canvas-sync-worker", "key_source": "environment", "database_source": "direct"}
+  ],
+  "scope": "Replay every frozen startup/idle case through the packaged native entrypoint under each configuration mode. File mode loads CRLF master/API/HMAC keys and database password before URL-template expansion. Selected-environment mode uses the operator-selected master-key variable. Compare exact idle/job/liveness observations and the established native SIGINT mapping; this is not active-provider or whole-worker acceptance."
+}

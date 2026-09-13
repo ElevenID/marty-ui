@@ -101,6 +101,9 @@ pub async fn prepare_oid4vci_retry(
         attempt_number,
     )
     .await?;
+    // The HTTP caller supplies a monotonic replacement time while retaining
+    // the persisted timestamp for compare-and-swap. Advance only on success.
+    instance.updated_at = now;
     Ok(PreparedInstanceStart {
         instance,
         artifact: Some(artifact),

@@ -25,9 +25,15 @@ const CANVAS_OAUTH: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
 const CANVAS_MANAGEMENT: &[u8] =
     include_bytes!("../../../../contracts/issuance-canvas-management.json");
+const CANVAS_OPERATIONS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-canvas-operations.json");
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
+const DIDCOMM: &[u8] =
+    include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
+const RENEWAL_REFERENCE: &[u8] =
+    include_bytes!("../../../../contracts/credential-renewal-python-reference.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -52,6 +58,7 @@ struct Coverage {
     canvas_management_behavior_contract: Upstream,
     credential_lifecycle_behavior_contract: Upstream,
     initiation_behavior_contract: Upstream,
+    renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
     platform_additive_http: Vec<PlatformOperation>,
@@ -66,6 +73,13 @@ struct Upstream {
     path: String,
     commit: String,
     sha256: String,
+}
+
+#[derive(Deserialize)]
+struct RenewalBehaviorContract {
+    path: String,
+    sha256: String,
+    intentional_native_corrections: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,11 +102,105 @@ struct HttpOperation {
     #[serde(default)]
     credential_behavior_contract: bool,
     #[serde(default)]
+    didcomm_behavior_contract: bool,
+    #[serde(default)]
+    initiation_behavior_contract: bool,
+    #[serde(default)]
+    renewal_behavior_contract: bool,
+    #[serde(default)]
     canvas_lti_behavior_case: Option<String>,
     #[serde(default)]
     canvas_oauth_behavior_case: Option<String>,
     #[serde(default)]
     canvas_management_behavior_case: Option<String>,
+    #[serde(default)]
+    canvas_operations_behavior_case: Option<CanvasOperationsCase>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+enum CanvasOperationsCase {
+    Enqueue,
+    Jobs,
+    Job,
+    Retry,
+    ResolveJob,
+    Candidates,
+    Reviews,
+    ResolveReview,
+}
+
+impl CanvasOperationsCase {
+    const ALL: [Self; 8] = [
+        Self::Enqueue,
+        Self::Jobs,
+        Self::Job,
+        Self::Retry,
+        Self::ResolveJob,
+        Self::Candidates,
+        Self::Reviews,
+        Self::ResolveReview,
+    ];
+
+    fn route(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Enqueue => (
+                "POST",
+                "/applications/{application_id}/canvas-sync",
+                "enqueue_canvas_application_sync_route",
+            ),
+            Self::Jobs => ("GET", "/canvas-sync-jobs", "list_canvas_sync_jobs_route"),
+            Self::Job => (
+                "GET",
+                "/canvas-sync-jobs/{job_id}",
+                "get_canvas_sync_job_route",
+            ),
+            Self::Retry => (
+                "POST",
+                "/canvas-sync-jobs/{job_id}/retry",
+                "retry_canvas_sync_job_route",
+            ),
+            Self::ResolveJob => (
+                "POST",
+                "/canvas-sync-jobs/{job_id}/resolve",
+                "resolve_canvas_sync_job_route",
+            ),
+            Self::Candidates => (
+                "GET",
+                "/canvas-award-candidates",
+                "list_canvas_award_candidates_route",
+            ),
+            Self::Reviews => (
+                "GET",
+                "/evidence-policy-reviews",
+                "list_evidence_policy_reviews_route",
+            ),
+            Self::ResolveReview => (
+                "POST",
+                "/evidence-policy-reviews/{review_id}/resolve",
+                "resolve_evidence_policy_review_route",
+            ),
+        }
+    }
+}
+
+impl HttpOperation {
+    fn behavior_selector_count(&self) -> usize {
+        usize::from(self.response.is_some())
+            + usize::from(self.behavior_case.is_some())
+            + usize::from(self.tenant_behavior_case.is_some())
+            + usize::from(self.transaction_read_behavior_case.is_some())
+            + usize::from(self.token_exchange_behavior_case.is_some())
+            + usize::from(self.proof_nonce_behavior_case.is_some())
+            + usize::from(self.credential_behavior_contract)
+            + usize::from(self.didcomm_behavior_contract)
+            + usize::from(self.initiation_behavior_contract)
+            + usize::from(self.renewal_behavior_contract)
+            + usize::from(self.canvas_lti_behavior_case.is_some())
+            + usize::from(self.canvas_oauth_behavior_case.is_some())
+            + usize::from(self.canvas_management_behavior_case.is_some())
+            + usize::from(self.canvas_operations_behavior_case.is_some())
+    }
 }
 
 #[derive(Deserialize)]
@@ -233,6 +341,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid issuance surface", error))?;
     let coverage: Coverage = serde_json::from_str(COVERAGE)
         .map_err(|error| contract_error("invalid native coverage", error))?;
+    let didcomm: Value = serde_json::from_slice(DIDCOMM)
+        .map_err(|error| contract_error("invalid DIDComm delivery contract", error))?;
+    let initiation: Value = serde_json::from_slice(INITIATION)
+        .map_err(|error| contract_error("invalid initiation contract", error))?;
     let discovery: DiscoveryContract = serde_json::from_slice(STATIC_DISCOVERY)
         .map_err(|error| contract_error("invalid static discovery contract", error))?;
     let tenant_discovery: TenantDiscoveryContract = serde_json::from_slice(TENANT_DISCOVERY)
@@ -824,9 +936,41 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_token_exchange_cases = BTreeSet::new();
     let mut native_proof_nonce_cases = BTreeSet::new();
     let mut native_credential_contract = false;
+    let mut native_didcomm_contract = false;
+    let mut native_initiation_contract = false;
+    let mut native_renewal_contract = false;
+    require(
+        coverage.renewal_behavior_contract.path
+            == "contracts/credential-renewal-python-reference.json"
+            && coverage.renewal_behavior_contract.sha256
+                == "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f"
+            && format!("{:x}", Sha256::digest(canonical_lf(RENEWAL_REFERENCE)))
+                == coverage.renewal_behavior_contract.sha256
+            && coverage
+                .renewal_behavior_contract
+                .intentional_native_corrections
+                == [
+                    "RENEWAL-001:links-before-delivery",
+                    "RENEWAL-002:pending-uri-on-unsent-delivery",
+                    "RENEWAL-003:atomic-canvas-successor-association",
+                ],
+        "renewal reference or governed native corrections changed",
+    )?;
+    let renewal_reference: Value = serde_json::from_slice(RENEWAL_REFERENCE)
+        .map_err(|error| contract_error("invalid renewal reference", error))?;
     let mut native_canvas_lti_cases = BTreeSet::new();
     let mut native_canvas_oauth_cases = BTreeSet::new();
     let mut native_canvas_management_cases = BTreeSet::new();
+    // Freeze the already-qualified source contract; changing its historical
+    // limits/status text is not necessary to select the eight exact operations.
+    require(
+        format!("{:x}", Sha256::digest(canonical_lf(CANVAS_OPERATIONS)))
+            == "73f4ac04e2158f9b84ca69fdfeff74191434d4739cb4252ca0daf98aa3b69120",
+        "Canvas operations behavior provenance changed",
+    )?;
+    let canvas_operations: Value = serde_json::from_slice(CANVAS_OPERATIONS)
+        .map_err(|error| contract_error("invalid Canvas operations contract", error))?;
+    let mut native_canvas_operations_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -840,18 +984,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             }),
             "native issuance operation is absent from the frozen surface",
         )?;
-        let behavior_selector_count = usize::from(operation.response.is_some())
-            + usize::from(operation.behavior_case.is_some())
-            + usize::from(operation.tenant_behavior_case.is_some())
-            + usize::from(operation.transaction_read_behavior_case.is_some())
-            + usize::from(operation.token_exchange_behavior_case.is_some())
-            + usize::from(operation.proof_nonce_behavior_case.is_some())
-            + usize::from(operation.credential_behavior_contract)
-            + usize::from(operation.canvas_lti_behavior_case.is_some())
-            + usize::from(operation.canvas_oauth_behavior_case.is_some())
-            + usize::from(operation.canvas_management_behavior_case.is_some());
         require(
-            behavior_selector_count == 1,
+            operation.behavior_selector_count() == 1,
             "native issuance operation must select exactly one behavior contract",
         )?;
         if operation.operation == "health_check" {
@@ -973,6 +1107,27 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
             )?;
+        } else if operation.renewal_behavior_contract {
+            require(
+                !native_renewal_contract,
+                "duplicate native renewal contract",
+            )?;
+            validate_renewal_operation(operation, &renewal_reference)?;
+            native_renewal_contract = true;
+        } else if operation.initiation_behavior_contract {
+            require(
+                !native_initiation_contract,
+                "duplicate native initiation contract",
+            )?;
+            validate_initiation_operation(operation, &initiation)?;
+            native_initiation_contract = true;
+        } else if operation.didcomm_behavior_contract {
+            require(
+                !native_didcomm_contract,
+                "duplicate native DIDComm contract",
+            )?;
+            validate_didcomm_operation(operation, &didcomm)?;
+            native_didcomm_contract = true;
         } else if operation.credential_behavior_contract {
             require(
                 !native_credential_contract
@@ -1095,6 +1250,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                         }),
                 "native Canvas management operation diverges from its behavior contract",
             )?;
+        } else if let Some(behavior_case) = operation.canvas_operations_behavior_case {
+            validate_canvas_operations_operation(operation, &canvas_operations)?;
+            require(
+                native_canvas_operations_cases.insert(behavior_case),
+                "duplicate native Canvas operations behavior case",
+            )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
         }
@@ -1149,6 +1310,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_canvas_management_cases == frozen_canvas_management_cases,
         "native Canvas management behavior coverage is incomplete",
     )?;
+    require(
+        native_canvas_operations_cases == BTreeSet::from(CanvasOperationsCase::ALL),
+        "native Canvas operations behavior coverage is incomplete",
+    )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
         .iter()
@@ -1169,6 +1334,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_credential_contract,
         "native credential endpoint behavior coverage is incomplete",
+    )?;
+    require(
+        native_didcomm_contract,
+        "native DIDComm endpoint behavior coverage is incomplete",
+    )?;
+    require(
+        native_initiation_contract,
+        "native initiation endpoint behavior coverage is incomplete",
+    )?;
+    require(
+        native_renewal_contract,
+        "native renewal contract is missing",
     )?;
     for operation in &coverage.platform_additive_http {
         require(
@@ -1278,6 +1455,122 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     })
 }
 
+fn validate_canvas_operations_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    let case = operation
+        .canvas_operations_behavior_case
+        .ok_or_else(|| invalid("native Canvas operations behavior case is missing"))?;
+    let (method, suffix, name) = case.route();
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.method == method
+            && operation.path == format!("/v1/integrations/canvas{suffix}")
+            && operation.operation == name
+            && contract["schema"] == "marty.issuance-canvas-operations/v1"
+            && contract["route_prefix"] == "/v1/integrations/canvas"
+            && contract["routes"].as_array().is_some_and(|routes| {
+                routes.len() == 8
+                    && routes
+                        .iter()
+                        .filter(|route| route["method"] == method && route["path"] == suffix)
+                        .count()
+                        == 1
+            })
+            && contract["behavior"]["note_max_length"] == 2000
+            && contract["behavior"]["post_query_filter_window"] == 500
+            && contract["behavior"]["actor_priority"]
+                == serde_json::json!(["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]),
+        "native Canvas operation diverges from its exact behavior contract",
+    )
+}
+
+fn validate_renewal_operation(operation: &HttpOperation, contract: &Value) -> Result<(), MmfError> {
+    require(
+        operation.renewal_behavior_contract
+            && operation.behavior_selector_count() == 1
+            && operation.operation == "renew_issued_credential"
+            && operation.method == "POST"
+            && operation.path == "/v1/issued-credentials/{credential_id}/renew"
+            && contract["schema"] == "marty.credential-renewal-python-reference/v1"
+            && contract["reference"]["source_commit"] == "87eae30788924921a42848425d315e2f33f7ae41"
+            && contract["reference"]["source_blobs"]
+                ["services/issuance/infrastructure/api/routes.py"]
+                == "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a"
+            && contract["cases"].as_array().is_some_and(|cases| {
+                cases.len() == 31
+                    && [
+                        ("missing-key", 401),
+                        ("missing-tenant", 403),
+                        ("foreign-tenant", 404),
+                        ("anoncrypt-keyed-rejection", 422),
+                        ("authcrypt-keyed-rejection", 422),
+                        ("anoncrypt-mixed-keyed-rejection", 422),
+                        ("authcrypt-mixed-keyed-rejection", 422),
+                    ]
+                    .iter()
+                    .all(|(name, status)| {
+                        cases.iter().any(|case| {
+                            case["case"] == *name && case["responses"][0]["status"] == *status
+                        })
+                    })
+            }),
+        "native renewal operation diverges from its exact governed contract",
+    )
+}
+
+fn validate_initiation_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.initiation_behavior_contract
+            && operation.behavior_selector_count() == 1
+            && operation.operation == "initiate_issuance"
+            && operation.method == "POST"
+            && operation.path == "/v1/issuance/initiate"
+            && contract["schema"] == "marty.issuance-initiation/v1"
+            && contract["surface"]["http"]
+                == serde_json::json!({
+                    "method": "POST", "path": "/v1/issuance/initiate",
+                    "operation": "initiate_issuance", "authentication": "management-api-key",
+                    "content_type": "application/json"
+                })
+            && contract["idempotency"]["http_source"] == "Idempotency-Key header"
+            && contract["idempotency"]["plaintext_persisted"] == false
+            && contract["idempotency"]["recovery_order"]
+                == "after-organization-and-client-validation-before-template-resolution"
+            && contract["idempotency"]["same_request"] == "return-committed-transaction-snapshot"
+            && contract["idempotency"]["different_request"]
+                == serde_json::json!({"http_status": 409, "grpc_status": "ALREADY_EXISTS"})
+            && contract["idempotency"]["didcomm_push_with_idempotency"]
+                == serde_json::json!({"http_status": 422, "grpc_status": "INVALID_ARGUMENT"})
+            && contract["transaction"]["atomic_reservation"] == true
+            && contract["response"]["source"] == "committed-transaction-snapshot"
+            && contract["response"]["pre_auth_code_visibility"]
+                == "internal-only-gateway-removes-publicly"
+            && contract["response"]["didcomm"]["native_rust_target"]
+                == "same-delivery-semantics-as-http",
+        "native initiation operation diverges from its admission contract",
+    )
+}
+
+fn validate_didcomm_operation(operation: &HttpOperation, contract: &Value) -> Result<(), MmfError> {
+    require(
+        operation.didcomm_behavior_contract
+            && operation.operation == "didcomm_deliver"
+            && operation.method == "POST"
+            && operation.path == "/v1/issuance/didcomm/deliver"
+            && contract["schema_version"] == 1
+            && contract["expected_response"]["status"] == "delivered"
+            && contract["transport_claim"]["single_active_attempt"] == true
+            && contract["transport_claim"]["automatic_resend_from_delivery_unknown"] == false
+            && contract["transport_claim"]["completion_fenced_by_attempt_id"] == true,
+        "native DIDComm operation diverges from its delivery contract",
+    )
+}
+
 fn canonical_lf(bytes: &[u8]) -> Vec<u8> {
     let mut canonical = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -1309,12 +1602,295 @@ fn contract_error(message: &'static str, error: serde_json::Error) -> MmfError {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_embedded_contract, Coverage, CANVAS_LTI, CANVAS_MANAGEMENT,
-        COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE, CREDENTIAL_SIGNING, INITIATION,
+        canonical_lf, validate_canvas_operations_operation, validate_didcomm_operation,
+        validate_embedded_contract, validate_initiation_operation, validate_renewal_operation,
+        CanvasOperationsCase, Coverage, HttpOperation, CANVAS_LTI, CANVAS_MANAGEMENT,
+        CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, RENEWAL_REFERENCE,
     };
+
+    #[test]
+    fn canvas_operations_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(CANVAS_OPERATIONS).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| operation.get("canvas_operations_behavior_case").is_some())
+            .collect();
+        assert_eq!(selected.len(), CanvasOperationsCase::ALL.len());
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_canvas_operations_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for value in [
+                serde_json::json!(true),
+                serde_json::json!(1),
+                serde_json::json!({}),
+                serde_json::json!("unknown"),
+            ] {
+                let mut changed = original.clone();
+                changed["canvas_operations_behavior_case"] = value;
+                assert!(parse(changed).is_err());
+            }
+            for (field, value) in [
+                ("canvas_operations_behavior_case", Value::Null),
+                ("method", serde_json::json!("DELETE")),
+                (
+                    "path",
+                    serde_json::json!("/v1/integrations/canvas/platforms"),
+                ),
+                ("operation", serde_json::json!("list_canvas_platforms")),
+                ("initiation_behavior_contract", Value::Bool(true)),
+                (
+                    "canvas_management_behavior_case",
+                    serde_json::json!("list_canvas_platforms"),
+                ),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(
+                    validate_canvas_operations_operation(&parse(changed).unwrap(), &contract)
+                        .is_err()
+                );
+            }
+            let mut removed = original.clone();
+            removed
+                .as_object_mut()
+                .unwrap()
+                .remove("canvas_operations_behavior_case");
+            assert!(
+                validate_canvas_operations_operation(&parse(removed).unwrap(), &contract).is_err()
+            );
+            let mut extra_segment = original.clone();
+            extra_segment["path"] =
+                serde_json::json!(format!("{}/extra", original["path"].as_str().unwrap()));
+            assert!(validate_canvas_operations_operation(
+                &parse(extra_segment).unwrap(),
+                &contract
+            )
+            .is_err());
+            for case in CanvasOperationsCase::ALL {
+                let mut changed = parse(original.clone()).unwrap();
+                if changed.canvas_operations_behavior_case != Some(case) {
+                    changed.canvas_operations_behavior_case = Some(case);
+                    assert!(validate_canvas_operations_operation(&changed, &contract).is_err());
+                }
+            }
+            for field in [
+                "note_max_length",
+                "post_query_filter_window",
+                "actor_priority",
+            ] {
+                let mut changed = contract.clone();
+                changed["behavior"][field] = Value::Null;
+                assert!(validate_canvas_operations_operation(
+                    &parse(original.clone()).unwrap(),
+                    &changed
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["routes"]
+                .as_array_mut()
+                .unwrap()
+                .push(contract["routes"][0].clone());
+            assert!(validate_canvas_operations_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn renewal_coverage_is_exact_and_rejects_missing_malformed_or_multiple_selectors() {
+        let entry = serde_json::json!({
+            "method":"POST", "path":"/v1/issued-credentials/{credential_id}/renew",
+            "operation":"renew_issued_credential", "renewal_behavior_contract":true
+        });
+        let contract: Value = serde_json::from_slice(RENEWAL_REFERENCE).unwrap();
+        let parse = |value| serde_json::from_value::<HttpOperation>(value);
+        validate_renewal_operation(&parse(entry.clone()).unwrap(), &contract).unwrap();
+        for malformed in [Value::Null, serde_json::json!("true"), serde_json::json!(1)] {
+            let mut changed = entry.clone();
+            changed["renewal_behavior_contract"] = malformed;
+            assert!(parse(changed).is_err());
+        }
+        for (field, value) in [
+            ("renewal_behavior_contract", serde_json::json!(false)),
+            ("initiation_behavior_contract", serde_json::json!(true)),
+            ("didcomm_behavior_contract", serde_json::json!(true)),
+            ("method", serde_json::json!("GET")),
+            ("operation", serde_json::json!("revoke_issued_credential")),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}"),
+            ),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}/revoke"),
+            ),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}/renew/extra"),
+            ),
+        ] {
+            let mut changed = entry.clone();
+            changed[field] = value;
+            assert!(validate_renewal_operation(&parse(changed).unwrap(), &contract).is_err());
+        }
+        let mut missing = entry.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("renewal_behavior_contract");
+        assert!(validate_renewal_operation(&parse(missing).unwrap(), &contract).is_err());
+        for name in [
+            "missing-key",
+            "missing-tenant",
+            "foreign-tenant",
+            "anoncrypt-keyed-rejection",
+            "authcrypt-mixed-keyed-rejection",
+        ] {
+            let mut changed = contract.clone();
+            let case = changed["cases"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|case| case["case"] == name)
+                .unwrap();
+            case["responses"][0]["status"] = serde_json::json!(200);
+            assert!(validate_renewal_operation(&parse(entry.clone()).unwrap(), &changed).is_err());
+        }
+    }
+
+    #[test]
+    fn initiation_coverage_rejects_malformed_or_multiple_behavior_selectors() {
+        let entry = serde_json::json!({
+            "method":"POST", "path":"/v1/issuance/initiate", "operation":"initiate_issuance",
+            "initiation_behavior_contract":true
+        });
+        let contract: Value = serde_json::from_slice(INITIATION).unwrap();
+        let operation: HttpOperation = serde_json::from_value(entry.clone()).unwrap();
+        validate_initiation_operation(&operation, &contract).unwrap();
+        for malformed in [
+            Value::Null,
+            Value::String("true".into()),
+            serde_json::json!(1),
+        ] {
+            let mut changed = entry.clone();
+            changed["initiation_behavior_contract"] = malformed;
+            assert!(serde_json::from_value::<HttpOperation>(changed).is_err());
+        }
+        let mut changed = entry.clone();
+        changed
+            .as_object_mut()
+            .unwrap()
+            .remove("initiation_behavior_contract");
+        let missing: HttpOperation = serde_json::from_value(changed).unwrap();
+        assert_eq!(missing.behavior_selector_count(), 0);
+        assert!(validate_initiation_operation(&missing, &contract).is_err());
+        let mut changed = entry;
+        changed["didcomm_behavior_contract"] = Value::Bool(true);
+        let multiple: HttpOperation = serde_json::from_value(changed).unwrap();
+        assert_eq!(multiple.behavior_selector_count(), 2);
+        assert!(validate_initiation_operation(&multiple, &contract).is_err());
+    }
+
+    #[test]
+    fn initiation_coverage_cannot_select_siblings_or_relax_admission() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).unwrap();
+        let mut operation = coverage
+            .native_http
+            .into_iter()
+            .find(|operation| operation.initiation_behavior_contract)
+            .unwrap();
+        let contract: Value = serde_json::from_slice(INITIATION).unwrap();
+        validate_initiation_operation(&operation, &contract).unwrap();
+        for path in [
+            "/v1/issuance",
+            "/v1/issuance/initiate/extra",
+            "/v1/issuance/didcomm/deliver",
+        ] {
+            operation.path = path.into();
+            assert!(validate_initiation_operation(&operation, &contract).is_err());
+        }
+        operation.path = "/v1/issuance/initiate".into();
+        operation.method = "GET".into();
+        assert!(validate_initiation_operation(&operation, &contract).is_err());
+        operation.method = "POST".into();
+        for (pointer, value) in [
+            ("/surface/http/authentication", serde_json::json!("none")),
+            ("/idempotency/plaintext_persisted", serde_json::json!(true)),
+            (
+                "/idempotency/recovery_order",
+                serde_json::json!("after-template-resolution"),
+            ),
+            (
+                "/idempotency/same_request",
+                serde_json::json!("create-new-transaction"),
+            ),
+            (
+                "/idempotency/different_request/http_status",
+                serde_json::json!(200),
+            ),
+            (
+                "/idempotency/didcomm_push_with_idempotency/http_status",
+                serde_json::json!(200),
+            ),
+            ("/transaction/atomic_reservation", serde_json::json!(false)),
+            ("/response/source", serde_json::json!("request")),
+            (
+                "/response/pre_auth_code_visibility",
+                serde_json::json!("public"),
+            ),
+        ] {
+            let mut changed = contract.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                validate_initiation_operation(&operation, &changed).is_err(),
+                "{pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn didcomm_coverage_cannot_select_siblings_or_relax_send_fencing() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).unwrap();
+        let mut operation = coverage
+            .native_http
+            .into_iter()
+            .find(|operation| operation.didcomm_behavior_contract)
+            .unwrap();
+        let contract: Value = serde_json::from_slice(DIDCOMM).unwrap();
+        validate_didcomm_operation(&operation, &contract).unwrap();
+        for path in [
+            "/v1/issuance/initiate",
+            "/v1/issuance/didcomm/deliver/extra",
+        ] {
+            operation.path = path.into();
+            assert!(validate_didcomm_operation(&operation, &contract).is_err());
+        }
+        operation.path = "/v1/issuance/didcomm/deliver".into();
+        operation.method = "GET".into();
+        assert!(validate_didcomm_operation(&operation, &contract).is_err());
+        operation.method = "POST".into();
+        for (field, value) in [
+            ("single_active_attempt", false),
+            ("automatic_resend_from_delivery_unknown", true),
+            ("completion_fenced_by_attempt_id", false),
+        ] {
+            let mut changed = contract.clone();
+            changed["transport_claim"][field] = Value::Bool(value);
+            assert!(validate_didcomm_operation(&operation, &changed).is_err());
+        }
+    }
 
     #[test]
     fn provenance_hash_is_independent_of_checkout_line_endings() {
@@ -1350,8 +1926,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 63);
-        assert_eq!(summary.remaining_http, 68);
+        assert_eq!(summary.native_http, 74);
+        assert_eq!(summary.remaining_http, 57);
         assert_eq!(summary.remaining_grpc, 0);
     }
 }
