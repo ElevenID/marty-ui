@@ -42,7 +42,8 @@ mandatory too. Full combined Python regression at `72f966d11` passed **3,523
 tests, three skipped** in 227.43 seconds. These repairs still need fresh hosted
 qualification. Repair run `34724946640` at pushed `6c08438af` has passed Rust
 lint/packaging, release contracts, security, UI and browser lifecycle jobs;
-Rust service tests and image builds remain running at this observation.
+Image builds have also passed; Rust service database suites remain running at
+this observation. This run does not include the newer local integrations below.
 
 Reviewed Kubernetes native-owner configuration is integrated locally at
 `97ff18e48` (author `cc695ee84`). The final author checkpoint passed 30 Rust
@@ -58,16 +59,29 @@ tests captured-model reuse. These are model/command-boundary proofs, not cluster
 acceptance. Release provenance and resolved runtime acceptance remain required;
 see [the Kubernetes qualification boundary](rust-migrations/kubernetes-native-issuance.md).
 
-Envoy routing remains in its separate worktree. Its supplementary actual-image
-attempt now passes Docker creation and ownership checks but found a generator
-serialization defect: feature-unified arbitrary-precision JSON numbers became
-objects in YAML output. A bounded JSON-output correction and independently parsed
-numeric-scalar regression are in progress; full Linux runtime coverage remains
-pending. A separate
-Flow worker is implementing actual-main startup and public service-boundary
-checks. Packaged image boot, real gateway authentication, callback-worker
-delivery and self-host workload TLS remain explicit acceptance requirements.
-Neither workstream authorizes Python deletion, merging or deployment yet.
+Envoy initiation routing is now integrated locally at `b26eb71c8` (reviewed
+author `ab9267e0e`). Its bounded JSON serializer fixes the feature-unified numeric
+serialization defect. Author qualification passed 26 tooling tests, strict
+Clippy, baseline/candidate actual-image validation, rendered-native/fresh-main
+gates, all 19 DIDComm regressions, and 17 Python guards plus actual Compose
+comparisons. Full Linux Envoy business composition remains required in hosted CI;
+image validation is not business or release-provenance evidence.
+
+The Kubernetes dependency repair is integrated at `fc64b0026` (author
+`4e68b3028`): explicit gateway auth target, opt-in existing Rust signing service,
+and matching custom signing-key references across all four consumers. Its source
+checkpoint passed 32 Rust tests normally and under JSON feature unification,
+strict Clippy, and 365 Python guards. Default selection is preserved; no cluster
+or KMS behavior changed. The combined integration passed 193 focused Python and
+CI-registration checks in 73.71 seconds; integrated Rust and resolved Kubernetes
+runtime/cluster acceptance remain outstanding.
+
+Flow actual-main testing exposed a QR-retry timestamp bug previously masked by
+test setup, followed by a Windows wrapper-shell cleanup defect. The separate Flow
+worktree contains reviewed repairs and is awaiting actual-runtime requalification.
+Packaged image boot, real gateway authentication, callback-worker delivery and
+self-host workload TLS remain explicit acceptance requirements. These local
+checkpoints do not authorize Python deletion, protected merging or deployment.
 
 Self-host native-owner configuration is now integrated locally at `e53cb2704`
 (reviewed author `05f7df2df`). Its full Python regression passed **3,412 tests,
