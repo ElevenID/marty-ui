@@ -5829,8 +5829,9 @@ after maintainer review and native both-mode/retained DIDComm qualification.
 Combined Kubernetes/Flow/Envoy guards passed 92 cases; the complete Python suite
 at documentation head `d9c1ac4c9` passed **3,596 tests, 3 skipped** (216.81 seconds).
 The integrated Rust contract target compiled, and Kubernetes native-only delivery
-(7.06 seconds) plus Flow actual-main (13.12 seconds) passed. Final integrated
-fixture cleanup verification is tracked separately; Linux full-gateway and
+(7.06 seconds) plus Flow actual-main (13.12 seconds) passed. All six exact
+integrated fixture containers and both logged Flow processes were independently
+verified absent after execution. Linux full-gateway and
 released/deployed acceptance remain outstanding. See
 [Kubernetes runtime evidence](rust-migrations/kubernetes-native-runtime-acceptance.md)
 and [the next aggregate acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md).
