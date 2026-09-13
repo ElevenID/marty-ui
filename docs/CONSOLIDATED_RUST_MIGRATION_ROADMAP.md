@@ -31,6 +31,25 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Current execution snapshot — 2026-09-12
 
+Latest local review checkpoint: `a51f800a3` includes bounded failed-child
+diagnostics (`0e1577fe4`) and the selfhost extracted raw-configuration gate.
+Independent integrated qualification passed all 21 Rust packager tests from a
+fresh target, 34 selfhost wiring guards and 74 runtime/CI diagnostic guards.
+The selfhost gate compares complete source/extracted models, retaining exact
+Compose-escaped password templates, secret identities and image-default launch
+semantics. It does not prove packaged startup, secret loading or workload TLS.
+Fresh hosted qualification remains required; the earlier gateway failure's cause
+is still unknown pending its retained child diagnostics.
+
+The additional 51-case Canvas publication adapter reference is integrated at
+`9a7892422`; 79 adjacent guards and both original/additive replays passed.
+The Rust publication port continues separately. Review also found that existing
+native Canvas validation/revocation custom URL templates use simple replacement
+where pinned Python uses `str.format`. A shared, behavior-preserving formatter
+and frozen cases for all three URL helpers are now required before claiming
+complete parity. No Python retirement or deployment is authorized by these
+local configuration/reference results.
+
 The next hosted run `34724081112` at `5876e4ffc` completed with failures in
 example compilation and deployment guards. Repairs are integrated at `71e8aca8a`
 (register the shared bounded helper in the capture example) and `72f966d11`
