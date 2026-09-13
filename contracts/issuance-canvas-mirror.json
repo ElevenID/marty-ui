@@ -1,6 +1,7 @@
 {
   "schema": "marty.issuance-canvas-mirror/v1",
   "phase": "frozen-controlled-reference-only",
+  "artifact_identity": "UTF-8; CRLF normalized to LF only",
   "source_repository": "ElevenID/marty-credentials",
   "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
   "upstream_surface_sha256": "2ebc803454da1df3fd38c585ebeeaf540d13bbe41be7b70093f0394df6de66e3",

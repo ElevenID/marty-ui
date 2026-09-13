@@ -111,6 +111,14 @@ ENVIRONMENT = {
 VIOLATIONS = []
 
 
+def canonical_json_bytes(raw):
+    """Checked-in JSON identity: strict UTF-8, CRLF to LF, no other changes.
+
+    This is not used for pinned Git blobs, which retain exact byte identities.
+    """
+    return raw.decode("utf-8").replace("\r\n", "\n").encode("utf-8")
+
+
 def read_sources(checkout):
     result = {}
     for name, (path, expected) in SOURCES.items():
@@ -1046,7 +1054,9 @@ def observe_sources(sources, *, audit=False):
                 "source_commit": REVISION,
                 "sources": SOURCES,
                 "selected_definitions": loader.selected,
-                "scenarios_sha256": hashlib.sha256(SCENARIOS.read_bytes()).hexdigest(),
+                "scenarios_sha256": hashlib.sha256(
+                    canonical_json_bytes(SCENARIOS.read_bytes())
+                ).hexdigest(),
                 "infrastructure_controls": controls,
                 "dependencies": {
                     name: importlib.metadata.version(name)
@@ -1091,7 +1101,7 @@ def main():
         read_sources(args.credentials_checkout), audit=args.audit
     )
     if args.check:
-        if REFERENCE.read_text(encoding="utf-8") != encoded:
+        if canonical_json_bytes(REFERENCE.read_bytes()).decode("utf-8") != encoded:
             raise ValueError("Frozen Canvas mirror observations differ")
         print(
             f"Canvas mirror reference PASS: {len(result['http'])} HTTP, {len(result['provider_cancellation'])} provider cancellations, {len(result['loop'])} loop, {len(result['configuration'])} configuration cases"

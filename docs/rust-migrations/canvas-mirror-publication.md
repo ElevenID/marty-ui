@@ -36,6 +36,12 @@ envelope, not an immediately deletable count.
 
 ## Reference proof boundary
 
+Checked-in reference and scenario artifact identities use strict UTF-8 with
+CRLF normalized to LF only. The capture and inert artifact guards share this
+normalization, so Windows checkouts preserve the same recorded digests. No JSON
+content, other whitespace, Unicode form, or pinned Git blob bytes are changed;
+pinned source identities continue to hash their exact raw Git object bytes.
+
 The capture reads exact pinned Git blobs, selects unchanged source AST bodies,
 models and registration, and executes them with synthetic configuration. It
 uses the frozen in-memory repository and source-derived seed helpers, a fixed

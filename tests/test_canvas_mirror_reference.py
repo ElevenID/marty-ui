@@ -37,10 +37,12 @@ def artifact():
     )
 
 
-def assert_artifact_files(contract, read_bytes):
+def assert_artifact_files(contract, read_bytes, capture):
     for owner in ("reference", "scenarios"):
         assert (
-            hashlib.sha256(read_bytes(contract[owner]["path"])).hexdigest()
+            hashlib.sha256(
+                capture.canonical_json_bytes(read_bytes(contract[owner]["path"]))
+            ).hexdigest()
             == contract[owner]["sha256"]
         )
 
@@ -91,7 +93,8 @@ def test_contract_artifact_hashes_and_source_coverage(capture, artifact):
     scenarios = json.loads(
         (ROOT / contract["scenarios"]["path"]).read_text(encoding="utf-8")
     )
-    assert_artifact_files(contract, lambda path: (ROOT / path).read_bytes())
+    assert_artifact_files(contract, lambda path: (ROOT / path).read_bytes(), capture)
+    assert contract["artifact_identity"] == "UTF-8; CRLF normalized to LF only"
     assert_connected(contract, artifact, scenarios, capture)
     coverage = json.loads(
         (ROOT / "contracts/issuance-native-coverage.json").read_text()
@@ -101,15 +104,37 @@ def test_contract_artifact_hashes_and_source_coverage(capture, artifact):
 
 
 @pytest.mark.parametrize("owner", ["reference", "scenarios"])
-def test_changed_artifact_is_rejected(owner):
+def test_changed_artifact_is_rejected(owner, capture):
     contract = json.loads(CONTRACT.read_text())
+    target = contract[owner]["path"]
+    original = (ROOT / target).read_bytes()
+    mutated = original.replace(b'"id":', b'"changed_id":', 1)
+    assert mutated != original
 
     def changed(path):
-        raw = (ROOT / path).read_bytes()
-        return raw + b" " if path == contract[owner]["path"] else raw
+        return mutated if path == target else (ROOT / path).read_bytes()
 
     with pytest.raises(AssertionError):
-        assert_artifact_files(contract, changed)
+        assert_artifact_files(contract, changed, capture)
+
+
+def test_crlf_artifacts_preserve_exact_identity(capture):
+    contract = json.loads(CONTRACT.read_text())
+
+    def crlf(path):
+        raw = capture.canonical_json_bytes((ROOT / path).read_bytes())
+        assert b"\n" in raw
+        return raw.replace(b"\n", b"\r\n")
+
+    assert_artifact_files(contract, crlf, capture)
+
+
+def test_canonical_json_identity_has_no_other_normalization(capture):
+    raw = '{"value":"é", "space": 1}\r\n'.encode("utf-8")
+    assert capture.canonical_json_bytes(raw) == raw.replace(b"\r\n", b"\n")
+    assert capture.canonical_json_bytes(b"{\r}") == b"{\r}"
+    with pytest.raises(UnicodeDecodeError):
+        capture.canonical_json_bytes(b"\xff")
 
 
 @pytest.mark.parametrize("mutation", ["route", "auth", "loop", "case", "source"])
