@@ -1,0 +1,455 @@
+{
+  "schema": "marty.canvas-mirror-scenarios/v1",
+  "clock": "2026-09-01T12:00:00+00:00",
+  "http": [
+    {
+      "id": "bridge_publish",
+      "operation": "publish",
+      "repeat": 2,
+      "expected_status": 200
+    },
+    {
+      "id": "badgr_publish",
+      "operation": "publish",
+      "provider": "badgr_api",
+      "repeat": 2,
+      "expected_status": 200
+    },
+    {
+      "id": "canvas_api_publish",
+      "operation": "publish",
+      "provider": "canvas_credentials_api",
+      "expected_status": 200
+    },
+    {
+      "id": "publish_http_failure",
+      "operation": "publish",
+      "provider_status": 503,
+      "expected_status": 502
+    },
+    {
+      "id": "publish_transport_failure",
+      "operation": "publish",
+      "provider_failure": "transport",
+      "expected_status": 502
+    },
+    {
+      "id": "publish_empty_success",
+      "operation": "publish",
+      "provider_body": "",
+      "expected_status": 200
+    },
+    {
+      "id": "publish_scalar_success",
+      "operation": "publish",
+      "provider_body": "17",
+      "expected_status": 200
+    },
+    {
+      "id": "badgr_missing_assertion",
+      "operation": "publish",
+      "provider": "badgr_api",
+      "provider_body": "{}",
+      "expected_status": 502
+    },
+    {
+      "id": "publish_missing_credential",
+      "operation": "publish",
+      "omit": "credential",
+      "expected_status": 404
+    },
+    {
+      "id": "publish_missing_transaction",
+      "operation": "publish",
+      "omit": "transaction",
+      "expected_status": 404
+    },
+    {
+      "id": "publish_missing_delivery",
+      "operation": "publish",
+      "omit": "delivery",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_missing_binding",
+      "operation": "publish",
+      "omit": "binding",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_missing_platform",
+      "operation": "publish",
+      "omit": "platform",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_disabled_binding",
+      "operation": "publish",
+      "disabled": "binding",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_disabled_platform",
+      "operation": "publish",
+      "disabled": "platform",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_gate_disabled",
+      "operation": "publish",
+      "gate": "enable_canvas_mirror_publish",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_operations_disabled",
+      "operation": "publish",
+      "gate": "enable_canvas_mirror_ops",
+      "expected_status": 409
+    },
+    {
+      "id": "publish_foreign_context",
+      "operation": "publish",
+      "organization_header": "org-other",
+      "expected_status": 404
+    },
+    {
+      "id": "publish_missing_context",
+      "operation": "publish",
+      "organization_header": null,
+      "expected_status": 403
+    },
+    {
+      "id": "pending_default",
+      "operation": "pending",
+      "expected_status": 200
+    },
+    {
+      "id": "pending_failed_excluded",
+      "operation": "pending",
+      "delivery_status": "failed",
+      "expected_status": 200
+    },
+    {
+      "id": "pending_failed_retry",
+      "operation": "pending",
+      "delivery_status": "failed",
+      "query": {
+        "retry_failed": "true"
+      },
+      "expected_status": 200
+    },
+    {
+      "id": "pending_all_organizations",
+      "operation": "pending",
+      "query": {
+        "organization_id": null
+      },
+      "expected_status": 200
+    },
+    {
+      "id": "pending_zero_limit",
+      "operation": "pending",
+      "query": {
+        "limit": "0"
+      },
+      "expected_status": 422
+    },
+    {
+      "id": "pending_excess_limit",
+      "operation": "pending",
+      "query": {
+        "limit": "201"
+      },
+      "expected_status": 422
+    },
+    {
+      "id": "pending_invalid_retry",
+      "operation": "pending",
+      "query": {
+        "retry_failed": "invalid"
+      },
+      "expected_status": 422
+    },
+    {
+      "id": "pending_failed_alert_webhook",
+      "operation": "pending",
+      "provider_status": 503,
+      "attempts": 4,
+      "webhook_status": 202,
+      "expected_status": 200
+    },
+    {
+      "id": "pending_webhook_refusal",
+      "operation": "pending",
+      "provider_status": 503,
+      "attempts": 4,
+      "webhook_status": 503,
+      "expected_status": 200
+    },
+    {
+      "id": "pending_warning_no_webhook",
+      "operation": "pending",
+      "provider_status": 503,
+      "attempts": 2,
+      "webhook_status": 202,
+      "expected_status": 200
+    },
+    {
+      "id": "status_bridge_revoke",
+      "operation": "resync",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "credential_status": "revoked",
+      "expected_status": 200
+    },
+    {
+      "id": "status_badgr_revoke",
+      "operation": "resync",
+      "provider": "badgr_api",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "credential_status": "revoked",
+      "expected_status": 200
+    },
+    {
+      "id": "status_badgr_suspend",
+      "operation": "resync",
+      "provider": "badgr_api",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "credential_status": "suspended",
+      "expected_status": 200
+    },
+    {
+      "id": "status_badgr_reinstate",
+      "operation": "resync",
+      "provider": "badgr_api",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "expected_status": 200
+    },
+    {
+      "id": "status_missing_credential",
+      "operation": "resync",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "omit": "credential",
+      "expected_status": 200
+    },
+    {
+      "id": "status_gate_disabled",
+      "operation": "resync",
+      "delivery_status": "delivered",
+      "sync_failure": true,
+      "gate": "enable_canvas_mirror_ops",
+      "expected_status": 200
+    },
+    {
+      "id": "status_no_failure",
+      "operation": "resync",
+      "delivery_status": "delivered",
+      "expected_status": 200
+    },
+    {
+      "id": "automation_both_batches",
+      "operation": "cycle",
+      "extra_sync_record": true,
+      "expected_status": 200
+    },
+    {
+      "id": "automation_failed_default_retry",
+      "operation": "cycle",
+      "delivery_status": "failed",
+      "expected_status": 200
+    },
+    {
+      "id": "health_pending",
+      "operation": "health",
+      "expected_status": 200
+    },
+    {
+      "id": "health_mixed_alerts",
+      "operation": "health",
+      "mixed_health": true,
+      "expected_status": 200
+    },
+    {
+      "id": "health_foreign_context",
+      "operation": "health",
+      "organization_header": "org-other",
+      "expected_status": 200
+    },
+    {
+      "id": "provenance_by_record",
+      "operation": "provenance",
+      "delivery_status": "delivered",
+      "expected_status": 200
+    },
+    {
+      "id": "provenance_by_external",
+      "operation": "provenance",
+      "delivery_status": "delivered",
+      "query": {
+        "delivery_record_id": null,
+        "external_credential_id": "external-1"
+      },
+      "expected_status": 200
+    },
+    {
+      "id": "provenance_by_credential",
+      "operation": "provenance",
+      "query": {
+        "delivery_record_id": null,
+        "credential_id": "cred-001"
+      },
+      "expected_status": 200
+    },
+    {
+      "id": "provenance_missing_selector",
+      "operation": "provenance",
+      "query": {
+        "delivery_record_id": null
+      },
+      "expected_status": 400
+    },
+    {
+      "id": "provenance_missing_context",
+      "operation": "provenance",
+      "organization_header": null,
+      "expected_status": 403
+    },
+    {
+      "id": "provenance_context_mismatch",
+      "operation": "provenance",
+      "organization_header": "org-other",
+      "expected_status": 403
+    },
+    {
+      "id": "provenance_foreign_record",
+      "operation": "provenance",
+      "record_organization": "org-other",
+      "expected_status": 404
+    },
+    {
+      "id": "provenance_missing_credential",
+      "operation": "provenance",
+      "omit": "credential",
+      "expected_status": 409
+    },
+    {
+      "id": "provenance_missing_transaction",
+      "operation": "provenance",
+      "omit": "transaction",
+      "expected_status": 200
+    },
+    {
+      "id": "provenance_wrong_account",
+      "operation": "provenance",
+      "query": {
+        "canvas_account_id": "other-account"
+      },
+      "expected_status": 404
+    },
+    {
+      "id": "badgr_missing_recipient",
+      "operation": "publish",
+      "provider": "badgr_api",
+      "missing_recipient": true,
+      "expected_status": 502
+    }
+  ],
+  "provider_cancellation": [
+    {"id":"cancel_asgi_bridge_provider","operation":"publish"},
+    {"id":"cancel_asgi_badgr_provider","operation":"publish","provider":"badgr_api"},
+    {"id":"cancel_loop_publish_provider","operation":"pending","entrypoint":"automation_loop"},
+    {"id":"cancel_loop_sync_provider","operation":"resync","entrypoint":"automation_loop","delivery_status":"delivered","sync_failure":true}
+  ],
+  "authentication": {
+    "operations": [
+      "publish",
+      "pending",
+      "resync",
+      "cycle",
+      "health",
+      "provenance"
+    ],
+    "keys": [
+      null,
+      "incorrect"
+    ]
+  },
+  "loop": [
+    {
+      "id": "disabled",
+      "enabled": false
+    },
+    {
+      "id": "startup_both",
+      "sleeps": 3
+    },
+    {
+      "id": "delayed_start",
+      "run_on_startup": false,
+      "sleeps": 3
+    },
+    {
+      "id": "completion_relative",
+      "publish_duration": 4,
+      "sync_duration": 7,
+      "sleeps": 3
+    },
+    {
+      "id": "publish_exception_continues",
+      "publish_failure": "runtime",
+      "sleeps": 2
+    },
+    {
+      "id": "sync_exception_continues",
+      "sync_failure": "runtime",
+      "sleeps": 2
+    },
+    {
+      "id": "cancel_publish",
+      "cancel_at": "publish"
+    },
+    {
+      "id": "cancel_sync",
+      "cancel_at": "sync"
+    },
+    {
+      "id": "cancel_sleep",
+      "cancel_at": "sleep"
+    }
+  ],
+  "configuration": [
+    {
+      "id": "default",
+      "env": {}
+    },
+    {
+      "id": "enabled",
+      "env": {
+        "CANVAS_MIRROR_WORKER_ENABLED": " YeS ",
+        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID": " org-1 ",
+        "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP": "off"
+      }
+    },
+    {
+      "id": "invalid",
+      "env": {
+        "CANVAS_MIRROR_WORKER_ENABLED": "invalid",
+        "CANVAS_MIRROR_WORKER_BATCH_LIMIT": "0",
+        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS": "garbage",
+        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS": "-4"
+      }
+    },
+    {
+      "id": "python_integer",
+      "env": {
+        "CANVAS_MIRROR_WORKER_BATCH_LIMIT": " +٣_٠ ",
+        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS": "5",
+        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS": "7"
+      }
+    }
+  ]
+}
