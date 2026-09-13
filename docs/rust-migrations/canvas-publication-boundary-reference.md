@@ -3,18 +3,20 @@
 This is a source-pinned reference-only increment, not native adapter adoption or
 HTTP/loop selection. The original `canvas-mirror-python-reference.json` and
 51-case `canvas-mirror-adapter-reference.json` remain byte-for-byte unchanged.
-The separate `canvas-publication-boundary-reference.json` contains 13 actual
+The separate `canvas-publication-boundary-reference.json` contains 15 actual
 original adapter observations against Credentials
 `578e86ef43166be79add2d812e92ef650535edaa`; all executed application/model/seed
 source blobs are verified using the existing loader and bounded child.
 
-Eight cases cover bridge/Badgr issued/expiry timestamps with milliseconds,
-microseconds, non-UTC fixed offsets and absent expiry. The original typed model
+Ten cases cover bridge/Badgr issued/expiry timestamps with milliseconds,
+microseconds, non-UTC fixed offsets, absent expiry and naive datetimes. The original typed model
 receives `datetime.fromisoformat` values; outbound adapter payloads show actual
 Python `isoformat` behavior. For example, `.123` becomes `.123000`, and a
 supplied `-06:00` offset remains `-06:00`. This is not evidence that PostgreSQL
 `timestamptz` retains the input offset: repository UTC normalization remains a
-distinct boundary to qualify in native persistence tests.
+distinct boundary to qualify in native persistence tests. Naive input is accepted
+by the original dataclass and emitted without an invented timezone; those two
+cases are appended after the prior 13 observations and leave them unchanged.
 
 Two cases cancel actual bridge/Badgr adapter work after its controlled HTTP
 callback is entered. The same cancellation/task-join helper serves the original
@@ -36,7 +38,7 @@ python -m pytest tests/test_canvas_mirror_reference.py
 ```
 
 `contracts/issuance-canvas-mirror.json` binds both new artifact hashes, the exact
-8/2/3 counts and the original raw source revision. JSON artifact identity is
+10/2/3 counts and the original raw source revision. JSON artifact identity is
 UTF-8 with CRLF normalized to LF only; Git source blobs still use raw byte
 identity. Root-discovered guards retain hash/content-mutation, CRLF, source,
 complete-case, response-shape, cancellation ownership and mutually exclusive

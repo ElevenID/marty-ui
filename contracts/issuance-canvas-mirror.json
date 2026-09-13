@@ -26,13 +26,13 @@
   "adapter_result_encoding": "python-json-text",
   "publication_boundary_reference": {
     "path": "contracts/canvas-publication-boundary-reference.json",
-    "sha256": "aab6f053eec5f8529e57ed3dbacf7de46fc6a7fee9e40211c1654503d92b22f6"
+    "sha256": "aca06d4f4b160610e70a93efec7a0938ad23c92441a2e249c239ac99b2ed9080"
   },
   "publication_boundary_scenarios": {
     "path": "contracts/canvas-publication-boundary-scenarios.json",
-    "sha256": "194c79ad2b0d782d9cccfaa45173bc4fb28c943cf0e0441fded3e5e88599ba7d"
+    "sha256": "a0b975bf5ccb374b180c2f32f5aee8bd0e993d4909bc31596525ab5e65994b1f"
   },
-  "publication_boundary_observations": {"datetime":8,"adapter_cancellation":2,"response_shapes":3},
+  "publication_boundary_observations": {"datetime":10,"adapter_cancellation":2,"response_shapes":3},
   "mandatory_artifact_guards": "tests/test_canvas_mirror_reference.py",
   "routes": [
     {"method":"POST","path":"/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish","operation":"publish_issued_credential_canvas_mirror","source_line":6190},

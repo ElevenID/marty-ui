@@ -15,6 +15,8 @@
     {"id": "badgr_provider_cancel", "provider": "badgr_api", "cancel_provider": true},
     {"id": "badgr_empty_result_data_fallback", "provider": "badgr_api", "provider_body": "{\"result\":[],\"data\":[{\"entityId\":\"data-id\",\"openBadgeId\":\"https://badges.example/data-id\"}]}"},
     {"id": "badgr_first_nonobject_no_fallback", "provider": "badgr_api", "provider_body": "{\"result\":[false,{\"entityId\":\"later-id\"}],\"data\":[{\"entityId\":\"data-id\"}]}", "expected_exception": "RuntimeError"},
-    {"id": "badgr_empty_result_object_no_fallback", "provider": "badgr_api", "provider_body": "{\"result\":{},\"data\":[{\"entityId\":\"data-id\"}]}", "expected_exception": "RuntimeError"}
+    {"id": "badgr_empty_result_object_no_fallback", "provider": "badgr_api", "provider_body": "{\"result\":{},\"data\":[{\"entityId\":\"data-id\"}]}", "expected_exception": "RuntimeError"},
+    {"id": "bridge_naive_datetime", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123", "expires_at": "2027-08-31T23:59:58.123456"}}},
+    {"id": "badgr_naive_datetime", "provider": "badgr_api", "inputs": {"credential": {"issued_at": "2026-08-31T23:59:58.123", "expires_at": "2027-08-31T23:59:58.123456"}}}
   ]
 }

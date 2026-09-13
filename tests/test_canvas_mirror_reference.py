@@ -107,7 +107,7 @@ def require_publication_boundary(contract, capture, read_bytes):
         == contract["publication_boundary_scenarios"]["sha256"]
     )
     assert contract["publication_boundary_observations"] == {
-        "datetime": 8,
+        "datetime": 10,
         "adapter_cancellation": 2,
         "response_shapes": 3,
     }
@@ -125,6 +125,8 @@ def require_publication_boundary(contract, capture, read_bytes):
         "badgr_empty_result_data_fallback",
         "badgr_first_nonobject_no_fallback",
         "badgr_empty_result_object_no_fallback",
+        "bridge_naive_datetime",
+        "badgr_naive_datetime",
     ]
     assert [case["id"] for case in reference["adapter"]] == expected_ids
     assert [case["id"] for case in scenarios["adapter"]] == expected_ids
@@ -164,6 +166,15 @@ def require_publication_boundary(contract, capture, read_bytes):
             assert issued == expected
         if index == 6:
             assert body["credential"]["expires_at"] is None
+        if index in (13, 14):
+            issued = (
+                body["credential"]["issued_at"] if index == 13 else body["issuedOn"]
+            )
+            expiry = (
+                body["credential"]["expires_at"] if index == 13 else body["expires"]
+            )
+            assert issued == "2026-08-31T23:59:58.123000"
+            assert expiry == "2027-08-31T23:59:58.123456"
         if index == 7:
             assert "expires" not in body
         if index == 10:
