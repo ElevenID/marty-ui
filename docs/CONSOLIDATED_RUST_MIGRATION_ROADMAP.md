@@ -5816,6 +5816,14 @@ Combined configuration/registration tests passed 91 cases after extending the
 strict expected CI roster to include the already-approved Envoy image build;
 no runtime configuration or assertion strength was removed.
 
+Integrated qualification at `854844bb591` subsequently passed the complete
+repository Python suite: **3,569 passed, 3 skipped** (228.53 seconds). The combined
+Rust contract target compiled, all three affected Flow unit tests passed, and
+actual-main (12.39 seconds), retained PostgreSQL (5.78 seconds), rendered selection
+(10.49 seconds), and all three loader/process controls passed. Both logged Flow
+processes and all seven exact-owned fixture containers were independently verified
+absent. These local results do not replace the pending hosted Linux gates.
+
 Remaining work includes resolved Kubernetes runtime acceptance, hosted Linux
 business gates, release-image/gateway/callback/selfhost TLS acceptance, the
 remaining 57 issuance HTTP inventory entries and intended consumers, exact-head
