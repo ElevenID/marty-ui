@@ -98,6 +98,12 @@ REFERENCE = ROOT / "contracts/canvas-mirror-python-reference.json"
 SCENARIOS = ROOT / "contracts/canvas-mirror-scenarios.json"
 ADAPTER_SCENARIOS = ROOT / "contracts/canvas-mirror-adapter-scenarios.json"
 ADAPTER_REFERENCE = ROOT / "contracts/canvas-mirror-adapter-reference.json"
+PUBLICATION_BOUNDARY_SCENARIOS = (
+    ROOT / "contracts/canvas-publication-boundary-scenarios.json"
+)
+PUBLICATION_BOUNDARY_REFERENCE = (
+    ROOT / "contracts/canvas-publication-boundary-reference.json"
+)
 ENVIRONMENT = {
     "ISSUANCE_API_KEY": "synthetic-mirror-management",
     "ISSUER_BASE_URL": "https://issuer.example",
@@ -156,12 +162,26 @@ def verify_sources(sources):
             raise ValueError(f"Untrusted observation source: {name}")
 
 
-def bounded_observation_child(sources, *, audit=False, adapter_reference=False):
+def require_reference_mode(
+    *, audit=False, adapter_reference=False, publication_boundary=False
+):
+    if sum((audit, adapter_reference, publication_boundary)) > 1:
+        raise ValueError("Reference and audit modes are mutually exclusive")
+
+
+def bounded_observation_child(
+    sources, *, audit=False, adapter_reference=False, publication_boundary=False
+):
     """One owned child, no subprocess descendants; capped pipe drains + deadline.
 
     Source Git reads precede this observation-phase bound. A child that swallows
     cancellation cannot hang the capture parent or yield a partial artifact.
     """
+    require_reference_mode(
+        audit=audit,
+        adapter_reference=adapter_reference,
+        publication_boundary=publication_boundary,
+    )
     verify_sources(sources)
     failure = threading.Event()
     outputs = [bytearray(), bytearray()]
@@ -193,6 +213,8 @@ def bounded_observation_child(sources, *, audit=False, adapter_reference=False):
         arguments.append("--audit")
     if adapter_reference:
         arguments.append("--adapter-reference")
+    if publication_boundary:
+        arguments.append("--publication-boundary-reference")
     # A pre-populated owned regular file avoids an unbounded pipe write to a
     # child that never reads stdin. It is unlinked by this context on every path.
     with tempfile.TemporaryFile(dir=ROOT) as source_input:
@@ -253,6 +275,8 @@ def bounded_observation_child(sources, *, audit=False, adapter_reference=False):
         if result.get("schema") != (
             "marty.canvas-mirror-source-audit/v1"
             if audit
+            else "marty.canvas-publication-boundary-reference/v1"
+            if publication_boundary
             else "marty.canvas-mirror-adapter-reference/v1"
             if adapter_reference
             else "marty.canvas-mirror-python-reference/v1"
@@ -619,6 +643,7 @@ async def prepare(loader, case):
                     "organization_id",
                     "transaction_id",
                     "issuer_did",
+                    "issued_at",
                     "expires_at",
                     "status_list_entries",
                     "applicant_id",
@@ -636,7 +661,7 @@ async def prepare(loader, case):
             if set(changes) - allowed:
                 raise ValueError(f"Unsupported adapter input field: {name}")
             for key, value in changes.items():
-                if key == "expires_at" and value is not None:
+                if key in {"issued_at", "expires_at"} and value is not None:
                     value = datetime.fromisoformat(value)
                 setattr(owner, key, copy.deepcopy(value))
     if case.get("omit") != "transaction":
@@ -862,18 +887,19 @@ async def observe_http(loader, routes, case):
 
                 for _ in range(case.get("repeat", 1)):
                     try:
-                        result = await asyncio.wait_for(
-                            adapter.publish_canvas_credential_mirror(
-                                credential=next(iter(repo._credentials.values())),
-                                transaction=next(iter(repo._transactions.values())),
-                                platform=next(iter(repo._canvas_platforms.values())),
-                                delivery_record=next(
-                                    iter(repo._delivery_records.values())
-                                ),
-                                secret_resolver=secret,
-                            ),
-                            timeout=2,
+                        action = adapter.publish_canvas_credential_mirror(
+                            credential=next(iter(repo._credentials.values())),
+                            transaction=next(iter(repo._transactions.values())),
+                            platform=next(iter(repo._canvas_platforms.values())),
+                            delivery_record=next(iter(repo._delivery_records.values())),
+                            secret_resolver=secret,
                         )
+                        if case.get("cancel_provider"):
+                            responses.append(
+                                await cancel_provider_action(action, provider_entered)
+                            )
+                            continue
+                        result = await asyncio.wait_for(action, timeout=2)
                     except Exception as error:
                         require_clean_capture()
                         expected = case.get("expected_exception")
@@ -919,20 +945,7 @@ async def observe_http(loader, routes, case):
                     action = transport.request(
                         method, path, headers=headers, params=query
                     )
-                task = asyncio.create_task(action)
-                try:
-                    await asyncio.wait_for(provider_entered.wait(), 2)
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        responses.append({"outcome": "CancelledError"})
-                    else:
-                        raise AssertionError("Provider cancellation was swallowed")
-                finally:
-                    if not task.done():
-                        task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                responses.append(await cancel_provider_action(action, provider_entered))
             else:
                 for _ in range(case.get("repeat", 1)):
                     response = await asyncio.wait_for(
@@ -959,6 +972,24 @@ async def observe_http(loader, routes, case):
         "trace": trace,
         "after": snapshot(repo),
     }
+
+
+async def cancel_provider_action(action, provider_entered):
+    # Preserve the prior action/cancel/join sequence for original ASGI and loop
+    # cases. The complete parent-owned child deadline bounds swallowed cancel.
+    task = asyncio.create_task(action)
+    try:
+        await asyncio.wait_for(provider_entered.wait(), 2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return {"outcome": "CancelledError"}
+        raise AssertionError("Provider cancellation was swallowed")
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def observe_loop(routes, case):
@@ -1139,7 +1170,14 @@ async def verify_infrastructure_controls(loader, routes):
     return ["missing-global-fatal", "caught-unowned-origin-fatal"]
 
 
-def observe_sources(sources, *, audit=False, adapter_reference=False):
+def observe_sources(
+    sources, *, audit=False, adapter_reference=False, publication_boundary=False
+):
+    require_reference_mode(
+        audit=audit,
+        adapter_reference=adapter_reference,
+        publication_boundary=publication_boundary,
+    )
     verify_sources(sources)
     with patch.dict(os.environ, ENVIRONMENT, clear=True):
         loader = PinnedDefinitions(sources)
@@ -1171,10 +1209,16 @@ def observe_sources(sources, *, audit=False, adapter_reference=False):
             for module in loader.modules.values():
                 if getattr(module, "datetime", None) is datetime:
                     module.datetime = FixedDatetime
-            scenario_path = ADAPTER_SCENARIOS if adapter_reference else SCENARIOS
+            scenario_path = (
+                PUBLICATION_BOUNDARY_SCENARIOS
+                if publication_boundary
+                else ADAPTER_SCENARIOS
+                if adapter_reference
+                else SCENARIOS
+            )
             scenarios = json.loads(scenario_path.read_text(encoding="utf-8"))
             controls = asyncio.run(verify_infrastructure_controls(loader, routes))
-            if adapter_reference:
+            if adapter_reference or publication_boundary:
 
                 async def adapter_observations():
                     loader.validate_bindings()
@@ -1210,7 +1254,9 @@ def observe_sources(sources, *, audit=False, adapter_reference=False):
             else:
                 observed = asyncio.run(observe(loader, routes, scenarios))
             return {
-                "schema": "marty.canvas-mirror-adapter-reference/v1"
+                "schema": "marty.canvas-publication-boundary-reference/v1"
+                if publication_boundary
+                else "marty.canvas-mirror-adapter-reference/v1"
                 if adapter_reference
                 else "marty.canvas-mirror-python-reference/v1",
                 "source_commit": REVISION,
@@ -1225,7 +1271,7 @@ def observe_sources(sources, *, audit=False, adapter_reference=False):
                     for name in ("fastapi", "pydantic", "httpx")
                 },
                 "boundary": "Pinned publication adapter and models; original seed helpers with explicit inputs; controlled HTTP/org-secret lookup and clock; no ASGI/PG/filesystem/TLS/deployed proof"
-                if adapter_reference
+                if adapter_reference or publication_boundary
                 else "Pinned ASGI routes/models; frozen memory repository; controlled HTTP transport and clock; loop batch ports controlled; no PG/gateway/TLS/deployed proof",
                 **observed,
             }
@@ -1238,6 +1284,7 @@ def main():
     parser.add_argument("credentials_checkout", type=Path, nargs="?")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--adapter-reference", action="store_true")
+    parser.add_argument("--publication-boundary-reference", action="store_true")
     parser.add_argument(
         "--audit", action="store_true", help="Validate pinned AST closure only"
     )
@@ -1259,6 +1306,7 @@ def main():
             json.load(sys.stdin),
             audit=args.audit,
             adapter_reference=args.adapter_reference,
+            publication_boundary=args.publication_boundary_reference,
         )
         print(json.dumps(result, ensure_ascii=True, indent=2, sort_keys=True))
         return
@@ -1268,16 +1316,33 @@ def main():
         parser.error("--check cannot be combined with display/audit modes")
     if args.adapter_reference and (args.audit or args.summary):
         parser.error("--adapter-reference cannot be combined with audit/summary")
+    if args.publication_boundary_reference and (
+        args.audit or args.summary or args.adapter_reference
+    ):
+        parser.error(
+            "--publication-boundary-reference cannot be combined with other reference/audit/summary modes"
+        )
     encoded, result = bounded_observation_child(
         read_sources(args.credentials_checkout),
         audit=args.audit,
         adapter_reference=args.adapter_reference,
+        publication_boundary=args.publication_boundary_reference,
     )
     if args.check:
-        reference_path = ADAPTER_REFERENCE if args.adapter_reference else REFERENCE
+        reference_path = (
+            PUBLICATION_BOUNDARY_REFERENCE
+            if args.publication_boundary_reference
+            else ADAPTER_REFERENCE
+            if args.adapter_reference
+            else REFERENCE
+        )
         if canonical_json_bytes(reference_path.read_bytes()).decode("utf-8") != encoded:
             raise ValueError("Frozen Canvas mirror observations differ")
-        if args.adapter_reference:
+        if args.publication_boundary_reference:
+            print(
+                f"Canvas publication boundary reference PASS: {len(result['adapter'])} cases"
+            )
+        elif args.adapter_reference:
             print(
                 f"Canvas mirror adapter reference PASS: {len(result['adapter'])} cases"
             )

@@ -1,0 +1,2541 @@
+{
+  "adapter": [
+    {
+      "after": {
+        "snapshot_sha256": "16604233c921a41acf3ae45a36d8f16557c8cd4ee4ac0f4c12a7773675accc6c"
+      },
+      "before": {
+        "snapshot_sha256": "16604233c921a41acf3ae45a36d8f16557c8cd4ee4ac0f4c12a7773675accc6c"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "bridge_milliseconds",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"publish_url\":\"https://bridge.example/publish\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"id\":\"external-1\",\"issuer_id\":\"issuer-elevenid\"},\"request_id\":\"synthetic-request-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-08-31T23:59:58.123000+00:00\",\"expires_at\":\"2027-08-31T23:59:58.456000+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\",\"canvas_credentials\":{}}}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://bridge.example/publish"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "ae5abd9adb9eda83111d5c808bd2c1674e822f46914ae529b064aac813a63704"
+      },
+      "before": {
+        "snapshot_sha256": "ae5abd9adb9eda83111d5c808bd2c1674e822f46914ae529b064aac813a63704"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_milliseconds",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"provider\":\"badgr_api\",\"api_base_url\":\"https://api.badgr.io\",\"assertion_scope\":\"badgeclasses\",\"badgeclass_id\":\"badge-1\",\"publish_url\":\"https://api.badgr.io/v2/badgeclasses/badge-1/assertions\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"result\":[{\"entityId\":\"external-1\",\"issuer\":\"issuer-elevenid\",\"openBadgeId\":\"https://badges.example/assertion/external-1\"}]},\"request_id\":\"synthetic-request-1\",\"credential_url\":\"https://badges.example/assertion/external-1\",\"open_badge_id\":\"https://badges.example/assertion/external-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-08-31T23:59:58.123000+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-08-31T23:59:58.456000+00:00\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "400e6555735d575d50a72dc93e9969a7535c63a02696f56d846ef4c3ff129edd"
+      },
+      "before": {
+        "snapshot_sha256": "400e6555735d575d50a72dc93e9969a7535c63a02696f56d846ef4c3ff129edd"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "bridge_microseconds",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"publish_url\":\"https://bridge.example/publish\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"id\":\"external-1\",\"issuer_id\":\"issuer-elevenid\"},\"request_id\":\"synthetic-request-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-08-31T23:59:58.123456+00:00\",\"expires_at\":\"2027-08-31T23:59:58.654321+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\",\"canvas_credentials\":{}}}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://bridge.example/publish"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "bf56ed300992496d9fcfca3be00f13a98c90021d3c07aac4c5750aaaf535d711"
+      },
+      "before": {
+        "snapshot_sha256": "bf56ed300992496d9fcfca3be00f13a98c90021d3c07aac4c5750aaaf535d711"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_microseconds",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"provider\":\"badgr_api\",\"api_base_url\":\"https://api.badgr.io\",\"assertion_scope\":\"badgeclasses\",\"badgeclass_id\":\"badge-1\",\"publish_url\":\"https://api.badgr.io/v2/badgeclasses/badge-1/assertions\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"result\":[{\"entityId\":\"external-1\",\"issuer\":\"issuer-elevenid\",\"openBadgeId\":\"https://badges.example/assertion/external-1\"}]},\"request_id\":\"synthetic-request-1\",\"credential_url\":\"https://badges.example/assertion/external-1\",\"open_badge_id\":\"https://badges.example/assertion/external-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-08-31T23:59:58.123456+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-08-31T23:59:58.654321+00:00\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "4da2eb70f40ff8abb7dc67e807668eaee464df335b1ab04504587a547c21d80f"
+      },
+      "before": {
+        "snapshot_sha256": "4da2eb70f40ff8abb7dc67e807668eaee464df335b1ab04504587a547c21d80f"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "bridge_offset",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"publish_url\":\"https://bridge.example/publish\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"id\":\"external-1\",\"issuer_id\":\"issuer-elevenid\"},\"request_id\":\"synthetic-request-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-08-31T23:59:58.123000-06:00\",\"expires_at\":\"2027-08-31T23:59:58+05:30\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\",\"canvas_credentials\":{}}}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://bridge.example/publish"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "f8f6ed8148883e46218b7f736ac69adad1688bccd09350c2fbc3393717c8b7c5"
+      },
+      "before": {
+        "snapshot_sha256": "f8f6ed8148883e46218b7f736ac69adad1688bccd09350c2fbc3393717c8b7c5"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_offset",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"provider\":\"badgr_api\",\"api_base_url\":\"https://api.badgr.io\",\"assertion_scope\":\"badgeclasses\",\"badgeclass_id\":\"badge-1\",\"publish_url\":\"https://api.badgr.io/v2/badgeclasses/badge-1/assertions\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"result\":[{\"entityId\":\"external-1\",\"issuer\":\"issuer-elevenid\",\"openBadgeId\":\"https://badges.example/assertion/external-1\"}]},\"request_id\":\"synthetic-request-1\",\"credential_url\":\"https://badges.example/assertion/external-1\",\"open_badge_id\":\"https://badges.example/assertion/external-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-08-31T23:59:58.123000-06:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-08-31T23:59:58+05:30\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "5c54bda5a21a04949c593eba2ee7879591d342155780d0140451ff54127bb102"
+      },
+      "before": {
+        "snapshot_sha256": "5c54bda5a21a04949c593eba2ee7879591d342155780d0140451ff54127bb102"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "bridge_expiry_absent",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"publish_url\":\"https://bridge.example/publish\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"id\":\"external-1\",\"issuer_id\":\"issuer-elevenid\"},\"request_id\":\"synthetic-request-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":null},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\",\"canvas_credentials\":{}}}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://bridge.example/publish"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "8b87f53e1d539b9935a02361e62a407a26b73bfef159d3306850a704277d6bc2"
+      },
+      "before": {
+        "snapshot_sha256": "8b87f53e1d539b9935a02361e62a407a26b73bfef159d3306850a704277d6bc2"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_expiry_absent",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"external-1\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"provider\":\"badgr_api\",\"api_base_url\":\"https://api.badgr.io\",\"assertion_scope\":\"badgeclasses\",\"badgeclass_id\":\"badge-1\",\"publish_url\":\"https://api.badgr.io/v2/badgeclasses/badge-1/assertions\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"result\":[{\"entityId\":\"external-1\",\"issuer\":\"issuer-elevenid\",\"openBadgeId\":\"https://badges.example/assertion/external-1\"}]},\"request_id\":\"synthetic-request-1\",\"credential_url\":\"https://badges.example/assertion/external-1\",\"open_badge_id\":\"https://badges.example/assertion/external-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}}}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "845a9791ba9ed8df1d9a4aa1b89d3edcb56c7e19eccd7ca3ef1ff85b478386cc"
+      },
+      "before": {
+        "snapshot_sha256": "845a9791ba9ed8df1d9a4aa1b89d3edcb56c7e19eccd7ca3ef1ff85b478386cc"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "bridge_provider_cancel",
+      "request": null,
+      "responses": [
+        {
+          "outcome": "CancelledError"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuer_id\":\"issuer-elevenid\",\"organization_id\":\"org-1\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"canvas_account_id\":\"canvas-account-1\",\"canvas_base_url\":\"https://canvas.example.test\",\"credential\":{\"id\":\"cred-001\",\"transaction_id\":\"tx-001\",\"credential_template_id\":\"tmpl-1\",\"format\":\"w3c_vcdm_v2_sd_jwt\",\"jwt\":\"eyJhbGciOiJFZERTQSJ9.test.sig\",\"hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"revocation_profile_id\":null,\"status_list_entries\":[],\"issued_at\":\"2026-03-01T00:00:00+00:00\",\"expires_at\":\"2027-03-01T00:00:00+00:00\"},\"recipient\":{\"applicant_id\":\"applicant-1\",\"subject_did\":\"did:key:z6Mk_subject\"},\"source\":{\"delivery_record_id\":\"delivery-001\",\"delivery_mode\":\"wallet_plus_canvas_mirror\",\"application_id\":null},\"metadata\":{\"queue\":\"canvas_credentials_mirror\",\"canvas_platform_id\":\"platform-1\",\"canvas_program_binding_id\":\"binding-1\",\"publish_attempts\":0,\"private_fixture_marker\":\"must-not-enter-public-provenance-metadata\",\"canvas_credentials\":{}}}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://bridge.example/publish"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "before": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_provider_cancel",
+      "request": null,
+      "responses": [
+        {
+          "outcome": "CancelledError"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "before": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_empty_result_data_fallback",
+      "request": null,
+      "responses": [
+        {
+          "result_encoding": "python-json-text",
+          "result_json": "{\"external_credential_id\":\"data-id\",\"external_issuer_id\":\"issuer-elevenid\",\"metadata\":{\"provider\":\"badgr_api\",\"api_base_url\":\"https://api.badgr.io\",\"assertion_scope\":\"badgeclasses\",\"badgeclass_id\":\"badge-1\",\"publish_url\":\"https://api.badgr.io/v2/badgeclasses/badge-1/assertions\",\"published_at\":\"2026-09-01T12:00:00+00:00\",\"http_status\":201,\"publish_response\":{\"result\":[],\"data\":[{\"entityId\":\"data-id\",\"openBadgeId\":\"https://badges.example/data-id\"}]},\"request_id\":\"synthetic-request-1\",\"credential_url\":\"https://badges.example/data-id\",\"open_badge_id\":\"https://badges.example/data-id\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "before": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_first_nonobject_no_fallback",
+      "request": null,
+      "responses": [
+        {
+          "detail": "Canvas Credentials assertion publish response did not include an assertion id",
+          "exception": "RuntimeError"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    },
+    {
+      "after": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "before": {
+        "snapshot_sha256": "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0"
+      },
+      "entrypoint": "direct_adapter",
+      "id": "badgr_empty_result_object_no_fallback",
+      "request": null,
+      "responses": [
+        {
+          "detail": "Canvas Credentials assertion publish response did not include an assertion id",
+          "exception": "RuntimeError"
+        }
+      ],
+      "trace": [
+        {
+          "follow_redirects": false,
+          "kind": "client",
+          "timeout": 20.0,
+          "transport": "PinnedCanvasAsyncTransport",
+          "trust_env": false
+        },
+        {
+          "body": "{\"issuedOn\":\"2026-03-01T00:00:00+00:00\",\"recipient\":{\"identity\":\"learner@example.edu\",\"type\":\"email\",\"hashed\":true},\"allowDuplicateAwards\":false,\"narrative\":\"Issued by ElevenID from verified Canvas course activity.\",\"evidence\":[{\"url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\",\"name\":\"ElevenID canonical credential record\",\"description\":\"Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.\",\"narrative\":\"Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.\",\"genre\":\"Credential provenance\",\"audience\":\"Verifiers and employers\"}],\"extensions\":{\"value\":{\"elevenid\":{\"credential_id\":\"cred-001\",\"credential_hash\":\"62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa\",\"issuer_did\":\"did:web:issuer.example\",\"delivery_record_id\":\"delivery-001\",\"canvas_account_id\":\"canvas-account-1\",\"provenance_url\":\"https://issuer.example/console/org/operate/verify?delivery_record_id=delivery-001&credential_id=cred-001&canvas_account_id=canvas-account-1&organization_id=org-1\"}}},\"expires\":\"2027-03-01T00:00:00+00:00\"}",
+          "headers": {
+            "accept": "application/json",
+            "authorization": "Bearer synthetic-provider-token",
+            "content-type": "application/json"
+          },
+          "kind": "http",
+          "method": "POST",
+          "url": "https://api.badgr.io/v2/badgeclasses/badge-1/assertions"
+        }
+      ]
+    }
+  ],
+  "boundary": "Pinned publication adapter and models; original seed helpers with explicit inputs; controlled HTTP/org-secret lookup and clock; no ASGI/PG/filesystem/TLS/deployed proof",
+  "dependencies": {
+    "fastapi": "0.135.3",
+    "httpx": "0.28.1",
+    "pydantic": "2.13.0"
+  },
+  "http": [],
+  "infrastructure_controls": [
+    "missing-global-fatal",
+    "caught-unowned-origin-fatal"
+  ],
+  "provider_cancellation": [],
+  "scenarios_sha256": "194c79ad2b0d782d9cccfaa45173bc4fb28c943cf0e0441fded3e5e88599ba7d",
+  "schema": "marty.canvas-publication-boundary-reference/v1",
+  "selected_definitions": {
+    "issuance.application.canvas_feature_flags": [
+      "_enabled",
+      "canvas_pilot_organizations",
+      "os",
+      "portable_canvas_enabled",
+      "portable_canvas_enabled_for_organization",
+      "private_canvas_origin_allowlist"
+    ],
+    "issuance.application.canvas_lti_services": [
+      "CanvasLtiServiceError",
+      "PinnedCanvasAsyncTransport",
+      "_canvas_origin_is_private_allowlisted",
+      "_is_private_canvas_hostname",
+      "_normalized_private_canvas_origins",
+      "_resolved_canvas_addresses",
+      "canvas_http_client",
+      "httpx",
+      "ipaddress",
+      "normalize_canvas_https_origin",
+      "os",
+      "private_canvas_origin_allowlist",
+      "socket",
+      "urlparse",
+      "validate_canvas_origin"
+    ],
+    "issuance.application.canvas_runtime": [
+      "Any",
+      "CANVAS_FEATURE_FLAG_KEYS",
+      "normalize_canvas_feature_flags"
+    ],
+    "issuance.domain.entities": [
+      "Any",
+      "Application",
+      "ApplicationStatus",
+      "ApplicationTemplate",
+      "ApprovalPolicySet",
+      "AuthorizationSession",
+      "CanvasAwardCandidate",
+      "CanvasAwardCandidateState",
+      "CanvasCandidateObservation",
+      "CanvasEventReceipt",
+      "CanvasEvidenceFactType",
+      "CanvasEvidencePassRule",
+      "CanvasEvidenceRequirement",
+      "CanvasEvidenceScope",
+      "CanvasEvidenceSource",
+      "CanvasEvidenceSyncJob",
+      "CanvasEvidenceSyncJobStatus",
+      "CanvasEvidenceSyncTarget",
+      "CanvasEvidenceSyncTargetType",
+      "CanvasLearnerIdentity",
+      "CanvasLearnerIdentityStatus",
+      "CanvasLtiLaunchState",
+      "CanvasOAuthAuthorization",
+      "CanvasOAuthConnection",
+      "CanvasOAuthConnectionStatus",
+      "CanvasPlatform",
+      "CanvasProgramBinding",
+      "CanvasSyncReadinessState",
+      "CanvasWorkerHeartbeat",
+      "CredentialDeliveryRecord",
+      "CredentialDeliveryStatus",
+      "CredentialStatus",
+      "DeliveryTarget",
+      "Enum",
+      "EventType",
+      "EvidenceFact",
+      "EvidenceFactHead",
+      "EvidencePolicyReview",
+      "EvidencePolicyReviewStatus",
+      "IssuanceEvent",
+      "IssuanceIdempotencyConflictError",
+      "IssuanceStatus",
+      "IssuanceTransaction",
+      "IssuedCredential",
+      "Oid4vciRegisteredClient",
+      "OrganizationIntegrationSecret",
+      "_AUTH_SESSION_TTL_MINUTES",
+      "_CANVAS_LTI_STATE_TTL_MINUTES",
+      "_ISSUANCE_SAVE_PREDECESSORS",
+      "_OFFER_TTL_MINUTES",
+      "_required_identifier",
+      "dataclass",
+      "datetime",
+      "field",
+      "hashlib",
+      "issuance_save_predecessors",
+      "json",
+      "os",
+      "secrets",
+      "stable_issuance_credential_id",
+      "timedelta",
+      "timezone",
+      "uuid",
+      "validate_canvas_evidence_requirements"
+    ],
+    "issuance.domain.ports": [
+      "ABC",
+      "Any",
+      "Application",
+      "ApplicationStatus",
+      "ApplicationTemplate",
+      "ApprovalPolicySet",
+      "AuthorizationSession",
+      "CanvasAwardCandidate",
+      "CanvasAwardCandidateState",
+      "CanvasCandidateObservation",
+      "CanvasEventReceipt",
+      "CanvasEvidenceAtomicCommit",
+      "CanvasEvidenceAtomicMutation",
+      "CanvasEvidenceSyncJob",
+      "CanvasEvidenceSyncJobStatus",
+      "CanvasEvidenceSyncTarget",
+      "CanvasEvidenceTransitionPlanner",
+      "CanvasLearnerIdentity",
+      "CanvasLtiLaunchState",
+      "CanvasOAuthAuthorization",
+      "CanvasOAuthConnection",
+      "CanvasPlatform",
+      "CanvasProgramBinding",
+      "CanvasSyncReadinessState",
+      "CanvasWorkerHeartbeat",
+      "CredentialDeliveryRecord",
+      "CredentialDeliveryStatus",
+      "DeliveryTarget",
+      "EvidenceFact",
+      "EvidenceFactHead",
+      "EvidencePolicyReview",
+      "EvidencePolicyReviewStatus",
+      "IIssuanceRepository",
+      "IssuanceEvent",
+      "IssuanceTransaction",
+      "IssuedCredential",
+      "Oid4vciRegisteredClient",
+      "OrganizationIntegrationSecret",
+      "Protocol",
+      "abstractmethod",
+      "copy",
+      "dataclass",
+      "datetime",
+      "merge_application_integration_context"
+    ],
+    "issuance.infrastructure.adapters.canvas_credentials_adapter": [
+      "Any",
+      "Awaitable",
+      "BaseModel",
+      "Callable",
+      "CanvasCredentialsPublishResult",
+      "CanvasCredentialsStatusSyncResult",
+      "CanvasLtiServiceError",
+      "CanvasPlatform",
+      "CanvasSecretResolver",
+      "CredentialDeliveryRecord",
+      "Field",
+      "IssuanceTransaction",
+      "IssuedCredential",
+      "_CANVAS_CREDENTIALS_DEFAULT_API_BASE_URL",
+      "_CANVAS_CREDENTIALS_REAL_PROVIDERS",
+      "_CANVAS_CREDENTIAL_SECRET_SELECTOR_KEYS",
+      "_CANVAS_PUBLISH_TIMEOUT_SECONDS",
+      "_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS",
+      "_badgr_assertion_url",
+      "_badgr_revoke_url",
+      "_build_badgr_assertion_payload",
+      "_build_canvas_publish_payload",
+      "_build_canvas_status_sync_payload",
+      "_build_elevenid_provenance_url",
+      "_canvas_credentials_allowed_api_origins",
+      "_canvas_credentials_assertion_scope",
+      "_canvas_credentials_badgeclass_id",
+      "_canvas_credentials_config_value",
+      "_canvas_credentials_headers",
+      "_canvas_credentials_https_origin",
+      "_canvas_credentials_issuer_id",
+      "_canvas_credentials_metadata_sources",
+      "_canvas_credentials_provider",
+      "_canvas_credentials_recipient_identity",
+      "_canvas_credentials_secret_reference",
+      "_canvas_credentials_secret_value",
+      "_env_bool",
+      "_extract_badgr_assertion_id",
+      "_extract_badgr_issuer_id",
+      "_extract_badgr_public_assertion_url",
+      "_first_badgr_result",
+      "_first_non_empty_string",
+      "_integration_secret_id_from_ref",
+      "_is_real_canvas_credentials_provider",
+      "_normalize_canvas_credentials_api_base_url",
+      "_normalize_publish_url",
+      "_normalize_status_sync_url",
+      "_public_marty_base_url",
+      "_publish_canvas_badgr_assertion",
+      "_read_secret_value",
+      "_require_canvas_delivery_ownership",
+      "_response_json_or_excerpt",
+      "_sanitize_canvas_credentials_outbound_metadata",
+      "_sync_canvas_badgr_assertion_status",
+      "_truncate_text",
+      "canvas_http_client",
+      "datetime",
+      "httpx",
+      "os",
+      "portable_canvas_enabled_for_organization",
+      "publish_canvas_credential_mirror",
+      "quote",
+      "sync_canvas_credential_status",
+      "timezone",
+      "urlencode",
+      "urlparse",
+      "validate_canvas_origin"
+    ],
+    "issuance.infrastructure.adapters.delivery_records": [
+      "Any",
+      "Application",
+      "canvas_context_from_integration_context",
+      "canvas_delivery_feature_enabled",
+      "canvas_deployment_profile_delivery_metadata",
+      "normalize_canvas_feature_flags"
+    ],
+    "issuance.infrastructure.adapters.memory_repository": [
+      "Any",
+      "Application",
+      "ApplicationStatus",
+      "ApplicationTemplate",
+      "ApprovalPolicySet",
+      "AuthorizationSession",
+      "CanvasAwardCandidate",
+      "CanvasAwardCandidateState",
+      "CanvasCandidateObservation",
+      "CanvasEventReceipt",
+      "CanvasEvidenceAtomicCommit",
+      "CanvasEvidenceSyncJob",
+      "CanvasEvidenceSyncJobStatus",
+      "CanvasEvidenceSyncTarget",
+      "CanvasEvidenceTransitionPlanner",
+      "CanvasLearnerIdentity",
+      "CanvasLearnerIdentityStatus",
+      "CanvasLtiLaunchState",
+      "CanvasOAuthAuthorization",
+      "CanvasOAuthConnection",
+      "CanvasOAuthConnectionStatus",
+      "CanvasPlatform",
+      "CanvasProgramBinding",
+      "CanvasSyncReadinessState",
+      "CanvasWorkerHeartbeat",
+      "CredentialDeliveryRecord",
+      "CredentialDeliveryStatus",
+      "DeliveryTarget",
+      "EvidenceFact",
+      "EvidenceFactHead",
+      "EvidencePolicyReview",
+      "EvidencePolicyReviewStatus",
+      "IIssuanceRepository",
+      "InMemoryIssuanceRepository",
+      "IssuanceEvent",
+      "IssuanceIdempotencyConflictError",
+      "IssuanceStatus",
+      "IssuanceTransaction",
+      "IssuedCredential",
+      "Oid4vciRegisteredClient",
+      "OrganizationIntegrationSecret",
+      "UTC",
+      "asyncio",
+      "copy",
+      "datetime",
+      "hashlib",
+      "issuance_save_predecessors",
+      "merge_application_integration_context",
+      "secrets",
+      "stable_issuance_credential_id",
+      "time",
+      "timedelta"
+    ],
+    "issuance.infrastructure.api.routes": [
+      "APIRouter",
+      "Any",
+      "BaseModel",
+      "Callable",
+      "CanvasMirrorAlertResponse",
+      "CanvasMirrorAutomationConfig",
+      "CanvasMirrorAutomationCycleResponse",
+      "CanvasMirrorBatchProcessResponse",
+      "CanvasMirrorHealthResponse",
+      "CanvasMirrorIssuerResponse",
+      "CanvasMirrorProvenanceResponse",
+      "CanvasMirrorStatusSyncBatchResponse",
+      "CanvasMirrorTarget",
+      "CanvasPlatform",
+      "CanvasProgramBinding",
+      "ConfigDict",
+      "CredentialDeliveryRecord",
+      "CredentialDeliveryRecordResponse",
+      "CredentialDeliveryStatus",
+      "CredentialStatus",
+      "DeliveryTarget",
+      "Depends",
+      "EventType",
+      "Field",
+      "HTTPException",
+      "Header",
+      "IIssuanceRepository",
+      "ISSUER_BASE_URL",
+      "IssuanceEvent",
+      "IssuanceTransaction",
+      "IssuedCredential",
+      "IssuedCredentialStatusListEntryResponse",
+      "Query",
+      "Request",
+      "UTC",
+      "_DATA_INTEGRITY_PAYLOAD_FORMATS",
+      "_FALSE_ENV_VALUES",
+      "_ISSUANCE_API_KEY",
+      "_JWT_VC_PAYLOAD_FORMATS",
+      "_MDOC_PAYLOAD_FORMATS",
+      "_TRUE_ENV_VALUES",
+      "_VDS_NC_PAYLOAD_FORMATS",
+      "_api_key_header",
+      "_canvas_delivery_failure_status_code",
+      "_canvas_gate_blocked_error",
+      "_canvas_gate_blocked_metadata",
+      "_canvas_mirror_alert_for_record",
+      "_canvas_mirror_alert_to_dict",
+      "_canvas_mirror_provenance_to_protocol",
+      "_canvas_mirror_publish_metrics",
+      "_canvas_mirror_record_matches",
+      "_canvas_mirror_status_sync_metrics",
+      "_credential_format_to_protocol",
+      "_credential_status_to_protocol",
+      "_delivery_record_has_status_sync_failure",
+      "_delivery_record_to_protocol",
+      "_emit_canvas_mirror_alert_observability",
+      "_emit_canvas_mirror_alerts_for_records",
+      "_env_bool",
+      "_env_int",
+      "_hydrate_canvas_gate_metadata",
+      "_log_canvas_mirror_metrics",
+      "_max_iso_datetime",
+      "_metadata_int",
+      "_metadata_text",
+      "_next_canvas_publish_metadata",
+      "_next_canvas_status_sync_metadata",
+      "_normalize_payload_format",
+      "_parse_iso_datetime",
+      "_post_canvas_mirror_alert_webhook",
+      "_process_canvas_mirror_delivery_record",
+      "_public_canvas_metadata",
+      "_require_trusted_organization",
+      "_resolve_canvas_mirror_delivery_record",
+      "_resolve_canvas_mirror_target",
+      "_status_list_entries_to_protocol",
+      "_subject_id_hash",
+      "_sync_canvas_lifecycle_delivery_record",
+      "_trusted_organization_id",
+      "_verify_management_api_key",
+      "asyncio",
+      "canvas_delivery_feature_enabled",
+      "canvas_deployment_profile_delivery_metadata",
+      "dataclass",
+      "datetime",
+      "get_canvas_mirror_health",
+      "get_canvas_mirror_provenance",
+      "hashlib",
+      "hmac",
+      "httpx",
+      "issuance_router",
+      "issued_credential_router",
+      "logger",
+      "logging",
+      "org_issuer_url",
+      "os",
+      "process_failed_canvas_mirror_status_syncs",
+      "process_pending_canvas_mirror_deliveries",
+      "publish_canvas_credential_mirror",
+      "publish_issued_credential_canvas_mirror",
+      "run_canvas_mirror_automation_cycle",
+      "run_canvas_mirror_automation_cycle_endpoint",
+      "run_canvas_mirror_automation_loop",
+      "run_canvas_mirror_publish_batch",
+      "run_canvas_mirror_status_sync_batch",
+      "status",
+      "sync_canvas_credential_status",
+      "time"
+    ],
+    "mirror_seed": [
+      "CredentialDeliveryRecord",
+      "CredentialDeliveryStatus",
+      "CredentialStatus",
+      "DeliveryTarget",
+      "InMemoryIssuanceRepository",
+      "IssuanceStatus",
+      "IssuanceTransaction",
+      "IssuedCredential",
+      "UTC",
+      "_TestableRepo",
+      "_canvas_binding_metadata",
+      "_make_credential",
+      "_make_delivery_record",
+      "_make_transaction",
+      "_save_canvas_program_target",
+      "datetime",
+      "hashlib",
+      "pytest",
+      "repo"
+    ]
+  },
+  "snapshots": {
+    "16604233c921a41acf3ae45a36d8f16557c8cd4ee4ac0f4c12a7773675accc6c": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {},
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-08-31T23:59:58.456000+00:00",
+          "id": "cred-001",
+          "issued_at": "2026-08-31T23:59:58.123000+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {},
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "400e6555735d575d50a72dc93e9969a7535c63a02696f56d846ef4c3ff129edd": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {},
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-08-31T23:59:58.654321+00:00",
+          "id": "cred-001",
+          "issued_at": "2026-08-31T23:59:58.123456+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {},
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "4da2eb70f40ff8abb7dc67e807668eaee464df335b1ab04504587a547c21d80f": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {},
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-08-31T23:59:58+05:30",
+          "id": "cred-001",
+          "issued_at": "2026-08-31T23:59:58.123000-06:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {},
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "5c54bda5a21a04949c593eba2ee7879591d342155780d0140451ff54127bb102": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {},
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": null,
+          "id": "cred-001",
+          "issued_at": "2026-03-01T00:00:00+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {},
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "845a9791ba9ed8df1d9a4aa1b89d3edcb56c7e19eccd7ca3ef1ff85b478386cc": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {},
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-03-01T00:00:00+00:00",
+          "id": "cred-001",
+          "issued_at": "2026-03-01T00:00:00+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {},
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "8b87f53e1d539b9935a02361e62a407a26b73bfef159d3306850a704277d6bc2": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {
+            "badgeclass_id": "badge-1",
+            "provider": "badgr_api"
+          },
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": null,
+          "id": "cred-001",
+          "issued_at": "2026-03-01T00:00:00+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {
+              "badgeclass_id": "badge-1",
+              "provider": "badgr_api"
+            },
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "email": "learner@example.edu",
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "ae5abd9adb9eda83111d5c808bd2c1674e822f46914ae529b064aac813a63704": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {
+            "badgeclass_id": "badge-1",
+            "provider": "badgr_api"
+          },
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-08-31T23:59:58.456000+00:00",
+          "id": "cred-001",
+          "issued_at": "2026-08-31T23:59:58.123000+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {
+              "badgeclass_id": "badge-1",
+              "provider": "badgr_api"
+            },
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "email": "learner@example.edu",
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "bf56ed300992496d9fcfca3be00f13a98c90021d3c07aac4c5750aaaf535d711": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {
+            "badgeclass_id": "badge-1",
+            "provider": "badgr_api"
+          },
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-08-31T23:59:58.654321+00:00",
+          "id": "cred-001",
+          "issued_at": "2026-08-31T23:59:58.123456+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {
+              "badgeclass_id": "badge-1",
+              "provider": "badgr_api"
+            },
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "email": "learner@example.edu",
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "f47ffa2c8d9f09b2242d90fb705692e2c1add15c59de26d5c298ce03c5832dc0": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {
+            "badgeclass_id": "badge-1",
+            "provider": "badgr_api"
+          },
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-03-01T00:00:00+00:00",
+          "id": "cred-001",
+          "issued_at": "2026-03-01T00:00:00+00:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {
+              "badgeclass_id": "badge-1",
+              "provider": "badgr_api"
+            },
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "email": "learner@example.edu",
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    },
+    "f8f6ed8148883e46218b7f736ac69adad1688bccd09350c2fbc3393717c8b7c5": {
+      "applications": {},
+      "canvas_platforms": {
+        "platform-1": {
+          "archived_at": null,
+          "canvas_account_id": "canvas-account-1",
+          "canvas_base_url": "https://canvas.example.test",
+          "capability_snapshot": {},
+          "config_version": 1,
+          "connection_config": {},
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "display_name": null,
+          "enabled": true,
+          "id": "platform-1",
+          "last_connection_error": null,
+          "last_validated_at": null,
+          "lti_client_id": null,
+          "lti_deployment_id": null,
+          "lti_issuer": null,
+          "lti_jwks_expires_at": null,
+          "lti_jwks_fetched_at": null,
+          "lti_jwks_json": null,
+          "lti_jwks_url": null,
+          "lti_openid_configuration": null,
+          "lti_trust_profile": "hosted_global",
+          "organization_id": "org-1",
+          "registration_status": "draft",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "canvas_program_bindings": {
+        "binding-1": {
+          "activated_at": null,
+          "application_template_id": "tmpl-app",
+          "approval_policy_set_id": null,
+          "archived_at": null,
+          "auto_approve_on_evidence": false,
+          "canvas_credentials": {
+            "badgeclass_id": "badge-1",
+            "provider": "badgr_api"
+          },
+          "canvas_scope": {},
+          "config_version": 1,
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_template_id": "tmpl-1",
+          "credential_template_snapshot": {},
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "deployment_profile_id": null,
+          "direct_issue_enabled": false,
+          "display_name": null,
+          "enabled": true,
+          "evidence_requirements": [],
+          "feature_flags": {},
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "id": "binding-1",
+          "issuer_mode": "org_managed",
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "readiness_checks": [],
+          "readiness_validated_at": null,
+          "updated_at": "2026-09-01T12:00:00+00:00",
+          "validated_config_version": null
+        }
+      },
+      "credentials": {
+        "cred-001": {
+          "applicant_id": "applicant-1",
+          "credential_hash": "62971d440b33f7dd58117df0ea1fb45ac424913c8b74b497869b50914568f7aa",
+          "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+          "credential_template_id": "tmpl-1",
+          "expires_at": "2027-08-31T23:59:58+05:30",
+          "id": "cred-001",
+          "issued_at": "2026-08-31T23:59:58.123000-06:00",
+          "issuer_did": "did:web:issuer.example",
+          "organization_id": "org-1",
+          "renewed_from_credential_id": null,
+          "renewed_to_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked": false,
+          "revoked_at": null,
+          "status": "active",
+          "status_list_entries": [],
+          "status_updated_at": "2026-09-01T12:00:00+00:00",
+          "subject_did": "did:key:z6Mk_subject",
+          "transaction_id": "tx-001"
+        }
+      },
+      "delivery_records": {
+        "delivery-001": {
+          "canvas_account_id": "canvas-account-1",
+          "created_at": "2026-03-01T00:00:00+00:00",
+          "credential_id": "cred-001",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "delivery_target": "canvas_credentials",
+          "external_credential_id": null,
+          "external_issuer_id": null,
+          "id": "delivery-001",
+          "last_error": null,
+          "metadata": {
+            "canvas_credentials": {
+              "badgeclass_id": "badge-1",
+              "provider": "badgr_api"
+            },
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+            "private_fixture_marker": "must-not-enter-public-provenance-metadata",
+            "publish_attempts": 0,
+            "queue": "canvas_credentials_mirror"
+          },
+          "organization_id": "org-1",
+          "status": "pending",
+          "transaction_id": "tx-001",
+          "updated_at": "2026-09-01T12:00:00+00:00"
+        }
+      },
+      "events": [],
+      "transactions": {
+        "tx-001": {
+          "access_token": null,
+          "applicant_id": "applicant-1",
+          "application_id": null,
+          "claims": {
+            "age": 30,
+            "email": "learner@example.edu",
+            "name": "Alice"
+          },
+          "created_at": "2026-09-01T12:00:00+00:00",
+          "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+          "credential_template_id": "tmpl-1",
+          "credential_type": "VerifiableCredential",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "expires_at": "2026-09-08T12:00:00+00:00",
+          "id": "tx-001",
+          "idempotency_key_hash": null,
+          "idempotency_request_hash": null,
+          "issued_at": null,
+          "issuer_algorithm": null,
+          "issuer_did_override": null,
+          "issuer_mode": "org_managed",
+          "issuer_profile_id": null,
+          "nonce": "test-nonce-42",
+          "oid4vci_client_id": null,
+          "organization_id": "org-1",
+          "pre_auth_code": "synthetic-precode",
+          "renewable": false,
+          "renewal_of_credential_id": null,
+          "renewal_window_days": 30,
+          "reserved_credential_id": null,
+          "revocation_profile_id": null,
+          "revocation_reason": null,
+          "revoked_at": null,
+          "selective_disclosure_claims": [],
+          "signing_service_id": null,
+          "status": "issued",
+          "subject_did": "did:key:z6Mk_subject",
+          "validity_days": 365,
+          "wallet_configs": [],
+          "zk_predicate_claims": []
+        }
+      }
+    }
+  },
+  "source_commit": "578e86ef43166be79add2d812e92ef650535edaa",
+  "sources": {
+    "issuance.application.canvas_feature_flags": [
+      "services/issuance/application/canvas_feature_flags.py",
+      "0fd22c63f09641f886d6c7c4bad5d16393fabe92"
+    ],
+    "issuance.application.canvas_lti_services": [
+      "services/issuance/application/canvas_lti_services.py",
+      "6bde953e9be8c01b51e622668a2cf9fc016f581d"
+    ],
+    "issuance.application.canvas_runtime": [
+      "services/issuance/application/canvas_runtime.py",
+      "ae2874fb057e19db7cfd6b28dc39a77eba02c3fb"
+    ],
+    "issuance.application.credential_vct": [
+      "services/issuance/application/credential_vct.py",
+      "bff0c6bf046e7df15447350d0e4bcc645b8e28d2"
+    ],
+    "issuance.domain.entities": [
+      "services/issuance/domain/entities.py",
+      "1b5e2eba90c1ec13c1a38135f4da92813f1d1073"
+    ],
+    "issuance.domain.ports": [
+      "services/issuance/domain/ports.py",
+      "695a2cdd3f3a5c9d3ce6ef12e282cdca6f086a24"
+    ],
+    "issuance.infrastructure.adapters.canvas_credentials_adapter": [
+      "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py",
+      "c86671e2b2ab5bb8a72de78a9bdadb0f340a5ec8"
+    ],
+    "issuance.infrastructure.adapters.delivery_records": [
+      "services/issuance/infrastructure/adapters/delivery_records.py",
+      "eda21f907f3abd1e4652e06400f5a6dcf424952f"
+    ],
+    "issuance.infrastructure.adapters.memory_repository": [
+      "services/issuance/infrastructure/adapters/memory_repository.py",
+      "2961bee99877f616512c99704dc5e63ef3b9c4cc"
+    ],
+    "issuance.infrastructure.api.routes": [
+      "services/issuance/infrastructure/api/routes.py",
+      "1f137c588ffd7ed77ceb297a52d55e9a75ae7b81"
+    ],
+    "mirror_seed": [
+      "tests/test_issuance_changes.py",
+      "b47328b334b809b85db2aa67de675342b5ccd8ae"
+    ],
+    "startup_evidence": [
+      "services/issuance/main.py",
+      "ed30de75eefa16beea1e820dc83fe8607311ed43"
+    ]
+  }
+}

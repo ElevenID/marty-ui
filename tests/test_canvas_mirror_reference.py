@@ -89,6 +89,154 @@ def assert_connected(contract, reference, scenarios, capture):
     assert contract["native_selection"] == "unchanged"
 
 
+def require_publication_boundary(contract, capture, read_bytes):
+    decoded = {}
+    for kind in ("reference", "scenarios"):
+        owner = contract[f"publication_boundary_{kind}"]
+        raw = capture.canonical_json_bytes(read_bytes(owner["path"]))
+        assert hashlib.sha256(raw).hexdigest() == owner["sha256"]
+        decoded[kind] = json.loads(raw)
+    reference, scenarios = decoded["reference"], decoded["scenarios"]
+    assert reference["schema"] == "marty.canvas-publication-boundary-reference/v1"
+    assert reference["source_commit"] == scenarios["source_commit"] == capture.REVISION
+    assert reference["sources"] == {
+        name: list(value) for name, value in capture.SOURCES.items()
+    }
+    assert (
+        reference["scenarios_sha256"]
+        == contract["publication_boundary_scenarios"]["sha256"]
+    )
+    assert contract["publication_boundary_observations"] == {
+        "datetime": 8,
+        "adapter_cancellation": 2,
+        "response_shapes": 3,
+    }
+    expected_ids = [
+        "bridge_milliseconds",
+        "badgr_milliseconds",
+        "bridge_microseconds",
+        "badgr_microseconds",
+        "bridge_offset",
+        "badgr_offset",
+        "bridge_expiry_absent",
+        "badgr_expiry_absent",
+        "bridge_provider_cancel",
+        "badgr_provider_cancel",
+        "badgr_empty_result_data_fallback",
+        "badgr_first_nonobject_no_fallback",
+        "badgr_empty_result_object_no_fallback",
+    ]
+    assert [case["id"] for case in reference["adapter"]] == expected_ids
+    assert [case["id"] for case in scenarios["adapter"]] == expected_ids
+    assert {
+        "publish_canvas_credential_mirror",
+        "_build_badgr_assertion_payload",
+        "_build_canvas_publish_payload",
+    } <= set(reference["selected_definitions"][capture.ADAPTER])
+    assert reference["infrastructure_controls"] == [
+        "missing-global-fatal",
+        "caught-unowned-origin-fatal",
+    ]
+    for index, case in enumerate(reference["adapter"]):
+        assert case["entrypoint"] == "direct_adapter"
+        assert case["before"] == case["after"]
+        assert case["before"]["snapshot_sha256"] in reference["snapshots"]
+        requests = [call for call in case["trace"] if call["kind"] == "http"]
+        assert len(requests) == 1 and requests[0]["method"] == "POST"
+        response = case["responses"][0]
+        if index in (8, 9):
+            assert response == {"outcome": "CancelledError"}
+        elif index in (11, 12):
+            assert response == {
+                "exception": "RuntimeError",
+                "detail": "Canvas Credentials assertion publish response did not include an assertion id",
+            }
+        else:
+            assert response["result_encoding"] == "python-json-text"
+        body = json.loads(requests[0]["body"])
+        if index < 6:
+            issued = body["issuedOn"] if index % 2 else body["credential"]["issued_at"]
+            expected = [
+                "2026-08-31T23:59:58.123000+00:00",
+                "2026-08-31T23:59:58.123456+00:00",
+                "2026-08-31T23:59:58.123000-06:00",
+            ][index // 2]
+            assert issued == expected
+        if index == 6:
+            assert body["credential"]["expires_at"] is None
+        if index == 7:
+            assert "expires" not in body
+        if index == 10:
+            assert (
+                json.loads(response["result_json"])["external_credential_id"]
+                == "data-id"
+            )
+
+
+def test_additive_publication_boundary_hashes_sources_and_complete_observations(
+    capture,
+):
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+    def read(path):
+        return (ROOT / path).read_bytes()
+
+    require_publication_boundary(contract, capture, read)
+    require_publication_boundary(
+        contract,
+        capture,
+        lambda path: capture.canonical_json_bytes(read(path)).replace(b"\n", b"\r\n"),
+    )
+    for key in ("publication_boundary_reference", "publication_boundary_scenarios"):
+        target = contract[key]["path"]
+        with pytest.raises(AssertionError):
+            require_publication_boundary(
+                contract,
+                capture,
+                lambda path: read(path) + b" " if path == target else read(path),
+            )
+    changed = copy.deepcopy(contract)
+    changed["publication_boundary_observations"]["adapter_cancellation"] = 0
+    with pytest.raises(AssertionError):
+        require_publication_boundary(changed, capture, read)
+
+
+@pytest.mark.parametrize(
+    "modes",
+    [
+        {"audit": True, "adapter_reference": True},
+        {"audit": True, "publication_boundary": True},
+        {"adapter_reference": True, "publication_boundary": True},
+        {"audit": True, "adapter_reference": True, "publication_boundary": True},
+    ],
+)
+def test_conflicting_reference_modes_cannot_spawn_or_execute(capture, modes):
+    for entrypoint in (capture.bounded_observation_child, capture.observe_sources):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            entrypoint({}, **modes)
+
+
+def test_boundary_cancellation_keeps_original_owned_task_sequence(capture):
+    tree = ast.parse(CAPTURE.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+    }
+    cancellation = ast.unparse(functions["cancel_provider_action"])
+    assert "asyncio.create_task(action)" in cancellation
+    assert "await asyncio.wait_for(provider_entered.wait(), 2)" in cancellation
+    assert "task.cancel()" in cancellation
+    assert "await task" in cancellation
+    assert "await asyncio.gather(task, return_exceptions=True)" in cancellation
+    assert "except asyncio.CancelledError" in cancellation
+    assert "Provider cancellation was swallowed" in cancellation
+    # Both direct adapter and prior ASGI/loop branches use this owner. The
+    # bounded complete child remains the final cancellation-swallowing fence.
+    assert (
+        ast.unparse(functions["observe_http"]).count("await cancel_provider_action(")
+        == 2
+    )
+
+
 def test_contract_artifact_hashes_and_source_coverage(capture, artifact):
     contract = json.loads(CONTRACT.read_text())
     scenarios = json.loads(
