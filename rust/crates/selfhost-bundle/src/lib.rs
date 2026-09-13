@@ -433,14 +433,14 @@ pub fn relativize(text: &str, stage: &Path) -> Result<String> {
                     }
                     relative(&checked)?;
                     let value = format!("./{suffix}");
-                    let value = if key == "file: " {
-                        value
-                            .strip_prefix("./${")
-                            .map(|rest| format!("${{{rest}"))
-                            .unwrap_or(value)
-                    } else {
-                        value
-                    };
+                    // A leading operator directory may resolve to an absolute
+                    // path. Prefixing it with ./ would anchor that path under
+                    // the bundle. File and both recognized bind-source forms
+                    // must preserve the same interpolation semantics.
+                    let value = value
+                        .strip_prefix("./${")
+                        .map(|rest| format!("${{{rest}"))
+                        .unwrap_or(value);
                     let value = if value.contains([' ', '#', ':']) {
                         serde_json::to_string(&value).unwrap()
                     } else {

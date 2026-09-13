@@ -150,6 +150,7 @@ def assert_connections(read):
         "validate_strict",
         "assert_descriptor_inventory(&repo, &output)",
         "assert_contained_references(&extracted, &rendered)",
+        "assert_operator_bind_paths(&repo, &extracted)",
         "inventory(&output)",
         "inventory(&extracted)",
     ]:
@@ -183,6 +184,7 @@ def test_actual_bundle_gate_runs_in_required_workspace_ci():
         "no-render",
         "no-inventory",
         "no-containment",
+        "no-operator-binds",
         "workspace",
         "make",
     ],
@@ -210,6 +212,11 @@ def test_disabled_or_shallow_bundle_gate_is_rejected(fault):
                 return source.replace(
                     "assert_contained_references(&extracted, &rendered)",
                     "fake_references(&extracted, &rendered)",
+                )
+            if fault == "no-operator-binds":
+                return source.replace(
+                    "assert_operator_bind_paths(&repo, &extracted)",
+                    "absent(&repo, &extracted)",
                 )
         if fault == "workspace" and relative == "rust/Cargo.toml":
             return source.replace('"crates/selfhost-bundle"', '"absent"')

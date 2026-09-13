@@ -389,6 +389,58 @@ fn folded_and_list_first_paths_preserve_required_selectors_and_sibling_fields() 
 }
 
 #[test]
+fn operator_bind_directories_keep_file_semantics_without_weakening_path_validation() {
+    for key in ["file: ", "source: ", "- source: "] {
+        for selector in [
+            "${DIRECTORY}",
+            "${DIRECTORY:?directory required}",
+            "${DIRECTORY:-relative-state}",
+        ] {
+            let input = format!("{key}/stage/{selector}/data\n");
+            let output = marty_selfhost_bundle::relativize(&input, Path::new("/stage")).unwrap();
+            let decoded: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+            let object = if key.starts_with('-') {
+                &decoded[0]
+            } else {
+                &decoded
+            };
+            let field = if key == "file: " { "file" } else { "source" };
+            assert_eq!(object[field].as_str().unwrap(), format!("{selector}/data"));
+        }
+        for suffix in [
+            "literal/file",
+            "directory with spaces/file",
+            "literal/${DIRECTORY}/file",
+        ] {
+            let output = marty_selfhost_bundle::relativize(
+                &format!("{key}/stage/{suffix}\n"),
+                Path::new("/stage"),
+            )
+            .unwrap();
+            let decoded: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+            let object = if key.starts_with('-') {
+                &decoded[0]
+            } else {
+                &decoded
+            };
+            let field = if key == "file: " { "file" } else { "source" };
+            assert_eq!(object[field].as_str().unwrap(), format!("./{suffix}"));
+        }
+        for path in [
+            "/stage/${DIRECTORY}/../escape",
+            "/stage-other/${DIRECTORY}/data",
+            "/stage/${DIRECTORY:-${OTHER}}/data",
+        ] {
+            assert!(marty_selfhost_bundle::relativize(
+                &format!("{key}{path}\n"),
+                Path::new("/stage")
+            )
+            .is_err());
+        }
+    }
+}
+
+#[test]
 fn nested_outputs_and_empty_directories_survive_directory_and_zip_packaging() {
     let root = tempfile::tempdir().unwrap();
     let mut options = fixture(root.path());

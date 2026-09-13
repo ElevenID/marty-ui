@@ -77,6 +77,19 @@ Replay with `scripts/capture_selfhost_bundle_reference.py --path-reference --che
 
 ## Acceptance ownership
 
+The interpolated runtime-model follow-up exposed a narrow path correction:
+leading operator-directory expressions in bind `source`/`- source` fields now
+receive the same treatment as `file` fields. Previously a generated
+`./${SELFHOST_STATE_DIR:?...}/postgres` anchored an absolute operator directory
+under the extracted bundle. The source intended `${SELFHOST_STATE_DIR:?...}/postgres`.
+Postgres, Redis and applicant state mounts are affected. Literal packaged paths
+remain relative; interpolation and path-escape validation remain unchanged.
+The frozen Python reference is not rewritten: this is an explicit governed fix,
+qualified by actual source/extracted Compose interpolation with absolute paths
+(including spaces), relative paths and required-empty refusal, plus pure
+file/source/list-first required/default/literal/traversal controls. No state
+directory or deployment is created by these tests.
+
 The unignored `actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references`
 test runs the real CLI and real Compose against the current repository's bundle
 descriptor, compares the independently enumerated source asset inventory with
