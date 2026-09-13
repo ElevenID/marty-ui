@@ -42,8 +42,27 @@ mandatory too. Full combined Python regression at `72f966d11` passed **3,523
 tests, three skipped** in 227.43 seconds. These repairs still need fresh hosted
 qualification. Repair run `34724946640` at pushed `6c08438af` has passed Rust
 lint/packaging, release contracts, security, UI and browser lifecycle jobs;
-Image builds have also passed; Rust service database suites remain running at
-this observation. This run does not include the newer local integrations below.
+Image builds also passed, but the run subsequently completed with failure;
+the isolated database step recorded 230 passed, three failed and two ignored.
+Two failures are confirmed missing `PyYAML` in the selected Python harness
+interpreter; the third gateway-composition failure remains under investigation.
+The CI dependency repair is in progress. This run does not
+include the newer local integrations below. No fresh-head merge qualification
+or deployment is claimed.
+
+Latest reviewed local integrations: `166b825d9` fixes Windows CRLF identity
+handling for the frozen Canvas mirror artifacts without changing their corpus
+or raw pinned source hashes; `cce77044f` fixes Rust selfhost packaging of leading
+operator bind-directory expressions, preserving absolute state-directory paths.
+The latter has actual source/extracted Compose regression coverage for absolute
+paths with spaces, relative paths and required-empty refusal; the frozen Python
+reference remains unchanged and the intentional repair is documented separately.
+Combined integrated focused guards passed **94 tests**; the integrated mirror
+capture matched **64 HTTP, four provider cancellations, nine loop and four
+configuration observations**. These are local proofs, not deployed acceptance.
+Selfhost full resolved-runtime qualification and additive Canvas publication
+adapter vectors continue in separate worktrees. No Python feature was deleted
+by these repairs, and DIDComm KMS redesign remains deferred.
 
 Reviewed Kubernetes native-owner configuration is integrated locally at
 `97ff18e48` (author `cc695ee84`). The final author checkpoint passed 30 Rust
