@@ -5799,3 +5799,27 @@ preserved the single-owner rule.
 Wave two followed the removable-source order above. Its dependency chain,
 deleted-source inventory, immutable aggregate, fail-closed rollout findings,
 and protected beta lifecycle are commit-pinned in the wave-two final evidence.
+
+### Follow-on runtime checkpoint: Flow integration
+
+Wave three remains complete; this checkpoint belongs to the follow-on migration
+and cleanup goal. Combined Envoy/Kubernetes tooling at `1dcc3fb947` passed all
+37 tests both normally and with explicit arbitrary-precision feature unification,
+strict tooling Clippy, and issuance contract-target compilation.
+
+Flow actual-main acceptance and its narrow QR retry timestamp correction are
+integrated at `cff3a4aa1`. Author qualification passed actual startup/public retry,
+retained PostgreSQL and rendered-selection gates, loader/process controls, affected
+Flow units, strict Clippy and 141 Python guards. See
+[the acceptance boundaries](rust-migrations/flow-public-startup-acceptance.md).
+Combined configuration/registration tests passed 91 cases after extending the
+strict expected CI roster to include the already-approved Envoy image build;
+no runtime configuration or assertion strength was removed.
+
+Remaining work includes resolved Kubernetes runtime acceptance, hosted Linux
+business gates, release-image/gateway/callback/selfhost TLS acceptance, the
+remaining 57 issuance HTTP inventory entries and intended consumers, exact-head
+review/CI/merge, branch reconciliation, and aggregate beta recordings/device
+acceptance/soak. Local qualification is not deployed acceptance. Active Python
+remains until its retirement gates pass. DIDComm KMS corrections remain deferred;
+production is unchanged.
