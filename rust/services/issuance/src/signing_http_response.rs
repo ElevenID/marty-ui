@@ -3,16 +3,19 @@
 //! Debug/Display never expose remote diagnostic material. This module does not
 //! choose public privacy policy, routes, cryptography or success validation.
 
+#[cfg(test)]
+use crate::lossless_json_tree::JsonNode;
 use reqwest::Response;
 use serde::de::DeserializeOwned;
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::{
     canvas_content_decoder::CanvasContentDecoder,
     canvas_response_text::{response_text, CanvasResponseTextError},
-    lossless_json_tree::{JsonNode, JsonTree},
+    lossless_json_tree::JsonTree,
     python_text::PythonText,
-    python_value::{float, PythonValueNode, PythonValueView},
+    python_value::PythonJsonValue as DiagnosticValue,
     signing_error_detail::{
         operation_error_points, response_without_body, SigningOperation, SigningResponseAction,
     },
@@ -115,52 +118,6 @@ impl SigningResponseFailure {
                 .map(u32::from)
                 .collect(),
         )
-    }
-}
-
-#[derive(Clone, Copy)]
-enum DiagnosticValue<'a> {
-    Scalar(&'a Value),
-    Tree(&'a JsonTree, usize),
-}
-
-impl PythonValueView for DiagnosticValue<'_> {
-    fn truthy(self) -> bool {
-        match self {
-            Self::Scalar(value) => value.truthy(),
-            Self::Tree(tree, id) => match tree.node(id) {
-                JsonNode::Scalar(value) => value.truthy(),
-                JsonNode::Text(value) => value.codepoints().next().is_some(),
-                JsonNode::Float(value) => *value != 0.0,
-                JsonNode::Array(values) => !values.is_empty(),
-                JsonNode::Object(values) => !values.is_empty(),
-            },
-        }
-    }
-    fn view(self) -> PythonValueNode<Self> {
-        let Self::Tree(tree, id) = self else {
-            let Self::Scalar(value) = self else {
-                unreachable!()
-            };
-            return value.view().map(Self::Scalar);
-        };
-        match tree.node(id) {
-            JsonNode::Scalar(value) => Self::Scalar(value).view(),
-            JsonNode::Text(text) => PythonValueNode::Text(text.codepoints().collect()),
-            JsonNode::Float(value) => PythonValueNode::Number {
-                representation: float(*value),
-                zero: *value == 0.0,
-            },
-            JsonNode::Array(values) => {
-                PythonValueNode::Array(values.iter().map(|id| Self::Tree(tree, *id)).collect())
-            }
-            JsonNode::Object(values) => PythonValueNode::Object(
-                values
-                    .iter()
-                    .map(|(key, id)| (key.codepoints().collect(), Self::Tree(tree, *id)))
-                    .collect(),
-            ),
-        }
     }
 }
 

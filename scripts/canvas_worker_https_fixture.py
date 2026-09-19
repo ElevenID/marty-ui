@@ -81,6 +81,10 @@ class WorkerHttpsFixture:
     def configure_request_connection(self, handler):
         """Optional per-handler socket setup; existing fixtures keep defaults."""
 
+    def request_handler_type(self, base):
+        """Default identity hook: publication alone adds its POST contract."""
+        return base
+
     def write_response_body(self, handler, body, *, index, path, stage):
         """Optional body schedule; default framing and write behavior are unchanged."""
         handler.wfile.write(body)
@@ -150,7 +154,7 @@ class WorkerHttpsFixture:
                 prefix="canvas-worker-rest-"
             )
             self.cert, key = create_loopback_certificate(Path(self.certificates.name))
-            self.server = Server(("127.0.0.1", 0), Handler)
+            self.server = Server(("127.0.0.1", 0), self.request_handler_type(Handler))
             # server_close must join the owned request handlers after release.
             self.server.daemon_threads = False
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

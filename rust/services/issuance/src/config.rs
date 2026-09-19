@@ -67,6 +67,9 @@ pub struct IssuanceServiceConfig {
     pub canvas_credentials_validation: CanvasCredentialsValidationConfig,
     pub canvas_credentials_status: CanvasCredentialsStatusConfig,
     pub canvas_credentials_validation_timeout: CanvasNetworkTimeout,
+    pub canvas_credentials_publish_timeout: CanvasNetworkTimeout,
+    pub canvas_credentials_publication:
+        crate::canvas_credentials_publication::CanvasCredentialsPublicationConfig,
     pub canvas_allow_private_base_urls: bool,
     pub canvas_allow_http_localhost_base_urls: bool,
     pub canvas_local_admin_token: Option<String>,
@@ -607,7 +610,7 @@ impl IssuanceServiceConfig {
             portable_enabled: canvas_portable_enabled,
             pilot_organizations: canvas_pilot_organizations.clone(),
         };
-        let (_, status_timeout) = crate::canvas_credentials_protocol::timeout_values(
+        let (publish_timeout, status_timeout) = crate::canvas_credentials_protocol::timeout_values(
             values
                 .get("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS")
                 .map(String::as_str),
@@ -623,6 +626,9 @@ impl IssuanceServiceConfig {
         })?;
         let canvas_credentials_validation_timeout =
             CanvasNetworkTimeout::from_seconds(status_timeout);
+        let canvas_credentials_publish_timeout =
+            CanvasNetworkTimeout::from_seconds(publish_timeout);
+        let canvas_credentials_publication = crate::canvas_credentials_publication::CanvasCredentialsPublicationConfig::from_environment(canvas_credentials_status.clone(), &values);
         let canvas_allow_private_base_urls =
             environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
         let canvas_allow_http_localhost_base_urls =
@@ -698,6 +704,8 @@ impl IssuanceServiceConfig {
             canvas_credentials_validation,
             canvas_credentials_status,
             canvas_credentials_validation_timeout,
+            canvas_credentials_publish_timeout,
+            canvas_credentials_publication,
             canvas_allow_private_base_urls,
             canvas_allow_http_localhost_base_urls,
             canvas_local_admin_token,
@@ -1527,6 +1535,77 @@ mod tests {
             direct.canvas_credentials_validation_timeout,
             CanvasNetworkTimeout::from_seconds(3.25)
         );
+        assert_eq!(
+            direct.canvas_credentials_publish_timeout,
+            CanvasNetworkTimeout::from_seconds(1.5)
+        );
+        assert_eq!(
+            direct.canvas_credentials_publication.delivery,
+            direct.canvas_credentials_status
+        );
+    }
+
+    #[test]
+    fn publication_settings_preserve_empty_flags_and_provenance_precedence() {
+        let defaults = IssuanceServiceConfig::from_values(values(&[])).unwrap();
+        assert!(defaults.canvas_credentials_publication.recipient_hashed);
+        assert!(
+            !defaults
+                .canvas_credentials_publication
+                .allow_duplicate_awards
+        );
+        let empty = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", ""),
+            ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", ""),
+            ("CANVAS_CREDENTIALS_PROVENANCE_BASE_URL", " "),
+            (
+                "MARTY_ISSUER_BASE_URL",
+                " https://synthetic-provenance.invalid/// ",
+            ),
+        ]))
+        .unwrap();
+        assert!(!empty.canvas_credentials_publication.recipient_hashed);
+        assert!(!empty.canvas_credentials_publication.allow_duplicate_awards);
+        assert_eq!(
+            empty
+                .canvas_credentials_publication
+                .provenance_base_url
+                .as_deref(),
+            Some("https://synthetic-provenance.invalid")
+        );
+        let custom = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", " YeS "),
+            ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "on"),
+            (
+                "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+                "https://synthetic-priority.invalid/",
+            ),
+            ("MARTY_ISSUER_BASE_URL", "https://synthetic-other.invalid"),
+            (
+                "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+                "  synthetic narrative  ",
+            ),
+        ]))
+        .unwrap();
+        assert!(custom.canvas_credentials_publication.recipient_hashed);
+        assert!(custom.canvas_credentials_publication.allow_duplicate_awards);
+        assert_eq!(
+            custom
+                .canvas_credentials_publication
+                .provenance_base_url
+                .as_deref(),
+            Some("https://synthetic-priority.invalid")
+        );
+        assert_eq!(
+            custom
+                .canvas_credentials_publication
+                .assertion_narrative
+                .as_deref(),
+            Some("  synthetic narrative  ")
+        );
+        let debug = format!("{:?}", custom.canvas_credentials_publication);
+        assert!(!debug.contains("synthetic-"));
+        assert!(!debug.contains("synthetic narrative"));
     }
 
     #[test]

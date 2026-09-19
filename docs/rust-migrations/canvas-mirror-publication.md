@@ -113,6 +113,53 @@ implemented, with prior observations retained.
 
 ## Required next implementation gates
 
+### Unselected publication-adapter candidate
+
+The current Rust candidate shares delivery configuration and transport with the
+existing status adapter through compatibility aliases. Management validation
+retains its separate canonical-tenant secret fallback policy. Publication uses
+its own parsed publish timeout; validation/status still use the status timeout.
+The borrowed lossless JSON node view moved mechanically to `python_value`, with
+the existing signing diagnostic alias and caller policies retained.
+
+`CanvasPublicationContext` borrows complete persisted credential/platform/
+delivery projections and the existing typed transaction. It is not a public
+JSON admission DTO: a later repository/orchestrator must validate and construct
+these projections from its typed rows before calling the adapter. The current
+tests use exact frozen model snapshots through the existing transaction decoder.
+They do not qualify arbitrary unchecked input values, nullable-metadata defaults
+or normalization of database timestamp strings. Publication observation time
+already uses the existing microsecond `timestamp_string` owner; additional
+non-whole-second credential/expiry vectors remain required before that boundary
+is claimed.
+
+The 51 controlled adapter cases prove 50 exact lossless provider projections and
+one explicitly governed privacy projection: the existing native secret port
+exposes a closed failure, not the Python resolver's arbitrary exception text.
+The raw frozen observation stays unchanged. This candidate returns
+`Canvas Credentials secret lookup failed`, with the same zero HTTP/state effects.
+Later orchestration must retain this closed error through HTTP and persistence;
+the current adapter test is not evidence for those outer boundaries.
+
+The separate Linux HTTPS runner reuses that same graph and the production
+platform verifier. Its independent peer compares complete structured requests
+and both attempted/accepted counts. Only the two known fixture origins and
+their matching transport metadata are rebased to the owned TLS listener;
+credential, provenance and provider-response content are unchanged. Untrusted
+TLS and private-origin denial are separate zero-HTTP controls. Trust is scoped
+to an isolated child, never installed on the machine. This gate remains required
+in CI; Windows fixture controls and an unconfigured `https_child` return do not
+count as native HTTPS proof.
+
+Custom assertion formatting is deliberately incomplete and unselected pending
+the separately frozen shared Python-format candidate. The existing validation
+and revoke template callsites also require that shared grammar correction while
+retaining their distinct policies. No adapter-complete, route, loop or deletion
+claim is permitted before custom-template parity. Filesystem-secret rotation,
+additional timestamp/cancellation vectors, real PG persistence, orchestration
+failure propagation, webhooks and health remain separately required. No Core,
+KMS, crypto implementation, dependency pin or runtime owner is changed here.
+
 Reuse the owned `PublishedDatabase` and existing provider/lifecycle fixtures for
 actual native HTTP/PG/provider tests, full lossless state, denied-request zero
 side effects, both publication providers, replay/retry behavior, alerts and

@@ -310,6 +310,9 @@ async fn replay_cases(cases: &[Value], observations: &[Value], depth: bool) {
                 json!({"metadata":observe_value(&marty_issuance_service::lossless_json::LosslessJson::Object(metadata))})
             }
             Err(error) => json!({"error_class":match &error {
+                CanvasCredentialsStatusError::InvalidStoredData => panic!(
+                    "publication-only stored-data error escaped through status synchronization"
+                ),
                 CanvasCredentialsStatusError::Runtime(_) | CanvasCredentialsStatusError::NonScalarRuntime(_) => "RuntimeError",
                 CanvasCredentialsStatusError::ResponseText(error) => error.diagnostic_class(),
             },"error":observe_text(&error.message())}),

@@ -1,8 +1,10 @@
 //! Pure signing diagnostic projections, not production adapter adoption.
 //! Frozen HTTP request counts/methods/paths are not manufactured by this test.
 //! HTTP ownership, byte decoding, JSON parsing, success parsing and real signing
-//! remain separate integration gates. Neither protected signing files nor the
-//! library module graph is imported or modified by this isolated target.
+//! remain separate integration gates. The shared borrowed view uses the real
+//! library JsonTree type; these 45 scalar vectors still invoke the same pure API,
+//! not HTTP/signing adapters or a replacement parser.
+use marty_issuance_service::lossless_json_tree;
 #[path = "../src/python_value.rs"]
 mod python_value;
 #[path = "../src/signing_error_detail.rs"]

@@ -1,6 +1,7 @@
 //! Shared JSON-value display compatibility with the published Python runtime.
 //! Unicode tables are frozen language-neutral observations, not host-version
 //! heuristics. No Python process is used by the Rust runtime.
+use crate::lossless_json_tree::{JsonNode, JsonTree};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -128,6 +129,92 @@ impl PythonValueView for &Value {
                     .map(|(key, value)| (key.chars().map(u32::from).collect(), value))
                     .collect(),
             ),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PythonJsonValue<'a> {
+    Scalar(&'a Value),
+    Tree(&'a JsonTree, usize),
+}
+
+impl PythonValueView for PythonJsonValue<'_> {
+    fn truthy(self) -> bool {
+        match self {
+            Self::Scalar(value) => value.truthy(),
+            Self::Tree(tree, id) => match tree.node(id) {
+                JsonNode::Scalar(value) => value.truthy(),
+                JsonNode::Text(value) => value.codepoints().next().is_some(),
+                JsonNode::Float(value) => *value != 0.0,
+                JsonNode::Array(values) => !values.is_empty(),
+                JsonNode::Object(values) => !values.is_empty(),
+            },
+        }
+    }
+    fn view(self) -> PythonValueNode<Self> {
+        let Self::Tree(tree, id) = self else {
+            let Self::Scalar(value) = self else {
+                unreachable!()
+            };
+            return value.view().map(Self::Scalar);
+        };
+        match tree.node(id) {
+            JsonNode::Scalar(value) => Self::Scalar(value).view(),
+            JsonNode::Text(text) => PythonValueNode::Text(text.codepoints().collect()),
+            JsonNode::Float(value) => PythonValueNode::Number {
+                representation: float(*value),
+                zero: *value == 0.0,
+            },
+            JsonNode::Array(values) => {
+                PythonValueNode::Array(values.iter().map(|id| Self::Tree(tree, *id)).collect())
+            }
+            JsonNode::Object(values) => PythonValueNode::Object(
+                values
+                    .iter()
+                    .map(|(key, id)| (key.codepoints().collect(), Self::Tree(tree, *id)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl<'a> PythonJsonValue<'a> {
+    pub(crate) fn field(self, name: &str) -> Option<Self> {
+        match self {
+            Self::Scalar(value) => value.as_object()?.get(name).map(Self::Scalar),
+            Self::Tree(tree, id) => {
+                let JsonNode::Object(entries) = tree.node(id) else {
+                    return None;
+                };
+                entries
+                    .iter()
+                    .find(|(key, _)| key.codepoints().eq(name.chars().map(u32::from)))
+                    .map(|(_, id)| Self::Tree(tree, *id))
+            }
+        }
+    }
+    pub(crate) fn first(self) -> Option<Self> {
+        match self {
+            Self::Scalar(value) => value.as_array()?.first().map(Self::Scalar),
+            Self::Tree(tree, id) => {
+                let JsonNode::Array(values) = tree.node(id) else {
+                    return None;
+                };
+                values.first().map(|id| Self::Tree(tree, *id))
+            }
+        }
+    }
+    pub(crate) fn is_object(self) -> bool {
+        match self {
+            Self::Scalar(value) => value.is_object(),
+            Self::Tree(tree, id) => matches!(tree.node(id), JsonNode::Object(_)),
+        }
+    }
+    pub(crate) fn string_points(self) -> Vec<u32> {
+        match self.view() {
+            PythonValueNode::Text(value) => value,
+            _ => representation_points(self),
         }
     }
 }
@@ -260,6 +347,50 @@ pub(crate) fn float(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_json_view_retains_lossless_projection_and_scalar_compatibility() {
+        let scalar = serde_json::json!({"nested": [null, false, 0, "text"]});
+        let tree = JsonTree::from_response_bytes(br#"{"nested":[null,false,0,"text"]}"#).unwrap();
+        for root in [
+            PythonJsonValue::Scalar(&scalar),
+            PythonJsonValue::Tree(&tree, tree.root()),
+        ] {
+            assert!(root.is_object());
+            assert!(root.truthy());
+            let first = root.field("nested").unwrap().first().unwrap();
+            assert!(!first.truthy());
+            assert!(!first.is_object());
+            assert!(first.field("missing").is_none());
+            assert!(first.first().is_none());
+            assert_eq!(
+                root.string_points(),
+                python_string(&scalar)
+                    .unwrap()
+                    .chars()
+                    .map(u32::from)
+                    .collect::<Vec<_>>()
+            );
+        }
+        let tree = JsonTree::from_response_bytes(
+            br#"{"id":"\ud800","number":NaN,"values":[Infinity,-Infinity,-0.0]}"#,
+        )
+        .unwrap();
+        let root = PythonJsonValue::Tree(&tree, tree.root());
+        assert_eq!(root.field("id").unwrap().string_points(), [0xd800]);
+        assert!(root.field("number").unwrap().truthy());
+        assert_eq!(
+            root.field("number").unwrap().string_points(),
+            "nan".chars().map(u32::from).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            root.field("values").unwrap().string_points(),
+            "[inf, -inf, -0.0]"
+                .chars()
+                .map(u32::from)
+                .collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn truthiness_never_materializes_a_view() {

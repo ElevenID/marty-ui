@@ -444,6 +444,22 @@ jobs:
           test_list="$("$https_executable" --list)"
           [[ "$test_list" == *"$https_test: test"* ]]
           "$https_executable" "$https_test" --exact --nocapture --test-threads=1
+      - name: Test Canvas publication adapter over real HTTPS
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          publication_executable="$(jq -sr '
+            [.[] | select(.reason == "compiler-artifact")
+            | select(.target.name == "issuance-behavior")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.executable != null) | .executable] | unique
+            | if length == 1 then .[0] else error("Expected one issuance behavior executable") end
+          ' "$RUNNER_TEMP/rust-test-artifacts.json")"
+          test -x "$publication_executable"
+          test_list="$("$publication_executable" --list)"
+          [[ "$test_list" == *"canvas_publication_behavior::https_child: test"* ]]
+          python3 ../scripts/test_canvas_publication_https.py "$publication_executable"
       - name: Prepare required rendered base executable acceptance
         shell: bash
         run: |
