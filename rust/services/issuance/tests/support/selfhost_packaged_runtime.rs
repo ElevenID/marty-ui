@@ -198,8 +198,7 @@ fn last_child_stage(stderr: &[u8]) -> Option<String> {
     stderr
         .lines()
         .filter_map(|line| line.strip_prefix(STAGE_PREFIX))
-        .filter(|value| valid_stage(value))
-        .next_back()
+        .rfind(|value| valid_stage(value))
         .map(str::to_owned)
 }
 
