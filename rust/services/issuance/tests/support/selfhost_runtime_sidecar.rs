@@ -101,7 +101,7 @@ impl PendingOperation {
     }
 }
 
-fn validate_pending_operation(path: &Path, scope: Uuid) -> Result<(), String> {
+fn validate_pending_operation(path: &Path, scope: Uuid) -> Result<PendingKind, String> {
     let metadata = path.symlink_metadata().map_err(|_| ERROR)?;
     require(metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() <= 128)?;
     #[cfg(unix)]
@@ -116,7 +116,15 @@ fn validate_pending_operation(path: &Path, scope: Uuid) -> Result<(), String> {
             && rows[0] == "v1"
             && rows[1] == scope.to_string()
             && PendingKind::valid(rows[2]),
-    )
+    )?;
+    Ok(match rows[2] {
+        "database" => PendingKind::Database,
+        "packager" => PendingKind::Packager,
+        "native-create" => PendingKind::NativeCreate,
+        "native-start" => PendingKind::NativeStart,
+        "native-cleanup" => PendingKind::NativeCleanup,
+        _ => unreachable!("validated pending operation kind"),
+    })
 }
 
 pub(super) fn require_no_pending_operation(scope: Uuid, scratch: &Path) -> Result<(), String> {
@@ -124,8 +132,11 @@ pub(super) fn require_no_pending_operation(scope: Uuid, scratch: &Path) -> Resul
     match path.symlink_metadata() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Ok(_) => {
-            validate_pending_operation(&path, scope)?;
-            Err("Selfhost child has an incomplete nested operation; recovery withheld".into())
+            let kind = validate_pending_operation(&path, scope)?;
+            Err(format!(
+                "Selfhost child has an incomplete {} operation; recovery withheld",
+                kind.name()
+            ))
         }
         Err(_) => Err(ERROR.into()),
     }
@@ -383,6 +394,18 @@ impl<'a> OwnedNative<'a> {
             serde_json::from_str(&database.borrow_descriptor()?).map_err(|_| ERROR)?;
         let postgres = descriptor["postgres_id"].as_str().ok_or(ERROR)?;
         exact_id(postgres)?;
+        let postgres_info = inspect(postgres)?;
+        let networks = postgres_info["NetworkSettings"]["Networks"]
+            .as_object()
+            .ok_or(ERROR)?;
+        require(networks.len() == 1)?;
+        let database_host = networks
+            .values()
+            .next()
+            .and_then(|network| network["IPAddress"].as_str())
+            .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+            .filter(|value| value.is_private() && !value.is_loopback() && !value.is_unspecified())
+            .ok_or(ERROR)?;
         let network = format!("container:{postgres}");
         let scope = format!("selfhost-{}", Uuid::new_v4().simple());
         let mut directory = tempfile::tempdir().map_err(|_| ERROR)?;
@@ -411,6 +434,13 @@ impl<'a> OwnedNative<'a> {
                 .get("volumes")
                 .is_none_or(|v| v.as_array().is_some_and(Vec::is_empty)),
         )?;
+        // Compose v5.4 removed `create --no-deps`. Remove dependencies only
+        // from this isolated test copy so create cannot materialize siblings.
+        require(
+            service
+                .remove("depends_on")
+                .is_some_and(|v| v.as_object().is_some_and(|v| !v.is_empty())),
+        )?;
         // Explicit deployment-only isolation delta. All sibling fields remain.
         service.insert("image".into(), json!(image.id));
         service.remove("networks");
@@ -438,7 +468,7 @@ impl<'a> OwnedNative<'a> {
         require(prefix == "postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}")?;
         environment.insert(
             "DATABASE_URL_TEMPLATE".into(),
-            json!(format!("{prefix}@127.0.0.1:5432/marty")),
+            json!(format!("{prefix}@{database_host}:5432/marty")),
         );
         if case == SecretCase::RawAndFile {
             environment.insert(
@@ -464,7 +494,7 @@ impl<'a> OwnedNative<'a> {
         }
         expected_environment.insert(
             "DATABASE_URL_TEMPLATE".into(),
-            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@127.0.0.1:5432/marty".into(),
+            format!("postgresql+asyncpg://marty:${{MARTY_DB_PASSWORD}}@{database_host}:5432/marty"),
         );
         std::fs::write(&config, serde_json::to_vec(&model).map_err(|_| ERROR)?)
             .map_err(|_| ERROR)?;
@@ -574,7 +604,12 @@ impl<'a> OwnedNative<'a> {
             .filter_map(|s| s.strip_prefix("DATABASE_URL_TEMPLATE="))
             .collect();
         require(
-            templates == ["postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@127.0.0.1:5432/marty"],
+            templates
+                == [self
+                    .environment
+                    .get("DATABASE_URL_TEMPLATE")
+                    .map(String::as_str)
+                    .ok_or(ERROR)?],
         )?;
         require(
             !environment
@@ -590,14 +625,7 @@ impl<'a> OwnedNative<'a> {
         self.database.borrow_descriptor()?;
         let pending = PendingOperation::begin(PendingKind::NativeCreate)?;
         self.creation_attempted = true;
-        self.compose(&[
-            "create",
-            "--no-build",
-            "--pull",
-            "never",
-            "--no-deps",
-            OWNER,
-        ])?;
+        self.compose(&["create", "--no-build", "--pull", "never", OWNER])?;
         let ids = self.discover()?;
         require(ids.len() == 1)?;
         self.checked(&inspect(&ids[0])?, &ids[0])?;
@@ -805,7 +833,7 @@ mod recovery_tests {
         assert!(PendingOperation::begin_at(scope, &scratch, PendingKind::Database).is_err());
         assert!(require_no_pending_operation(scope, &scratch)
             .unwrap_err()
-            .contains("incomplete nested operation"));
+            .contains("incomplete packager operation"));
         pending.complete().unwrap();
         assert!(require_no_pending_operation(scope, &scratch).is_ok());
 

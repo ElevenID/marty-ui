@@ -236,7 +236,14 @@ def main(argv=None):
             sys.stdout.buffer.write(ready + b"\n")
             sys.stdout.buffer.flush()
             stop.wait()
-    except (Exception, KeyboardInterrupt):
+    except (Exception, KeyboardInterrupt) as error:
+        # The parent intentionally reports only this bounded class name. Never
+        # emit exception text because subprocess errors can contain local paths.
+        print(
+            f"wallet-fixture-startup:{type(error).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
     finally:
         for signum, handler in previous.items():

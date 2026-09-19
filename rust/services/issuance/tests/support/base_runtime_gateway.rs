@@ -192,7 +192,10 @@ impl GatewayFixture {
     pub(super) async fn deny_invalid_client(&self) {
         let response = self
             .client
-            .post(format!("{}/v1/issuance/initiate", self.origin))
+            // Exercise the public gateway contract. The gateway rewrites this
+            // route to the native service's internal `/initiate` endpoint only
+            // after authenticating the caller.
+            .post(format!("{}/v1/issuance", self.origin))
             .header("x-api-key", "synthetic-invalid-client-key")
             .json(&json!({}))
             .send()

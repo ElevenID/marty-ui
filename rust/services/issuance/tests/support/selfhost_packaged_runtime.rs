@@ -19,6 +19,7 @@ const PASSWORD: &str = "SyntheticSelfhostDatabasePassword5837";
 const WRONG_PASSWORD: &str = "SyntheticDifferentDatabasePassword9014";
 const SERVICE_TOKEN: &str = "synthetic-selfhost-production-grpc-service-token";
 const HMAC: &str = "synthetic-selfhost-native-token-hmac-key";
+const STAGE_PREFIX: &str = "SELFHOST_PUBLIC_LOADER_STAGE:";
 pub(super) const CHILD_TEST: &str = "selfhost_public_image_loader_child";
 
 #[derive(Clone, Copy)]
@@ -183,7 +184,84 @@ fn child_result(
     })?;
     let stdout = String::from_utf8(output.stdout).map_err(|_| ERROR)?;
     let complete = format!("SELFHOST_PUBLIC_LOADER_COMPLETE:{sentinel}");
-    require(output.status.success() && stdout.lines().filter(|line| *line == complete).count() == 1)
+    if output.status.success() && stdout.lines().filter(|line| *line == complete).count() == 1 {
+        return Ok(());
+    }
+    if let Some(stage) = last_child_stage(&output.stderr) {
+        return Err(format!("{ERROR} after {stage}"));
+    }
+    Err(ERROR.into())
+}
+
+fn last_child_stage(stderr: &[u8]) -> Option<String> {
+    let stderr = std::str::from_utf8(stderr).ok()?;
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(STAGE_PREFIX))
+        .filter(|value| valid_stage(value))
+        .next_back()
+        .map(str::to_owned)
+}
+
+fn valid_stage(value: &str) -> bool {
+    let Some((case, stage)) = value.split_once(':') else {
+        return false;
+    };
+    matches!(
+        case,
+        "database"
+            | "correct"
+            | "crlf"
+            | "wrong-password"
+            | "missing-mount"
+            | "directory"
+            | "unreadable"
+            | "empty"
+            | "placeholder"
+            | "raw-and-file"
+    ) && matches!(
+        stage,
+        "provision"
+            | "prepare"
+            | "write-secrets"
+            | "snapshot-before"
+            | "native-prepare"
+            | "create"
+            | "verify-baked-files"
+            | "start"
+            | "await-health"
+            | "verify-identity"
+            | "invalid-transaction"
+            | "transaction"
+            | "transaction-status-200"
+            | "transaction-status-401"
+            | "transaction-status-500-expected"
+            | "transaction-status-500-unexpected"
+            | "transaction-status-other"
+            | "verify-log-boundary"
+            | "cleanup"
+            | "snapshot-after"
+            | "input-integrity"
+    )
+}
+
+fn case_key(case: SecretCase) -> &'static str {
+    match case {
+        SecretCase::Correct => "correct",
+        SecretCase::CrLf => "crlf",
+        SecretCase::WrongPassword => "wrong-password",
+        SecretCase::MissingMount => "missing-mount",
+        SecretCase::Directory => "directory",
+        SecretCase::Unreadable => "unreadable",
+        SecretCase::Empty => "empty",
+        SecretCase::Placeholder => "placeholder",
+        SecretCase::RawAndFile => "raw-and-file",
+    }
+}
+
+fn record_stage(case: SecretCase, stage: &'static str) {
+    debug_assert!(valid_stage(&format!("{}:{stage}", case_key(case))));
+    eprintln!("{STAGE_PREFIX}{}:{stage}", case_key(case));
 }
 
 fn closed_docker(
@@ -426,14 +504,18 @@ fn run_service(
     case: SecretCase,
     secrets: &[String],
 ) -> Result<(), String> {
+    record_stage(case, "create");
     service.create()?;
+    record_stage(case, "verify-baked-files");
     service.verify_baked_files(repo)?;
+    record_stage(case, "start");
     service.start()?;
     let healthy = matches!(
         case,
         SecretCase::Correct | SecretCase::CrLf | SecretCase::WrongPassword
     );
     let deadline = Instant::now() + Duration::from_secs(20);
+    record_stage(case, "await-health");
     loop {
         let state = service.state()?;
         if state["Running"] == false {
@@ -447,18 +529,26 @@ fn run_service(
         std::thread::sleep(Duration::from_millis(100));
     }
     if healthy {
+        record_stage(case, "verify-identity");
         service.verify_running_identity()?;
+        record_stage(case, "invalid-transaction");
         let invalid = service.transaction(false)?;
         require(invalid == (401, json!({"detail":"Invalid API Key"})))?;
+        record_stage(case, "transaction");
         let response = service.transaction(true)?;
+        let unavailable = json!({"detail":"Issuance transaction data is temporarily unavailable"});
+        record_stage(
+            case,
+            match (&response.0, &response.1) {
+                (200, _) => "transaction-status-200",
+                (401, _) => "transaction-status-401",
+                (500, body) if body == &unavailable => "transaction-status-500-expected",
+                (500, _) => "transaction-status-500-unexpected",
+                _ => "transaction-status-other",
+            },
+        );
         if case == SecretCase::WrongPassword {
-            require(
-                response
-                    == (
-                        500,
-                        json!({"detail":"Issuance transaction data is temporarily unavailable"}),
-                    ),
-            )?;
+            require(response == (500, unavailable))?;
         } else {
             require(
                 response
@@ -480,6 +570,7 @@ fn run_service(
         SecretCase::Empty | SecretCase::Placeholder => Some("GRPC_SERVICE_TOKEN"),
         _ => None,
     };
+    record_stage(case, "verify-log-boundary");
     service.verify_log_boundary(
         &secrets.iter().map(String::as_str).collect::<Vec<_>>(),
         expected,
@@ -526,6 +617,7 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
         extracted,
     } = fixture;
     let repo = repo.as_path();
+    eprintln!("{STAGE_PREFIX}database:provision");
     let pool = provision(database).await?;
     let result = async {
         for case in [
@@ -539,14 +631,21 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
             SecretCase::Placeholder,
             SecretCase::RawAndFile,
         ] {
+            record_stage(case, "prepare");
             let mut prepared = super::selfhost_prepared::prepare(repo, &extracted.extracted);
             prepared.retain_for_parent(&super::selfhost_runtime_sidecar::parent_scratch()?);
+            record_stage(case, "write-secrets");
             let secrets = write_synthetic_secrets(&prepared.secret_directory, case)?;
+            record_stage(case, "snapshot-before");
             let before = snapshot(&pool).await?;
             extracted.verify_unchanged();
             prepared.verify_sources();
+            record_stage(case, "native-prepare");
             let mut service = OwnedNative::prepare(&prepared, database, &image, case)?;
             let operation = run_service(&mut service, repo, case, &secrets);
+            if operation.is_ok() {
+                record_stage(case, "cleanup");
+            }
             let cleanup = service.close_verified();
             let cleanup_failed = cleanup.is_err();
             let combined = super::base_runtime_container::retain_failure(operation, cleanup);
@@ -560,11 +659,15 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
                 }
                 return combined;
             }
+            if combined.is_ok() {
+                record_stage(case, "snapshot-after");
+            }
             let unchanged = snapshot(&pool).await? == before;
             extracted.verify_unchanged();
             prepared.verify_sources();
             combined?;
             require(unchanged)?;
+            record_stage(case, "input-integrity");
             require(prepared.finish(false).is_none())?;
         }
         Ok(())
@@ -577,6 +680,23 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_stage_diagnostic_accepts_only_closed_values() {
+        let stderr = b"ignored\nSELFHOST_PUBLIC_LOADER_STAGE:correct:create\nSELFHOST_PUBLIC_LOADER_STAGE:raw-and-file:verify-log-boundary\n";
+        assert_eq!(
+            last_child_stage(stderr).as_deref(),
+            Some("raw-and-file:verify-log-boundary")
+        );
+        assert_eq!(
+            last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:correct:C:\\private\\secret"),
+            None
+        );
+        assert_eq!(
+            last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:unknown:create"),
+            None
+        );
+    }
 
     #[test]
     fn process_control_child() {
@@ -704,7 +824,7 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.contains("child-failed"));
-        assert!(error.contains("incomplete nested operation"));
+        assert!(error.contains("incomplete native-create operation"));
         assert!(!called.get());
         drop(pending);
         drop(owned);

@@ -122,9 +122,10 @@ impl WalletFixture {
             .arg(status.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         let mut child = ChildGuard(command.spawn().expect("start owned HTTPS wallet"));
         let stdout = child.0.stdout.take().expect("wallet readiness pipe");
+        let stderr = child.0.stderr.take().expect("wallet diagnostic pipe");
         let (sender, receiver) = mpsc::sync_channel(1);
         let reader = std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -138,9 +139,30 @@ impl WalletFixture {
             let _ = child.0.wait();
         }
         reader.join().expect("wallet readiness reader joined");
-        let bytes = ready
-            .expect("bounded wallet startup")
-            .expect("wallet ready frame");
+        let bytes = match ready.expect("bounded wallet startup") {
+            Some(bytes) => bytes,
+            None => {
+                let status = child.0.wait().expect("reap failed wallet fixture");
+                let mut diagnostic = Vec::new();
+                stderr
+                    .take(4097)
+                    .read_to_end(&mut diagnostic)
+                    .expect("read bounded wallet startup diagnostic");
+                let diagnostic = (diagnostic.len() <= 4096
+                    && diagnostic.iter().all(|byte| {
+                        byte.is_ascii_alphanumeric()
+                            || matches!(*byte, b'-' | b'_' | b':' | b'\n' | b'\r')
+                    }))
+                .then(|| String::from_utf8(diagnostic).ok())
+                .flatten()
+                .unwrap_or_else(|| "wallet-fixture-startup:invalid-diagnostic".into());
+                panic!(
+                    "wallet ready frame missing (exit {:?}): {}",
+                    status.code(),
+                    diagnostic.trim()
+                );
+            }
+        };
         let (origin, ca_file) = validated_ready(&bytes, &directory.0)
             .expect("wallet ready frame stays within owned fixture");
         let ca = reqwest::Certificate::from_pem(
