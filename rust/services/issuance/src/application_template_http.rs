@@ -61,6 +61,13 @@ async fn create_template(
     headers: HeaderMap,
     body: Result<Json<ApplicationTemplateCreate>, JsonRejection>,
 ) -> Response {
+    if let Err(error) = service.preflight_create(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+        header(&headers, IDEMPOTENCY_HEADER),
+    ) {
+        return service_error(error);
+    }
     let Json(request) = match body {
         Ok(request) => request,
         Err(error) => return malformed_json(error),
@@ -82,12 +89,7 @@ async fn list_templates(
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    let Some(organization_id) = query
-        .organization_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(organization_id) = query.organization_id.as_deref() else {
         return missing_organization_query();
     };
     result_json(
@@ -123,6 +125,12 @@ async fn patch_template(
     headers: HeaderMap,
     body: Result<Json<ApplicationTemplatePatch>, JsonRejection>,
 ) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
     let Json(request) = match body {
         Ok(request) => request,
         Err(error) => return malformed_json(error),

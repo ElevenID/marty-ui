@@ -432,7 +432,7 @@ async fn missing_query_and_security_failures_match_the_frozen_boundary() {
         assert_eq!(body, expected_body);
     }
 
-    let response = application_template_http::router(service)
+    let response = application_template_http::router(service.clone())
         .oneshot(
             Request::builder()
                 .uri("/v1/application-templates")
@@ -444,4 +444,43 @@ async fn missing_query_and_security_failures_match_the_frozen_boundary() {
         .await
         .expect("response");
     assert_eq!(response.status().as_u16(), 422);
+
+    for (headers, expected_status) in [
+        (vec![], 401),
+        (vec![("x-api-key", "valid")], 400),
+        (
+            vec![("x-api-key", "valid"), ("x-organization-id", "org-123")],
+            400,
+        ),
+    ] {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/application-templates")
+            .header("content-type", "application/json");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let response = application_template_http::router(service.clone())
+            .oneshot(
+                builder
+                    .body(Body::from("{"))
+                    .expect("malformed preflight request"),
+            )
+            .await
+            .expect("preflight response");
+        assert_eq!(response.status().as_u16(), expected_status);
+    }
+
+    let response = application_template_http::router(service)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/application-templates?organization_id=%20%20")
+                .header("x-api-key", "valid")
+                .header("x-organization-id", "org-123")
+                .body(Body::empty())
+                .expect("blank tenant query"),
+        )
+        .await
+        .expect("blank tenant response");
+    assert_eq!(response.status().as_u16(), 404);
 }

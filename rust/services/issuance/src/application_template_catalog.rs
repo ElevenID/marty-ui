@@ -118,7 +118,7 @@ impl ApplicationTemplateCatalog for GrpcApplicationTemplateCatalog {
         &self,
         template_id: &str,
     ) -> Result<Option<CredentialTemplateValidationView>, ApplicationTemplateCatalogError> {
-        let requested_id = template_id.trim();
+        let requested_id = template_id;
         if requested_id.is_empty() {
             return Ok(None);
         }

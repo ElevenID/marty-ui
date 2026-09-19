@@ -204,7 +204,7 @@ impl ApplicationTemplatePatch {
                 "description" => template.description = nullable_string("description", value)?,
                 "credential_template_id" => {
                     template.credential_template_id =
-                        clean_optional(nullable_string("credential_template_id", value)?)
+                        nullable_string("credential_template_id", value)?
                 }
                 "form_fields" => {
                     let fields = typed_array::<ApplicationFormField>("form_fields", value)?;
@@ -242,7 +242,7 @@ impl ApplicationTemplatePatch {
                 }
                 "approval_policy_set_id" => {
                     template.approval_policy_set_id =
-                        clean_optional(nullable_string("approval_policy_set_id", value)?)
+                        nullable_string("approval_policy_set_id", value)?
                 }
                 "application_validity_days" => {
                     let value = value.as_i64().ok_or_else(|| {
@@ -382,13 +382,13 @@ impl ApplicationTemplateCreate {
             organization_id: self.organization_id,
             name: self.name,
             description: self.description,
-            credential_template_id: clean_optional(self.credential_template_id),
+            credential_template_id: self.credential_template_id,
             form_fields: values(self.form_fields)?,
             evidence_requirements: values(self.evidence_requirements)?,
             claim_collection_rules: values(self.claim_collection_rules)?,
             required_checks: values(self.required_checks)?,
             approval_strategy: self.approval_strategy,
-            approval_policy_set_id: clean_optional(self.approval_policy_set_id),
+            approval_policy_set_id: self.approval_policy_set_id,
             application_validity_days: self.application_validity_days,
             ui_config: self.ui_config,
             notification_config: self.notification_config,
@@ -455,13 +455,19 @@ impl ApplicationTemplateRecord {
         validation_errors: &[ApplicationTemplateValidationError],
         now: DateTime<Utc>,
     ) -> Result<(), ApplicationTemplateLifecycleError> {
-        if self.status != ApplicationTemplateStatus::Draft {
-            return Err(ApplicationTemplateLifecycleError::ActivateRequiresDraft);
-        }
+        self.require_draft_activation()?;
         if !validation_errors.is_empty() {
             return Err(ApplicationTemplateLifecycleError::ValidationFailed);
         }
         self.bump(ApplicationTemplateStatus::Active, now)
+    }
+
+    pub fn require_draft_activation(&self) -> Result<(), ApplicationTemplateLifecycleError> {
+        if self.status == ApplicationTemplateStatus::Draft {
+            Ok(())
+        } else {
+            Err(ApplicationTemplateLifecycleError::ActivateRequiresDraft)
+        }
     }
 
     pub fn deprecate(
@@ -1074,13 +1080,6 @@ fn validate_changed_arrays(
         notification_config: Map::new(),
     }
     .validate_transport()
-}
-
-fn clean_optional(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_owned())
-    })
 }
 
 fn text(value: Option<&Value>) -> String {

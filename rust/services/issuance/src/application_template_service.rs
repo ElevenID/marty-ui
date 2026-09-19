@@ -157,14 +157,13 @@ impl ApplicationTemplateService {
         api_key: Option<&str>,
         trusted_organization: Option<&str>,
         idempotency_key: Option<&str>,
-        request: ApplicationTemplateCreate,
+        mut request: ApplicationTemplateCreate,
     ) -> Result<ApplicationTemplateRecord, ApplicationTemplateServiceError> {
         self.security.authorize(api_key)?;
-        self.security.require_organization(
-            trusted_organization,
-            &request.organization_id,
-            false,
-        )?;
+        let organization_id = request.organization_id.trim().to_owned();
+        self.security
+            .require_organization(trusted_organization, &organization_id, false)?;
+        request.organization_id = organization_id;
         request.validate_transport()?;
         let binding = application_template_idempotency_binding(idempotency_key, &request)?;
         let template = ApplicationTemplateRecord::new(request, self.clock.now())?;
@@ -182,6 +181,7 @@ impl ApplicationTemplateService {
         claimed_organization: &str,
     ) -> Result<Vec<ApplicationTemplateRecord>, ApplicationTemplateServiceError> {
         self.security.authorize(api_key)?;
+        let claimed_organization = claimed_organization.trim();
         self.security
             .require_organization(trusted_organization, claimed_organization, false)?;
         self.repository
@@ -244,6 +244,7 @@ impl ApplicationTemplateService {
         self.security.authorize(api_key)?;
         let organization_id = required_organization(trusted_organization)?;
         let mut template = self.load(organization_id, template_id).await?;
+        template.require_draft_activation()?;
         let expected_version = template.version;
         let errors = self.validation_errors(&template).await?;
         if !errors.is_empty() {
@@ -254,6 +255,27 @@ impl ApplicationTemplateService {
             .replace_if_version(&template, expected_version)
             .await?;
         Ok(template)
+    }
+
+    pub fn preflight_json_request(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+    ) -> Result<(), ApplicationTemplateServiceError> {
+        self.security.authorize(api_key)?;
+        required_organization(trusted_organization)?;
+        Ok(())
+    }
+
+    pub fn preflight_create(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        idempotency_key: Option<&str>,
+    ) -> Result<(), ApplicationTemplateServiceError> {
+        self.preflight_json_request(api_key, trusted_organization)?;
+        validated_idempotency_key(idempotency_key)?;
+        Ok(())
     }
 
     pub async fn deprecate(
@@ -304,7 +326,11 @@ impl ApplicationTemplateService {
         &self,
         template: &ApplicationTemplateRecord,
     ) -> Result<Vec<ApplicationTemplateValidationError>, ApplicationTemplateServiceError> {
-        let credential_template = match template.credential_template_id.as_deref() {
+        let credential_template = match template
+            .credential_template_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
             None => CredentialTemplateValidationState::MissingReference,
             Some(template_id) => match self.catalog.get_strict(template_id).await {
                 Ok(Some(template)) => CredentialTemplateValidationState::Found(template),
@@ -315,7 +341,11 @@ impl ApplicationTemplateService {
             },
         };
         let approval_policy = if template.approval_strategy == "RULES_BASED" {
-            match template.approval_policy_set_id.as_deref() {
+            match template
+                .approval_policy_set_id
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            {
                 None => ApprovalPolicyValidationState::NotRequested,
                 Some(policy_set_id) => match self
                     .repository
@@ -374,9 +404,7 @@ fn application_template_idempotency_binding(
     raw_key: Option<&str>,
     request: &ApplicationTemplateCreate,
 ) -> Result<ApplicationTemplateIdempotencyBinding, ApplicationTemplateServiceError> {
-    let key = normalize_idempotency_key(raw_key)
-        .map_err(|_| ApplicationTemplateServiceError::InvalidIdempotencyKey)?
-        .ok_or(ApplicationTemplateServiceError::IdempotencyRequired)?;
+    let key = validated_idempotency_key(raw_key)?;
     let semantic = serde_json::to_value(request)
         .map_err(|_| ApplicationTemplateServiceError::Canonicalization)?;
     Ok(ApplicationTemplateIdempotencyBinding {
@@ -385,6 +413,14 @@ fn application_template_idempotency_binding(
             format!("{REQUEST_HASH_PREFIX}{}", python_canonical_json(&semantic)).as_bytes(),
         ),
     })
+}
+
+fn validated_idempotency_key(
+    raw_key: Option<&str>,
+) -> Result<String, ApplicationTemplateServiceError> {
+    normalize_idempotency_key(raw_key)
+        .map_err(|_| ApplicationTemplateServiceError::InvalidIdempotencyKey)?
+        .ok_or(ApplicationTemplateServiceError::IdempotencyRequired)
 }
 
 fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadError> {
@@ -578,6 +614,19 @@ mod tests {
         >,
     }
 
+    struct UnexpectedCatalog;
+
+    #[async_trait]
+    impl ApplicationTemplateCatalog for UnexpectedCatalog {
+        async fn get_strict(
+            &self,
+            _template_id: &str,
+        ) -> Result<Option<CredentialTemplateValidationView>, ApplicationTemplateCatalogError>
+        {
+            panic!("invalid lifecycle transitions must not call the catalog")
+        }
+    }
+
     #[async_trait]
     impl ApplicationTemplateCatalog for FixedCatalog {
         async fn get_strict(
@@ -724,6 +773,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn collection_tenant_values_are_canonicalized_like_the_frozen_boundary() {
+        let repository = Arc::new(MemoryRepository::default());
+        let service = service(repository, valid_catalog(), Some("secret"));
+        let mut create = request();
+        create.organization_id = " org-a ".to_owned();
+        create.credential_template_id = Some(" credential-template-1 ".to_owned());
+        let created = service
+            .create(
+                Some("secret"),
+                Some(" org-a "),
+                Some("canonical-tenant"),
+                create,
+            )
+            .await
+            .expect("trimmed tenant create");
+        assert_eq!(created.organization_id, "org-a");
+        assert_eq!(
+            created.credential_template_id.as_deref(),
+            Some(" credential-template-1 ")
+        );
+        assert_eq!(
+            service
+                .list(Some("secret"), Some("org-a"), " org-a ")
+                .await
+                .expect("trimmed tenant list")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn item_reads_hide_foreign_tenants_and_list_rejects_claimed_mismatch() {
         let repository = Arc::new(MemoryRepository::default());
         let service = service(repository, valid_catalog(), Some("secret"));
@@ -790,6 +870,35 @@ mod tests {
             .expect("deprecate");
         assert_eq!(deprecated.status, ApplicationTemplateStatus::Deprecated);
         assert_eq!(deprecated.version, 3);
+    }
+
+    #[tokio::test]
+    async fn invalid_activation_state_precedes_dependency_validation() {
+        let repository = Arc::new(MemoryRepository::default());
+        let service = service(repository.clone(), valid_catalog(), Some("secret"));
+        let created = service
+            .create(Some("secret"), Some("org-a"), Some("key-state"), request())
+            .await
+            .expect("create");
+        service
+            .activate(Some("secret"), Some("org-a"), &created.id)
+            .await
+            .expect("first activation");
+
+        let lifecycle_only = ApplicationTemplateService::new(
+            repository,
+            Arc::new(UnexpectedCatalog),
+            Arc::new(FixedClock(now())),
+            Some("secret"),
+        );
+        assert_eq!(
+            lifecycle_only
+                .activate(Some("secret"), Some("org-a"), &created.id)
+                .await,
+            Err(ApplicationTemplateServiceError::Lifecycle(
+                ApplicationTemplateLifecycleError::ActivateRequiresDraft
+            ))
+        );
     }
 
     #[tokio::test]
