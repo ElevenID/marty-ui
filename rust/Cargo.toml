@@ -19,6 +19,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
+fancy-regex = "0.19.2"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 hmac = "0.12"

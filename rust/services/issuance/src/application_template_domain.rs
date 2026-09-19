@@ -7,6 +7,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Utc};
+use fancy_regex::Regex as PythonCompatibleRegex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -702,7 +703,7 @@ pub fn validate_application_template(
             );
         }
         let pattern = text(field.get("validation_pattern"));
-        if !pattern.is_empty() && Regex::new(&pattern).is_err() {
+        if !pattern.is_empty() && PythonCompatibleRegex::new(&pattern).is_err() {
             add(
                 "form_fields",
                 format!("form_fields.{index}.validation_pattern"),
@@ -1201,6 +1202,37 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn validation_patterns_preserve_python_lookaround_and_backreferences() {
+        for pattern in [r"^(?=.*[A-Z])(?=.*\d).+$", r"^([A-Z])\1$"] {
+            let mut record = canonical_request()
+                .into_record("template-1".to_owned(), now())
+                .expect("record");
+            record.form_fields[0]["validation_pattern"] = json!(pattern);
+            let errors = validate_application_template(
+                &record,
+                &CredentialTemplateValidationState::NotFound,
+                &ApprovalPolicyValidationState::NotRequested,
+            );
+            assert!(
+                errors.iter().all(|error| error.code != "INVALID_PATTERN"),
+                "Python-compatible pattern was rejected: {pattern}"
+            );
+        }
+
+        let mut record = canonical_request()
+            .into_record("template-1".to_owned(), now())
+            .expect("record");
+        record.form_fields[0]["validation_pattern"] = json!("(?");
+        assert!(validate_application_template(
+            &record,
+            &CredentialTemplateValidationState::NotFound,
+            &ApprovalPolicyValidationState::NotRequested,
+        )
+        .iter()
+        .any(|error| error.code == "INVALID_PATTERN"));
     }
 
     #[test]
