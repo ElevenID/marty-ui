@@ -1221,7 +1221,15 @@ def test_every_issuance_integration_test_remains_registered() -> None:
     registered = [target["path"] for target in targets]
     harness = (directory / "tests/behavior_suite.rs").read_text(encoding="utf-8")
     grouped = re.findall(r'#\[path = "([^"]+)"\]', harness)
-    assert len(grouped) == 6
+    assert set(grouped) == {
+        "canvas_lti_tool_signing_behavior.rs",
+        "canvas_management_contract.rs",
+        "canvas_publication_behavior.rs",
+        "canvas_sync_worker_behavior.rs",
+        "canvas_sync_worker_configuration_oracle.rs",
+        "canvas_worker_result_oracle.rs",
+        "proof_nonce_behavior.rs",
+    }
     registered.extend(f"tests/{name}" for name in grouped)
     actual = {
         path.relative_to(directory).as_posix()
