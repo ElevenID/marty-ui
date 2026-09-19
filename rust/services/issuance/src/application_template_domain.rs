@@ -6,10 +6,10 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use fancy_regex::Regex as PythonCompatibleRegex;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
@@ -439,7 +439,9 @@ pub struct ApplicationTemplateRecord {
     pub status: ApplicationTemplateStatus,
     #[serde(skip)]
     pub version: i64,
+    #[serde(serialize_with = "serialize_python_datetime")]
     pub created_at: DateTime<Utc>,
+    #[serde(serialize_with = "serialize_python_datetime")]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -1091,6 +1093,13 @@ fn numeric(value: Option<&Value>) -> Option<f64> {
     value.and_then(Value::as_f64)
 }
 
+fn serialize_python_datetime<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_rfc3339_opts(SecondsFormat::AutoSi, false))
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -1137,6 +1146,9 @@ mod tests {
         assert_eq!(record.approval_strategy, "MANUAL");
         assert_eq!(record.application_validity_days, 30);
         assert_eq!(record.version, 1);
+        let response = serde_json::to_value(&record).expect("response JSON");
+        assert_eq!(response["created_at"], "2026-09-19T12:00:00+00:00");
+        assert_eq!(response["updated_at"], "2026-09-19T12:00:00+00:00");
         assert_eq!(
             record.form_fields[0]["options"],
             json!(["PENDING", {"label": "Cleared", "value": "CLEARED"}])
