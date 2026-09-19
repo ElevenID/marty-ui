@@ -39,7 +39,7 @@ def test_frozen_builtin_inventory_covers_metaclass_and_absent_attribute_boundari
             assert "repr" not in item and "value" not in item
 
 
-def test_capture_is_version_pinned_builtin_metadata_only_and_candidate_is_unselected():
+def test_capture_is_version_pinned_builtin_metadata_only_and_formatter_is_private():
     spec = importlib.util.spec_from_file_location("string_attribute_inventory", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -57,7 +57,13 @@ def test_capture_is_version_pinned_builtin_metadata_only_and_candidate_is_unsele
     assert "getattr(owner, attribute)" in source
     assert "repr(value)" not in source
     library = (ROOT / "rust/services/issuance/src/lib.rs").read_text(encoding="utf-8")
-    assert "#[cfg(test)]\nmod python_format;" in library
+    assert "mod python_format;" in library
+    assert "#[cfg(test)]\nmod python_format;" not in library
+    assert "pub mod python_format;" not in library
+    canvas_urls = (
+        ROOT / "rust/services/issuance/src/canvas_credentials_urls.rs"
+    ).read_text(encoding="utf-8")
+    assert "python_format::{format_named, PythonFormatError" in canvas_urls
     formatter = (ROOT / "rust/services/issuance/src/python_format.rs").read_text(
         encoding="utf-8"
     )
