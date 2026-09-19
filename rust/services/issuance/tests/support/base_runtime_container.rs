@@ -26,6 +26,7 @@ const CHILD: &str = "base_profile_gateway_composition_child";
 const ENVOY_CHILD: &str = "base_profile_envoy_composition_child";
 const KUBERNETES_CHILD: &str = "kubernetes_profile_gateway_composition_child";
 const COMPOSE_SHA256: &str = "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be";
+const COMPAT_TEST_EXECUTABLE: &str = "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";
 const ASSETS: &[&str] = &[
     "docker-compose.base.yml",
     "docker-compose.profile.issuance-native.yml",
@@ -119,6 +120,69 @@ fn executable(path: &Path) -> Result<PathBuf, String> {
         "Base runtime requires real Linux ELF artifacts",
     )?;
     Ok(path)
+}
+
+#[derive(Debug, PartialEq)]
+struct RuntimeExecutables {
+    test: PathBuf,
+    issuance: PathBuf,
+    gateway: PathBuf,
+}
+
+fn compatible_executable_paths(test: &Path) -> Result<RuntimeExecutables, String> {
+    require(
+        test.is_absolute(),
+        "Compatible base runtime test executable must be absolute",
+    )?;
+    let name = test
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("Compatible base runtime test executable name is invalid")?;
+    let hash = name
+        .strip_prefix("canvas_published_schema_contract-")
+        .ok_or("Compatible base runtime test executable has the wrong target name")?;
+    require(
+        hash.len() == 16
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "Compatible base runtime test executable has an invalid Cargo hash",
+    )?;
+    let deps = test
+        .parent()
+        .ok_or("Compatible base runtime test executable has no parent")?;
+    require(
+        deps.file_name().and_then(|name| name.to_str()) == Some("deps"),
+        "Compatible base runtime test executable is not in Cargo's deps directory",
+    )?;
+    let debug = deps
+        .parent()
+        .ok_or("Compatible base runtime target directory is unavailable")?;
+    Ok(RuntimeExecutables {
+        test: test.to_path_buf(),
+        issuance: debug.join("marty-issuance-service"),
+        gateway: debug.join("marty-gateway"),
+    })
+}
+
+fn runtime_executables() -> Result<RuntimeExecutables, String> {
+    let candidates = if let Some(test) = std::env::var_os(COMPAT_TEST_EXECUTABLE) {
+        compatible_executable_paths(Path::new(&test))?
+    } else {
+        let test = std::env::current_exe().map_err(|_| "Base test executable is unavailable")?;
+        let issuance = PathBuf::from(env!("CARGO_BIN_EXE_marty-issuance-service"));
+        let gateway = issuance.with_file_name("marty-gateway");
+        RuntimeExecutables {
+            test,
+            issuance,
+            gateway,
+        }
+    };
+    Ok(RuntimeExecutables {
+        test: executable(&candidates.test)?,
+        issuance: executable(&candidates.issuance)?,
+        gateway: executable(&candidates.gateway)?,
+    })
 }
 
 fn checked_assets(root: &Path, assets: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
@@ -398,10 +462,10 @@ async fn run_child(
         .ok_or("Missing verified database ID")?;
     exact_id(postgres)?;
     let root = source_root()?;
-    let test_executable =
-        executable(&std::env::current_exe().map_err(|_| "Base test executable is unavailable")?)?;
-    let issuance = executable_path()?;
-    let gateway = executable(&issuance.with_file_name("marty-gateway"))?;
+    let executables = runtime_executables()?;
+    let test_executable = executables.test;
+    let issuance = executables.issuance;
+    let gateway = executables.gateway;
     let renderer = regular_file(&PathBuf::from(
         std::env::var_os("MARTY_BASE_COMPOSE_BINARY")
             .ok_or("Pinned Compose renderer is required")?,
@@ -527,10 +591,6 @@ fn child_failure_is_retained_when_cleanup_or_verification_also_fails() {
     );
 }
 
-fn executable_path() -> Result<PathBuf, String> {
-    executable(Path::new(env!("CARGO_BIN_EXE_marty-issuance-service")))
-}
-
 async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
     // Validate optional CI-owned output storage before creating any container.
     let diagnostics = super::runtime_failure_diagnostics::Diagnostics::from_environment()?;
@@ -636,6 +696,49 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compatible_executable_selector_derives_only_exact_cargo_siblings() {
+        let test = if cfg!(windows) {
+            PathBuf::from(r"C:\target\debug\deps\canvas_published_schema_contract-0123456789abcdef")
+        } else {
+            PathBuf::from("/target/debug/deps/canvas_published_schema_contract-0123456789abcdef")
+        };
+        assert_eq!(
+            compatible_executable_paths(&test).unwrap(),
+            RuntimeExecutables {
+                test: test.clone(),
+                issuance: test
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("marty-issuance-service"),
+                gateway: test
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("marty-gateway"),
+            }
+        );
+        for invalid in [
+            PathBuf::from("debug/deps/canvas_published_schema_contract-0123456789abcdef"),
+            test.with_file_name("other-0123456789abcdef"),
+            test.with_file_name("canvas_published_schema_contract-0123456789abcde"),
+            test.with_file_name("canvas_published_schema_contract-0123456789abcdeF"),
+            test.parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(test.file_name().unwrap()),
+        ] {
+            assert!(
+                compatible_executable_paths(&invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
+    }
 
     #[test]
     fn container_inspection_closes_network_mount_and_child_identity_boundaries() {

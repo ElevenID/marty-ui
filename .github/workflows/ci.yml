@@ -425,6 +425,52 @@ jobs:
         run: >-
           cargo test --locked --workspace --no-run --message-format=json
           > "$RUNNER_TEMP/rust-test-artifacts.json"
+      - name: Compile Bookworm-compatible base runtime acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t builder_images < <(awk '$1 == "FROM" && $3 == "AS" && $4 == "rust-service-builder" { print $2 }' services/Dockerfile)
+          [[ ${#builder_images[@]} == 1 ]]
+          bookworm_builder="${builder_images[0]}"
+          [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
+          docker pull "$bookworm_builder"
+          host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          test -d "$host_cargo_home"
+          compat_target="$RUNNER_TEMP/marty-bookworm-target"
+          compat_artifacts="$RUNNER_TEMP/marty-bookworm-artifacts.json"
+          mkdir -m 700 "$compat_target"
+          docker run --rm --network none --read-only \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env "CARGO_HOME=$host_cargo_home" \
+            --env "CARGO_TARGET_DIR=$compat_target" \
+            --env CARGO_INCREMENTAL=0 \
+            --env CARGO_PROFILE_TEST_DEBUG=0 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
+            --volume "$host_cargo_home:$host_cargo_home" \
+            --volume "$compat_target:$compat_target" \
+            --workdir "$GITHUB_WORKSPACE/rust" \
+            "$bookworm_builder" \
+            sh -ceu '
+              cargo build --locked --offline --quiet -p marty-issuance-service --bin marty-issuance-service
+              cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway
+              cargo test --locked --offline -p marty-issuance-service \
+                --test canvas_published_schema_contract --no-run --message-format=json
+            ' > "$compat_artifacts"
+          compat_executable="$(jq -sr '
+            [.[] | select(.reason == "compiler-artifact")
+            | select(.target.name == "canvas_published_schema_contract")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.executable != null) | .executable] | unique
+            | if length == 1 then .[0] else error("Expected one Bookworm-compatible base runtime executable") end
+          ' "$compat_artifacts")"
+          [[ "$(dirname "$compat_executable")" == "$compat_target/debug/deps" ]]
+          [[ "${compat_executable##*/}" =~ ^canvas_published_schema_contract-[a-f0-9]{16}$ ]]
+          test -x "$compat_executable"
+          test -x "$compat_target/debug/marty-issuance-service"
+          test -x "$compat_target/debug/marty-gateway"
+          printf 'MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s\n' "$compat_executable" >> "$GITHUB_ENV"
       - name: Test native Canvas AGS/NRPS over real HTTPS
         working-directory: rust
         shell: bash

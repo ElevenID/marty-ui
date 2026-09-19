@@ -245,6 +245,118 @@ def runtime_ci(workflow):
     assert index < names.index("Run safe Rust contract groups concurrently")
 
 
+def compatibility_ci(workflow):
+    job = workflow["jobs"]["test-rust-services"]
+    name = "Compile Bookworm-compatible base runtime acceptance"
+    matches = [
+        (index, step)
+        for index, step in enumerate(job["steps"])
+        if step.get("name") == name
+    ]
+    assert len(matches) == 1
+    index, step = matches[0]
+    assert set(step) == {"name", "shell", "run"}
+    assert step["shell"] == "bash"
+    script = step["run"]
+    required = (
+        "set -euo pipefail",
+        'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-builder" { print $2 }\' services/Dockerfile',
+        '[[ ${#builder_images[@]} == 1 ]]',
+        '^rust:1\\.95-bookworm@sha256:[a-f0-9]{64}$',
+        'docker pull "$bookworm_builder"',
+        'compat_target="$RUNNER_TEMP/marty-bookworm-target"',
+        'compat_artifacts="$RUNNER_TEMP/marty-bookworm-artifacts.json"',
+        "docker run --rm --network none --read-only",
+        '--user "$(id -u):$(id -g)"',
+        '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
+        '--volume "$compat_target:$compat_target"',
+        '--workdir "$GITHUB_WORKSPACE/rust"',
+        "cargo build --locked --offline --quiet -p marty-issuance-service --bin marty-issuance-service",
+        "cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway",
+        "--test canvas_published_schema_contract --no-run --message-format=json",
+        'select(.target.name == "canvas_published_schema_contract")',
+        '[[ "$(dirname "$compat_executable")" == "$compat_target/debug/deps" ]]',
+        '^canvas_published_schema_contract-[a-f0-9]{16}$',
+        'test -x "$compat_target/debug/marty-issuance-service"',
+        'test -x "$compat_target/debug/marty-gateway"',
+        "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s",
+        '>> "$GITHUB_ENV"',
+    )
+    for value in required:
+        assert value in script
+    assert script.count("--network none") == 1
+    assert script.count("MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s") == 1
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index("Compile reusable Rust test executables") < index
+    assert index < names.index("Prepare required rendered base executable acceptance")
+    source = (
+        ROOT / "rust/services/issuance/tests/support/base_runtime_container.rs"
+    ).read_text()
+    assert (
+        'const COMPAT_TEST_EXECUTABLE: &str = '
+        '"MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";'
+        in source
+    )
+    assert "compatible_executable_paths(Path::new(&test))?" in source
+    assert 'strip_prefix("canvas_published_schema_contract-")' in source
+    assert 'Some("deps")' in source
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing",
+        "duplicate",
+        "optional",
+        "conditional",
+        "builder",
+        "network",
+        "workspace",
+        "gateway",
+        "selector",
+    ],
+)
+def test_runtime_ci_builds_closed_bookworm_compatible_child_artifacts(fault):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    compatibility_ci(workflow)
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    step = next(
+        item
+        for item in steps
+        if item.get("name") == "Compile Bookworm-compatible base runtime acceptance"
+    )
+    if fault == "missing":
+        steps.remove(step)
+    elif fault == "duplicate":
+        steps.append(deepcopy(step))
+    elif fault == "optional":
+        step["continue-on-error"] = True
+    elif fault == "conditional":
+        step["if"] = "false"
+    elif fault == "builder":
+        step["run"] = step["run"].replace("services/Dockerfile", "unowned")
+    elif fault == "network":
+        step["run"] = step["run"].replace("--network none", "--network host")
+    elif fault == "workspace":
+        step["run"] = step["run"].replace(
+            '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
+            '--volume "$GITHUB_WORKSPACE:/workspace:ro"',
+        )
+    elif fault == "gateway":
+        step["run"] = step["run"].replace(
+            "cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway",
+            "true",
+        )
+    elif fault == "selector":
+        step["run"] = step["run"].replace(
+            "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE", "UNCONNECTED_EXECUTABLE"
+        )
+    if fault:
+        with pytest.raises(AssertionError):
+            compatibility_ci(workflow)
+
+
 @pytest.mark.parametrize(
     "fault",
     [
