@@ -114,3 +114,53 @@ def test_reference_capture_does_not_accept_infrastructure_failure(monkeypatch):
     monkeypatch.setattr(module, "FIELDS", {"value": InfrastructureFailure()})
     with pytest.raises(RuntimeError, match="controlled infrastructure refusal"):
         module.observe()
+
+
+def test_format_metadata_reference_is_partitioned_portable_and_reproducible():
+    path = ROOT / "contracts/python-format-metadata-reference.json"
+    raw = path.read_text(encoding="utf-8")
+    assert hashlib.sha256(raw.encode()).hexdigest() == (
+        "4424fd7d967eea587ff516dd7bca6f0fa326ec94bb80176d23d57321f669f8b1"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "marty.python-format-metadata-reference/v2"
+    assert value["python_version"] == "3.12.10"
+    assert "host" not in value
+    assert len(value["cases"]) == 463
+    assert len(value["deterministic"]) == 356
+    assert len(value["platform_state_bound"]) == 10
+    assert len(value["identity_observations_not_exact_parity"]) == 97
+    partitions = [
+        value["deterministic"],
+        value["platform_state_bound"],
+        value["identity_observations_not_exact_parity"],
+    ]
+    assert sorted(row["id"] for rows in partitions for row in rows) == sorted(
+        row["id"] for row in value["cases"]
+    )
+    assert all(
+        set(row) == {"id", "template", "platform_state_bound", "qualification"}
+        for row in value["platform_state_bound"]
+    )
+    for row in value["identity_observations_not_exact_parity"]:
+        for shape in (row["first_shape"], row["repeat_shape"]):
+            assert all("0x" not in literal for literal in shape["literals"])
+            assert set(shape["owners"]) <= {
+                "input_string",
+                "str_type",
+                "type_type",
+                "object_type",
+                "unqualified_object",
+            }
+
+    script = ROOT / "scripts/capture_python_format_metadata.py"
+    spec = importlib.util.spec_from_file_location("python_format_metadata", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.observe() == value
+    assert module.identity_shape("before 0xABCDEF after", {}) == {
+        "literals": ["before ", " after"],
+        "owners": ["unqualified_object"],
+        "address_count": 1,
+        "qualification": "shape observation only; not exact output or complete object support",
+    }

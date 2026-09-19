@@ -28,6 +28,15 @@ errors to be distinguished from known existing capabilities that remain
 unmodeled. Eighteen independent absence observations retain Unicode, surrogates,
 NUL, quotes and long names.
 
+The follow-on metadata reference contains 463 exact CPython 3.12.10 templates:
+356 deterministic outcomes, 97 address-bearing identity shapes, and 10
+platform/build-state observations. Identity addresses are removed completely
+while retaining a closed owner classification; both uppercase and lowercase
+hexadecimal spellings are covered. Platform/build-state rows intentionally keep
+only their case identity and qualification, never a captured host value or a
+false Rust parity claim. These rows qualify future implementation scope; they do
+not select the formatter for a production caller.
+
 Remaining adoption gates:
 
 - Model remaining deterministic builtin metadata/object paths, not merely the
@@ -61,4 +70,5 @@ Reproduce the independent metadata inventory using exact CPython 3.12.10:
 
 ```text
 python -I scripts/capture_python_string_attributes.py --check
+python -I scripts/capture_python_format_metadata.py --check
 ```
