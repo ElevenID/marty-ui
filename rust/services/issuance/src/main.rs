@@ -2,6 +2,9 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
+    application_template_catalog::runtime_catalog,
+    application_template_postgres::PostgresApplicationTemplateRepository,
+    application_template_service::{ApplicationTemplateService, SystemApplicationTemplateClock},
     canvas_award_candidate_approval::{
         CanvasApplicationApprovalService, CanvasAwardCandidateApprovalService,
         SecureCanvasAwardApprovalSeedGenerator,
@@ -475,6 +478,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
     )?);
+    let application_templates = ApplicationTemplateService::new(
+        Arc::new(PostgresApplicationTemplateRepository::new(pool.clone())),
+        runtime_catalog(
+            &config.credential_template_grpc_target,
+            config.internal_service_token.as_deref(),
+            config.dependency_timeout,
+        )?,
+        Arc::new(SystemApplicationTemplateClock),
+        config.issuance_api_key.as_deref(),
+    );
     let initiation_clock = Arc::new(SystemInitiationClock);
     let initiation = InitiationService::new(
         InitiationPorts {
@@ -591,6 +604,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )
             .with_renewal(renewal),
             credential_management_http,
+            application_templates,
             CanvasServices::new(
                 canvas_oauth,
                 canvas_management,

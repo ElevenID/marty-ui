@@ -4617,6 +4617,7 @@ dependencies = [
  "protoc-bin-vendored",
  "rand 0.8.7",
  "rand 0.9.5",
+ "regex",
  "reqwest",
  "rsa",
  "rustls",

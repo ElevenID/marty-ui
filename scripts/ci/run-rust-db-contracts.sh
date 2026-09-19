@@ -51,6 +51,12 @@ if (( ${#issuance_credential_contracts[@]} != 1 )); then
   exit 1
 fi
 "${issuance_credential_contracts[0]}" --test-threads=1
+mapfile -t application_template_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'application_template_postgres_contract-*' -perm -u+x)
+if (( ${#application_template_contracts[@]} != 1 )); then
+  printf 'Expected one Application Template PostgreSQL contract executable, found %s.\n' "${#application_template_contracts[@]}" >&2
+  exit 1
+fi
+"${application_template_contracts[0]}" --test-threads=1
 mapfile -t canvas_issuance_contracts < <(
   find target/debug/deps -maxdepth 1 -type f -perm -u+x \
     \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \

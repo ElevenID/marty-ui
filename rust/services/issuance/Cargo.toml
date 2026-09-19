@@ -51,6 +51,7 @@ percent-encoding.workspace = true
 prost.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+regex.workspace = true
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
 serde.workspace = true
@@ -116,6 +117,14 @@ path = "tests/canvas_award_candidate_behavior.rs"
 [[test]]
 name = "canvas_award_candidate_postgres_contract"
 path = "tests/canvas_award_candidate_postgres_contract.rs"
+
+[[test]]
+name = "application_template_postgres_contract"
+path = "tests/application_template_postgres_contract.rs"
+
+[[test]]
+name = "application_template_http_behavior"
+path = "tests/application_template_http_behavior.rs"
 
 [[test]]
 name = "canvas_event_status_postgres_contract"

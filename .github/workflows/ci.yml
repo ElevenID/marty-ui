@@ -647,6 +647,17 @@ jobs:
             echo "Unable to locate the compiled Issuance credential PostgreSQL contract executable." >&2
             exit 1
           fi
+          application_template_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "application_template_postgres_contract")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$application_template_executable" || ! -x "$application_template_executable" ]]; then
+            echo "Unable to locate the compiled Application Template PostgreSQL contract executable." >&2
+            exit 1
+          fi
           mapfile -t canvas_issuance_contract_executables < <(jq -r '
             select(.reason == "compiler-artifact")
             | select(.package_id | contains("marty-issuance-service"))

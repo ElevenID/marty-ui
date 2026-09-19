@@ -78,6 +78,12 @@
     "commit": "4b6ab986f65a9300c1755fde0c8d377eab89057f",
     "sha256": "4895c90c2b0185edb6de60cab94e89c9d3416505a4dde1b0ea94b191602ab262"
   },
+  "application_template_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-application-templates.json",
+    "commit": "1e02b873f9960781ff3cb1a47141b91a88521825",
+    "sha256": "aa196039d65cf82b7a27980a999ce7f215a1d6bed4ee48346dbb702791bf304e"
+  },
   "renewal_behavior_contract": {
     "path": "contracts/credential-renewal-python-reference.json",
     "sha256": "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f",
@@ -105,6 +111,54 @@
       "path": "/v1/issuance/didcomm/deliver",
       "operation": "didcomm_deliver",
       "didcomm_behavior_contract": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/application-templates",
+      "operation": "create_application_template",
+      "application_template_behavior_case": "create_application_template"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/application-templates",
+      "operation": "list_application_templates",
+      "application_template_behavior_case": "list_application_templates"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/application-templates/{template_id}",
+      "operation": "get_application_template",
+      "application_template_behavior_case": "get_application_template"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/application-templates/{template_id}",
+      "operation": "update_application_template",
+      "application_template_behavior_case": "update_application_template"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/application-templates/{template_id}/validate",
+      "operation": "validate_application_template",
+      "application_template_behavior_case": "validate_application_template"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/application-templates/{template_id}/activate",
+      "operation": "activate_application_template",
+      "application_template_behavior_case": "activate_application_template"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/application-templates/{template_id}/deprecate",
+      "operation": "deprecate_application_template",
+      "application_template_behavior_case": "deprecate_application_template"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/application-templates/{template_id}",
+      "operation": "delete_application_template",
+      "application_template_behavior_case": "delete_application_template"
     },
     {
       "method": "GET",
@@ -555,7 +609,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 57,
+    "http": 49,
     "grpc": 0,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,
