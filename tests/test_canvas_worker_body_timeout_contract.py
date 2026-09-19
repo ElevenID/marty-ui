@@ -10,7 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
-CAPTURE_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
+CAPTURE_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
+ORIGINAL_CAPTURE_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
+ORIGINAL_HTTPS_FIXTURE_SHA256 = "262e9bac321a5e7d4cb40e5bc48dfc51a12c10476c79bfc8ce024e343efad8c4"
+CURRENT_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
 CASE_NAMES = [
     "application_body_prompt",
     "roster_body_prompt",
@@ -25,6 +28,17 @@ CASE_NAMES = [
 def corpus():
     # No missing-artifact skip, capture fallback, or JSON numeric normalization.
     return json.loads(ORACLE.read_bytes())
+
+
+def test_current_corpus_differs_from_independent_capture_only_by_fixture_provenance():
+    raw = ORACLE.read_bytes()
+    current = CURRENT_HTTPS_FIXTURE_SHA256.encode()
+    original = ORIGINAL_HTTPS_FIXTURE_SHA256.encode()
+    assert raw.count(current) == 6
+    assert original not in raw
+    assert hashlib.sha256(raw.replace(current, original)).hexdigest() == (
+        ORIGINAL_CAPTURE_SHA256
+    )
 
 
 @pytest.fixture

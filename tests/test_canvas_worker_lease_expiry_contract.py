@@ -12,8 +12,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-lease-expiry-oracle.json"
 BODY_ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
-CAPTURE_SHA256 = "455494bc6be253a73747116734c418c9c13e41d13eac09a1c31f721e5d44499d"
-BODY_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
+CAPTURE_SHA256 = "e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853"
+BODY_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
+ORIGINAL_CAPTURE_SHA256 = "455494bc6be253a73747116734c418c9c13e41d13eac09a1c31f721e5d44499d"
+ORIGINAL_HTTPS_FIXTURE_SHA256 = "262e9bac321a5e7d4cb40e5bc48dfc51a12c10476c79bfc8ce024e343efad8c4"
+CURRENT_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
 CASES = ("renewal_lock_early_release", "renewal_lock_crosses_expiry")
 PROOFS = (
     "blocked_renewal_observed",
@@ -23,6 +26,17 @@ PROOFS = (
     "provider_body_pending_at_release",
     "stable_after_final_attempt_join_and_interrupt",
 )
+
+
+def test_current_corpus_differs_from_independent_capture_only_by_fixture_provenance():
+    raw = ORACLE.read_bytes()
+    current = CURRENT_HTTPS_FIXTURE_SHA256.encode()
+    original = ORIGINAL_HTTPS_FIXTURE_SHA256.encode()
+    assert raw.count(current) == 2
+    assert original not in raw
+    assert hashlib.sha256(raw.replace(current, original)).hexdigest() == (
+        ORIGINAL_CAPTURE_SHA256
+    )
 OBSERVATION_FIELDS = {
     "before_release",
     "capture_source_sha256",

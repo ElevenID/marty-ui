@@ -78,8 +78,11 @@ timing; fresh-head hosted BODY/expiry parity is still required.
 
 [The body capture record](canvas-worker-body-timeout-capture-plan.md) records
 six-case A/B captures at `ffb515200`, exact raw byte agreement, and subsequent
-configured regeneration at `c092509c7` (263.15s). The permanent corpus contains
-46,042 bytes with SHA256
+configured regeneration at `c092509c7` (263.15s). The current permanent corpus
+contains 46,042 bytes with SHA256
+`bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`;
+the independent A/B capture hash before the publication fixture's
+default-identity hook was
 `e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb`.
 It preserves full probe reports and numeric spelling. Native expectations are
 selected from its `worker_body_timeout` observations, never calculated from

@@ -28,6 +28,15 @@ chunk. The later mixed/full groups were skipped. This is a separate runtime
 read-inactivity mismatch, not another dependency-import failure.
 Native BODY and full-worker live-provider expiry behavior remain unqualified.
 
+Integration update, 2026-09-19: the selected publication adapter added a
+default-identity request-handler hook to the shared HTTPS fixture. The current
+19,575-byte expiry corpus has SHA-256
+`e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853`.
+An exact contract proves both changes from the independent A/B capture are only
+the fixture-provenance digest; every behavioral observation remains byte
+identical. PR #814 must still pass exact published-process regeneration before
+this provenance refresh is qualified.
+
 The first actual Linux native expiry preflight ran at
 `3967412b7fbe4627a12f313e9d4a4b8156f14f93` in
 [CI34212739731](https://github.com/ElevenID/marty-ui/actions/runs/34212739731),

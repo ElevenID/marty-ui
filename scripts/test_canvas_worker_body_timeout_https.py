@@ -25,7 +25,10 @@ import test_canvas_worker_timeout_https as header
 
 ROOT = Path(__file__).resolve().parents[1]
 CASE_NAMES = [case[0] for case in body.CASE_LAYOUT]
-CORPUS_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
+# Publication added a default-identity handler hook to the shared HTTPS fixture.
+# Contract tests prove this corpus changes the independent capture only at the
+# six fixture-provenance values; hosted regeneration must still match exactly.
+CORPUS_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
 CASE_TIMEOUT_SECONDS = 90
 require = header.require
 assert_control = header.assert_control

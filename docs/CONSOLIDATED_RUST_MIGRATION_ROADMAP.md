@@ -921,6 +921,13 @@ Exact-owned cleanup passed. Permanent corpus registration and configured raw
 regeneration now pass; native body replay remains pending. This is published
 Python evidence, not worker cutover approval.
 
+Current PR #814 integration refreshes only the shared HTTPS fixture provenance
+after the publication adapter added a default-identity handler hook. Exact
+contracts reconstruct the historical body corpus by changing only its six
+provenance digests. The current 46,042-byte corpus SHA256 is
+`bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`;
+hosted published-process regeneration remains required before qualification.
+
 Historical qualified deadline/composition checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`:
 [CI34189450698](https://github.com/ElevenID/marty-ui/actions/runs/34189450698)

@@ -10,6 +10,15 @@ at registration `c092509c79de5513382e16ac466a05a265367e05`.
 Native body replay, runtime body-timeout parity,
 consumer cutover, and deployment remain unqualified.
 
+Integration update, 2026-09-19: the selected publication adapter added a
+default-identity request-handler hook to the shared HTTPS fixture. The current
+46,042-byte corpus has SHA-256
+`bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`.
+An exact contract proves all six changes from the independent A/B capture are
+only the fixture-provenance digest; every behavioral observation remains byte
+identical. PR #814 must still pass exact published-process regeneration before
+this provenance refresh is qualified.
+
 The implementation is isolated on
 `feat/canvas-worker-body-timeout-reference-v1`, based on `395cab656`. Its isolated
 worktree lets the already-tested delayed-header branch proceed independently.

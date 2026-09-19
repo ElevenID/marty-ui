@@ -26,7 +26,10 @@ import test_canvas_worker_timeout_https as header
 
 ROOT = Path(__file__).resolve().parents[1]
 CASE_NAMES = tuple(name for name, _ in reference.CASE_LAYOUT)
-CORPUS_SHA256 = "455494bc6be253a73747116734c418c9c13e41d13eac09a1c31f721e5d44499d"
+# Publication added a default-identity handler hook to the shared HTTPS fixture.
+# Contract tests prove this corpus changes the independent capture only at the
+# two fixture-provenance values; hosted regeneration must still match exactly.
+CORPUS_SHA256 = "e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853"
 SCHEMA = "marty.canvas-worker-lease-expiry-native-observation/v1"
 STATUSES = frozenset(("leased", "succeeded", "retry", "dead_letter"))
 FIELDS = frozenset(
