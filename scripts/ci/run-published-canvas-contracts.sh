@@ -39,6 +39,8 @@ fi
 "${executables[0]}" --list | grep -Fx 'base_profile_native_renewal_uses_actual_rendered_configuration: test'
 "${executables[0]}" --list | grep -Fx 'base_profile_gateway_composition_isolated: test'
 "${executables[0]}" --list | grep -Fx 'base_profile_gateway_composition_child: test'
+"${executables[0]}" --list | grep -Fx 'selfhost_public_image_loader_isolated: test'
+"${executables[0]}" --list | grep -Fx 'selfhost_public_image_loader_child: test'
 "${executables[0]}" --list | grep -Fx 'kubernetes_resolved_native_profile_delivers_both_encryption_modes: test'
 "${executables[0]}" --list | grep -Fx 'kubernetes_profile_gateway_composition_isolated: test'
 "${executables[0]}" --list | grep -Fx 'kubernetes_profile_gateway_composition_child: test'

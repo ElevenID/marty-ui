@@ -652,6 +652,15 @@ impl PreparedCompose {
     pub(super) fn directory(&self) -> &Path {
         self.owned.path()
     }
+    pub(super) fn retain_for_parent(&mut self, parent: &Path) {
+        assert!(self.owned.path().starts_with(parent));
+        assert_ne!(self.owned.path(), parent);
+        self.owned.disable_cleanup(true);
+    }
+    /// Preserve synthetic inputs when a runtime owner could not verify cleanup.
+    pub(super) fn finish(self, retain: bool) -> Option<PathBuf> {
+        retain.then(|| self.owned.keep())
+    }
     pub(super) fn verify_sources(&self) {
         assert_eq!(
             self.source_hashes,
@@ -808,6 +817,42 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     }
 }
 
+#[test]
+fn prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
+    // Cleanup-only owner control: this intentionally does not qualify a model.
+    let parent = tempfile::tempdir().unwrap();
+    let owned = tempfile::tempdir_in(parent.path()).unwrap();
+    let root = owned.path().to_owned();
+    let secret_directory = root.join("synthetic-secrets");
+    fs::create_dir(&secret_directory).unwrap();
+    fs::write(secret_directory.join("synthetic"), "retained-input").unwrap();
+    let mut prepared = PreparedCompose {
+        owned,
+        source_root: root.clone(),
+        source_hashes: BTreeMap::new(),
+        raw_model: Value::Null,
+        raw_hash: String::new(),
+        secret_directory: secret_directory.clone(),
+        model: ClosedSelfhostModel {
+            full_model: Value::Null,
+            secret_directory,
+            model_hash: String::new(),
+        },
+    };
+    prepared.retain_for_parent(parent.path());
+    assert!(std::panic::catch_unwind(move || {
+        let _prepared = prepared;
+        panic!("controlled child unwind");
+    })
+    .is_err());
+    assert_eq!(
+        fs::read(root.join("synthetic-secrets/synthetic")).unwrap(),
+        b"retained-input"
+    );
+    parent.close().unwrap();
+    assert!(!root.exists());
+}
+
 pub(super) fn qualify(repo: &Path, extracted: &Path) {
     let prepared = prepare(repo, extracted);
     let model = &prepared.model;
@@ -901,6 +946,7 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
         "No secret material loaded or generated"
     );
     println!("SELFHOST_EXTRACTED_RAW_RUNTIME_MODEL_V1_COMPLETE");
+    assert!(prepared.finish(false).is_none());
 }
 
 fn negative_controls(

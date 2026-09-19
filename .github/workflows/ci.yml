@@ -477,6 +477,27 @@ jobs:
           printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
+      - name: Prepare public selfhost image loader acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --manifest-path rust/Cargo.toml \
+            -p marty-selfhost-bundle --bin package-selfhost-bundle
+          test -x rust/target/debug/package-selfhost-bundle
+          selfhost_revision="${{ github.event.pull_request.head.sha || github.sha }}"
+          [[ "$selfhost_revision" =~ ^[a-f0-9]{40}$ ]]
+          docker build \
+            --file services/Dockerfile \
+            --tag marty-selfhost-public:contract \
+            --build-arg MARTY_RELEASE_VERSION=ci \
+            --build-arg "MARTY_UI_SHA=$selfhost_revision" \
+            --build-arg SERVICE_NAME=issuance_native \
+            .
+          selfhost_image_id="$(docker image inspect --format '{{.Id}}' marty-selfhost-public:contract)"
+          [[ "$selfhost_image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'MARTY_SELFHOST_TEST_PACKAGER_BINARY=%s\n' "$PWD/rust/target/debug/package-selfhost-bundle" >> "$GITHUB_ENV"
+          printf 'MARTY_SELFHOST_TEST_IMAGE=%s\n' "$selfhost_image_id" >> "$GITHUB_ENV"
+          printf 'MARTY_SELFHOST_TEST_REVISION=%s\n' "$selfhost_revision" >> "$GITHUB_ENV"
       - name: Prepare database contract executables
         working-directory: rust
         shell: bash

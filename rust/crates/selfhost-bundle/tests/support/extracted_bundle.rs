@@ -174,20 +174,28 @@ pub(super) struct ExtractedBundle {
     verified_inventory: BTreeMap<PathBuf, Option<Vec<u8>>>,
 }
 impl ExtractedBundle {
-    pub(super) fn create(repo: &Path, mut cli: Command) -> Self {
+    // This shared support module is also compiled by the issuance image-loader
+    // gate, which must use create_with to bracket the child operation record.
+    #[allow(dead_code)]
+    pub(super) fn create(repo: &Path, cli: Command) -> Self {
+        Self::create_with(repo, cli, |command| command.output().unwrap())
+    }
+    pub(super) fn create_with(
+        repo: &Path,
+        mut cli: Command,
+        execute: impl FnOnce(&mut Command) -> std::process::Output,
+    ) -> Self {
         let owned = tempfile::tempdir().unwrap();
         let output = owned.path().join("customer-bundle");
         let archive = owned.path().join("distribution");
-        let result = cli
-            .arg("--repo-root")
+        cli.arg("--repo-root")
             .arg(repo)
             .arg("--output-dir")
             .arg(&output)
             .arg("--archive")
             .arg(&archive)
-            .current_dir(owned.path())
-            .output()
-            .unwrap();
+            .current_dir(owned.path());
+        let result = execute(&mut cli);
         assert!(
             result.status.success(),
             "actual packager rejected synthetic source inputs: {}",
@@ -282,6 +290,13 @@ impl ExtractedBundle {
     pub(super) fn directory(&self) -> &Path {
         self.owned.path()
     }
+    /// The runtime host owns the enclosing scratch until resource recovery has
+    /// completed. Child unwinding must not remove assets still mounted there.
+    pub(super) fn retain_for_parent(&mut self, parent: &Path) {
+        assert!(self.owned.path().starts_with(parent));
+        assert_ne!(self.owned.path(), parent);
+        self.owned.disable_cleanup(true);
+    }
     pub(super) fn verify_unchanged(&self) {
         assert_eq!(inventory(&self.extracted), self.verified_inventory);
         assert_eq!(inventory(&self.output), self.verified_inventory);
@@ -313,4 +328,30 @@ fn jointly_mutated_verified_bundle_is_refused() {
         fs::write(directory.join("asset"), b"verified-original").unwrap();
     }
     fixture.verify_unchanged();
+}
+
+#[test]
+fn extracted_inputs_survive_child_unwind_until_parent_removes_scratch() {
+    let parent = tempfile::tempdir().unwrap();
+    let owned = tempfile::tempdir_in(parent.path()).unwrap();
+    let root = owned.path().to_owned();
+    let output = root.join("output");
+    let extracted = root.join("extracted");
+    fs::create_dir(&output).unwrap();
+    fs::create_dir(&extracted).unwrap();
+    let mut fixture = ExtractedBundle {
+        owned,
+        verified_inventory: inventory(&output),
+        output,
+        extracted,
+    };
+    fixture.retain_for_parent(parent.path());
+    assert!(std::panic::catch_unwind(move || {
+        let _fixture = fixture;
+        panic!("controlled child unwind");
+    })
+    .is_err());
+    assert!(root.is_dir());
+    parent.close().unwrap();
+    assert!(!root.exists());
 }

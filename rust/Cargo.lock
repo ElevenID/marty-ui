@@ -4604,6 +4604,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-platform-clock",
  "marty-release-evidence",
+ "marty-selfhost-bundle",
  "marty-verification",
  "mmf-config",
  "mmf-core",
@@ -4625,6 +4626,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-rustls",
@@ -4638,6 +4640,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zip",
 ]
 
 [[package]]

@@ -181,6 +181,158 @@ fn checked_borrowed_url(info: &Value, id: &str, scope: &str) -> Result<String, S
     ))
 }
 
+fn checked_recovery_scope(scope: Uuid) -> Result<(), String> {
+    if scope.get_version_num() != 4 || scope.get_variant() != uuid::Variant::RFC4122 {
+        return Err("Invalid caller-owned database scope".into());
+    }
+    Ok(())
+}
+
+fn scope_ids(
+    scope: Uuid,
+    execute: &impl Fn(&[&str]) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
+    checked_recovery_scope(scope)?;
+    let filter = format!("label={LABEL}={scope}");
+    let output = execute(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &filter])?;
+    let ids = output.lines().map(str::to_owned).collect::<Vec<_>>();
+    if ids.len() > 2 || (ids.len() == 2 && ids[0] == ids[1]) {
+        return Err("Unexpected resources in caller-owned database scope".into());
+    }
+    for id in &ids {
+        PublishedDatabase::accept_id(id)?;
+    }
+    Ok(ids)
+}
+
+fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<String>, String> {
+    checked_recovery_scope(scope)?;
+    let error = "Refusing database recovery: exact owner identity/topology mismatch";
+    if rows.len() > 2 {
+        return Err(error.into());
+    }
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+    ))
+    .unwrap();
+    let scope = scope.to_string();
+    let mut postgres = None;
+    let mut probe = None;
+    for (id, info) in rows {
+        PublishedDatabase::accept_id(id)?;
+        if info["Id"] != *id || info["Config"]["Labels"][LABEL] != scope {
+            return Err(error.into());
+        }
+        if info["Config"]["Image"] == fixture["observed_postgres_image"] {
+            checked_database_storage(info, id, &scope)?;
+            if postgres.replace(id.clone()).is_some()
+                || info["HostConfig"]["Tmpfs"]
+                    .as_object()
+                    .is_none_or(|v| v.len() != 2)
+                || info["HostConfig"]["Privileged"] != false
+                || info["HostConfig"]["PortBindings"]
+                    != serde_json::json!({"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":""}]})
+            {
+                return Err(error.into());
+            }
+            let values = info["Config"]["Env"].as_array().ok_or(error)?;
+            for expected in [
+                "POSTGRES_USER=oracle",
+                "POSTGRES_PASSWORD=synthetic-local-only",
+                "POSTGRES_DB=canvas_published_schema_test",
+            ] {
+                let key = expected.split_once('=').unwrap().0;
+                if values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|v| v.starts_with(&format!("{key}=")))
+                    .collect::<Vec<_>>()
+                    != [expected]
+                {
+                    return Err(error.into());
+                }
+            }
+        } else if info["Config"]["Image"] == fixture["observed_image"] {
+            if probe.replace((id.clone(), info)).is_some()
+                || info["HostConfig"]["ReadonlyRootfs"] != true
+                || info["HostConfig"]["Privileged"] != false
+                || info["HostConfig"]["CapDrop"] != serde_json::json!(["ALL"])
+                || info["Config"]["Entrypoint"] != serde_json::json!(["python"])
+                || info["Config"]["Cmd"]
+                    != serde_json::json!([
+                        "/verification/scripts/prepare_canvas_published_schema.py"
+                    ])
+            {
+                return Err(error.into());
+            }
+            let security = &info["HostConfig"]["SecurityOpt"];
+            if *security != serde_json::json!(["no-new-privileges"])
+                && *security != serde_json::json!(["no-new-privileges:true"])
+            {
+                return Err(error.into());
+            }
+            let env = info["Config"]["Env"].as_array().ok_or(error)?;
+            for expected in [
+                "PYTHONDONTWRITEBYTECODE=1",
+                "TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key",
+            ] {
+                let key = expected.split_once('=').unwrap().0;
+                if env
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|v| v.starts_with(&format!("{key}=")))
+                    .collect::<Vec<_>>()
+                    != [expected]
+                {
+                    return Err(error.into());
+                }
+            }
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(3)
+                .ok_or(error)?;
+            let mounts = info["Mounts"].as_array().ok_or(error)?;
+            if mounts.len() != 2 {
+                return Err(error.into());
+            }
+            for relative in [
+                "scripts/prepare_canvas_published_schema.py",
+                "contracts/canvas-worker-consumer-range-oracle.json",
+            ] {
+                let source = root.join(relative);
+                let destination = format!("/verification/{relative}");
+                if mounts
+                    .iter()
+                    .filter(|v| {
+                        v["Type"] == "bind"
+                            && v["RW"] == false
+                            && v["Source"].as_str() == source.to_str()
+                            && v["Destination"] == destination
+                    })
+                    .count()
+                    != 1
+                {
+                    return Err(error.into());
+                }
+            }
+        } else {
+            return Err(error.into());
+        }
+    }
+    let mut result = Vec::new();
+    if let Some((id, info)) = probe {
+        let pg = postgres.as_ref().ok_or(error)?;
+        if info["HostConfig"]["NetworkMode"] != format!("container:{pg}") {
+            return Err(error.into());
+        }
+        result.push(id);
+    }
+    if let Some(id) = postgres {
+        result.push(id);
+    }
+    Ok(result)
+}
+
 pub struct PublishedDatabase {
     scope: String,
     postgres: Option<String>,
@@ -215,6 +367,56 @@ impl PublishedDatabase {
 
     pub async fn start() -> Result<Self, String> {
         Self::start_probe(None).await
+    }
+
+    /// The host coordinator allocates this UUID before launching its child, so
+    /// interrupted creation can be recovered by exact scope, never by prefix.
+    pub(super) async fn start_with_scope(scope: Uuid) -> Result<Self, String> {
+        checked_recovery_scope(scope)?;
+        if !scope_ids(scope, &docker)?.is_empty() {
+            return Err("Caller-owned database scope already exists".into());
+        }
+        Self::start_probe_with_scope(None, None, false, scope).await
+    }
+
+    /// Default-schema fixture recovery only. The caller supplies its already
+    /// closed Docker endpoint; this method never reads a context or changes env.
+    pub(super) fn recover_scope(
+        scope: Uuid,
+        execute: &impl Fn(&[&str]) -> Result<String, String>,
+    ) -> Result<Vec<String>, String> {
+        let ordered = Self::inspect_recovery_scope(scope, execute)?;
+        for id in &ordered {
+            execute(&["rm", "--force", id])?;
+            let filter = format!("id={id}");
+            if !execute(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &filter])?.is_empty()
+            {
+                return Err("Exact recovered database resource remained".into());
+            }
+        }
+        if !scope_ids(scope, execute)?.is_empty() {
+            return Err("Owned recovery scope remained".into());
+        }
+        Ok(ordered)
+    }
+
+    /// Validated removal order: optional probe, then its PostgreSQL namespace.
+    pub(super) fn inspect_recovery_scope(
+        scope: Uuid,
+        execute: &impl Fn(&[&str]) -> Result<String, String>,
+    ) -> Result<Vec<String>, String> {
+        let ids = scope_ids(scope, execute)?;
+        let rows = ids
+            .iter()
+            .map(|id| {
+                let info =
+                    serde_json::from_str(&execute(&["inspect", "--format", "{{json .}}", id])?)
+                        .map_err(|_| "Invalid owned recovery inspection")?;
+                Ok((id.clone(), info))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        // Validate the complete set before removing any resource.
+        checked_recovery_rows(scope, &rows)
     }
 
     pub async fn start_with_issued_reviews() -> Result<Self, String> {
@@ -884,12 +1086,21 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
     ) -> Result<Self, String> {
+        Self::start_probe_with_scope(oracle, extra_fixture, recovery_schema, Uuid::new_v4()).await
+    }
+
+    async fn start_probe_with_scope(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+        scope: Uuid,
+    ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
         .unwrap();
         let mut owned = Self {
-            scope: Uuid::new_v4().to_string(),
+            scope: scope.to_string(),
             postgres: None,
             probe: None,
             url: String::new(),
@@ -1498,6 +1709,109 @@ impl Drop for PublishedDatabase {
 mod diagnostic_tests {
     use super::*;
     use serde_json::json;
+
+    fn recovery_rows() -> (Uuid, Vec<(String, Value)>) {
+        let (mut database, id, scope) = borrow_fixture();
+        database["HostConfig"]["Privileged"] = json!(false);
+        database["HostConfig"]["PortBindings"] =
+            json!({"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":""}]});
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap();
+        let probe_id = "b".repeat(64);
+        let probe = json!({
+            "Id":probe_id,
+            "Config":{"Image":fixture["observed_image"],"Labels":{LABEL:scope},
+                "Entrypoint":["python"],"Cmd":["/verification/scripts/prepare_canvas_published_schema.py"],
+                "Env":["PYTHONDONTWRITEBYTECODE=1","TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key"]},
+            "HostConfig":{"NetworkMode":format!("container:{id}"),"ReadonlyRootfs":true,"Privileged":false,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"]},
+            "Mounts":[
+                {"Type":"bind","RW":false,"Source":root.join("scripts/prepare_canvas_published_schema.py"),"Destination":"/verification/scripts/prepare_canvas_published_schema.py"},
+                {"Type":"bind","RW":false,"Source":root.join("contracts/canvas-worker-consumer-range-oracle.json"),"Destination":"/verification/contracts/canvas-worker-consumer-range-oracle.json"}
+            ]
+        });
+        (
+            Uuid::parse_str(&scope).unwrap(),
+            vec![(id, database), (probe_id, probe)],
+        )
+    }
+
+    #[test]
+    fn caller_scope_recovery_rejects_foreign_or_incomplete_ownership_before_removal() {
+        let (scope, rows) = recovery_rows();
+        assert_eq!(
+            checked_recovery_rows(scope, &rows).unwrap(),
+            [rows[1].0.clone(), rows[0].0.clone()]
+        );
+        let mut mutations = Vec::new();
+        for (index, pointer, replacement) in [
+            (
+                0,
+                "/Config/Labels/com.elevenid.test.canvas-published-schema",
+                json!(Uuid::new_v4().to_string()),
+            ),
+            (0, "/Config/Image", json!("unowned:latest")),
+            (0, "/Mounts", json!([{"Type":"bind","Source":"/operator"}])),
+            (
+                0,
+                "/HostConfig/PortBindings/5432~1tcp/0/HostIp",
+                json!("0.0.0.0"),
+            ),
+            (1, "/HostConfig/NetworkMode", json!("host")),
+            (1, "/HostConfig/SecurityOpt", json!([])),
+            (1, "/Config/Env", json!(["TOKEN_HMAC_KEY=changed"])),
+            (1, "/Mounts/0/RW", json!(true)),
+            (1, "/Mounts/0/Source", json!("/operator")),
+            (1, "/Config/Entrypoint", json!(["sh"])),
+        ] {
+            let mut changed = rows.clone();
+            *changed[index].1.pointer_mut(pointer).unwrap() = replacement;
+            mutations.push(changed);
+        }
+        mutations.push(vec![rows[0].clone(), rows[0].clone()]);
+        mutations.push(vec![rows[1].clone()]);
+        mutations.push(vec![rows[0].clone(), rows[1].clone(), rows[0].clone()]);
+        for changed in mutations {
+            let writes = std::cell::RefCell::new(Vec::new());
+            let invoke = |args: &[&str]| -> Result<String, String> {
+                match args[0] {
+                    "ps" => Ok(changed
+                        .iter()
+                        .map(|v| v.0.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n")),
+                    "inspect" => Ok(changed
+                        .iter()
+                        .find(|v| v.0 == args[3])
+                        .unwrap()
+                        .1
+                        .to_string()),
+                    _ => {
+                        writes.borrow_mut().push(args[0].to_owned());
+                        Err("Unexpected write".into())
+                    }
+                }
+            };
+            assert!(PublishedDatabase::recover_scope(scope, &invoke).is_err());
+            assert!(writes.borrow().is_empty());
+        }
+        assert!(scope_ids(Uuid::nil(), &|_| panic!(
+            "invalid UUID must not invoke Docker"
+        ))
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn caller_scope_constructor_rejects_invalid_uuid_before_docker() {
+        assert!(PublishedDatabase::start_with_scope(Uuid::nil())
+            .await
+            .is_err());
+    }
 
     fn borrow_fixture() -> (Value, String, String) {
         let id = "a".repeat(64);

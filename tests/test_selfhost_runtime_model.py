@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
@@ -67,6 +68,112 @@ def assert_connected(reader):
 
 def test_actual_extracted_runtime_model_is_mandatory():
     assert_connected(read)
+
+
+def assert_public_image_loader_connected(reader):
+    source = reader("rust/services/issuance/tests/canvas_published_schema_contract.rs")
+    runtime = reader("rust/services/issuance/tests/support/selfhost_packaged_runtime.rs")
+    sidecar = reader("rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs")
+    runner = reader("scripts/ci/run-published-canvas-contracts.sh")
+    workflow = yaml.safe_load(reader(".github/workflows/ci.yml"))
+    for name in [
+        "selfhost_public_image_loader_isolated",
+        "selfhost_public_image_loader_child",
+    ]:
+        assert source.count(f"fn {name}()") == 1
+        line = f'"${{executables[0]}}" --list | grep -Fx \'{name}: test\''
+        assert runner.splitlines().count(line) == 1
+    for required in [
+        "selfhost_packaged_runtime::run_isolated_child()",
+        "PendingOperation::begin",
+        "PublishedDatabase::start_with_scope",
+        "after_database_checkpoint",
+    ]:
+        assert required in source
+    for required in [
+        "ChildCase::TimeoutAfterDatabase",
+        "ChildCase::ExitAfterDatabase",
+        "require_no_pending_operation",
+        "PublishedDatabase::recover_scope",
+        "recover_parent_scope",
+        "MARTY_SELFHOST_TEST_IMAGE",
+    ]:
+        assert required in runtime
+    for required in [
+        "create_new(true)",
+        "validate_pending_operation",
+        "PendingKind::NativeCreate",
+        "PendingKind::NativeStart",
+        "PendingKind::NativeCleanup",
+    ]:
+        assert required in sidecar
+    job = workflow["jobs"]["test-rust-services"]
+    steps = job["steps"]
+    matches = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if step.get("name") == "Prepare public selfhost image loader acceptance"
+    ]
+    assert len(matches) == 1
+    index, step = matches[0]
+    assert set(step) == {"name", "shell", "run"}
+    assert step["shell"] == "bash"
+    body = step["run"]
+    for required in [
+        "set -euo pipefail",
+        "cargo build --locked --manifest-path rust/Cargo.toml",
+        "-p marty-selfhost-bundle --bin package-selfhost-bundle",
+        "--file services/Dockerfile",
+        "--tag marty-selfhost-public:contract",
+        "--build-arg SERVICE_NAME=issuance_native",
+        "docker image inspect --format '{{.Id}}' marty-selfhost-public:contract",
+        "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
+        "MARTY_SELFHOST_TEST_IMAGE",
+        "MARTY_SELFHOST_TEST_REVISION",
+    ]:
+        assert required in body
+    names = [step.get("name") for step in steps]
+    assert names.index("Compile reusable Rust test executables") < index
+    assert index < names.index("Run isolated database contract suites concurrently")
+
+
+def test_public_image_loader_is_a_mandatory_exact_source_image_gate():
+    assert_public_image_loader_connected(read)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["source", "runner", "workflow", "dockerfile", "image", "revision", "pending"],
+)
+def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
+    def changed(name):
+        source = read(name)
+        replacements = {
+            "source": (
+                "rust/services/issuance/tests/canvas_published_schema_contract.rs",
+                "selfhost_packaged_runtime::run_isolated_child()",
+            ),
+            "runner": (
+                "scripts/ci/run-published-canvas-contracts.sh",
+                '"${executables[0]}" --list | grep -Fx \'selfhost_public_image_loader_isolated: test\'',
+            ),
+            "workflow": (
+                ".github/workflows/ci.yml",
+                "Prepare public selfhost image loader acceptance",
+            ),
+            "dockerfile": (".github/workflows/ci.yml", "--file services/Dockerfile"),
+            "image": (".github/workflows/ci.yml", "MARTY_SELFHOST_TEST_IMAGE"),
+            "revision": (".github/workflows/ci.yml", "MARTY_SELFHOST_TEST_REVISION"),
+            "pending": (
+                "rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs",
+                "create_new(true)",
+            ),
+        }
+        target, value = replacements[fault]
+        return source.replace(value, "ABSENT", 1) if name == target else source
+
+    with pytest.raises(AssertionError):
+        assert_public_image_loader_connected(changed)
 
 
 @pytest.mark.parametrize(

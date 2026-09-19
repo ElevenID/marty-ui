@@ -91,7 +91,39 @@ Unicode rather than silently replacing it. No containers, service images or
 secret material were created. All results remain configuration and packaging
 evidence only, even though real executables perform the rendering.
 
-## Later mandatory stages (not implemented here)
+## Stage B source checkpoint (execution not yet qualified)
+
+The pending native-only public-image gate reuses the actual CLI/ZIP extraction
+owner and the complete raw extracted Compose model. Its explicit isolation delta
+selects the immutable source-built services image, keeps the baked dispatcher and
+loader, joins only the exact-owned PostgreSQL namespace, removes service host
+ports, and adds a read-only root, dropped capabilities and a bounded `/tmp`
+tmpfs. Synthetic secret files are mounted individually; no replacement loader,
+pre-expanded database URL, operator mount or container Docker socket is allowed.
+Actual Compose creation must consume the retained double-dollar template. The
+gate then checks the resulting single-dollar Docker environment and requires an
+authenticated, fully checked transaction response through a real database role
+and password. A wrong password must fail the database operation with unchanged
+scoped issuance rows; health alone is not password evidence.
+
+The parent allocates an exact UUID and private Docker configuration before a
+closed-environment host child starts. PostgreSQL, Compose and recovery commands
+must use the same fixed daemon. Child-owned bundle, prepared secret and Compose
+scratch inputs remain under parent ownership through panic and timeout. Recovery
+is **conditional**, not automatic for every timeout: a persistent exclusive
+operation record covers nested create-capable work. Only an explicitly completed
+synchronous boundary clears it. If completion, record inspection, child reaping
+or exact resource cleanup is unknown, cleanup writes are withheld and scratch is
+retained with the original and cleanup failures. Current empty label queries do
+not prove that an in-flight daemon request cannot create a resource later.
+
+Structural and controlled-child tests precede any image execution. Configured
+post-database abrupt-exit/timeout cases must additionally prove exact-owned
+resource recovery, separately from a held pending-operation timeout which must
+refuse recovery. This draft has not yet qualified actual service-image startup,
+Compose-to-container escaping, non-root secret access or PostgreSQL effects.
+
+## Later mandatory stages (acceptance still open)
 
 1. **Public services-image and permissions.** Use an exact-head source build of
    the existing `services/Dockerfile`, inspected at UID/GID `10001:10001`. Launch
