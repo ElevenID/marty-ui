@@ -1,8 +1,10 @@
-# Named-string formatter candidate — not selected
+# Named-string formatter and Canvas URL adoption
 
-`python_format` is currently registered only under `cfg(test)`. No Canvas URL
-builder or production route calls it. Completing a reference vector subset does
-not authorize removing Python or declaring the three consumers feature-complete.
+`python_format` is now a private production module shared by the native Canvas
+assertion-publication, managed-validation and revocation-status URL owners. The
+consumer wrapper in `canvas_credentials_urls` owns defaults, identifier rules,
+eager quoting, whitespace stripping and public error projection; the generic
+formatter remains DRY and unaware of Canvas policy.
 
 The shared API takes lossless `PythonText` and named, already-prepared string
 values. Caller-owned URL quoting, default templates, optional identifier rules,
@@ -16,8 +18,9 @@ no runtime Python interpreter or frozen result lookup.
 
 The helper reference contains 123 cases. The formatter-only gate explicitly
 separates 88 formatting cases from 28 caller-default cases and seven eager
-quoting errors. Those excluded wrapper cases must still pass through the actual
-consumer owners before adoption. This is not the entire Python formatting space.
+quoting errors. The production wrapper now replays all 123 cases without an
+exclusion list, while the formatter test retains the narrower 88-case ownership
+boundary. This is not the entire Python formatting space.
 
 The builtin existence inventory is captured using CPython 3.12.10's exact
 `str`/`type` instance, class, and metaclass MRO dictionaries. `dir(str)` alone is
@@ -34,17 +37,16 @@ platform/build-state observations. Identity addresses are removed completely
 while retaining a closed owner classification; both uppercase and lowercase
 hexadecimal spellings are covered. Platform/build-state rows intentionally keep
 only their case identity and qualification, never a captured host value or a
-false Rust parity claim. These rows qualify future implementation scope; they do
-not select the formatter for a production caller.
+false Rust parity claim. These rows qualify possible formatter expansion; they
+are outside the selected Canvas URL surface.
 
-Remaining adoption gates:
+Remaining formatter-expansion gates, not blockers for the three selected Canvas
+URL consumers:
 
 - Model remaining deterministic builtin metadata/object paths, not merely the
   known `__class__`, name, qualname and module fields.
 - Define governed observations for nondeterministic bound-method/object repr;
   never normalize addresses into a false exact-parity claim.
-- Preserve the actual three callers' quoting/error phase and public/retry
-  projections, and replay all 123 helper cases through those real owners.
 - Extend specification/parser differential coverage beyond the existing corpus.
 
 An additional frozen 777-case string-only differential inventory exhausts pairs

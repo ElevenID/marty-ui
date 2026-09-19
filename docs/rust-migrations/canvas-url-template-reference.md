@@ -43,3 +43,15 @@ Frozen JSON guards normalize CRLF to LF only. Git source identities retain exact
 blob bytes; surrogate results remain escaped JSON rather than lossy replacement
 characters. No feature deletion or full migration-completion claim follows from
 this reference slice.
+
+## Adoption status
+
+The reference has now been consumed by the shared production Rust owner in
+`canvas_credentials_urls`. Assertion publication, managed validation and
+revocation status all call that owner; no consumer retains a separate template
+replacement implementation. The wrapper passes all 123 observations, including
+the 28 default/optional-identifier cases and seven eager-quoting failures that
+were intentionally outside the generic formatter-only gate. Consumer suites,
+the full 418-test issuance library suite and strict Clippy pass on the selected
+implementation. Provider transport, persistence and deployment evidence remain
+separate gates; this adoption closes the URL-helper parity gap only.

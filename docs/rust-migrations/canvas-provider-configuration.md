@@ -409,3 +409,20 @@ remain an explicit adoption gap; extended/RFC2231 charset parameters, additional
 header forms and exceptional text/JSON application boundaries also need evidence.
 Do not cut over all consumers or claim blanket response parity on this corpus.
 No deployment, reachable Python feature deletion or other-worker change occurred.
+
+## Shared URL owner selected
+
+The later `canvas_credentials_urls` adoption closes the URL-template portion of
+the earlier open findings. One production Rust wrapper now owns assertion,
+validation and revoke defaults; Python-compatible whitespace stripping; eager
+UTF-8 percent quoting; missing-versus-empty identifiers; lossless text; and exact
+formatter/error projection. All 123 frozen helper observations pass through that
+wrapper with no exclusions. Assertion publication, managed validation and status
+revocation use it directly, while validation retains its existing HTTPS/origin
+policy and each caller retains its existing transport, retry and persistence
+owner.
+
+This does not turn the historical socket/encoding checkpoints above into blanket
+provider parity. Any still-open transport, charset, persistence, recovery or
+deployment acceptance item remains independently gated. It does remove
+URL/template formatting and three-consumer adoption from the current open list.

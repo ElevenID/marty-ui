@@ -1,15 +1,18 @@
 # Next aggregate beta: acceptance checklist
 
-Source-readiness audit: integration `57384f431`. This is a pending checklist,
-not a release reservation, deployment authorization for production, or an
-acceptance claim. Historical beta 1.1.217 evidence cannot qualify a new candidate.
-No candidate coordinate is selected here.
+Source-readiness audit: PR #814 integration branch
+`feat/canvas-review-resolution-v1`; record its exact protected merge SHA before
+selecting a release. This is a pending checklist, not a release reservation,
+deployment authorization for production, or an acceptance claim. Historical
+beta 1.1.217 evidence cannot qualify a new candidate. No candidate coordinate is
+selected here.
 
 1. Land the complete intended source through exact-head maintainer review and
    protected CI, including Linux base/Envoy/Kubernetes consumer gates. Reconcile
    component pins explicitly; do not implicitly select another worker's crypto
-   changes. Resolve remaining consumer migrations before claiming whole-goal
-   completion. Keep DIDComm KMS redesign separately deferred.
+   changes. Resolve remaining source-qualification and consumer-acceptance gates
+   before claiming whole-goal completion. Keep DIDComm KMS redesign separately
+   deferred.
 2. Select a fresh unused aggregate coordinate. Use
    `.github/workflows/prepare-stack-tag.yml` and `cd.yml`; retain the source,
    claim/transaction and run identities. Verify annotated tag/source, complete
