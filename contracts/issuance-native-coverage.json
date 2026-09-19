@@ -3,8 +3,8 @@
   "upstream": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-runtime-surface.json",
-    "commit": "578e86ef43166be79add2d812e92ef650535edaa",
-    "sha256": "2ebc803454da1df3fd38c585ebeeaf540d13bbe41be7b70093f0394df6de66e3"
+    "commit": "f127f55ecfb113ebcdfee55a79e6bae937114dfa",
+    "sha256": "b161a8aa7be187f0b8123325b1708f39f29e09b83f231016b0f4431e20d79829"
   },
   "behavior_contract": {
     "repository": "ElevenID/marty-credentials",
@@ -81,7 +81,7 @@
   "application_template_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-application-templates.json",
-    "commit": "1e02b873f9960781ff3cb1a47141b91a88521825",
+    "commit": "f127f55ecfb113ebcdfee55a79e6bae937114dfa",
     "sha256": "aa196039d65cf82b7a27980a999ce7f215a1d6bed4ee48346dbb702791bf304e"
   },
   "renewal_behavior_contract": {

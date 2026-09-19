@@ -89,7 +89,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert (
         hashlib.sha256(canonical_surface).hexdigest() == coverage["upstream"]["sha256"]
     )
-    assert coverage["upstream"]["commit"] == "578e86ef43166be79add2d812e92ef650535edaa"
+    assert coverage["upstream"]["commit"] == (
+        "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
+    )
     assert (
         hashlib.sha256(discovery_bytes.replace(b"\r\n", b"\n")).hexdigest()
         == (coverage["behavior_contract"]["sha256"])
@@ -245,7 +247,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         == coverage["application_template_behavior_contract"]["sha256"]
     )
     assert coverage["application_template_behavior_contract"]["commit"] == (
-        "1e02b873f9960781ff3cb1a47141b91a88521825"
+        "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
     )
     assert application_templates["schema"] == "marty.issuance-application-templates/v1"
     assert len(application_templates["surface"]["routes"]) == 8
