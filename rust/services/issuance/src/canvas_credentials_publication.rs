@@ -9,6 +9,7 @@ use crate::{
     canvas_credentials_transport::{
         CanvasCredentialsRequest, CanvasCredentialsTransport, HttpCanvasCredentialsTransport,
     },
+    canvas_credentials_urls::assertion_url,
     canvas_credentials_validation::CanvasCredentialsSecretResolver,
     canvas_lti_launch::{CanvasLtiClock, SystemCanvasLtiClock},
     canvas_operator_secret::{CanvasOperatorSecretReader, FileCanvasOperatorSecretReader},
@@ -230,29 +231,28 @@ impl CanvasCredentialsPublicationService {
                 return Err(error("CANVAS_CREDENTIALS_BADGECLASS_ID is required for real Canvas Credentials publish"));
             }
             let issuer = issuer_id();
-            // Source-only checkpoint: this explicit gate is replaced by the
-            // shared, separately frozen Python formatter before adapter landing.
-            // No consumer selects this incomplete candidate.
-            if self
+            let template = self
                 .config
                 .assertion_url_template
                 .as_deref()
-                .is_some_and(|value| !strip(value).is_empty())
-            {
-                return Err(error(
-                    "Canvas assertion URL formatting awaits qualified shared formatter",
-                ));
-            }
-            let id = if scope == "issuers" {
-                issuer.as_deref().ok_or_else(|| error("CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'"))?
-            } else {
-                &badge
-            };
-            let url = format!(
-                "{base}/v2/{}/{}/assertions",
-                quote_identifier(&scope),
-                quote_identifier(id)
-            );
+                .map(|value| PythonText::from(value.to_owned()));
+            let base_text = PythonText::from(base.clone());
+            let scope_text = PythonText::from(scope.clone());
+            let badge_text = PythonText::from(badge.clone());
+            let issuer_text = issuer.as_ref().map(|value| PythonText::from(value.clone()));
+            let url = assertion_url(
+                template.as_ref(),
+                &base_text,
+                &scope_text,
+                Some(&badge_text),
+                issuer_text.as_ref(),
+            )
+            .map_err(|failure| match failure.into_scalar_message() {
+                Ok(message) => error(message),
+                Err(message) => CanvasCredentialsProviderError::NonScalarRuntime(message),
+            })?
+            .into_scalar()
+            .map_err(CanvasCredentialsProviderError::NonScalarRuntime)?;
             let payload = self.badgr_payload(context, &badge, &scope)?;
             (
                 url,

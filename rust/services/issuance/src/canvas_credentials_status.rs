@@ -13,7 +13,8 @@ pub use crate::canvas_credentials_transport::{
 };
 use crate::{
     canvas_credentials_delivery_config::{config_value, metadata_sources, DeliveryConfiguration},
-    canvas_credentials_protocol::{quote_identifier, response_excerpt, truncate_text},
+    canvas_credentials_protocol::{response_excerpt, truncate_text},
+    canvas_credentials_urls::revoke_url,
     canvas_credentials_validation::CanvasCredentialsSecretResolver,
     canvas_lifecycle_delivery::{
         CanvasLifecycleCredential, CanvasLifecycleProviderError, CanvasLifecycleStatusProvider,
@@ -177,19 +178,20 @@ impl CanvasCredentialsStatusService {
                 })?;
             let token = self.token(organization, &sources).await?.ok_or_else(|| error("CANVAS_CREDENTIALS_API_TOKEN is required for real Canvas Credentials status sync"))?;
             let base = self.base_url(&sources)?;
-            let identifier = quote_identifier(external_id);
-            let url = match self
+            let template = self
                 .config
                 .revoke_url_template
-                .as_deref()
-                .map(strip)
-                .filter(|value| !value.is_empty())
-            {
-                Some(template) => template
-                    .replace("{api_base_url}", &base)
-                    .replace("{external_credential_id}", &identifier),
-                None => format!("{base}/v2/assertions/{identifier}"),
-            };
+                .as_ref()
+                .map(|value| PythonText::from(value.clone()));
+            let base_text = PythonText::from(base.clone());
+            let identifier = PythonText::from(external_id.to_owned());
+            let url = revoke_url(template.as_ref(), &base_text, Some(&identifier))
+                .map_err(|failure| match failure.into_scalar_message() {
+                    Ok(message) => error(message),
+                    Err(message) => CanvasCredentialsStatusError::NonScalarRuntime(message),
+                })?
+                .into_scalar()
+                .map_err(CanvasCredentialsStatusError::NonScalarRuntime)?;
             let reason = reason
                 .filter(|value| !value.is_empty())
                 .or(credential

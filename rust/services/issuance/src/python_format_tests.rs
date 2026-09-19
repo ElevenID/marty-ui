@@ -100,7 +100,7 @@ fn every_frozen_pairwise_string_case_matches_without_capability_filtering() {
 }
 
 #[test]
-fn candidate_matches_every_eligible_frozen_template_without_claiming_wrapper_adoption() {
+fn formatter_matches_every_format_case_while_wrapper_owns_defaults_and_quote_errors() {
     let cases = JsonTree::from_json_bytes(include_bytes!(
         "../../../../contracts/canvas-url-template-scenarios.json"
     ))
@@ -180,8 +180,8 @@ fn candidate_matches_every_eligible_frozen_template_without_claiming_wrapper_ado
         }
         formatted += 1;
     }
-    // These exclusions are actual wrapper defaults/eager quote errors, never
-    // unsupported formatter behavior filtered out of the successful count.
+    // These are wrapper defaults/eager quote errors, not unsupported formatter
+    // behavior. canvas_credentials_urls separately replays all 123 cases.
     assert_eq!((formatted, defaults, before_format), (88, 28, 7));
 }
 

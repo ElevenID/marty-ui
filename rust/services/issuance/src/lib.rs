@@ -12,7 +12,6 @@ pub mod lossless_json;
 pub mod lossless_json_tree;
 mod lossless_json_write;
 pub mod owned_json_value;
-#[cfg(test)]
 mod python_format;
 mod python_json_diagnostic;
 pub mod python_text;
@@ -31,6 +30,7 @@ mod canvas_credentials_protocol;
 pub mod canvas_credentials_publication;
 pub mod canvas_credentials_status;
 pub mod canvas_credentials_transport;
+mod canvas_credentials_urls;
 pub mod canvas_credentials_validation;
 pub mod canvas_event_status;
 pub mod canvas_event_status_postgres;

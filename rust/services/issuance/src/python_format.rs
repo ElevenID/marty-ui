@@ -1,4 +1,4 @@
-//! Unselected candidate for Python 3.12 named-string formatting.
+//! Shared Python 3.12 named-string formatting owner for migrated Rust callers.
 //! No evaluation, runtime Python, URL policy, or corpus-result lookup.
 //! Object attributes outside the explicitly modeled builtin metadata remain an
 //! internal capability gap, never a fabricated Python AttributeError.

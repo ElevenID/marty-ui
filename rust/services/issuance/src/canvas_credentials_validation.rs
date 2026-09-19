@@ -22,6 +22,7 @@ use crate::canvas_operator_secret::{
     FileCanvasOperatorSecretReader,
 };
 use crate::canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy};
+use crate::{canvas_credentials_urls, python_text::PythonText};
 
 #[cfg(test)]
 use crate::canvas_credentials_protocol::MAX_EXCERPT_CHARS;
@@ -336,49 +337,34 @@ impl CanvasCredentialsValidationService {
         issuer_id: Option<&str>,
         badgeclass_id: Option<&str>,
     ) -> Result<String, String> {
-        if let Some(template) = self.config.validation_url_template.as_deref() {
-            let url = template
-                .replace("{api_base_url}", base_url)
-                .replace("{scope}", &encoded_path_segment(scope))
-                .replace(
-                    "{badgeclass_id}",
-                    &encoded_path_segment(badgeclass_id.unwrap_or_default()),
-                )
-                .replace(
-                    "{issuer_id}",
-                    &encoded_path_segment(issuer_id.unwrap_or_default()),
-                );
-            let origin = https_origin(&url).ok_or_else(|| {
-                "Canvas Credentials validation URL must be a trusted HTTPS URL".to_owned()
-            })?;
-            if !self.allowed_origins.contains(&origin) {
-                return Err(
-                    "Canvas Credentials validation URL origin is not operator allowlisted"
-                        .to_owned(),
-                );
-            }
-            return Ok(url);
+        let template = self
+            .config
+            .validation_url_template
+            .as_ref()
+            .map(|value| PythonText::from(value.clone()));
+        let base = PythonText::from(base_url.to_owned());
+        let scope = PythonText::from(scope.to_owned());
+        let issuer = issuer_id.map(|value| PythonText::from(value.to_owned()));
+        let badge = badgeclass_id.map(|value| PythonText::from(value.to_owned()));
+        let url = canvas_credentials_urls::validation_url(
+            template.as_ref(),
+            &base,
+            &scope,
+            badge.as_ref(),
+            issuer.as_ref(),
+        )
+        .map_err(|failure| failure.scalar_message().to_owned())?
+        .into_scalar()
+        .map_err(|_| "Canvas Credentials validation URL contains non-scalar text".to_owned())?;
+        let origin = https_origin(&url).ok_or_else(|| {
+            "Canvas Credentials validation URL must be a trusted HTTPS URL".to_owned()
+        })?;
+        if !self.allowed_origins.contains(&origin) {
+            return Err(
+                "Canvas Credentials validation URL origin is not operator allowlisted".to_owned(),
+            );
         }
-        let identifier = if scope == "issuers" {
-            issuer_id.ok_or_else(|| {
-                "CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'"
-                    .to_owned()
-            })?
-        } else {
-            badgeclass_id.ok_or_else(|| {
-                "CANVAS_CREDENTIALS_BADGECLASS_ID is required for Canvas Credentials validation"
-                    .to_owned()
-            })?
-        };
-        let mut url =
-            Url::parse(&format!("{}/", base_url.trim_end_matches('/'))).map_err(|_| {
-                "Canvas Credentials API base URL must be a trusted HTTPS URL".to_owned()
-            })?;
-        url.path_segments_mut()
-            .map_err(|_| "Canvas Credentials API base URL must be a trusted HTTPS URL".to_owned())?
-            .pop_if_empty()
-            .extend(["v2", scope, identifier]);
-        Ok(url.to_string().trim_end_matches('/').to_owned())
+        Ok(url)
     }
 }
 
@@ -578,14 +564,6 @@ fn map_text<'value>(value: &'value Map<String, Value>, key: &str) -> Option<&'va
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn encoded_path_segment(value: &str) -> String {
-    let mut url = Url::parse("https://encoding.invalid/").expect("static URL");
-    url.path_segments_mut()
-        .expect("hierarchical URL")
-        .push(value);
-    url.path().trim_start_matches('/').to_owned()
 }
 
 #[cfg(test)]
