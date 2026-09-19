@@ -9,6 +9,10 @@ from test_canvas_worker_image_startup import HARDENED, ROOT, contract, mount
 def run():
     image = contract("canvas-worker-consumer-range-oracle.json")["observed_image"]
     assert re.fullmatch(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}", image)
+    # Make the immutable-image network operation explicit and independently
+    # bounded. Otherwise `docker create` may perform a hidden pull under load
+    # and exhaust the helper's short local-operation timeout.
+    docker("pull", image, timeout=180)
     with owned_container(
         "--network",
         "none",

@@ -41,9 +41,10 @@ def test_reference_container_is_reaped_after_every_observation_path(
     owner = importlib.import_module("test_canvas_worker_image_entrypoint")
     calls = []
     identity = "a" * 64
+    image = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "0" * 64
 
     def docker(*arguments, **options):
-        calls.append(arguments)
+        calls.append((arguments, options))
         operation = arguments[0]
         if operation == "create":
             return identity
@@ -62,13 +63,15 @@ def test_reference_container_is_reaped_after_every_observation_path(
 
     monkeypatch.setattr(owner, "docker", docker)
     monkeypatch.setattr(runner, "docker", docker)
+    monkeypatch.setattr(runner, "contract", lambda _name: {"observed_image": image})
     if failure:
         with pytest.raises((AssertionError, subprocess.CalledProcessError)):
             runner.run()
     else:
         runner.run()
-    assert calls[-1] == ("rm", "--force", identity)
-    create = calls[0]
+    assert calls[0] == (("pull", image), {"timeout": 180})
+    assert calls[-1][0] == ("rm", "--force", identity)
+    create = next(arguments for arguments, _options in calls if arguments[0] == "create")
     assert create[create.index("--network") + 1] == "none"
     assert "--read-only" in create and "--publish" not in create
     assert create[-1] == "--check"
