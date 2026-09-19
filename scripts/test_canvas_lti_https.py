@@ -139,6 +139,10 @@ def create_loopback_certificate(root):
         [
             "openssl",
             "req",
+            # The fixture supplies every required subject and extension. Avoid
+            # inheriting a missing or host-specific OpenSSL configuration file.
+            "-config",
+            os.devnull,
             "-x509",
             "-newkey",
             "rsa:2048",
