@@ -614,7 +614,7 @@
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 56,
     "dynamic_configuration_lookups": 20,
-    "migration_revisions": 44,
+    "migration_revisions": 46,
     "migration_heads": 1
   },
   "native_environment_variables": [
