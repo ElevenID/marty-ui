@@ -99,7 +99,25 @@ replacement commits are inside #814 but not yet on `main`; they are removed
 only after those replacement commits are ancestors of `origin/main`. A fresh
 workspace-wide audit reports five dirty worktrees, all belonging to the active
 crypto/SD-JWT effort; they remain untouched. The active KMS worktrees likewise
-remain preserved. The aggregate
+remain preserved.
+
+The eight clean historical UI branches are local-only and have no remote branch
+or PR. Their rebased/folded replacements in #814 are recorded below. These are
+same-purpose mappings established by subject, range-diff, and touched-path
+review; they are not claims that the rewritten commit objects are identical.
+
+| Local branch | Local commit(s) | Reviewed replacement commit(s) in #814 |
+|---|---|---|
+| `feat/canvas-gateway-read-parity-v1` | `58131f8b6`, `3de5e0211`, `4e729ad12` | `0a0ae6df7`, `9b31fedaa`, `9a292d9cd` |
+| `feat/canvas-gateway-trusted-actor-v1` | `58131f8b6`, `3de5e0211`, `f4d6a7681`, `afe9084b8` | `0a0ae6df7`, `9b31fedaa`, `87e3515c8`, `9a292d9cd` |
+| `feat/credential-renewal-native-v1` | `1239dda5c`, `48e4f33b0` | `68635c519`, `3253f8a76` |
+| `feat/envoy-native-issuance-selector-v1` | `ab9267e0e` | `b26eb71c8` |
+| `test/flow-public-startup-v1` | `791b1c3ce` | `cff3a4aa1` |
+| `test/kubernetes-resolved-runtime-v1` | `d362294b5` | `57384f431` |
+| `fix/selfhost-bundle-rust-packager-v1` | `3d9578387` | `dad9508d9` |
+| `test/selfhost-packaged-loader-v1` | `005cc9d96`, `b94446177` | `869c9702f`, `4f1913926` |
+
+The aggregate
 beta-only runner, release-documentation, production-entrypoint, evidence
 collector, deployment-check, and soak-verifier audit passes 58 focused tests.
 The live beta baseline remains `1.1.217`; production is unchanged.
