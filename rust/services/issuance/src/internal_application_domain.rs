@@ -254,6 +254,122 @@ impl From<&ApplicationRecord> for ApplicationResponse {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvidenceFactRecord {
+    pub id: String,
+    pub organization_id: String,
+    pub application_id: String,
+    pub subject_id: String,
+    pub provider: String,
+    pub fact_type: String,
+    pub scope: Map<String, Value>,
+    pub assertion: Map<String, Value>,
+    pub verification: Map<String, Value>,
+    pub source: Map<String, Value>,
+    pub requirement_id: Option<String>,
+    pub logical_key: String,
+    pub source_revision: String,
+    pub payload_hash: String,
+    pub observed_at: DateTime<Utc>,
+    pub effective_at: Option<DateTime<Utc>>,
+    pub superseded_fact_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct EvidenceFactResponse {
+    pub id: String,
+    pub organization_id: String,
+    pub application_id: String,
+    pub subject_id: String,
+    pub provider: String,
+    pub fact_type: String,
+    pub scope: Map<String, Value>,
+    pub assertion: Map<String, Value>,
+    pub verification: Map<String, Value>,
+    pub source: Map<String, Value>,
+    pub requirement_id: Option<String>,
+    pub logical_key: String,
+    pub source_revision: String,
+    pub payload_hash: String,
+    pub observed_at: String,
+    pub effective_at: Option<String>,
+    pub superseded_fact_id: Option<String>,
+    pub created_at: String,
+}
+
+impl From<&EvidenceFactRecord> for EvidenceFactResponse {
+    fn from(value: &EvidenceFactRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            organization_id: value.organization_id.clone(),
+            application_id: value.application_id.clone(),
+            subject_id: value.subject_id.clone(),
+            provider: value.provider.clone(),
+            fact_type: value.fact_type.clone(),
+            scope: value.scope.clone(),
+            assertion: value.assertion.clone(),
+            verification: value.verification.clone(),
+            source: value.source.clone(),
+            requirement_id: value.requirement_id.clone(),
+            logical_key: value.logical_key.clone(),
+            source_revision: value.source_revision.clone(),
+            payload_hash: value.payload_hash.clone(),
+            observed_at: python_datetime(value.observed_at),
+            effective_at: value.effective_at.map(python_datetime),
+            superseded_fact_id: value.superseded_fact_id.clone(),
+            created_at: python_datetime(value.created_at),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IssuanceEventRecord {
+    pub id: String,
+    pub transaction_id: Option<String>,
+    pub application_id: Option<String>,
+    pub event_type: String,
+    pub metadata: Map<String, Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IssuanceEventResponse {
+    pub id: String,
+    pub transaction_id: Option<String>,
+    pub application_id: Option<String>,
+    pub event_type: String,
+    pub metadata: Map<String, Value>,
+    pub created_at: String,
+}
+
+impl From<&IssuanceEventRecord> for IssuanceEventResponse {
+    fn from(value: &IssuanceEventRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            transaction_id: value.transaction_id.clone(),
+            application_id: value.application_id.clone(),
+            event_type: value.event_type.clone(),
+            metadata: value.metadata.clone(),
+            created_at: python_datetime(value.created_at),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ApplicationEvidenceSummaryResponse {
+    pub application_id: String,
+    pub organization_id: String,
+    pub status: String,
+    pub evidence_facts: Vec<EvidenceFactResponse>,
+    pub policy_decision: Option<Map<String, Value>>,
+    pub policy_source: Option<String>,
+    pub policy_set_id: Option<String>,
+    pub issuance_transaction_id: Option<String>,
+    pub canvas: Option<Map<String, Value>>,
+    pub available_api_checks: Vec<Map<String, Value>>,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ApplicationDomainError {
     #[error("Cannot {operation} application in ApplicationStatus.{status} status")]

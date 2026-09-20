@@ -17,7 +17,10 @@ use marty_issuance_service::{
     application_template_domain::{
         ApplicationTemplateCreate, ApplicationTemplateRecord, ApplicationTemplateStatus,
     },
-    internal_application_domain::{ApplicationCreate, ApplicationRecord, ApplicationStatus},
+    internal_application_domain::{
+        ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
+        IssuanceEventRecord,
+    },
     internal_application_http,
     internal_application_service::{
         InternalApplicationClock, InternalApplicationIdGenerator, InternalApplicationRepository,
@@ -31,6 +34,8 @@ use tower::ServiceExt;
 struct MemoryState {
     templates: BTreeMap<String, ApplicationTemplateRecord>,
     applications: BTreeMap<String, ApplicationRecord>,
+    evidence_facts: Vec<EvidenceFactRecord>,
+    issuance_events: Vec<IssuanceEventRecord>,
 }
 
 #[derive(Default)]
@@ -54,6 +59,22 @@ impl MemoryRepository {
             .expect("repository state")
             .applications
             .insert(application.id.clone(), application);
+    }
+
+    fn seed_evidence_fact(&self, fact: EvidenceFactRecord) {
+        self.state
+            .lock()
+            .expect("repository state")
+            .evidence_facts
+            .push(fact);
+    }
+
+    fn seed_issuance_event(&self, event: IssuanceEventRecord) {
+        self.state
+            .lock()
+            .expect("repository state")
+            .issuance_events
+            .push(event);
     }
 }
 
@@ -117,6 +138,36 @@ impl InternalApplicationRepository for MemoryRepository {
             .applications
             .get(application_id)
             .cloned())
+    }
+
+    async fn list_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .evidence_facts
+            .iter()
+            .filter(|fact| fact.application_id == application_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_events_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("repository state")
+            .issuance_events
+            .iter()
+            .filter(|event| event.application_id.as_deref() == Some(application_id))
+            .cloned()
+            .collect())
     }
 
     async fn replace_application_if_revision(
@@ -196,6 +247,43 @@ fn application(id: &str, organization_id: &str, status: ApplicationStatus) -> Ap
     .expect("application record");
     application.status = status;
     application
+}
+
+fn evidence_fact(application_id: &str) -> EvidenceFactRecord {
+    EvidenceFactRecord {
+        id: "fact-1".to_owned(),
+        organization_id: "org-123".to_owned(),
+        application_id: application_id.to_owned(),
+        subject_id: "ada@example.test".to_owned(),
+        provider: "contract-provider".to_owned(),
+        fact_type: "identity.document".to_owned(),
+        scope: Map::from_iter([("document_type".to_owned(), json!("passport"))]),
+        assertion: Map::from_iter([("verified".to_owned(), json!(true))]),
+        verification: Map::from_iter([
+            ("method".to_owned(), json!("CONTRACT")),
+            ("status".to_owned(), json!("VERIFIED")),
+        ]),
+        source: Map::from_iter([("event_id".to_owned(), json!("event-1"))]),
+        requirement_id: Some("requirement-1".to_owned()),
+        logical_key: "logical-key-1".to_owned(),
+        source_revision: "revision-1".to_owned(),
+        payload_hash: "payload-hash-1".to_owned(),
+        observed_at: fixed_time(),
+        effective_at: Some(fixed_time()),
+        superseded_fact_id: Some("fact-0".to_owned()),
+        created_at: fixed_time(),
+    }
+}
+
+fn issuance_event(application_id: &str) -> IssuanceEventRecord {
+    IssuanceEventRecord {
+        id: "issuance-event-1".to_owned(),
+        transaction_id: Some("transaction-1".to_owned()),
+        application_id: Some(application_id.to_owned()),
+        event_type: "offer_viewed".to_owned(),
+        metadata: Map::from_iter([("channel".to_owned(), json!("contract"))]),
+        created_at: fixed_time(),
+    }
 }
 
 fn service(
@@ -534,6 +622,154 @@ async fn list_and_item_boundaries_hide_tenants_and_validate_status() {
 }
 
 #[tokio::test]
+async fn evidence_and_event_reads_match_the_frozen_typed_projections() {
+    let repository = Arc::new(MemoryRepository::default());
+    let mut template = template("org-123", ApplicationTemplateStatus::Active);
+    template.evidence_requirements = vec![json!({
+        "evidence_id": "check-1",
+        "evidence_type": "EXTERNAL_API",
+        "description": "Contract API check",
+        "provider": "contract-provider",
+        "fact_type": "identity.document",
+        "required": true,
+        "verification_method": "CONTRACT_API",
+        "auto_issue_on_permit": false,
+        "scope": {"document_type": "passport"},
+        "api": {
+            "method": "get",
+            "url": "https://provider.example.test/check",
+            "secret_headers": {"authorization": "Bearer secret-token"}
+        }
+    })];
+    repository.seed_template(template);
+    let mut application = application(
+        "application-read",
+        "org-123",
+        ApplicationStatus::UnderReview,
+    );
+    application.integration_context = json!({
+        "policy": {
+            "allowed": true,
+            "policy_source": "contract",
+            "policy_set_id": "policy-1"
+        },
+        "canvas": {"course_id": "course-1"}
+    })
+    .as_object()
+    .expect("integration context")
+    .clone();
+    application.issuance_transaction_id = Some("transaction-1".to_owned());
+    repository.seed_application(application);
+    repository.seed_evidence_fact(evidence_fact("application-read"));
+    repository.seed_issuance_event(issuance_event("application-read"));
+    let service = service(repository, Some("secret"));
+
+    let (status, facts) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-read/evidence-facts",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(facts[0]["id"], "fact-1");
+    assert_eq!(facts[0]["effective_at"], "2026-09-19T12:34:56+00:00");
+    assert_eq!(
+        facts[0]
+            .as_object()
+            .expect("EvidenceFactResponse")
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "application_id",
+            "assertion",
+            "created_at",
+            "effective_at",
+            "fact_type",
+            "id",
+            "logical_key",
+            "observed_at",
+            "organization_id",
+            "payload_hash",
+            "provider",
+            "requirement_id",
+            "scope",
+            "source",
+            "source_revision",
+            "subject_id",
+            "superseded_fact_id",
+            "verification"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let (status, summary) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-read/evidence-summary",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary["status"], "under_review");
+    assert_eq!(summary["evidence_facts"], facts);
+    assert_eq!(summary["policy_source"], "contract");
+    assert_eq!(summary["policy_set_id"], "policy-1");
+    assert_eq!(summary["canvas"], json!({"course_id": "course-1"}));
+    assert_eq!(summary["available_api_checks"][0]["check_id"], "check-1");
+    assert_eq!(summary["available_api_checks"][0]["api_method"], "GET");
+    assert!(summary.to_string().find("secret-token").is_none());
+    assert!(summary.to_string().find("provider.example.test").is_none());
+
+    let (status, events) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-read/issuance-events",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        events,
+        json!([{
+            "id": "issuance-event-1",
+            "transaction_id": "transaction-1",
+            "application_id": "application-read",
+            "event_type": "offer_viewed",
+            "metadata": {"channel": "contract"},
+            "created_at": "2026-09-19T12:34:56+00:00"
+        }])
+    );
+
+    for path in [
+        "/internal/applications/application-read/evidence-facts",
+        "/internal/applications/application-read/evidence-summary",
+        "/internal/applications/application-read/issuance-events",
+    ] {
+        let (status, response) = request(
+            &service,
+            Method::GET,
+            path,
+            None,
+            Some("secret"),
+            Some("org-other"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(response, json!({"detail": "Application not found"}));
+    }
+}
+
+#[tokio::test]
 async fn lifecycle_and_revision_conflicts_preserve_exact_public_details() {
     for (operation, status, detail) in [
         (
@@ -607,17 +843,81 @@ async fn lifecycle_and_revision_conflicts_preserve_exact_public_details() {
 #[tokio::test]
 async fn auth_preflight_precedes_json_validation_and_siblings_remain_closed() {
     let service = service(Arc::new(MemoryRepository::default()), Some("secret"));
-    let (status, response) = request(
-        &service,
-        Method::GET,
-        "/internal/applications",
-        None,
-        None,
-        Some("org-123"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(response, json!({"detail": "X-API-Key header is missing"}));
+    for (method, path, body) in [
+        (Method::GET, "/internal/applications", None),
+        (
+            Method::POST,
+            "/internal/applications",
+            Some(json!({"application_template_id": "template-1", "applicant_data": {}})),
+        ),
+        (Method::GET, "/internal/applications/application-1", None),
+        (
+            Method::GET,
+            "/internal/applications/application-1/evidence-facts",
+            None,
+        ),
+        (
+            Method::GET,
+            "/internal/applications/application-1/evidence-summary",
+            None,
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/submit-evidence",
+            Some(json!({"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}})),
+        ),
+        (
+            Method::POST,
+            "/internal/applications/application-1/reject",
+            Some(json!({"review_notes": "Rejected"})),
+        ),
+        (
+            Method::GET,
+            "/internal/applications/application-1/issuance-events",
+            None,
+        ),
+    ] {
+        let (status, response) = request(
+            &service,
+            method.clone(),
+            path,
+            body.clone(),
+            None,
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(
+            response,
+            json!({"detail": "X-API-Key header is missing"}),
+            "{method} {path}"
+        );
+
+        let (status, response) = request(
+            &service,
+            method.clone(),
+            path,
+            body.clone(),
+            Some("wrong"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(
+            response,
+            json!({"detail": "Invalid API Key"}),
+            "{method} {path}"
+        );
+
+        let (status, response) =
+            request(&service, method.clone(), path, body, Some("secret"), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {path}");
+        assert_eq!(
+            response,
+            json!({"detail": "X-Organization-ID is required for application management"}),
+            "{method} {path}"
+        );
+    }
 
     let (status, response) = request(
         &service,

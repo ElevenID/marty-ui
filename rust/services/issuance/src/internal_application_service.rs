@@ -8,14 +8,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
     application_template_domain::{ApplicationTemplateRecord, ApplicationTemplateStatus},
     internal_application_domain::{
-        derive_applicant_identifier, ApplicationCreate, ApplicationDomainError, ApplicationRecord,
-        ApplicationRejection, ApplicationStatus, EvidenceSubmission,
+        derive_applicant_identifier, ApplicationCreate, ApplicationDomainError,
+        ApplicationEvidenceSummaryResponse, ApplicationRecord, ApplicationRejection,
+        ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse, EvidenceSubmission,
+        IssuanceEventRecord,
     },
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
@@ -56,6 +59,16 @@ pub trait InternalApplicationRepository: Send + Sync {
         &self,
         application_id: &str,
     ) -> Result<Option<ApplicationRecord>, InternalApplicationRepositoryError>;
+
+    async fn list_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError>;
+
+    async fn list_events_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError>;
 
     /// Atomically replace one exact lifecycle revision. A false result means
     /// the status or `updated_at` changed after the service read the row.
@@ -220,6 +233,82 @@ impl InternalApplicationService {
             .await
     }
 
+    pub async fn list_evidence_facts(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        self.load_managed(application_id, trusted_organization)
+            .await?;
+        self.repository
+            .list_evidence_facts_for_application(application_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn evidence_summary(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<ApplicationEvidenceSummaryResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        let facts = self
+            .repository
+            .list_evidence_facts_for_application(application_id)
+            .await?;
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?;
+        let policy_decision = object_member(&application.integration_context, "policy");
+        let policy_source = policy_decision
+            .as_ref()
+            .and_then(|policy| string_member(policy, "policy_source"));
+        let policy_set_id = policy_decision
+            .as_ref()
+            .and_then(|policy| string_member(policy, "policy_set_id"));
+        let canvas = object_member(&application.integration_context, "canvas");
+        Ok(ApplicationEvidenceSummaryResponse {
+            application_id: application.id,
+            organization_id: application.organization_id,
+            status: application.status.as_str().to_owned(),
+            evidence_facts: facts.iter().map(EvidenceFactResponse::from).collect(),
+            policy_decision,
+            policy_source,
+            policy_set_id,
+            issuance_transaction_id: application.issuance_transaction_id,
+            canvas,
+            available_api_checks: template
+                .as_ref()
+                .map(available_external_api_checks)
+                .unwrap_or_default(),
+        })
+    }
+
+    pub async fn list_issuance_events(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        self.load_managed(application_id, trusted_organization)
+            .await?;
+        self.repository
+            .list_events_for_application(application_id)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn submit_evidence(
         &self,
         api_key: Option<&str>,
@@ -291,6 +380,81 @@ impl InternalApplicationService {
             .filter(|application| application.organization_id == trusted_organization)
             .ok_or(InternalApplicationServiceError::ApplicationNotFound)
     }
+}
+
+fn object_member(source: &Map<String, Value>, name: &str) -> Option<Map<String, Value>> {
+    source.get(name).and_then(Value::as_object).cloned()
+}
+
+fn string_member(source: &Map<String, Value>, name: &str) -> Option<String> {
+    source.get(name).and_then(Value::as_str).map(str::to_owned)
+}
+
+fn available_external_api_checks(template: &ApplicationTemplateRecord) -> Vec<Map<String, Value>> {
+    template
+        .evidence_requirements
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|requirement| {
+            let evidence_type = string_member(requirement, "evidence_type")?.to_uppercase();
+            if !matches!(evidence_type.as_str(), "EXTERNAL_API" | "EXTERNAL_FACT") {
+                return None;
+            }
+            let api = requirement.get("api").and_then(Value::as_object);
+            if evidence_type == "EXTERNAL_API" && api.is_none() {
+                return None;
+            }
+            let check_id = ["evidence_id", "check_id", "id", "name"]
+                .into_iter()
+                .find_map(|name| {
+                    string_member(requirement, name).filter(|value| !value.is_empty())
+                })?;
+            let description = string_member(requirement, "description")
+                .filter(|value| !value.is_empty())
+                .or_else(|| string_member(requirement, "label").filter(|value| !value.is_empty()))
+                .unwrap_or_else(|| check_id.clone());
+            let provider = string_member(requirement, "provider")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "external_api".to_owned());
+            let fact_type = string_member(requirement, "fact_type").unwrap_or_default();
+            let verification_method = string_member(requirement, "verification_method")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "EXTERNAL_API_RESPONSE".to_owned());
+            let api_method = api
+                .and_then(|api| string_member(api, "method"))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "POST".to_owned())
+                .to_uppercase();
+            let required = !matches!(requirement.get("required"), Some(Value::Bool(false)));
+            let auto_issue_on_permit = matches!(
+                requirement.get("auto_issue_on_permit"),
+                Some(Value::Bool(true))
+            );
+            let scope = requirement
+                .get("scope")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            Some(Map::from_iter([
+                ("check_id".to_owned(), Value::String(check_id)),
+                ("evidence_type".to_owned(), Value::String(evidence_type)),
+                ("description".to_owned(), Value::String(description)),
+                ("provider".to_owned(), Value::String(provider)),
+                ("fact_type".to_owned(), Value::String(fact_type)),
+                ("required".to_owned(), Value::Bool(required)),
+                (
+                    "verification_method".to_owned(),
+                    Value::String(verification_method),
+                ),
+                (
+                    "auto_issue_on_permit".to_owned(),
+                    Value::Bool(auto_issue_on_permit),
+                ),
+                ("api_method".to_owned(), Value::String(api_method)),
+                ("scope".to_owned(), Value::Object(scope)),
+            ]))
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -400,6 +564,20 @@ mod tests {
                 .iter()
                 .find(|application| application.id == application_id)
                 .cloned())
+        }
+
+        async fn list_evidence_facts_for_application(
+            &self,
+            _application_id: &str,
+        ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_events_for_application(
+            &self,
+            _application_id: &str,
+        ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError> {
+            Ok(Vec::new())
         }
 
         async fn replace_application_if_revision(

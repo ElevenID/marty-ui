@@ -2,7 +2,8 @@ use chrono::{Duration, TimeZone, Utc};
 use marty_issuance_service::{
     application_template_domain::{ApplicationTemplateCreate, ApplicationTemplateStatus},
     internal_application_domain::{
-        ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceSubmission,
+        ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
+        EvidenceSubmission, IssuanceEventRecord,
     },
     internal_application_postgres::PostgresInternalApplicationRepository,
     internal_application_service::{
@@ -34,6 +35,8 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
 
     for statement in [
         "CREATE SCHEMA IF NOT EXISTS issuance_service",
+        "DROP TABLE IF EXISTS issuance_service.issuance_events CASCADE",
+        "DROP TABLE IF EXISTS issuance_service.evidence_facts CASCADE",
         "DROP TABLE IF EXISTS issuance_service.applications CASCADE",
         "DROP TABLE IF EXISTS issuance_service.application_templates CASCADE",
         "CREATE TABLE issuance_service.application_templates (
@@ -79,6 +82,34 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
             submitted_at TIMESTAMPTZ NOT NULL,
             reviewed_at TIMESTAMPTZ,
             expires_at TIMESTAMPTZ NOT NULL
+        )",
+        "CREATE TABLE issuance_service.evidence_facts (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            application_id TEXT NOT NULL REFERENCES issuance_service.applications(id),
+            subject_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            fact_type TEXT NOT NULL,
+            scope JSON NOT NULL,
+            assertion JSON NOT NULL,
+            verification JSON NOT NULL,
+            source JSON NOT NULL,
+            requirement_id TEXT,
+            logical_key TEXT NOT NULL,
+            source_revision TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            observed_at TIMESTAMPTZ NOT NULL,
+            effective_at TIMESTAMPTZ,
+            superseded_fact_id TEXT,
+            created_at TIMESTAMPTZ NOT NULL
+        )",
+        "CREATE TABLE issuance_service.issuance_events (
+            id TEXT PRIMARY KEY,
+            transaction_id TEXT,
+            application_id TEXT REFERENCES issuance_service.applications(id),
+            event_type TEXT NOT NULL,
+            metadata JSON NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
         )",
     ] {
         sqlx::query(statement)
@@ -162,6 +193,90 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .expect("status-filtered list")
         .is_empty());
 
+    sqlx::query(
+        "INSERT INTO issuance_service.evidence_facts (
+            id, organization_id, application_id, subject_id, provider, fact_type,
+            scope, assertion, verification, source, requirement_id, logical_key,
+            source_revision, payload_hash, observed_at, effective_at,
+            superseded_fact_id, created_at
+        ) VALUES (
+            'fact-1', 'org-123', 'application-1', 'ada@example.test',
+            'contract-provider', 'identity.document', $1, $2, $3, $4,
+            'requirement-1', 'logical-key-1', 'revision-1', 'payload-hash-1',
+            $5, $5, NULL, $5
+        )",
+    )
+    .bind(json!({"document_type": "passport"}))
+    .bind(json!({"verified": true}))
+    .bind(json!({"method": "CONTRACT", "status": "VERIFIED"}))
+    .bind(json!({"event_id": "event-1"}))
+    .bind(observed_at)
+    .execute(&pool)
+    .await
+    .expect("evidence fact fixture must insert");
+    let expected_fact = EvidenceFactRecord {
+        id: "fact-1".to_owned(),
+        organization_id: "org-123".to_owned(),
+        application_id: "application-1".to_owned(),
+        subject_id: "ada@example.test".to_owned(),
+        provider: "contract-provider".to_owned(),
+        fact_type: "identity.document".to_owned(),
+        scope: Map::from_iter([("document_type".to_owned(), json!("passport"))]),
+        assertion: Map::from_iter([("verified".to_owned(), json!(true))]),
+        verification: json!({"method": "CONTRACT", "status": "VERIFIED"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        source: Map::from_iter([("event_id".to_owned(), json!("event-1"))]),
+        requirement_id: Some("requirement-1".to_owned()),
+        logical_key: "logical-key-1".to_owned(),
+        source_revision: "revision-1".to_owned(),
+        payload_hash: "payload-hash-1".to_owned(),
+        observed_at,
+        effective_at: Some(observed_at),
+        superseded_fact_id: None,
+        created_at: observed_at,
+    };
+    assert_eq!(
+        repository
+            .list_evidence_facts_for_application("application-1")
+            .await
+            .expect("evidence facts"),
+        vec![expected_fact]
+    );
+    assert!(repository
+        .list_evidence_facts_for_application("missing")
+        .await
+        .expect("empty evidence facts")
+        .is_empty());
+
+    sqlx::query(
+        "INSERT INTO issuance_service.issuance_events (
+            id, transaction_id, application_id, event_type, metadata, created_at
+        ) VALUES (
+            'event-1', 'transaction-1', 'application-1', 'offer_viewed', $1, $2
+        )",
+    )
+    .bind(json!({"channel": "contract"}))
+    .bind(observed_at)
+    .execute(&pool)
+    .await
+    .expect("issuance event fixture must insert");
+    assert_eq!(
+        repository
+            .list_events_for_application("application-1")
+            .await
+            .expect("issuance events"),
+        vec![IssuanceEventRecord {
+            id: "event-1".to_owned(),
+            transaction_id: Some("transaction-1".to_owned()),
+            application_id: Some("application-1".to_owned()),
+            event_type: "offer_viewed".to_owned(),
+            metadata: Map::from_iter([("channel".to_owned(), json!("contract"))]),
+            created_at: observed_at,
+        }]
+    );
+
     let mut winning = application.clone();
     winning
         .submit_evidence(
@@ -221,6 +336,14 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         Err(InternalApplicationRepositoryError::Unavailable)
     );
 
+    sqlx::query("DROP TABLE issuance_service.issuance_events CASCADE")
+        .execute(&pool)
+        .await
+        .expect("issuance events contract table must clean up");
+    sqlx::query("DROP TABLE issuance_service.evidence_facts CASCADE")
+        .execute(&pool)
+        .await
+        .expect("evidence facts contract table must clean up");
     sqlx::query("DROP TABLE issuance_service.applications CASCADE")
         .execute(&pool)
         .await

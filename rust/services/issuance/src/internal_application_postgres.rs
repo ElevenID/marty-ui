@@ -9,7 +9,9 @@ use tracing::error;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     application_template_postgres::PostgresApplicationTemplateRepository,
-    internal_application_domain::{ApplicationRecord, ApplicationStatus},
+    internal_application_domain::{
+        ApplicationRecord, ApplicationStatus, EvidenceFactRecord, IssuanceEventRecord,
+    },
     internal_application_service::{
         InternalApplicationRepository, InternalApplicationRepositoryError,
     },
@@ -50,6 +52,21 @@ const GET: &str = concat!(
     application_columns!(),
     " FROM issuance_service.applications WHERE id = $1"
 );
+
+const LIST_EVIDENCE_FACTS: &str = "SELECT
+        id, organization_id, application_id, subject_id, provider, fact_type,
+        scope, assertion, verification, source, requirement_id, logical_key,
+        source_revision, payload_hash, observed_at, effective_at,
+        superseded_fact_id, created_at
+    FROM issuance_service.evidence_facts
+    WHERE application_id = $1
+    ORDER BY created_at";
+
+const LIST_ISSUANCE_EVENTS: &str = "SELECT
+        id, transaction_id, application_id, event_type, metadata, created_at
+    FROM issuance_service.issuance_events
+    WHERE application_id = $1
+    ORDER BY created_at";
 
 const REPLACE_IF_REVISION: &str = "UPDATE issuance_service.applications
     SET application_template_id = $1,
@@ -181,6 +198,34 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
             .transpose()
     }
 
+    async fn list_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        sqlx::query(LIST_EVIDENCE_FACTS)
+            .bind(application_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .into_iter()
+            .map(evidence_fact_row)
+            .collect()
+    }
+
+    async fn list_events_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<IssuanceEventRecord>, InternalApplicationRepositoryError> {
+        sqlx::query(LIST_ISSUANCE_EVENTS)
+            .bind(application_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .into_iter()
+            .map(issuance_event_row)
+            .collect()
+    }
+
     async fn replace_application_if_revision(
         &self,
         application: &ApplicationRecord,
@@ -244,6 +289,42 @@ fn application_row(row: PgRow) -> Result<ApplicationRecord, InternalApplicationR
         submitted_at: get(&row, "submitted_at")?,
         reviewed_at: get(&row, "reviewed_at")?,
         expires_at: get(&row, "expires_at")?,
+    })
+}
+
+fn evidence_fact_row(row: PgRow) -> Result<EvidenceFactRecord, InternalApplicationRepositoryError> {
+    Ok(EvidenceFactRecord {
+        id: get(&row, "id")?,
+        organization_id: get(&row, "organization_id")?,
+        application_id: get(&row, "application_id")?,
+        subject_id: get(&row, "subject_id")?,
+        provider: get(&row, "provider")?,
+        fact_type: get(&row, "fact_type")?,
+        scope: json_object(&row, "scope")?,
+        assertion: json_object(&row, "assertion")?,
+        verification: json_object(&row, "verification")?,
+        source: json_object(&row, "source")?,
+        requirement_id: get(&row, "requirement_id")?,
+        logical_key: get(&row, "logical_key")?,
+        source_revision: get(&row, "source_revision")?,
+        payload_hash: get(&row, "payload_hash")?,
+        observed_at: get(&row, "observed_at")?,
+        effective_at: get(&row, "effective_at")?,
+        superseded_fact_id: get(&row, "superseded_fact_id")?,
+        created_at: get(&row, "created_at")?,
+    })
+}
+
+fn issuance_event_row(
+    row: PgRow,
+) -> Result<IssuanceEventRecord, InternalApplicationRepositoryError> {
+    Ok(IssuanceEventRecord {
+        id: get(&row, "id")?,
+        transaction_id: get(&row, "transaction_id")?,
+        application_id: get(&row, "application_id")?,
+        event_type: get(&row, "event_type")?,
+        metadata: json_object(&row, "metadata")?,
+        created_at: get(&row, "created_at")?,
     })
 }
 

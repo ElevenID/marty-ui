@@ -16,7 +16,7 @@ use serde_json::json;
 use crate::{
     internal_application_domain::{
         ApplicationCreate, ApplicationDomainError, ApplicationRejection, ApplicationResponse,
-        EvidenceSubmission,
+        EvidenceFactResponse, EvidenceSubmission, IssuanceEventResponse,
     },
     internal_application_service::{
         InternalApplicationRepositoryError, InternalApplicationService,
@@ -39,12 +39,24 @@ pub fn router(service: InternalApplicationService) -> Router {
             get(get_application),
         )
         .route(
+            "/internal/applications/{application_id}/evidence-facts",
+            get(list_evidence_facts),
+        )
+        .route(
+            "/internal/applications/{application_id}/evidence-summary",
+            get(get_evidence_summary),
+        )
+        .route(
             "/internal/applications/{application_id}/submit-evidence",
             post(submit_evidence),
         )
         .route(
             "/internal/applications/{application_id}/reject",
             post(reject_application),
+        )
+        .route(
+            "/internal/applications/{application_id}/issuance-events",
+            get(list_issuance_events),
         )
         .with_state(service)
 }
@@ -136,6 +148,51 @@ async fn get_application(
     )
 }
 
+async fn list_evidence_facts(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    match service
+        .list_evidence_facts(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            &application_id,
+        )
+        .await
+    {
+        Ok(facts) => (
+            StatusCode::OK,
+            Json(
+                facts
+                    .iter()
+                    .map(EvidenceFactResponse::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
+async fn get_evidence_summary(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    match service
+        .evidence_summary(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            &application_id,
+        )
+        .await
+    {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
 async fn submit_evidence(
     State(service): State<InternalApplicationService>,
     Path(application_id): Path<String>,
@@ -190,6 +247,33 @@ async fn reject_application(
             )
             .await,
     )
+}
+
+async fn list_issuance_events(
+    State(service): State<InternalApplicationService>,
+    Path(application_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    match service
+        .list_issuance_events(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            &application_id,
+        )
+        .await
+    {
+        Ok(events) => (
+            StatusCode::OK,
+            Json(
+                events
+                    .iter()
+                    .map(IssuanceEventResponse::from)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+            .into_response(),
+        Err(error) => service_error(error),
+    }
 }
 
 fn result_application(
