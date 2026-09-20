@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. Native Canvas worker launch wiring and selection of the eight additional Canvas operations are implemented and qualified locally, not deployed. PR #814 remains draft; newer reviewed source still needs exact-head CI, landing and effective consumer acceptance. Reachable Python features and other-worker crypto work are preserved until retirement gates pass. Feature-preserving cleanup remains open. No production deployment occurred in this lane.
+**Status:** Waves one through three, the 31-route Rust Canvas cutover, and the canonical Rust verifier implementation are merged. The recorded published beta baseline is aggregate `marty-ui@v1.1.217`, source `4596afaca3724e60a8dadbd4e227b6e765cb495c`; its hosted lifecycle and first-party KMS switching recording pass. All-demo/device evidence and the governed soak remain incomplete. PR #814 is maintainer-reviewed at exact head `458823962b00ab614060b5420f7a7caa44d2712e`, has squash auto-merge enabled, and is waiting only for its exact-head Rust database-contract job; it is not deployed. The next eight-route Application Template cutover is implemented and locally qualified in Rust on `integration/application-template-after-814-v1`, raising the staged issuance inventory from 74 native / 57 remaining to 82 native / 49 remaining. Its corresponding Python management retirement is separately gated and unlanded. Reachable Python features and the independent KMS-hardening work remain preserved until their retirement or ownership gates pass. Feature-preserving branch cleanup remains open. No production deployment occurred in this lane.
 
 Prior `v1.1.214` evidence remains retained at source
 `24f5d5dc0bb47d3dadb118b4dbe45191c5cf71b1`, release run `33930593794`.
@@ -19,7 +19,7 @@ only; and `v1.2.78` is preliminary, non-activating evidence.
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-09-12
+**Last updated:** 2026-09-19
 
 ## Objective
 
@@ -29,7 +29,43 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Current execution snapshot — 2026-09-12
+## Current execution snapshot — 2026-09-19
+
+PR #814 is open with squash auto-merge enabled at exact head
+`458823962b00ab614060b5420f7a7caa44d2712e`. Every completed hosted check is
+green. The only live gate is the isolated Rust database-contract step in CI run
+`35482275103`; it must complete successfully on this exact head before the
+reviewed tree is treated as landed. This is hosted qualification, not beta or
+production deployment.
+
+The follow-on Application Template slice is staged at `d24771214` with all
+eight management routes implemented in the shared Rust issuance service. Its
+language-neutral contract freezes transport models, tenant isolation, lifecycle
+transitions, validation ordering, authenticated credential-template lookup,
+idempotent create and compare-and-set persistence. Focused unit and full HTTP
+lifecycle tests, an isolated PostgreSQL contract, candidate ownership checks,
+strict Clippy, formatting and dependency-policy checks pass. The first five
+commits are patch-identical to the reviewed source branch; the sixth adds
+complete eight-route HTTP lifecycle coverage. The branch remains unpushed until
+#814 lands and can be rebased onto protected `main` without ambiguous ancestry.
+
+The corresponding `marty-credentials` retirement is staged separately at
+`de52f21`. It removes only the superseded Python management router, eight
+handlers, request models and their implementation-specific tests. The entity,
+repository, schema, migrations and application/offer/evidence/Canvas consumers
+remain. Its complete unit suite passes 1,552 tests and 200 subtests. It must not
+land before the Rust routes land.
+
+All 85 audited `marty-ui` worktrees were clean. Seventy historical branches are
+patch-equivalent to #814. Seven older non-identical patches were individually
+compared with their integrated commits; the changed versions preserve the old
+feature blobs or add stronger adjacent gates, with no deleted capability found.
+The duplicate clean Application Template source branch/worktree was removed
+after exact patch-equivalence verification. Remaining superseded branches and
+worktrees are deleted only after #814 is merged; the active Application Template
+and independent KMS-hardening work are retained.
+
+## Historical execution snapshot — 2026-09-12
 
 At local `9e7f178a5`, the shared named-string formatter is integrated under
 `cfg(test)` only. Independent same-source Rust qualification passed five tests
@@ -5929,10 +5965,19 @@ released/deployed acceptance remain outstanding. See
 [Kubernetes runtime evidence](rust-migrations/kubernetes-native-runtime-acceptance.md)
 and [the next aggregate acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md).
 
-Remaining work includes resolved Kubernetes runtime acceptance, hosted Linux
-business gates, release-image/gateway/callback/selfhost TLS acceptance, the
-remaining 57 issuance HTTP inventory entries and intended consumers, exact-head
-review/CI/merge, branch reconciliation, and aggregate beta recordings/device
-acceptance/soak. Local qualification is not deployed acceptance. Active Python
-remains until its retirement gates pass. DIDComm KMS corrections remain deferred;
-production is unchanged.
+PR #814's reviewed exact head contains the resolved Kubernetes, Flow, Envoy,
+self-host and Canvas integrations described above and reports **74 native / 57
+remaining / 131 total** issuance HTTP operations. Its hosted Linux Rust gate and
+protected merge are still in progress. The staged Application Template slice
+adds eight native operations and, once landed, reports **82 native / 49 remaining
+/ 131 total** without removing the entity, storage or downstream consumer
+surface. Its separately tested Python management retirement remains ordered
+after that Rust landing.
+
+Remaining work includes completion and protected landing of the exact PR #814
+head, the Application Template Rust and Python-retirement PRs, release-image /
+gateway / callback / self-host TLS acceptance, intended-consumer review for the
+remaining 49 issuance HTTP entries, branch and worktree reconciliation, and one
+aggregate beta recording/device acceptance soak. Local qualification is not
+deployed acceptance. Active Python remains until its retirement gates pass.
+DIDComm KMS corrections remain deferred; production is unchanged.
