@@ -32,6 +32,8 @@ const CREDENTIAL_LIFECYCLE: &[u8] =
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
 const APPLICATION_TEMPLATES: &[u8] =
     include_bytes!("../../../../contracts/issuance-application-templates.json");
+const INTERNAL_APPLICATIONS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-internal-applications.json");
 const DIDCOMM: &[u8] =
     include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
 const RENEWAL_REFERENCE: &[u8] =
@@ -61,6 +63,7 @@ struct Coverage {
     credential_lifecycle_behavior_contract: Upstream,
     initiation_behavior_contract: Upstream,
     application_template_behavior_contract: Upstream,
+    internal_application_behavior_contract: Upstream,
     renewal_behavior_contract: RenewalBehaviorContract,
     native_http: Vec<HttpOperation>,
     native_grpc: Vec<String>,
@@ -375,6 +378,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid credential lifecycle contract", error))?;
     let application_templates: Value = serde_json::from_slice(APPLICATION_TEMPLATES)
         .map_err(|error| contract_error("invalid application template contract", error))?;
+    let internal_applications: Value = serde_json::from_slice(INTERNAL_APPLICATIONS)
+        .map_err(|error| contract_error("invalid internal application contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -683,6 +688,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected application template behavior contract",
     )?;
     require(
+        internal_applications["schema"] == "marty.issuance-internal-applications/v1"
+            && internal_applications["surface"]["base_path"] == "/internal/applications"
+            && internal_applications["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 14)
+            && internal_applications["coverage"]["rust_implementation_authorized"] == true
+            && internal_applications["coverage"]["required_before_rust_implementation"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+            && internal_applications["source_revision"]["approved_repairs"]
+                .as_array()
+                .is_some_and(|repairs| repairs.len() == 9),
+        "unexpected internal application behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -835,6 +855,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid application template provenance",
     )?;
     require(
+        coverage.internal_application_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.internal_application_behavior_contract.path
+                == "contracts/issuance-internal-applications.json"
+            && coverage.internal_application_behavior_contract.commit.len() == 40
+            && coverage
+                .internal_application_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid internal application provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -935,6 +967,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         actual_application_templates == coverage.application_template_behavior_contract.sha256,
         "application template hash does not match provenance",
+    )?;
+    let canonical_internal_applications = canonical_lf(INTERNAL_APPLICATIONS);
+    let actual_internal_applications =
+        format!("{:x}", Sha256::digest(&canonical_internal_applications));
+    require(
+        actual_internal_applications == coverage.internal_application_behavior_contract.sha256,
+        "internal application hash does not match provenance",
     )?;
 
     let routes = surface["http"]["routes"]
@@ -1700,7 +1739,7 @@ mod tests {
         validate_embedded_contract, validate_initiation_operation, validate_renewal_operation,
         CanvasOperationsCase, Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI,
         CANVAS_MANAGEMENT, CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
-        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, RENEWAL_REFERENCE,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, RENEWAL_REFERENCE,
     };
 
     #[test]
@@ -2067,6 +2106,10 @@ mod tests {
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(APPLICATION_TEMPLATES))),
             coverage.application_template_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(INTERNAL_APPLICATIONS))),
+            coverage.internal_application_behavior_contract.sha256
         );
     }
 
