@@ -7,13 +7,16 @@ use marty_issuance_service::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
         EvidenceSubmission, IssuanceEventRecord,
     },
+    internal_application_evidence::{
+        EvidenceCommitOutcome, EvidenceTransitionWrite, InternalApplicationEvidenceRepository,
+    },
     internal_application_offer::InternalApplicationOfferRepository,
     internal_application_postgres::PostgresInternalApplicationRepository,
     internal_application_service::{
         InternalApplicationRepository, InternalApplicationRepositoryError,
     },
 };
-use serde_json::{json, Map};
+use serde_json::{json, Map, Value};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
@@ -40,6 +43,7 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         "CREATE SCHEMA IF NOT EXISTS issuance_service",
         "DROP TABLE IF EXISTS issuance_service.issuance_events CASCADE",
         "DROP TABLE IF EXISTS issuance_service.issuance_transactions CASCADE",
+        "DROP TABLE IF EXISTS issuance_service.evidence_fact_heads CASCADE",
         "DROP TABLE IF EXISTS issuance_service.evidence_facts CASCADE",
         "DROP TABLE IF EXISTS issuance_service.applications CASCADE",
         "DROP TABLE IF EXISTS issuance_service.application_templates CASCADE",
@@ -141,6 +145,14 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
             effective_at TIMESTAMPTZ,
             superseded_fact_id TEXT,
             created_at TIMESTAMPTZ NOT NULL
+        )",
+        "CREATE TABLE issuance_service.evidence_fact_heads (
+            organization_id TEXT NOT NULL,
+            application_id TEXT NOT NULL,
+            logical_key TEXT NOT NULL,
+            fact_id TEXT NOT NULL UNIQUE,
+            updated_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (application_id, logical_key)
         )",
         "CREATE TABLE issuance_service.issuance_events (
             id TEXT PRIMARY KEY,
@@ -709,6 +721,240 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .issuance_transaction_id
         .is_none());
 
+    let evidence_application = application_fixture(&application, "application-evidence-atomic");
+    repository
+        .insert_application(&evidence_application)
+        .await
+        .expect("evidence application fixture must insert");
+    let evidence_transaction = approval_transaction(
+        "transaction-evidence-atomic",
+        &evidence_application,
+        observed_at,
+    );
+    let evidence_fact =
+        evidence_fact_fixture("fact-evidence-atomic", &evidence_application, observed_at);
+    let mut evidence_updated = evidence_application.clone();
+    evidence_updated
+        .approve_reserved(
+            evidence_transaction.id.clone(),
+            Some("Evidence permitted".to_owned()),
+            "external-evidence:auto-approval",
+            observed_at + Duration::minutes(11),
+        )
+        .expect("evidence approval transition");
+    evidence_updated.evidence_submissions.push(Map::from_iter([(
+        "evidence_fact_ids".to_owned(),
+        json!([evidence_fact.id]),
+    )]));
+    evidence_updated
+        .integration_context
+        .insert("policy".to_owned(), json!({"allowed": true}));
+    let evidence_events = [
+        "evidence_fact_created",
+        "evidence_policy_permitted",
+        "approval_issuance_succeeded",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, event_type)| {
+        evidence_event_fixture(
+            &format!("event-evidence-atomic-{index}"),
+            &evidence_application,
+            event_type,
+            observed_at + Duration::minutes(11),
+        )
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        repository
+            .commit_transition(&EvidenceTransitionWrite {
+                application: evidence_updated.clone(),
+                expected_status: ApplicationStatus::Pending,
+                expected_updated_at: evidence_application.updated_at,
+                evidence_fact: evidence_fact.clone(),
+                transaction: Some(evidence_transaction.clone()),
+                events: evidence_events,
+            })
+            .await
+            .expect("atomic evidence transition"),
+        EvidenceCommitOutcome::Committed
+    );
+    let evidence_stored = repository
+        .get_application(&evidence_application.id)
+        .await
+        .expect("evidence application lookup")
+        .expect("evidence application");
+    assert_eq!(evidence_stored.status, ApplicationStatus::Approved);
+    assert_eq!(
+        evidence_stored.issuance_transaction_id.as_deref(),
+        Some("transaction-evidence-atomic")
+    );
+    assert_eq!(
+        repository
+            .list_facts(&evidence_application.id)
+            .await
+            .expect("evidence facts"),
+        vec![evidence_fact]
+    );
+    assert_eq!(
+        repository
+            .list_events_for_application(&evidence_application.id)
+            .await
+            .expect("evidence events")
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "evidence_fact_created",
+            "evidence_policy_permitted",
+            "approval_issuance_succeeded"
+        ]
+    );
+
+    let failure_application = application_fixture(&application, "application-evidence-failure");
+    repository
+        .insert_application(&failure_application)
+        .await
+        .expect("failure application fixture must insert");
+    let mut failure_transaction = approval_transaction(
+        "transaction-evidence-failure",
+        &failure_application,
+        observed_at,
+    );
+    failure_transaction.pre_authorized_code = "reject-me".to_owned();
+    let failure_fact =
+        evidence_fact_fixture("fact-evidence-failure", &failure_application, observed_at);
+    let mut failure_updated = failure_application.clone();
+    failure_updated
+        .approve_reserved(
+            failure_transaction.id.clone(),
+            None,
+            "external-evidence:auto-approval",
+            observed_at + Duration::minutes(12),
+        )
+        .expect("failure transition candidate");
+    assert!(repository
+        .commit_transition(&EvidenceTransitionWrite {
+            application: failure_updated,
+            expected_status: ApplicationStatus::Pending,
+            expected_updated_at: failure_application.updated_at,
+            evidence_fact: failure_fact,
+            transaction: Some(failure_transaction),
+            events: vec![evidence_event_fixture(
+                "event-evidence-failure",
+                &failure_application,
+                "evidence_fact_created",
+                observed_at + Duration::minutes(12),
+            )],
+        })
+        .await
+        .is_err());
+    assert_eq!(
+        repository
+            .get_application(&failure_application.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ApplicationStatus::Pending
+    );
+    assert!(repository
+        .list_facts(&failure_application.id)
+        .await
+        .expect("rolled back facts")
+        .is_empty());
+    assert!(repository
+        .list_events_for_application(&failure_application.id)
+        .await
+        .expect("rolled back events")
+        .is_empty());
+    assert_eq!(transaction_count(&pool, &failure_application.id).await, 0);
+
+    let conflict_application = application_fixture(&application, "application-evidence-conflict");
+    repository
+        .insert_application(&conflict_application)
+        .await
+        .expect("conflict application fixture must insert");
+    sqlx::query("UPDATE issuance_service.applications SET status = 'rejected' WHERE id = $1")
+        .bind(&conflict_application.id)
+        .execute(&pool)
+        .await
+        .expect("rejection wins conflict fixture");
+    let conflict_fact =
+        evidence_fact_fixture("fact-evidence-conflict", &conflict_application, observed_at);
+    let mut stale_candidate = conflict_application.clone();
+    stale_candidate.updated_at = observed_at + Duration::minutes(13);
+    assert_eq!(
+        repository
+            .commit_transition(&EvidenceTransitionWrite {
+                application: stale_candidate,
+                expected_status: ApplicationStatus::Pending,
+                expected_updated_at: conflict_application.updated_at,
+                evidence_fact: conflict_fact.clone(),
+                transaction: None,
+                events: Vec::new(),
+            })
+            .await
+            .expect("evidence lifecycle conflict"),
+        EvidenceCommitOutcome::ConcurrentChange
+    );
+    let conflict_events = [
+        "evidence_fact_created",
+        "evidence_policy_permitted",
+        "approval_issuance_failed",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, event_type)| {
+        evidence_event_fixture(
+            &format!("event-evidence-conflict-{index}"),
+            &conflict_application,
+            event_type,
+            observed_at + Duration::minutes(13),
+        )
+    })
+    .collect::<Vec<_>>();
+    repository
+        .commit_conflict_evidence(
+            &conflict_application.id,
+            &conflict_application.organization_id,
+            &conflict_fact,
+            &conflict_events,
+        )
+        .await
+        .expect("conflict fact and audit retention");
+    assert_eq!(
+        repository
+            .get_application(&conflict_application.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ApplicationStatus::Rejected
+    );
+    assert_eq!(
+        repository
+            .list_facts(&conflict_application.id)
+            .await
+            .expect("retained conflict fact")
+            .len(),
+        1
+    );
+    assert_eq!(
+        repository
+            .list_events_for_application(&conflict_application.id)
+            .await
+            .expect("retained conflict events")
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "evidence_fact_created",
+            "evidence_policy_permitted",
+            "approval_issuance_failed"
+        ]
+    );
+
     sqlx::query(
         "UPDATE issuance_service.applications
          SET status = 'not-a-status' WHERE id = 'application-1'",
@@ -729,6 +975,10 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .execute(&pool)
         .await
         .expect("issuance transactions contract table must clean up");
+    sqlx::query("DROP TABLE issuance_service.evidence_fact_heads CASCADE")
+        .execute(&pool)
+        .await
+        .expect("evidence fact heads contract table must clean up");
     sqlx::query("DROP TABLE issuance_service.evidence_facts CASCADE")
         .execute(&pool)
         .await
@@ -747,6 +997,55 @@ fn application_fixture(source: &ApplicationRecord, id: &str) -> ApplicationRecor
     let mut application = source.clone();
     application.id = id.to_owned();
     application
+}
+
+fn evidence_fact_fixture(
+    id: &str,
+    application: &ApplicationRecord,
+    now: chrono::DateTime<Utc>,
+) -> EvidenceFactRecord {
+    EvidenceFactRecord {
+        id: id.to_owned(),
+        organization_id: application.organization_id.clone(),
+        application_id: application.id.clone(),
+        subject_id: application.applicant_identifier.clone(),
+        provider: "passport_verifier".to_owned(),
+        fact_type: "passport.document_verified".to_owned(),
+        scope: Map::from_iter([("document_type".to_owned(), json!("passport"))]),
+        assertion: Map::from_iter([("verified".to_owned(), json!(true))]),
+        verification: Map::from_iter([
+            ("method".to_owned(), json!("EXTERNAL_API_RESPONSE")),
+            ("status".to_owned(), json!("VERIFIED")),
+        ]),
+        source: Map::from_iter([("check_id".to_owned(), json!("passport-check"))]),
+        requirement_id: None,
+        logical_key: format!("logical-{id}"),
+        source_revision: format!("revision-{id}"),
+        payload_hash: format!("payload-{id}"),
+        observed_at: now,
+        effective_at: Some(now),
+        superseded_fact_id: None,
+        created_at: now,
+    }
+}
+
+fn evidence_event_fixture(
+    id: &str,
+    application: &ApplicationRecord,
+    event_type: &str,
+    now: chrono::DateTime<Utc>,
+) -> IssuanceEventRecord {
+    IssuanceEventRecord {
+        id: id.to_owned(),
+        transaction_id: None,
+        application_id: Some(application.id.clone()),
+        event_type: event_type.to_owned(),
+        metadata: Map::from_iter([(
+            "organization_id".to_owned(),
+            Value::String(application.organization_id.clone()),
+        )]),
+        created_at: now,
+    }
 }
 
 fn approval_transaction(

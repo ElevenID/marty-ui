@@ -391,6 +391,19 @@ pub struct ApplicationEvidenceSummaryResponse {
     pub available_api_checks: Vec<Map<String, Value>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ExternalEvidenceApiCheckResponse {
+    pub application_id: String,
+    pub organization_id: String,
+    pub check_id: String,
+    pub status: String,
+    pub application_status: String,
+    pub evidence_fact: EvidenceFactResponse,
+    pub policy_decision: Map<String, Value>,
+    pub issuance_transaction_id: Option<String>,
+    pub response_metadata: Map<String, Value>,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ApplicationDomainError {
     #[error("Cannot {operation} application in ApplicationStatus.{status} status")]

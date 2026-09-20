@@ -108,6 +108,8 @@ pub mod initiation_response;
 pub mod integration_secret;
 pub mod internal_application_approval;
 pub mod internal_application_domain;
+pub mod internal_application_evidence;
+pub mod internal_external_evidence;
 pub mod internal_application_http;
 pub mod internal_application_offer;
 pub mod internal_application_postgres;

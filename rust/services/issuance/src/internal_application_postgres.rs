@@ -21,6 +21,10 @@ use crate::{
     internal_application_domain::{
         ApplicationRecord, ApplicationStatus, EvidenceFactRecord, IssuanceEventRecord,
     },
+    internal_application_evidence::{
+        EvidenceCommitOutcome, EvidenceTransitionWrite, InternalApplicationEvidenceRepository,
+        InternalApplicationEvidenceRepositoryError,
+    },
     internal_application_offer::{
         InternalApplicationOfferError, InternalApplicationOfferRepository,
     },
@@ -118,6 +122,29 @@ const INSERT_ISSUANCE_EVENT: &str = "INSERT INTO issuance_service.issuance_event
     (id, transaction_id, application_id, event_type, metadata, created_at)
     VALUES ($1, $2, $3, $4, $5, $6)";
 
+const INSERT_EVIDENCE_FACT: &str = "INSERT INTO issuance_service.evidence_facts (
+        id, organization_id, application_id, subject_id, provider, fact_type,
+        scope, assertion, verification, source, requirement_id, logical_key,
+        source_revision, payload_hash, observed_at, effective_at,
+        superseded_fact_id, created_at
+    ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17, $18
+    )";
+
+const UPSERT_EVIDENCE_FACT_HEAD: &str = "INSERT INTO issuance_service.evidence_fact_heads (
+        organization_id, application_id, logical_key, fact_id, updated_at
+    ) VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (application_id, logical_key) DO UPDATE SET
+        organization_id = EXCLUDED.organization_id,
+        fact_id = EXCLUDED.fact_id,
+        updated_at = EXCLUDED.updated_at";
+
+const GET_APPROVAL_POLICY_SET: &str = "SELECT
+        id::text AS id, status, policy_type, cedar_policies
+    FROM organization_service.policy_sets
+    WHERE organization_id::text = $1 AND id::text = $2";
+
 #[derive(Clone)]
 pub struct PostgresInternalApplicationRepository {
     pool: PgPool,
@@ -184,6 +211,77 @@ where
         .map_err(repository_error)?
         .rows_affected();
     Ok(affected == 1)
+}
+
+async fn insert_evidence_fact_on<'executor, E>(
+    executor: E,
+    fact: &EvidenceFactRecord,
+) -> Result<(), InternalApplicationEvidenceRepositoryError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    sqlx::query(INSERT_EVIDENCE_FACT)
+        .bind(&fact.id)
+        .bind(&fact.organization_id)
+        .bind(&fact.application_id)
+        .bind(&fact.subject_id)
+        .bind(&fact.provider)
+        .bind(&fact.fact_type)
+        .bind(Value::Object(fact.scope.clone()))
+        .bind(Value::Object(fact.assertion.clone()))
+        .bind(Value::Object(fact.verification.clone()))
+        .bind(Value::Object(fact.source.clone()))
+        .bind(&fact.requirement_id)
+        .bind(&fact.logical_key)
+        .bind(&fact.source_revision)
+        .bind(&fact.payload_hash)
+        .bind(fact.observed_at)
+        .bind(fact.effective_at)
+        .bind(&fact.superseded_fact_id)
+        .bind(fact.created_at)
+        .execute(executor)
+        .await
+        .map_err(evidence_repository_error)?;
+    Ok(())
+}
+
+async fn upsert_evidence_fact_head_on<'executor, E>(
+    executor: E,
+    fact: &EvidenceFactRecord,
+) -> Result<(), InternalApplicationEvidenceRepositoryError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    sqlx::query(UPSERT_EVIDENCE_FACT_HEAD)
+        .bind(&fact.organization_id)
+        .bind(&fact.application_id)
+        .bind(&fact.logical_key)
+        .bind(&fact.id)
+        .bind(fact.created_at)
+        .execute(executor)
+        .await
+        .map_err(evidence_repository_error)?;
+    Ok(())
+}
+
+async fn insert_issuance_event_on<'executor, E>(
+    executor: E,
+    event: &IssuanceEventRecord,
+) -> Result<(), InternalApplicationEvidenceRepositoryError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    sqlx::query(INSERT_ISSUANCE_EVENT)
+        .bind(&event.id)
+        .bind(&event.transaction_id)
+        .bind(&event.application_id)
+        .bind(&event.event_type)
+        .bind(Value::Object(event.metadata.clone()))
+        .bind(event.created_at)
+        .execute(executor)
+        .await
+        .map_err(evidence_repository_error)?;
+    Ok(())
 }
 
 #[async_trait]
@@ -311,6 +409,173 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
             expected_updated_at,
         )
         .await
+    }
+}
+
+#[async_trait]
+impl InternalApplicationEvidenceRepository for PostgresInternalApplicationRepository {
+    async fn list_facts(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationEvidenceRepositoryError> {
+        InternalApplicationRepository::list_evidence_facts_for_application(self, application_id)
+            .await
+            .map_err(|_| InternalApplicationEvidenceRepositoryError::Unavailable)
+    }
+
+    async fn approval_policy_set(
+        &self,
+        organization_id: &str,
+        policy_set_id: &str,
+    ) -> Result<Option<Map<String, Value>>, InternalApplicationEvidenceRepositoryError> {
+        let row = match sqlx::query(GET_APPROVAL_POLICY_SET)
+            .bind(organization_id)
+            .bind(policy_set_id)
+            .fetch_optional(&self.pool)
+            .await
+        {
+            Ok(row) => row,
+            Err(_) => {
+                error!("approval PolicySet lookup failed during evidence evaluation");
+                return Ok(None);
+            }
+        };
+        row.map(|row| {
+            Ok(Map::from_iter([
+                (
+                    "id".to_owned(),
+                    Value::String(row.try_get("id").map_err(evidence_repository_error)?),
+                ),
+                (
+                    "status".to_owned(),
+                    Value::String(row.try_get("status").map_err(evidence_repository_error)?),
+                ),
+                (
+                    "policy_type".to_owned(),
+                    Value::String(
+                        row.try_get("policy_type")
+                            .map_err(evidence_repository_error)?,
+                    ),
+                ),
+                (
+                    "cedar_policies".to_owned(),
+                    Value::String(
+                        row.try_get("cedar_policies")
+                            .map_err(evidence_repository_error)?,
+                    ),
+                ),
+            ]))
+        })
+        .transpose()
+    }
+
+    async fn commit_transition(
+        &self,
+        write: &EvidenceTransitionWrite,
+    ) -> Result<EvidenceCommitOutcome, InternalApplicationEvidenceRepositoryError> {
+        if write.evidence_fact.application_id != write.application.id
+            || write.evidence_fact.organization_id != write.application.organization_id
+            || write.events.iter().any(|event| {
+                event.application_id.as_deref() != Some(write.application.id.as_str())
+                    || event
+                        .metadata
+                        .get("organization_id")
+                        .and_then(Value::as_str)
+                        != Some(write.application.organization_id.as_str())
+            })
+            || write.transaction.as_ref().is_some_and(|transaction| {
+                transaction.application_id.as_deref() != Some(write.application.id.as_str())
+                    || transaction.organization_id != write.application.organization_id
+            })
+        {
+            return Err(InternalApplicationEvidenceRepositoryError::Unavailable);
+        }
+
+        let mut database = self.pool.begin().await.map_err(evidence_repository_error)?;
+        let current = sqlx::query(GET_FOR_UPDATE)
+            .bind(&write.application.id)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(evidence_repository_error)?
+            .map(application_row)
+            .transpose()
+            .map_err(|_| InternalApplicationEvidenceRepositoryError::Unavailable)?;
+        let Some(current) = current else {
+            return Ok(EvidenceCommitOutcome::ConcurrentChange);
+        };
+        if current.organization_id != write.application.organization_id
+            || current.status != write.expected_status
+            || current.updated_at != write.expected_updated_at
+        {
+            return Ok(EvidenceCommitOutcome::ConcurrentChange);
+        }
+
+        if let Some(transaction) = &write.transaction {
+            let inserted = insert_issuance_transaction(&mut *database, transaction)
+                .await
+                .map_err(|_| InternalApplicationEvidenceRepositoryError::Unavailable)?;
+            if inserted.as_ref().map(|value| value.id.as_str()) != Some(transaction.id.as_str()) {
+                return Err(InternalApplicationEvidenceRepositoryError::Unavailable);
+            }
+        }
+        insert_evidence_fact_on(&mut *database, &write.evidence_fact).await?;
+        upsert_evidence_fact_head_on(&mut *database, &write.evidence_fact).await?;
+        if !replace_application_if_revision_on(
+            &mut *database,
+            &write.application,
+            write.expected_status,
+            write.expected_updated_at,
+        )
+        .await
+        .map_err(|_| InternalApplicationEvidenceRepositoryError::Unavailable)?
+        {
+            return Ok(EvidenceCommitOutcome::ConcurrentChange);
+        }
+        for event in &write.events {
+            insert_issuance_event_on(&mut *database, event).await?;
+        }
+        database.commit().await.map_err(evidence_repository_error)?;
+        Ok(EvidenceCommitOutcome::Committed)
+    }
+
+    async fn commit_conflict_evidence(
+        &self,
+        application_id: &str,
+        organization_id: &str,
+        fact: &EvidenceFactRecord,
+        events: &[IssuanceEventRecord],
+    ) -> Result<(), InternalApplicationEvidenceRepositoryError> {
+        if fact.application_id != application_id
+            || fact.organization_id != organization_id
+            || events.iter().any(|event| {
+                event.application_id.as_deref() != Some(application_id)
+                    || event
+                        .metadata
+                        .get("organization_id")
+                        .and_then(Value::as_str)
+                        != Some(organization_id)
+            })
+        {
+            return Err(InternalApplicationEvidenceRepositoryError::Unavailable);
+        }
+        let mut database = self.pool.begin().await.map_err(evidence_repository_error)?;
+        let current_organization = sqlx::query_scalar::<_, String>(
+            "SELECT organization_id FROM issuance_service.applications WHERE id = $1 FOR UPDATE",
+        )
+        .bind(application_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(evidence_repository_error)?;
+        if current_organization.as_deref() != Some(organization_id) {
+            return Err(InternalApplicationEvidenceRepositoryError::Unavailable);
+        }
+        insert_evidence_fact_on(&mut *database, fact).await?;
+        upsert_evidence_fact_head_on(&mut *database, fact).await?;
+        for event in events {
+            insert_issuance_event_on(&mut *database, event).await?;
+        }
+        database.commit().await.map_err(evidence_repository_error)?;
+        Ok(())
     }
 }
 
@@ -710,6 +975,13 @@ where
 fn repository_error(cause: sqlx::Error) -> InternalApplicationRepositoryError {
     error!(%cause, "internal Application repository query failed");
     InternalApplicationRepositoryError::Unavailable
+}
+
+fn evidence_repository_error(_cause: sqlx::Error) -> InternalApplicationEvidenceRepositoryError {
+    // SQL details may contain provider-derived values. Keep the public error
+    // stable and redact the database cause at this boundary.
+    error!("internal Application evidence persistence failed");
+    InternalApplicationEvidenceRepositoryError::Unavailable
 }
 
 fn row_error(cause: sqlx::Error) -> InternalApplicationRepositoryError {

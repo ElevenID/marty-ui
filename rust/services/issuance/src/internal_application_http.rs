@@ -16,13 +16,16 @@ use serde_json::json;
 use crate::{
     internal_application_domain::{
         ApplicationApproval, ApplicationCreate, ApplicationDomainError, ApplicationRejection,
-        ApplicationResponse, EvidenceFactResponse, EvidenceSubmission, IssuanceEventResponse,
+        ApplicationResponse, EvidenceFactResponse, EvidenceSubmission,
+        ExternalEvidenceApiCheckRequest, IssuanceEventResponse,
     },
+    internal_application_evidence::InternalApplicationEvidenceError,
     internal_application_offer::InternalApplicationOfferError,
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationRepositoryError,
         InternalApplicationService, InternalApplicationServiceError,
     },
+    internal_external_evidence::ExternalEvidenceApiError,
     management_http::{header, malformed_json, missing_organization_query, security_error},
 };
 
@@ -46,6 +49,10 @@ pub fn router(service: InternalApplicationService) -> Router {
         .route(
             "/internal/applications/{application_id}/evidence-summary",
             get(get_evidence_summary),
+        )
+        .route(
+            "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
+            post(run_external_evidence_api_check),
         )
         .route(
             "/internal/applications/{application_id}/submit-evidence",
@@ -230,6 +237,37 @@ async fn submit_evidence(
     )
 }
 
+async fn run_external_evidence_api_check(
+    State(service): State<InternalApplicationService>,
+    Path((application_id, check_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<ExternalEvidenceApiCheckRequest>, JsonRejection>,
+) -> Response {
+    if let Err(error) = service.preflight_json_request(
+        header(&headers, API_KEY_HEADER),
+        header(&headers, ORGANIZATION_HEADER),
+    ) {
+        return service_error(error);
+    }
+    let Json(request) = match body {
+        Ok(request) => request,
+        Err(error) => return malformed_json(error),
+    };
+    match service
+        .run_external_evidence_api_check(
+            header(&headers, API_KEY_HEADER),
+            header(&headers, ORGANIZATION_HEADER),
+            &application_id,
+            &check_id,
+            request,
+        )
+        .await
+    {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => service_error(error),
+    }
+}
+
 async fn reject_application(
     State(service): State<InternalApplicationService>,
     Path(application_id): Path<String>,
@@ -380,6 +418,9 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
         InternalApplicationServiceError::Offer(error) => {
             return offer_error_response(error);
         }
+        InternalApplicationServiceError::Evidence(error) => {
+            return evidence_error_response(error);
+        }
         InternalApplicationServiceError::OfferRequiresApproved(_) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -397,6 +438,7 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
         InternalApplicationServiceError::Domain(_) => unreachable!("handled above"),
         InternalApplicationServiceError::Approval(_) => unreachable!("handled above"),
         InternalApplicationServiceError::Offer(_) => unreachable!("handled above"),
+        InternalApplicationServiceError::Evidence(_) => unreachable!("handled above"),
         InternalApplicationServiceError::OfferRequiresApproved(_) => {
             unreachable!("handled above")
         }
@@ -430,8 +472,46 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
             StatusCode::NOT_FOUND,
             "No issuance offer available for this application",
         ),
+        InternalApplicationServiceError::ExternalCheckNotFound => (
+            StatusCode::NOT_FOUND,
+            "External evidence API check not found on application template",
+        ),
+        InternalApplicationServiceError::ExternalCheckInvalidStatus(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": error.to_string()})),
+            )
+                .into_response();
+        }
     };
     (status, Json(json!({"detail": detail}))).into_response()
+}
+
+fn evidence_error_response(error: InternalApplicationEvidenceError) -> Response {
+    match error {
+        InternalApplicationEvidenceError::External(
+            ExternalEvidenceApiError::InvalidConfiguration(detail),
+        ) => (StatusCode::BAD_REQUEST, Json(json!({"detail": detail}))).into_response(),
+        InternalApplicationEvidenceError::External(ExternalEvidenceApiError::Transport) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"detail": "External evidence API request failed"})),
+        )
+            .into_response(),
+        InternalApplicationEvidenceError::ConcurrentChange => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "detail": "Application lifecycle changed during evidence processing"
+            })),
+        )
+            .into_response(),
+        InternalApplicationEvidenceError::Approval(error) => approval_error_response(error),
+        error @ (InternalApplicationEvidenceError::Repository(_)
+        | InternalApplicationEvidenceError::Policy) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 fn approval_error_response(error: InternalApplicationApprovalError) -> Response {

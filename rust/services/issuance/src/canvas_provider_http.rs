@@ -204,7 +204,7 @@ fn preferred_address(addresses: &[SocketAddr]) -> Option<SocketAddr> {
         .or_else(|| addresses.first().copied())
 }
 
-fn is_private_ip(ip: IpAddr) -> bool {
+pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(value) => {
             let [first, second, third, _] = value.octets();

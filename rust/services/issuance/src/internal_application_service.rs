@@ -18,11 +18,16 @@ use crate::{
         derive_applicant_identifier, ApplicationApproval, ApplicationCreate,
         ApplicationDomainError, ApplicationEvidenceSummaryResponse, ApplicationRecord,
         ApplicationRejection, ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse,
-        EvidenceSubmission, IssuanceEventRecord,
+        EvidenceSubmission, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
+        IssuanceEventRecord,
+    },
+    internal_application_evidence::{
+        InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
     },
     internal_application_offer::{
         InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
     },
+    internal_external_evidence::find_external_api_requirement,
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
 };
@@ -159,6 +164,7 @@ pub struct InternalApplicationService {
     ids: Arc<dyn InternalApplicationIdGenerator>,
     approver: Option<Arc<dyn InternalApplicationApprover>>,
     offers: Option<Arc<dyn InternalApplicationOfferCoordinator>>,
+    evidence: Option<Arc<dyn InternalApplicationEvidenceCoordinator>>,
     security: ManagementSecurity,
 }
 
@@ -169,6 +175,7 @@ impl std::fmt::Debug for InternalApplicationService {
             .field("security", &self.security)
             .field("approval_configured", &self.approver.is_some())
             .field("offers_configured", &self.offers.is_some())
+            .field("evidence_configured", &self.evidence.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -187,6 +194,7 @@ impl InternalApplicationService {
             ids,
             approver: None,
             offers: None,
+            evidence: None,
             security: ManagementSecurity::new(management_api_key),
         }
     }
@@ -200,6 +208,15 @@ impl InternalApplicationService {
     #[must_use]
     pub fn with_offers(mut self, offers: Arc<dyn InternalApplicationOfferCoordinator>) -> Self {
         self.offers = Some(offers);
+        self
+    }
+
+    #[must_use]
+    pub fn with_evidence(
+        mut self,
+        evidence: Arc<dyn InternalApplicationEvidenceCoordinator>,
+    ) -> Self {
+        self.evidence = Some(evidence);
         self
     }
 
@@ -523,6 +540,45 @@ impl InternalApplicationService {
             .map_err(Into::into)
     }
 
+    pub async fn run_external_evidence_api_check(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        check_id: &str,
+        request: ExternalEvidenceApiCheckRequest,
+    ) -> Result<ExternalEvidenceApiCheckResponse, InternalApplicationServiceError> {
+        self.security.authorize(api_key)?;
+        let trusted_organization = required_organization(trusted_organization)?;
+        let application = self
+            .load_managed(application_id, trusted_organization)
+            .await?;
+        if !matches!(
+            application.status,
+            ApplicationStatus::Pending | ApplicationStatus::Approved
+        ) {
+            return Err(InternalApplicationServiceError::ExternalCheckInvalidStatus(
+                application_status_debug(application.status),
+            ));
+        }
+        let template = self
+            .repository
+            .get_application_template(&application.application_template_id)
+            .await?
+            .filter(|template| template.organization_id == application.organization_id)
+            .ok_or(InternalApplicationServiceError::TemplateNotFound)?;
+        let requirement = find_external_api_requirement(&template, check_id)
+            .ok_or(InternalApplicationServiceError::ExternalCheckNotFound)?;
+        self.evidence
+            .as_ref()
+            .ok_or(InternalApplicationEvidenceError::Repository(
+                crate::internal_application_evidence::InternalApplicationEvidenceRepositoryError::Unavailable,
+            ))?
+            .run_external_check(application, template, requirement, request)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn load_managed(
         &self,
         application_id: &str,
@@ -622,6 +678,8 @@ pub enum InternalApplicationServiceError {
     #[error(transparent)]
     Offer(#[from] InternalApplicationOfferError),
     #[error(transparent)]
+    Evidence(#[from] InternalApplicationEvidenceError),
+    #[error(transparent)]
     Domain(#[from] ApplicationDomainError),
     #[error("Invalid application status")]
     InvalidStatus,
@@ -641,6 +699,21 @@ pub enum InternalApplicationServiceError {
     OfferRequiresApproved(String),
     #[error("No issuance offer available for this application")]
     OfferNotAvailable,
+    #[error("External evidence API check not found on application template")]
+    ExternalCheckNotFound,
+    #[error("Cannot run evidence check for application in ApplicationStatus.{0} status")]
+    ExternalCheckInvalidStatus(String),
+}
+
+fn application_status_debug(status: ApplicationStatus) -> String {
+    match status {
+        ApplicationStatus::Pending => "PENDING",
+        ApplicationStatus::UnderReview => "UNDER_REVIEW",
+        ApplicationStatus::Approved => "APPROVED",
+        ApplicationStatus::Rejected => "REJECTED",
+        ApplicationStatus::Withdrawn => "WITHDRAWN",
+    }
+    .to_owned()
 }
 
 fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadError> {

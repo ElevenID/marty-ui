@@ -19,7 +19,11 @@ use marty_issuance_service::{
     },
     internal_application_domain::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
+        EvidenceFactResponse, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
         IssuanceEventRecord,
+    },
+    internal_application_evidence::{
+        InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
     },
     internal_application_http,
     internal_application_offer::{
@@ -31,6 +35,7 @@ use marty_issuance_service::{
         InternalApplicationIdGenerator, InternalApplicationRepository,
         InternalApplicationRepositoryError, InternalApplicationService,
     },
+    internal_external_evidence::ExternalEvidenceApiError,
 };
 use serde_json::{json, Map, Value};
 use tower::ServiceExt;
@@ -41,6 +46,124 @@ struct MemoryState {
     applications: BTreeMap<String, ApplicationRecord>,
     evidence_facts: Vec<EvidenceFactRecord>,
     issuance_events: Vec<IssuanceEventRecord>,
+}
+
+#[tokio::test]
+async fn external_evidence_route_preserves_shape_lifecycle_and_redacted_transport_errors() {
+    let repository = Arc::new(MemoryRepository::default());
+    let mut configured = template("org-123", ApplicationTemplateStatus::Active);
+    configured.evidence_requirements = vec![json!({
+        "evidence_id": "passport-check",
+        "evidence_type": "EXTERNAL_API",
+        "api": {"url": "https://provider.example/check"}
+    })];
+    repository.seed_template(configured);
+    repository.seed_application(application(
+        "application-pending",
+        "org-123",
+        ApplicationStatus::Pending,
+    ));
+    repository.seed_application(application(
+        "application-rejected",
+        "org-123",
+        ApplicationStatus::Rejected,
+    ));
+    let fact = evidence_fact("application-pending");
+    let response = ExternalEvidenceApiCheckResponse {
+        application_id: "application-pending".to_owned(),
+        organization_id: "org-123".to_owned(),
+        check_id: "passport-check".to_owned(),
+        status: "evidence_received".to_owned(),
+        application_status: "approved".to_owned(),
+        evidence_fact: EvidenceFactResponse::from(&fact),
+        policy_decision: json!({"allowed": true})
+            .as_object()
+            .expect("policy")
+            .clone(),
+        issuance_transaction_id: Some("transaction-1".to_owned()),
+        response_metadata: json!({
+            "http_status_code": 200,
+            "response_hash": "response-hash",
+            "endpoint_host": "provider.example",
+            "endpoint_path": "/check"
+        })
+        .as_object()
+        .expect("metadata")
+        .clone(),
+    };
+    let service = service_with_evidence(repository.clone(), Ok(response));
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-pending/evidence/api-checks/passport-check/run",
+        Some(json!({"unknown": true})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["application_status"], "approved");
+    assert_eq!(body["evidence_fact"]["id"], "fact-1");
+    assert_eq!(
+        body.as_object()
+            .expect("ExternalEvidenceApiCheckResponse")
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [
+            "application_id",
+            "application_status",
+            "check_id",
+            "evidence_fact",
+            "issuance_transaction_id",
+            "organization_id",
+            "policy_decision",
+            "response_metadata",
+            "status",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications/application-rejected/evidence/api-checks/passport-check/run",
+        Some(json!({})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "detail": "Cannot run evidence check for application in ApplicationStatus.REJECTED status"
+        })
+    );
+
+    let failed = service_with_evidence(
+        repository,
+        Err(InternalApplicationEvidenceError::External(
+            ExternalEvidenceApiError::Transport,
+        )),
+    );
+    let (status, body) = request(
+        &failed,
+        Method::POST,
+        "/internal/applications/application-pending/evidence/api-checks/passport-check/run",
+        Some(json!({"inputs": {"authorization": "Bearer secret-token"}})),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        body,
+        json!({"detail": "External evidence API request failed"})
+    );
+    assert!(!body.to_string().contains("secret-token"));
 }
 
 #[derive(Default)]
@@ -227,6 +350,23 @@ struct FixedOffers {
     get: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
 }
 
+struct FixedEvidence {
+    result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
+}
+
+#[async_trait]
+impl InternalApplicationEvidenceCoordinator for FixedEvidence {
+    async fn run_external_check(
+        &self,
+        _application: ApplicationRecord,
+        _template: ApplicationTemplateRecord,
+        _requirement: Map<String, Value>,
+        _request: ExternalEvidenceApiCheckRequest,
+    ) -> Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError> {
+        self.result.clone()
+    }
+}
+
 #[async_trait]
 impl InternalApplicationOfferCoordinator for FixedOffers {
     async fn generate(
@@ -391,6 +531,13 @@ fn service_with_offers(
     get: Result<IssuanceOfferResponse, InternalApplicationOfferError>,
 ) -> InternalApplicationService {
     service(repository, Some("secret")).with_offers(Arc::new(FixedOffers { generate, get }))
+}
+
+fn service_with_evidence(
+    repository: Arc<MemoryRepository>,
+    result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
+) -> InternalApplicationService {
+    service(repository, Some("secret")).with_evidence(Arc::new(FixedEvidence { result }))
 }
 
 async fn request(
