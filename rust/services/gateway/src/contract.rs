@@ -941,17 +941,25 @@ mod tests {
                 "/v1/credential-templates",
                 "credential-templates",
             ),
-            (HttpMethod::Get, "/v1/application-templates", "issuance"),
-            (HttpMethod::Post, "/v1/application-templates", "issuance"),
+            (
+                HttpMethod::Get,
+                "/v1/application-templates",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/application-templates",
+                issuance_native::NATIVE_SERVICE,
+            ),
             (
                 HttpMethod::Post,
                 "/v1/application-templates/template-1/validate",
-                "issuance",
+                issuance_native::NATIVE_SERVICE,
             ),
             (
                 HttpMethod::Post,
                 "/v1/application-templates/template-1/activate",
-                "issuance",
+                issuance_native::NATIVE_SERVICE,
             ),
             (HttpMethod::Post, "/v1/me/applications", "applicant"),
             (
