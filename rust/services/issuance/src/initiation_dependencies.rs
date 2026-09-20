@@ -25,6 +25,10 @@ use crate::{
         InitiationRelatedResourceValidator, InitiationRevocationProfileValidator,
         InitiationTemplate, InitiationTemplateResolver, OrganizationValidation,
     },
+    internal_application_approval::{
+        InternalApplicationApprovalDependencies, InternalApplicationCredentialTemplate,
+    },
+    internal_application_service::InternalApplicationApprovalError,
     organization_proto::{
         organization_service_client::OrganizationServiceClient, GetOrganizationRequest,
     },
@@ -235,6 +239,99 @@ impl InitiationRevocationProfileValidator for NativeInitiationControlPlane {
             return Err(InitiationDependencyError::Invalid(
                 "credential template must reference an active revocation profile".into(),
             ));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl InternalApplicationApprovalDependencies for NativeInitiationControlPlane {
+    async fn credential_template(
+        &self,
+        template_id: &str,
+    ) -> Result<Option<InternalApplicationCredentialTemplate>, InternalApplicationApprovalError>
+    {
+        let mut client = self.templates.clone();
+        let template = match client
+            .get_template(self.grpc_request(GetTemplateRequest {
+                template_id: template_id.to_owned(),
+            }))
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == Code::NotFound => return Ok(None),
+            Err(_) => return Err(InternalApplicationApprovalError::CredentialTemplateUnavailable),
+        };
+        if template.id.is_empty() {
+            return Ok(None);
+        }
+        if template.id != template_id {
+            return Err(InternalApplicationApprovalError::CredentialTemplateUnavailable);
+        }
+        let wallet_configs = if template.wallet_configs_json.trim().is_empty() {
+            Vec::new()
+        } else {
+            serde_json::from_str::<Vec<Value>>(&template.wallet_configs_json)
+                .map_err(|_| InternalApplicationApprovalError::CredentialTemplateUnavailable)?
+                .into_iter()
+                .filter(Value::is_object)
+                .collect()
+        };
+        let validity = template.validity_rules.unwrap_or_default();
+        Ok(Some(InternalApplicationCredentialTemplate {
+            organization_id: template.organization_id,
+            status: template.status,
+            credential_type: template.credential_type,
+            vct: non_empty(template.vct),
+            credential_payload_format: template.credential_payload_format,
+            revocation_profile_id: non_empty(template.revocation_profile_id),
+            wallet_configs,
+            selective_disclosure_claims: template.selective_disclosure_fields,
+            zk_predicate_claims: template.zk_predicate_claims,
+            validity_days: positive_or(
+                i64::from(validity.default_validity_days),
+                DEFAULT_VALIDITY_DAYS,
+            ),
+            renewable: validity.renewable,
+            renewal_window_days: positive_or(
+                i64::from(validity.renewal_window_days),
+                DEFAULT_RENEWAL_WINDOW_DAYS,
+            ),
+            issuer_did: template.issuer_did,
+            issuer_algorithm: template.issuer_algorithm,
+        }))
+    }
+
+    async fn validate_revocation_profile(
+        &self,
+        organization_id: &str,
+        profile_id: Option<&str>,
+    ) -> Result<(), InternalApplicationApprovalError> {
+        let profile_id = profile_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or(InternalApplicationApprovalError::RevocationProfileInactive)?;
+        let mut client = self.revocation_profiles.clone();
+        let profile = match client
+            .get_revocation_profile(self.grpc_request(GetRevocationProfileRequest {
+                profile_id: profile_id.to_owned(),
+            }))
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == Code::NotFound => {
+                return Err(InternalApplicationApprovalError::RevocationProfileNotFound)
+            }
+            Err(_) => return Err(InternalApplicationApprovalError::RevocationProfileUnavailable),
+        };
+        if profile.id != profile_id {
+            return Err(InternalApplicationApprovalError::RevocationProfileNotFound);
+        }
+        if profile.organization_id != organization_id {
+            return Err(InternalApplicationApprovalError::RevocationProfileForeign);
+        }
+        if !profile.status.trim().eq_ignore_ascii_case("active") {
+            return Err(InternalApplicationApprovalError::RevocationProfileInactive);
         }
         Ok(())
     }

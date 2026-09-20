@@ -3,17 +3,21 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row};
 use tracing::error;
 
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     application_template_postgres::PostgresApplicationTemplateRepository,
+    credential::CredentialTransaction,
+    credential_postgres::insert_issuance_transaction,
+    internal_application_approval::InternalApplicationApprovalRepository,
     internal_application_domain::{
         ApplicationRecord, ApplicationStatus, EvidenceFactRecord, IssuanceEventRecord,
     },
     internal_application_service::{
-        InternalApplicationRepository, InternalApplicationRepositoryError,
+        InternalApplicationApprovalError, InternalApplicationRepository,
+        InternalApplicationRepositoryError,
     },
 };
 
@@ -51,6 +55,12 @@ const GET: &str = concat!(
     "SELECT ",
     application_columns!(),
     " FROM issuance_service.applications WHERE id = $1"
+);
+
+const GET_FOR_UPDATE: &str = concat!(
+    "SELECT ",
+    application_columns!(),
+    " FROM issuance_service.applications WHERE id = $1 FOR UPDATE"
 );
 
 const LIST_EVIDENCE_FACTS: &str = "SELECT
@@ -112,6 +122,50 @@ impl PostgresInternalApplicationRepository {
             pool,
         }
     }
+}
+
+async fn replace_application_if_revision_on<'executor, E>(
+    executor: E,
+    application: &ApplicationRecord,
+    expected_status: ApplicationStatus,
+    expected_updated_at: DateTime<Utc>,
+) -> Result<bool, InternalApplicationRepositoryError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    let affected = sqlx::query(REPLACE_IF_REVISION)
+        .bind(&application.application_template_id)
+        .bind(&application.applicant_identifier)
+        .bind(Value::Object(application.form_data.clone()))
+        .bind(Value::Array(
+            application
+                .evidence_submissions
+                .iter()
+                .cloned()
+                .map(Value::Object)
+                .collect(),
+        ))
+        .bind(Value::Object(application.integration_context.clone()))
+        .bind(application.status.as_str())
+        .bind(&application.review_notes)
+        .bind(&application.reviewer_id)
+        .bind(&application.rejection_reason)
+        .bind(Value::Object(application.derived_claims.clone()))
+        .bind(&application.issuance_transaction_id)
+        .bind(&application.credential_id)
+        .bind(application.updated_at)
+        .bind(application.submitted_at)
+        .bind(application.reviewed_at)
+        .bind(application.expires_at)
+        .bind(&application.id)
+        .bind(&application.organization_id)
+        .bind(expected_status.as_str())
+        .bind(expected_updated_at)
+        .execute(executor)
+        .await
+        .map_err(repository_error)?
+        .rows_affected();
+    Ok(affected == 1)
 }
 
 #[async_trait]
@@ -232,40 +286,117 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
         expected_status: ApplicationStatus,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<bool, InternalApplicationRepositoryError> {
-        let affected = sqlx::query(REPLACE_IF_REVISION)
-            .bind(&application.application_template_id)
-            .bind(&application.applicant_identifier)
-            .bind(Value::Object(application.form_data.clone()))
-            .bind(Value::Array(
-                application
-                    .evidence_submissions
-                    .iter()
-                    .cloned()
-                    .map(Value::Object)
-                    .collect(),
-            ))
-            .bind(Value::Object(application.integration_context.clone()))
-            .bind(application.status.as_str())
-            .bind(&application.review_notes)
-            .bind(&application.reviewer_id)
-            .bind(&application.rejection_reason)
-            .bind(Value::Object(application.derived_claims.clone()))
-            .bind(&application.issuance_transaction_id)
-            .bind(&application.credential_id)
-            .bind(application.updated_at)
-            .bind(application.submitted_at)
-            .bind(application.reviewed_at)
-            .bind(application.expires_at)
-            .bind(&application.id)
-            .bind(&application.organization_id)
-            .bind(expected_status.as_str())
-            .bind(expected_updated_at)
-            .execute(&self.pool)
-            .await
-            .map_err(repository_error)?
-            .rows_affected();
-        Ok(affected == 1)
+        replace_application_if_revision_on(
+            &self.pool,
+            application,
+            expected_status,
+            expected_updated_at,
+        )
+        .await
     }
+}
+
+#[async_trait]
+impl InternalApplicationApprovalRepository for PostgresInternalApplicationRepository {
+    async fn reserve_ordinary_approval(
+        &self,
+        application: &ApplicationRecord,
+        transaction: &CredentialTransaction,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+        reviewed_at: DateTime<Utc>,
+    ) -> Result<Option<ApplicationRecord>, InternalApplicationApprovalError> {
+        if transaction.application_id.as_deref() != Some(application.id.as_str())
+            || transaction.organization_id != application.organization_id
+            || transaction.idempotency_key_hash.is_some()
+            || transaction.idempotency_request_hash.is_some()
+        {
+            return Err(InternalApplicationApprovalError::Unavailable);
+        }
+
+        let mut database = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| InternalApplicationApprovalError::Unavailable)?;
+        let current = sqlx::query(GET_FOR_UPDATE)
+            .bind(&application.id)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(|cause| {
+                error!(%cause, "ordinary application approval lock failed");
+                InternalApplicationApprovalError::Unavailable
+            })?
+            .map(application_row)
+            .transpose()
+            .map_err(|_| InternalApplicationApprovalError::Unavailable)?;
+        let Some(mut current) = current else {
+            return Ok(None);
+        };
+        if current.organization_id != application.organization_id
+            || current.status != ApplicationStatus::Pending
+            || current.updated_at != application.updated_at
+            || canvas_context(&current.integration_context)
+        {
+            return Ok(None);
+        }
+
+        let inserted = insert_issuance_transaction(&mut *database, transaction)
+            .await
+            .map_err(|cause| {
+                error!(%cause, "ordinary application transaction reservation failed");
+                InternalApplicationApprovalError::Unavailable
+            })?;
+        if inserted.as_ref().map(|value| value.id.as_str()) != Some(transaction.id.as_str()) {
+            return Err(InternalApplicationApprovalError::Unavailable);
+        }
+
+        current
+            .approve_reserved(
+                transaction.id.clone(),
+                review_notes.map(str::to_owned),
+                reviewer_id,
+                reviewed_at,
+            )
+            .map_err(|_| InternalApplicationApprovalError::ConcurrentChange)?;
+        if !replace_application_if_revision_on(
+            &mut *database,
+            &current,
+            ApplicationStatus::Pending,
+            application.updated_at,
+        )
+        .await
+        .map_err(|_| InternalApplicationApprovalError::Unavailable)?
+        {
+            return Ok(None);
+        }
+        database
+            .commit()
+            .await
+            .map_err(|_| InternalApplicationApprovalError::Unavailable)?;
+        Ok(Some(current))
+    }
+}
+
+fn canvas_context(integration_context: &Map<String, Value>) -> bool {
+    let Some(canvas) = integration_context.get("canvas").and_then(Value::as_object) else {
+        return false;
+    };
+    [
+        "canvas_platform_id",
+        "canvas_program_binding_id",
+        "canvas_account_id",
+    ]
+    .into_iter()
+    .any(|name| {
+        canvas
+            .get(name)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    }) || canvas
+        .get("source")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.trim().to_ascii_lowercase().starts_with("canvas"))
 }
 
 fn application_row(row: PgRow) -> Result<ApplicationRecord, InternalApplicationRepositoryError> {

@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use mmf_security::constant_time_secret_eq;
 use rand::RngCore;
 use serde_json::{json, Map, Value};
-use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
+use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 use uuid::Uuid;
 
@@ -119,6 +119,61 @@ const RESERVE_INITIATION: &str = concat!(
      RETURNING ",
     transaction_columns!()
 );
+
+/// Insert the canonical issuance-transaction shape through either a pool or an
+/// existing database transaction. Application approval uses the latter so the
+/// application lifecycle transition and transaction reservation commit as one
+/// write set.
+pub(crate) async fn insert_issuance_transaction<'executor, E>(
+    executor: E,
+    transaction: &CredentialTransaction,
+) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
+where
+    E: Executor<'executor, Database = Postgres>,
+{
+    let validity_days = i32::try_from(transaction.validity_days)
+        .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
+    let renewal_window_days = i32::try_from(transaction.renewal_window_days)
+        .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
+    sqlx::query(RESERVE_INITIATION)
+        .bind(&transaction.id)
+        .bind(&transaction.organization_id)
+        .bind(&transaction.credential_template_id)
+        .bind(&transaction.revocation_profile_id)
+        .bind(&transaction.renewal_of_credential_id)
+        .bind(&transaction.applicant_id)
+        .bind(&transaction.application_id)
+        .bind(&transaction.subject_did)
+        .bind(&transaction.idempotency_key_hash)
+        .bind(&transaction.idempotency_request_hash)
+        .bind(transaction_status(transaction.status))
+        .bind(&transaction.pre_authorized_code)
+        .bind(&transaction.nonce)
+        .bind(Value::Object(transaction.claims.clone()))
+        .bind(&transaction.credential_type)
+        .bind(json!(transaction.selective_disclosure_claims))
+        .bind(json!(transaction.zk_predicate_claims))
+        .bind(&transaction.credential_payload_format)
+        .bind(Value::Array(transaction.wallet_configs.clone()))
+        .bind(validity_days)
+        .bind(transaction.renewable)
+        .bind(renewal_window_days)
+        .bind(&transaction.delivery_mode)
+        .bind(&transaction.issuer_profile_id)
+        .bind(&transaction.issuer_mode)
+        .bind(&transaction.issuer_did)
+        .bind(&transaction.issuer_algorithm)
+        .bind(&transaction.signing_service_id)
+        .bind(&transaction.reserved_credential_id)
+        .bind(&transaction.oid4vci_client_id)
+        .bind(transaction.created_at)
+        .bind(transaction.expires_at)
+        .fetch_optional(executor)
+        .await
+        .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?
+        .map(transaction_row)
+        .transpose()
+}
 
 #[derive(Clone)]
 pub struct PostgresCredentialRepository {
@@ -1145,48 +1200,8 @@ impl InitiationRepository for PostgresCredentialRepository {
             (None, None) | (Some(_), Some(_)) => {}
             _ => return Err(InitiationRepositoryError::IncompleteIdempotencyBinding),
         }
-        let validity_days = i32::try_from(transaction.validity_days)
-            .map_err(|_| InitiationRepositoryError::Unavailable)?;
-        let renewal_window_days = i32::try_from(transaction.renewal_window_days)
-            .map_err(|_| InitiationRepositoryError::Unavailable)?;
-        let created = sqlx::query(RESERVE_INITIATION)
-            .bind(&transaction.id)
-            .bind(&transaction.organization_id)
-            .bind(&transaction.credential_template_id)
-            .bind(&transaction.revocation_profile_id)
-            .bind(&transaction.renewal_of_credential_id)
-            .bind(&transaction.applicant_id)
-            .bind(&transaction.application_id)
-            .bind(&transaction.subject_did)
-            .bind(&transaction.idempotency_key_hash)
-            .bind(&transaction.idempotency_request_hash)
-            .bind(transaction_status(transaction.status))
-            .bind(&transaction.pre_authorized_code)
-            .bind(&transaction.nonce)
-            .bind(Value::Object(transaction.claims.clone()))
-            .bind(&transaction.credential_type)
-            .bind(json!(transaction.selective_disclosure_claims))
-            .bind(json!(transaction.zk_predicate_claims))
-            .bind(&transaction.credential_payload_format)
-            .bind(Value::Array(transaction.wallet_configs.clone()))
-            .bind(validity_days)
-            .bind(transaction.renewable)
-            .bind(renewal_window_days)
-            .bind(&transaction.delivery_mode)
-            .bind(&transaction.issuer_profile_id)
-            .bind(&transaction.issuer_mode)
-            .bind(&transaction.issuer_did)
-            .bind(&transaction.issuer_algorithm)
-            .bind(&transaction.signing_service_id)
-            .bind(&transaction.reserved_credential_id)
-            .bind(&transaction.oid4vci_client_id)
-            .bind(transaction.created_at)
-            .bind(transaction.expires_at)
-            .fetch_optional(&self.pool)
+        let created = insert_issuance_transaction(&self.pool, transaction)
             .await
-            .map_err(|_| InitiationRepositoryError::Unavailable)?
-            .map(transaction_row)
-            .transpose()
             .map_err(|_| InitiationRepositoryError::Unavailable)?;
         if let Some(transaction) = created {
             return Ok(InitiationReservation {

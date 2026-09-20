@@ -1,6 +1,8 @@
 use chrono::{Duration, TimeZone, Utc};
 use marty_issuance_service::{
     application_template_domain::{ApplicationTemplateCreate, ApplicationTemplateStatus},
+    credential::{CredentialTransaction, CredentialTransactionStatus},
+    internal_application_approval::InternalApplicationApprovalRepository,
     internal_application_domain::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
         EvidenceSubmission, IssuanceEventRecord,
@@ -36,6 +38,7 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
     for statement in [
         "CREATE SCHEMA IF NOT EXISTS issuance_service",
         "DROP TABLE IF EXISTS issuance_service.issuance_events CASCADE",
+        "DROP TABLE IF EXISTS issuance_service.issuance_transactions CASCADE",
         "DROP TABLE IF EXISTS issuance_service.evidence_facts CASCADE",
         "DROP TABLE IF EXISTS issuance_service.applications CASCADE",
         "DROP TABLE IF EXISTS issuance_service.application_templates CASCADE",
@@ -82,6 +85,41 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
             submitted_at TIMESTAMPTZ NOT NULL,
             reviewed_at TIMESTAMPTZ,
             expires_at TIMESTAMPTZ NOT NULL
+        )",
+        "CREATE TABLE issuance_service.issuance_transactions (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            credential_template_id TEXT NOT NULL,
+            revocation_profile_id TEXT,
+            renewal_of_credential_id TEXT,
+            applicant_id TEXT,
+            application_id TEXT,
+            subject_did TEXT,
+            idempotency_key_hash TEXT,
+            idempotency_request_hash TEXT,
+            status TEXT NOT NULL,
+            pre_auth_code TEXT NOT NULL CHECK (pre_auth_code <> 'reject-me'),
+            c_nonce TEXT,
+            claims JSON NOT NULL,
+            credential_type TEXT,
+            selective_disclosure_claims JSON NOT NULL,
+            zk_predicate_claims JSON NOT NULL,
+            credential_payload_format TEXT NOT NULL,
+            wallet_configs JSON NOT NULL,
+            validity_days INTEGER NOT NULL,
+            renewable BOOLEAN NOT NULL,
+            renewal_window_days INTEGER NOT NULL,
+            delivery_mode TEXT NOT NULL,
+            issuer_profile_id TEXT,
+            issuer_mode TEXT NOT NULL,
+            issuer_did_override TEXT,
+            issuer_algorithm TEXT,
+            signing_service_id TEXT,
+            reserved_credential_id TEXT,
+            oid4vci_client_id TEXT,
+            created_at TIMESTAMPTZ NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            UNIQUE (organization_id, idempotency_key_hash)
         )",
         "CREATE TABLE issuance_service.evidence_facts (
             id TEXT PRIMARY KEY,
@@ -324,6 +362,151 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         winning
     );
 
+    let approved_application = application_fixture(&application, "application-approved");
+    repository
+        .insert_application(&approved_application)
+        .await
+        .expect("approval fixture must insert");
+    let approved = repository
+        .reserve_ordinary_approval(
+            &approved_application,
+            &approval_transaction("transaction-approved", &approved_application, observed_at),
+            "issuance-management-api",
+            Some("Reviewed"),
+            observed_at + Duration::minutes(3),
+        )
+        .await
+        .expect("ordinary approval reservation")
+        .expect("ordinary approval must win");
+    assert_eq!(approved.status, ApplicationStatus::Approved);
+    assert_eq!(
+        approved.reviewer_id.as_deref(),
+        Some("issuance-management-api")
+    );
+    assert_eq!(approved.review_notes.as_deref(), Some("Reviewed"));
+    assert_eq!(
+        approved.issuance_transaction_id.as_deref(),
+        Some("transaction-approved")
+    );
+    assert_eq!(transaction_count(&pool, "application-approved").await, 1);
+
+    let rejected_race = application_fixture(&application, "application-rejected-race");
+    repository
+        .insert_application(&rejected_race)
+        .await
+        .expect("approval/rejection race fixture must insert");
+    let mut rejection_lock = pool.begin().await.expect("rejection race transaction");
+    sqlx::query("SELECT id FROM issuance_service.applications WHERE id = $1 FOR UPDATE")
+        .bind(&rejected_race.id)
+        .fetch_one(&mut *rejection_lock)
+        .await
+        .expect("rejection race must lock application");
+    let approval_repository = repository.clone();
+    let approval_snapshot = rejected_race.clone();
+    let rejected_race_transaction =
+        approval_transaction("transaction-rejected-race", &approval_snapshot, observed_at);
+    let approval_loser = tokio::spawn(async move {
+        approval_repository
+            .reserve_ordinary_approval(
+                &approval_snapshot,
+                &rejected_race_transaction,
+                "issuance-management-api",
+                None,
+                observed_at + Duration::minutes(4),
+            )
+            .await
+    });
+    sqlx::query(
+        "UPDATE issuance_service.applications
+         SET status = 'rejected', reviewer_id = 'issuance-management-api',
+             review_notes = 'Rejected', reviewed_at = $2, updated_at = $2
+         WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(&rejected_race.id)
+    .bind(observed_at + Duration::minutes(4))
+    .execute(&mut *rejection_lock)
+    .await
+    .expect("rejection must win while holding the row lock");
+    rejection_lock
+        .commit()
+        .await
+        .expect("rejection winner must commit");
+    assert!(approval_loser
+        .await
+        .expect("approval race task")
+        .expect("approval loser query")
+        .is_none());
+    assert_eq!(transaction_count(&pool, &rejected_race.id).await, 0);
+    assert_eq!(
+        repository
+            .get_application(&rejected_race.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ApplicationStatus::Rejected
+    );
+
+    let approval_race = application_fixture(&application, "application-approval-race");
+    repository
+        .insert_application(&approval_race)
+        .await
+        .expect("approval/approval race fixture must insert");
+    let first_repository = repository.clone();
+    let second_repository = repository.clone();
+    let first_snapshot = approval_race.clone();
+    let second_snapshot = approval_race.clone();
+    let first_transaction =
+        approval_transaction("transaction-race-first", &first_snapshot, observed_at);
+    let second_transaction =
+        approval_transaction("transaction-race-second", &second_snapshot, observed_at);
+    let (first, second) = tokio::join!(
+        first_repository.reserve_ordinary_approval(
+            &first_snapshot,
+            &first_transaction,
+            "issuance-management-api",
+            None,
+            observed_at + Duration::minutes(5),
+        ),
+        second_repository.reserve_ordinary_approval(
+            &second_snapshot,
+            &second_transaction,
+            "issuance-management-api",
+            None,
+            observed_at + Duration::minutes(5),
+        )
+    );
+    let outcomes = [first.unwrap().is_some(), second.unwrap().is_some()];
+    assert_eq!(outcomes.into_iter().filter(|won| *won).count(), 1);
+    assert_eq!(transaction_count(&pool, &approval_race.id).await, 1);
+
+    let rollback_application = application_fixture(&application, "application-rollback");
+    repository
+        .insert_application(&rollback_application)
+        .await
+        .expect("rollback fixture must insert");
+    let mut rejected_transaction =
+        approval_transaction("transaction-rollback", &rollback_application, observed_at);
+    rejected_transaction.pre_authorized_code = "reject-me".to_owned();
+    assert!(repository
+        .reserve_ordinary_approval(
+            &rollback_application,
+            &rejected_transaction,
+            "issuance-management-api",
+            None,
+            observed_at + Duration::minutes(6),
+        )
+        .await
+        .is_err());
+    assert_eq!(transaction_count(&pool, &rollback_application.id).await, 0);
+    let rollback_current = repository
+        .get_application(&rollback_application.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rollback_current.status, ApplicationStatus::Pending);
+    assert!(rollback_current.issuance_transaction_id.is_none());
+
     sqlx::query(
         "UPDATE issuance_service.applications
          SET status = 'not-a-status' WHERE id = 'application-1'",
@@ -340,6 +523,10 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .execute(&pool)
         .await
         .expect("issuance events contract table must clean up");
+    sqlx::query("DROP TABLE issuance_service.issuance_transactions CASCADE")
+        .execute(&pool)
+        .await
+        .expect("issuance transactions contract table must clean up");
     sqlx::query("DROP TABLE issuance_service.evidence_facts CASCADE")
         .execute(&pool)
         .await
@@ -352,6 +539,63 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .execute(&pool)
         .await
         .expect("Application Template contract table must clean up");
+}
+
+fn application_fixture(source: &ApplicationRecord, id: &str) -> ApplicationRecord {
+    let mut application = source.clone();
+    application.id = id.to_owned();
+    application
+}
+
+fn approval_transaction(
+    id: &str,
+    application: &ApplicationRecord,
+    now: chrono::DateTime<Utc>,
+) -> CredentialTransaction {
+    CredentialTransaction {
+        id: id.to_owned(),
+        organization_id: application.organization_id.clone(),
+        credential_template_id: "credential-template-1".to_owned(),
+        revocation_profile_id: Some("revocation-profile-1".to_owned()),
+        renewal_of_credential_id: None,
+        applicant_id: Some(application.applicant_identifier.clone()),
+        application_id: Some(application.id.clone()),
+        subject_did: None,
+        idempotency_key_hash: None,
+        idempotency_request_hash: None,
+        status: CredentialTransactionStatus::Pending,
+        pre_authorized_code: "pre-authorized-code".to_owned(),
+        nonce: None,
+        claims: application.form_data.clone(),
+        credential_type: Some("EmployeeCredential".to_owned()),
+        selective_disclosure_claims: vec!["email".to_owned()],
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+        wallet_configs: Vec::new(),
+        validity_days: 365,
+        renewable: false,
+        renewal_window_days: 30,
+        delivery_mode: "wallet_only".to_owned(),
+        issuer_profile_id: Some("issuer-profile-1".to_owned()),
+        issuer_mode: "org_managed".to_owned(),
+        issuer_did: Some("did:web:issuer.example:org-123".to_owned()),
+        issuer_algorithm: Some("ES256".to_owned()),
+        signing_service_id: Some("kms-service-1".to_owned()),
+        reserved_credential_id: None,
+        oid4vci_client_id: None,
+        created_at: now,
+        expires_at: now + Duration::days(7),
+    }
+}
+
+async fn transaction_count(pool: &sqlx::PgPool, application_id: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM issuance_service.issuance_transactions WHERE application_id = $1",
+    )
+    .bind(application_id)
+    .fetch_one(pool)
+    .await
+    .expect("transaction count")
 }
 
 async fn insert_template(
