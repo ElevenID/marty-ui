@@ -14,13 +14,14 @@ use serde_json::Value;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     canvas_award_candidate_approval::{
-        resolve_and_attach_required_issuer, CanvasAwardApprovalSeedGenerator,
+        resolve_and_attach_required_issuer, CanvasApplicationApprovalError,
+        CanvasApplicationApprovalService, CanvasAwardApprovalSeedGenerator,
     },
     canvas_lti_launch::CanvasLtiClock,
     credential::{CredentialTransaction, CredentialTransactionStatus, IssuerContextResolver},
     internal_application_domain::ApplicationRecord,
     internal_application_service::{InternalApplicationApprovalError, InternalApplicationApprover},
-    python_value::{python_string, python_truthy},
+    python_value::{python_string, python_truthy, strip},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +66,117 @@ pub trait InternalApplicationApprovalRepository: Send + Sync {
         review_notes: Option<&str>,
         reviewed_at: DateTime<Utc>,
     ) -> Result<Option<ApplicationRecord>, InternalApplicationApprovalError>;
+}
+
+#[async_trait]
+pub trait InternalApplicationApprovalReader: Send + Sync {
+    async fn reload_approved_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Option<ApplicationRecord>, InternalApplicationApprovalError>;
+}
+
+#[async_trait]
+pub trait InternalCanvasApplicationApprover: Send + Sync {
+    async fn approve_canvas_application(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<String, InternalApplicationApprovalError>;
+}
+
+#[async_trait]
+impl InternalCanvasApplicationApprover for CanvasApplicationApprovalService {
+    async fn approve_canvas_application(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<String, InternalApplicationApprovalError> {
+        self.approve_as(organization_id, application_id, reviewer_id, review_notes)
+            .await
+            .map(|result| result.issuance_transaction_id)
+            .map_err(|error| match error {
+                CanvasApplicationApprovalError::Unavailable => {
+                    InternalApplicationApprovalError::Unavailable
+                }
+                CanvasApplicationApprovalError::NotFound
+                | CanvasApplicationApprovalError::RolloutDisabled
+                | CanvasApplicationApprovalError::InvalidStatus
+                | CanvasApplicationApprovalError::NotReady => {
+                    InternalApplicationApprovalError::CanvasNotReady
+                }
+            })
+    }
+}
+
+#[derive(Clone)]
+pub struct CompositeInternalApplicationApprover {
+    ordinary: Arc<dyn InternalApplicationApprover>,
+    canvas: Arc<dyn InternalCanvasApplicationApprover>,
+    reader: Arc<dyn InternalApplicationApprovalReader>,
+}
+
+impl std::fmt::Debug for CompositeInternalApplicationApprover {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CompositeInternalApplicationApprover")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompositeInternalApplicationApprover {
+    #[must_use]
+    pub fn new(
+        ordinary: Arc<dyn InternalApplicationApprover>,
+        canvas: Arc<dyn InternalCanvasApplicationApprover>,
+        reader: Arc<dyn InternalApplicationApprovalReader>,
+    ) -> Self {
+        Self {
+            ordinary,
+            canvas,
+            reader,
+        }
+    }
+}
+
+#[async_trait]
+impl InternalApplicationApprover for CompositeInternalApplicationApprover {
+    async fn approve(
+        &self,
+        application: &ApplicationRecord,
+        template: &ApplicationTemplateRecord,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
+        if !canvas_bound_application(application) {
+            return self
+                .ordinary
+                .approve(application, template, reviewer_id, review_notes)
+                .await;
+        }
+        let transaction_id = self
+            .canvas
+            .approve_canvas_application(
+                &application.organization_id,
+                &application.id,
+                reviewer_id,
+                review_notes,
+            )
+            .await?;
+        self.reader
+            .reload_approved_application(&application.id)
+            .await?
+            .filter(|current| {
+                current.organization_id == application.organization_id
+                    && current.status.as_str() == "approved"
+                    && current.issuance_transaction_id.as_deref() == Some(transaction_id.as_str())
+            })
+            .ok_or(InternalApplicationApprovalError::ConcurrentChange)
+    }
 }
 
 #[derive(Clone)]
@@ -275,6 +387,31 @@ fn delivery_mode(integration_context: &serde_json::Map<String, Value>) -> String
         .unwrap_or_else(|| "wallet_only".to_owned())
 }
 
+fn canvas_bound_application(application: &ApplicationRecord) -> bool {
+    let Some(canvas) = application
+        .integration_context
+        .get("canvas")
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    let text = |name: &str| {
+        canvas
+            .get(name)
+            .filter(|value| python_truthy(value))
+            .and_then(python_string)
+            .unwrap_or_default()
+    };
+    [
+        "canvas_platform_id",
+        "canvas_program_binding_id",
+        "canvas_account_id",
+    ]
+    .into_iter()
+    .any(|name| !strip(&text(name)).is_empty())
+        || strip(&text("source")).to_lowercase().starts_with("canvas")
+}
+
 fn credential_vct(raw: Option<&str>, credential_type: &str, issuer_base_url: &str) -> String {
     let raw = raw.map(str::trim).unwrap_or_default();
     if !raw.is_empty() && url::Url::parse(raw).is_ok_and(|value| !value.scheme().is_empty()) {
@@ -359,6 +496,72 @@ mod tests {
                 )
                 .unwrap();
             Ok(Some(application))
+        }
+    }
+
+    #[derive(Default)]
+    struct OrdinarySpy {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl InternalApplicationApprover for OrdinarySpy {
+        async fn approve(
+            &self,
+            application: &ApplicationRecord,
+            _template: &ApplicationTemplateRecord,
+            reviewer_id: &str,
+            review_notes: Option<&str>,
+        ) -> Result<ApplicationRecord, InternalApplicationApprovalError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut approved = application.clone();
+            approved
+                .approve_reserved(
+                    "ordinary-transaction".into(),
+                    review_notes.map(str::to_owned),
+                    reviewer_id,
+                    approved.updated_at + Duration::minutes(1),
+                )
+                .unwrap();
+            Ok(approved)
+        }
+    }
+
+    type CanvasCall = (String, String, String, Option<String>);
+
+    struct CanvasSpy {
+        calls: Mutex<Vec<CanvasCall>>,
+        result: Result<String, InternalApplicationApprovalError>,
+    }
+
+    #[async_trait]
+    impl InternalCanvasApplicationApprover for CanvasSpy {
+        async fn approve_canvas_application(
+            &self,
+            organization_id: &str,
+            application_id: &str,
+            reviewer_id: &str,
+            review_notes: Option<&str>,
+        ) -> Result<String, InternalApplicationApprovalError> {
+            self.calls.lock().unwrap().push((
+                organization_id.to_owned(),
+                application_id.to_owned(),
+                reviewer_id.to_owned(),
+                review_notes.map(str::to_owned),
+            ));
+            self.result.clone()
+        }
+    }
+
+    struct Reader(Option<ApplicationRecord>);
+
+    #[async_trait]
+    impl InternalApplicationApprovalReader for Reader {
+        async fn reload_approved_application(
+            &self,
+            _application_id: &str,
+        ) -> Result<Option<ApplicationRecord>, InternalApplicationApprovalError> {
+            Ok(self.0.clone())
         }
     }
 
@@ -664,5 +867,69 @@ mod tests {
             delivery_mode(&Map::from_iter([("delivery_mode".into(), json!([]))])),
             "wallet_only"
         );
+    }
+
+    #[tokio::test]
+    async fn composite_routes_canvas_without_changing_internal_reviewer_or_null_note() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
+        let mut canvas_application = application(now);
+        canvas_application.integration_context = Map::from_iter([(
+            "canvas".into(),
+            json!({"source":"Canvas LTI", "canvas_platform_id":"platform-1"}),
+        )]);
+        let mut persisted = canvas_application.clone();
+        persisted
+            .approve_reserved(
+                "canvas-transaction".into(),
+                None,
+                "issuance-management-api",
+                now + Duration::minutes(1),
+            )
+            .unwrap();
+        let ordinary = Arc::new(OrdinarySpy::default());
+        let canvas = Arc::new(CanvasSpy {
+            calls: Mutex::new(Vec::new()),
+            result: Ok("canvas-transaction".into()),
+        });
+        let composite = CompositeInternalApplicationApprover::new(
+            ordinary.clone(),
+            canvas.clone(),
+            Arc::new(Reader(Some(persisted.clone()))),
+        );
+
+        let approved = composite
+            .approve(
+                &canvas_application,
+                &application_template(now),
+                "issuance-management-api",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(approved, persisted);
+        assert_eq!(ordinary.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            canvas.calls.lock().unwrap().as_slice(),
+            &[(
+                "org-1".into(),
+                "application-1".into(),
+                "issuance-management-api".into(),
+                None,
+            )]
+        );
+    }
+
+    #[test]
+    fn canvas_detection_matches_python_truthy_string_boundaries() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
+        let mut candidate = application(now);
+        assert!(!canvas_bound_application(&candidate));
+        candidate.integration_context =
+            Map::from_iter([("canvas".into(), json!({"canvas_platform_id": 7}))]);
+        assert!(canvas_bound_application(&candidate));
+        candidate.integration_context =
+            Map::from_iter([("canvas".into(), json!({"source": "  CANVAS import  "}))]);
+        assert!(canvas_bound_application(&candidate));
     }
 }

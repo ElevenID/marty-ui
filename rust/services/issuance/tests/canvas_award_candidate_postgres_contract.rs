@@ -625,14 +625,14 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
             &race_a,
             &race_snapshot,
             "canvas-integration-management-api",
-            "review-a",
+            Some("review-a"),
             now(),
         ),
         management_repository.reserve_application_issuance(
             &race_b,
             &race_snapshot,
             "canvas-integration-management-api",
-            "review-b",
+            Some("review-b"),
             now(),
         ),
     );
@@ -707,7 +707,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
                 &drift_transaction,
                 &drift_snapshot,
                 "canvas-integration-management-api",
-                "must-not-commit",
+                Some("must-not-commit"),
                 now(),
             )
             .await,

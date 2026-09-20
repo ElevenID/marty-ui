@@ -11,7 +11,9 @@ use crate::{
     application_template_postgres::PostgresApplicationTemplateRepository,
     credential::CredentialTransaction,
     credential_postgres::insert_issuance_transaction,
-    internal_application_approval::InternalApplicationApprovalRepository,
+    internal_application_approval::{
+        InternalApplicationApprovalReader, InternalApplicationApprovalRepository,
+    },
     internal_application_domain::{
         ApplicationRecord, ApplicationStatus, EvidenceFactRecord, IssuanceEventRecord,
     },
@@ -375,6 +377,18 @@ impl InternalApplicationApprovalRepository for PostgresInternalApplicationReposi
             .await
             .map_err(|_| InternalApplicationApprovalError::Unavailable)?;
         Ok(Some(current))
+    }
+}
+
+#[async_trait]
+impl InternalApplicationApprovalReader for PostgresInternalApplicationRepository {
+    async fn reload_approved_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Option<ApplicationRecord>, InternalApplicationApprovalError> {
+        InternalApplicationRepository::get_application(self, application_id)
+            .await
+            .map_err(|_| InternalApplicationApprovalError::Unavailable)
     }
 }
 

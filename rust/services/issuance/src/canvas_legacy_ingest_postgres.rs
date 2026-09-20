@@ -534,7 +534,9 @@ async fn commit_atomic(
                 transaction,
                 &approval_snapshot,
                 "canvas:auto-approval",
-                "Auto-approved by MIP policy after verified Canvas evidence satisfied requirements",
+                Some(
+                    "Auto-approved by MIP policy after verified Canvas evidence satisfied requirements",
+                ),
                 commit.now,
             )
             .await

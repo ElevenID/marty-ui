@@ -296,7 +296,7 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         transaction: &CredentialTransaction,
         snapshot: &CanvasApplicationApprovalSnapshot,
         reviewer_id: &str,
-        review_notes: &str,
+        review_notes: Option<&str>,
         reviewed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<String, CanvasApplicationApprovalError> {
         reserve_management_canvas_issuance(
@@ -316,7 +316,7 @@ async fn reserve_management_canvas_issuance(
     prepared: &CredentialTransaction,
     snapshot: &CanvasApplicationApprovalSnapshot,
     reviewer_id: &str,
-    review_notes: &str,
+    review_notes: Option<&str>,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, CanvasApplicationApprovalError> {
     let mut database = pool
@@ -344,7 +344,7 @@ pub(crate) async fn reserve_management_canvas_issuance_in_transaction(
     prepared: &CredentialTransaction,
     snapshot: &CanvasApplicationApprovalSnapshot,
     reviewer_id: &str,
-    review_notes: &str,
+    review_notes: Option<&str>,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, CanvasApplicationApprovalError> {
     let application_id = prepared

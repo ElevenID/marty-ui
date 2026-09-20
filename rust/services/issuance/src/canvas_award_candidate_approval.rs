@@ -145,7 +145,7 @@ pub trait CanvasApplicationApprovalRepository: Send + Sync {
         transaction: &CredentialTransaction,
         snapshot: &CanvasApplicationApprovalSnapshot,
         reviewer_id: &str,
-        review_notes: &str,
+        review_notes: Option<&str>,
         reviewed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<String, CanvasApplicationApprovalError>;
 }
@@ -282,6 +282,28 @@ impl CanvasApplicationApprovalService {
         application_id: &str,
         review_notes: Option<&str>,
     ) -> Result<CanvasApplicationApprovalResult, CanvasApplicationApprovalError> {
+        self.approve_as(
+            organization_id,
+            application_id,
+            CANVAS_MANAGEMENT_REVIEWER_ID,
+            Some(match review_notes {
+                None | Some("") => DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES,
+                Some(notes) => notes,
+            }),
+        )
+        .await
+    }
+
+    /// Approve through the same Canvas readiness and atomic reservation path
+    /// while allowing another authenticated management boundary to retain its
+    /// own server-owned reviewer identity and nullable review note.
+    pub async fn approve_as(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+        reviewer_id: &str,
+        review_notes: Option<&str>,
+    ) -> Result<CanvasApplicationApprovalResult, CanvasApplicationApprovalError> {
         let snapshot = self
             .repository
             .load_application_approval_snapshot(organization_id, application_id)
@@ -325,16 +347,7 @@ impl CanvasApplicationApprovalService {
         .map_err(|_| CanvasApplicationApprovalError::NotReady)?;
         let issuance_transaction_id = self
             .repository
-            .reserve_application_issuance(
-                &transaction,
-                &snapshot,
-                CANVAS_MANAGEMENT_REVIEWER_ID,
-                match review_notes {
-                    None | Some("") => DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES,
-                    Some(notes) => notes,
-                },
-                now,
-            )
+            .reserve_application_issuance(&transaction, &snapshot, reviewer_id, review_notes, now)
             .await?;
         Ok(CanvasApplicationApprovalResult {
             application_id: application_id.to_owned(),
