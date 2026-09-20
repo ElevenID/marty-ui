@@ -253,7 +253,7 @@ fn transaction_status(status: CredentialTransactionStatus) -> &'static str {
     }
 }
 
-fn python_quote(value: &str) -> String {
+pub(crate) fn python_quote(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/') {

@@ -17,7 +17,7 @@ use crate::{
     config::normalize_grpc_target,
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
-        TemplateResponse,
+        GetWalletRequest, ListWalletsRequest, TemplateResponse, WalletRegistryEntry,
     },
     initiation::{
         InitiationApplicationClaimsResolver, InitiationClientRepository, InitiationDependencyError,
@@ -28,6 +28,7 @@ use crate::{
     internal_application_approval::{
         InternalApplicationApprovalDependencies, InternalApplicationCredentialTemplate,
     },
+    internal_application_offer::{InternalApplicationWalletCatalog, RegisteredOfferWallet},
     internal_application_service::InternalApplicationApprovalError,
     organization_proto::{
         organization_service_client::OrganizationServiceClient, GetOrganizationRequest,
@@ -335,6 +336,81 @@ impl InternalApplicationApprovalDependencies for NativeInitiationControlPlane {
         }
         Ok(())
     }
+}
+
+#[async_trait]
+impl InternalApplicationWalletCatalog for NativeInitiationControlPlane {
+    async fn wallets(&self, credential_template_id: &str) -> Vec<RegisteredOfferWallet> {
+        let mut client = self.templates.clone();
+        let template = match client
+            .get_template(self.grpc_request(GetTemplateRequest {
+                template_id: credential_template_id.to_owned(),
+            }))
+            .await
+        {
+            Ok(response)
+                if response.get_ref().id == credential_template_id
+                    && !response.get_ref().id.is_empty() =>
+            {
+                response.into_inner()
+            }
+            Ok(_) | Err(_) => return Vec::new(),
+        };
+        let wallet_ids = serde_json::from_str::<Vec<Value>>(&template.wallet_configs_json)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| {
+                value
+                    .as_object()
+                    .and_then(|wallet| wallet.get("wallet_id"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        if wallet_ids.is_empty() {
+            return client
+                .list_wallets(self.grpc_request(ListWalletsRequest {
+                    active_only: true,
+                    organization_id: String::new(),
+                }))
+                .await
+                .map(|response| {
+                    response
+                        .into_inner()
+                        .wallets
+                        .into_iter()
+                        .filter_map(registered_offer_wallet)
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+
+        let mut wallets = Vec::with_capacity(wallet_ids.len());
+        for wallet_id in wallet_ids {
+            let response = client
+                .get_wallet(self.grpc_request(GetWalletRequest { wallet_id }))
+                .await;
+            if let Ok(response) = response {
+                if let Some(wallet) = registered_offer_wallet(response.into_inner()) {
+                    wallets.push(wallet);
+                }
+            }
+        }
+        wallets
+    }
+}
+
+fn registered_offer_wallet(wallet: WalletRegistryEntry) -> Option<RegisteredOfferWallet> {
+    if wallet.id.is_empty() {
+        return None;
+    }
+    Some(RegisteredOfferWallet {
+        id: wallet.id,
+        name: wallet.name,
+        logo_url: non_empty(wallet.logo_url),
+        platforms: wallet.platforms,
+    })
 }
 
 #[async_trait]

@@ -448,7 +448,7 @@ fn identifier_component(value: Option<&Value>) -> Option<String> {
     (!rendered.is_empty()).then(|| rendered.to_owned())
 }
 
-fn python_datetime(value: DateTime<Utc>) -> String {
+pub(crate) fn python_datetime(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::AutoSi, false)
 }
 

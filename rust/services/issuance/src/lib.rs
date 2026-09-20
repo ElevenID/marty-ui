@@ -109,6 +109,7 @@ pub mod integration_secret;
 pub mod internal_application_approval;
 pub mod internal_application_domain;
 pub mod internal_application_http;
+pub mod internal_application_offer;
 pub mod internal_application_postgres;
 pub mod internal_application_service;
 mod management_http;
