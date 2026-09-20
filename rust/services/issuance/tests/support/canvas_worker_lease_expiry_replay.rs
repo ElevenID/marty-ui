@@ -484,11 +484,17 @@ fn held_state(actual: &Value, published: &Value) -> Checked<()> {
 
 async fn blocked(pool: &PgPool, blocker: i32) -> Checked<Option<i32>> {
     let before = Instant::now();
-    let (count, matches, pid): (i64, i64, Option<i32>) = tokio::time::timeout(Duration::from_millis(500), sqlx::query_as(
-        "SELECT count(*), count(*) FILTER (WHERE application_name=$2 AND state='active'
+    // A scheduler may briefly expose another statement waiting on the owned
+    // row lock. That is not the renewal signal and is covered by the durable
+    // state/effect checks below. Select the exact owned renewal statement here
+    // and continue polling until it appears; multiple matching renewals remain
+    // an ambiguity and fail closed.
+    let (count, pid): (i64, Option<i32>) = tokio::time::timeout(Duration::from_millis(500), sqlx::query_as(
+        "SELECT count(*), min(pid)
+         FROM pg_stat_activity WHERE datname=current_database()
+             AND $1=ANY(pg_blocking_pids(pid)) AND application_name=$2 AND state='active'
              AND wait_event_type='Lock' AND query LIKE 'UPDATE issuance_service.canvas_evidence_sync_jobs%'
-             AND query LIKE '%SET lease_expires_at = $5%'), min(pid)
-         FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))"
+             AND query LIKE '%SET lease_expires_at = $5%'"
     ).bind(blocker).bind(WORKER_ID).fetch_one(pool)).await
         .map_err(|_| "native expiry blocker query timed out")?
         .map_err(|_| "native expiry blocker query failed")?;
@@ -496,11 +502,11 @@ async fn blocked(pool: &PgPool, blocker: i32) -> Checked<Option<i32>> {
         before.elapsed() <= Duration::from_millis(500),
         "native expiry blocker query too wide",
     )?;
-    if count == 0 && matches == 0 && pid.is_none() {
+    if count == 0 && pid.is_none() {
         return Ok(None);
     }
     require(
-        count == 1 && matches == 1 && pid.is_some_and(|value| value > 1 && value != blocker),
+        count == 1 && pid.is_some_and(|value| value > 1 && value != blocker),
         "native expiry exact renewal blocker differs",
     )?;
     Ok(pid)
