@@ -91,6 +91,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         ROOT / "contracts/issuance-application-templates.json"
     ).read_bytes()
     application_templates = json.loads(application_template_bytes)
+    internal_application_bytes = (
+        ROOT / "contracts/issuance-internal-applications.json"
+    ).read_bytes()
+    internal_applications = json.loads(internal_application_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -260,6 +264,17 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert application_templates["schema"] == "marty.issuance-application-templates/v1"
     assert len(application_templates["surface"]["routes"]) == 8
+    assert (
+        hashlib.sha256(internal_application_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["internal_application_behavior_contract"]["sha256"]
+    )
+    assert coverage["internal_application_behavior_contract"]["commit"] == (
+        "da8ccf8f17dd4a418f6624c1fdabfe7cc4f2b909"
+    )
+    assert internal_applications["schema"] == (
+        "marty.issuance-internal-applications/v1"
+    )
+    assert len(internal_applications["surface"]["routes"]) == 14
     capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
     assert capability_policy["authority"] == "verified-signed-launch-claims"
     assert capability_policy["authorization_index"] == "verified_binding_launches"
@@ -336,6 +351,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     application_template_operations = {
         route["operation"] for route in application_templates["surface"]["routes"]
     }
+    internal_application_operations = {
+        route["operation"] for route in internal_applications["surface"]["routes"]
+    }
     canvas_operations_cases = {
         "enqueue_canvas_application_sync_route": "enqueue",
         "list_canvas_sync_jobs_route": "jobs",
@@ -365,13 +383,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 82
+    assert len(coverage["native_http"]) == 96
     assert set(native) == (
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
         | canvas_management_operations
         | application_template_operations
+        | internal_application_operations
         | set(canvas_operations_cases)
         | {
             "didcomm_deliver",
@@ -563,6 +582,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 and route["path"] == coverage_entry["path"]
                 and route["operation"] == operation
                 for route in application_templates["surface"]["routes"]
+            )
+            continue
+        if operation in internal_application_operations:
+            assert coverage_entry["internal_application_behavior_case"] == operation
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                for route in internal_applications["surface"]["routes"]
             )
             continue
         if operation in tenant_cases:
